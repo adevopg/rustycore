@@ -37,7 +37,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | L1 | shared/DataStores | `src/server/shared/DataStores/` | [shared-datastores.md](shared-datastores.md) | ✅ | ❌ |
 | L1 | shared/Dynamic | `src/server/shared/Dynamic/` | [shared-dynamic.md](shared-dynamic.md) | n/a | ❌ |
 | L1 | shared/JSON | `src/server/shared/JSON/` | [shared-json.md](shared-json.md) | n/a | ❌ |
-| L1 | proto/ | `src/server/proto/` | [proto.md](proto.md) | ✅ | ❌ |
+| L1 | proto/ | `src/server/proto/` | [proto.md](proto.md) | ⚠️ | ⚠️ |
 | L1 | game/DataStores | `src/server/game/DataStores/` | [datastores.md](datastores.md) | ⚠️ | ❌ |
 | L1 | game/Storages | `src/server/game/Storages/` | [storages.md](storages.md) | ⚠️ | ❌ |
 | L1 | game/Cache | `src/server/game/Cache/` | [cache.md](cache.md) | ⚠️ | ❌ |
@@ -50,7 +50,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | Layer | Module | C++ path | Doc | Status | Audit |
 |---|---|---|---|---|---|
 | L2 | game/Handlers | `src/server/game/Handlers/` | [handlers.md](handlers.md) | ⚠️ | ❌ |
-| L2 | game/Server | `src/server/game/Server/` | [server.md](server.md) | ✅ | ❌ |
+| L2 | game/Server | `src/server/game/Server/` | [server.md](server.md) | ⚠️ ~23% | ⚠️ |
 
 ### L3 — World & Maps
 
@@ -129,8 +129,8 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 
 | Module | C++ path | Doc | Status | Audit |
 |---|---|---|---|---|
-| bnetserver | `src/server/bnetserver/` | [bnetserver.md](bnetserver.md) | ✅ | ❌ |
-| worldserver | `src/server/worldserver/` | [worldserver.md](worldserver.md) | ✅ | ❌ |
+| bnetserver | `src/server/bnetserver/` | [bnetserver.md](bnetserver.md) | ⚠️ | ⚠️ |
+| worldserver | `src/server/worldserver/` | [worldserver.md](worldserver.md) | 🔧 (no global tick) | ⚠️ |
 
 ---
 
@@ -151,6 +151,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | 2026-05-01 | Índice creado, 45 módulos enumerados, 0 docs todavía |
 | 2026-05-01 | Primera ronda completa: 64/64 docs con plantilla de 12 secciones, plan de migración por módulo, gotchas y mapping C++→Rust. Audit aún 0/64. |
 | 2026-05-01 | Fase A (audit) — primer batch: crypto / shared-packets / shared-networking auditados vs C++ wotlk_classic. Status downgrade: shared-networking ✅→⚠️ (~75%), shared-packets ✅→⚠️, crypto ✅→⚠️ pero validado byte-exact en SRP6/AES-GCM/nonce. Audit: 3/64. |
+| 2026-05-01 | Fase A — segundo batch: server / proto / bnetserver / worldserver auditados. Hallazgos: server con 23% opcode coverage (145/621), worldserver con divergencia arquitectónica BREAKING (no existe MapManager::update; ticks viven en sesiones individuales — 0 sesiones = mundo congelado), bnetserver con bug de base64 ticket extraction, proto con 6/601 error codes mapeados. Audit: 7/64. |
 
 ---
 

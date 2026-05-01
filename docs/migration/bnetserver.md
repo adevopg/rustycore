@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/bnetserver/`
 > **Rust target crate(s):** `crates/bnet-server/`
 > **Layer:** binary (executable entry point)
-> **Status:** ⚠️ partial (login flow works; missing freeze detector, IP-Location DB, soap, win32 service, multi-thread io_context, some REST endpoints)
-> **Audited vs C++:** ❌ not audited
+> **Status:** ⚠️ partial (login flow works; missing freeze detector, IP-Location DB, soap, win32 service, multi-thread io_context, some REST endpoints, SecretMgr, DB keepalive)
+> **Audited vs C++:** ⚠️ audited (2026-05-01) — see §13
 > **Last updated:** 2026-05-01
 
 ---
@@ -284,3 +284,119 @@ HTTP routes (verb + path):
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+### 13.1 Audit summary
+
+The Rust bnet daemon **reaches the same listening state as TrinityCore** for the happy path: it binds 1119 (TLS, BNet RPC) + 8081 (HTTPS, REST), opens a `LoginDatabase`, runs the `BanExpiryHandler`, polls `realmlist` every `RealmsStateUpdateDelay` s, and wires up the SRPv1/v2 → ticket → `VerifyWebCredentials` → `LogonResult` flow end-to-end. The five core REST endpoints needed for the WoW launcher are present and `cargo test --workspace` passes (395 tests).
+
+What is **not** at parity with TC: cert path config, DB keep-alive ping, `SecretMgr` (HMAC keys), `IPLocation`, the two "bot" REST routes (`POST /login/`, `POST /login/srp/`), `MigrateLegacyPasswordHashes`, ban-failure persistence in `account_failedlogins` / `ip_auto_banned`, CLI args, PID file, and a graceful drain on SIGTERM. The ALPN / TLS-cipher pinning differs because Rust uses `rustls` (TLS 1.2-only `ServerConfig` with no ALPN) while TC uses Boost.Asio + OpenSSL with `TLS_method` (negotiates anything); for WoW 3.4.3 clients that converge on TLS 1.2 + an `ECDHE-RSA-AES*` suite this is functionally equivalent, but uncommon launcher builds may see different ciphers.
+
+There is also one **honest bug**: `extract_auth_ticket` in `rest/handlers.rs` strips `"Basic "` from the `Authorization` header and uses the **remaining base64 string verbatim** as the login ticket. TC's `ExtractAuthorization` Base64-**decodes** that, then truncates at the first `:`. Today this works only because the launcher and server happen to agree on storing the ticket as raw ASCII (`TC-<hex>`) without `:user@`-style suffix; a launcher that sends `Basic base64(ticket:)` per actual HTTP-Basic spec will fail authorization on `/bnetserver/gameAccounts/` and `/refreshLoginTicket/`.
+
+### 13.2 Startup-sequence parity
+
+| Step (TC `Main.cpp`) | TC behaviour | Rust `main.rs` | Parity |
+|---|---|---|---|
+| `signal(SIGABRT, AbortHandler)` | install crash handler | none | ❌ |
+| `Trinity::Locale::Init()` | set process locale | none | ❌ (cosmetic) |
+| `GetConsoleArguments()` | parse `--config` / `-cd` / `-u` / `-v` / `-h` | none — only `BNetServer.conf` lookup | ❌ |
+| `GOOGLE_PROTOBUF_VERIFY_VERSION` | sanity-check protobuf ABI | n/a (`prost`) | ✅ N/A |
+| Win32 service install/uninstall/run | optional | n/a (Linux) | ✅ accepted gap |
+| `sConfigMgr->LoadInitial(...)` + `LoadAdditionalDir(...)` | base + per-dir overrides | `wow_config::load_config` of single file (with `.dist` fallback) | ⚠️ no `conf.d/` |
+| `OverrideWithEnvVariablesIfAny` | env var → config override | none | ❌ |
+| `sLog->Initialize` + `Banner::Show` | log to file/console + DB appender | `tracing_subscriber::fmt` + single info line | ⚠️ partial |
+| `OpenSSLCrypto::threadsSetup` | OpenSSL ≤1.0.2 locking callbacks | n/a (rustls) | ✅ N/A |
+| `CreatePIDFile(path)` if `PidFile` set | optional pid file | none | ❌ |
+| `SslContext::Initialize()` | reads `CertificatesFile` + `PrivateKeyFile` + `PrivateKeyPassword`; one shared `ssl::context` | hardcoded `bnet_cert.pem` / `bnet_key.pem` (`bnet_fullchain.pem` if present); **two separate** rustls `ServerConfig`s (REST + RPC); reads `CertificatesFile` config but **does not actually use it** | ❌ cert path / password ignored |
+| `StartDB()` | single MariaDB pool for `LoginDatabase` | identical (sqlx pool via `wow_database::LoginDatabase`) | ✅ |
+| `--update-databases-only` short-circuit | run updaters then exit | runs `DbUpdater::populate` + `update`, never exits early | ⚠️ different semantics |
+| `sSecretMgr->Initialize(SECRET_OWNER_BNETSERVER)` | persist HMAC key | none | ❌ |
+| `sIPLocation->Load()` | parse GeoIP CSV | none | ❌ |
+| `Trinity::Net::ScanLocalNetworks()` | enumerate own subnets for "client is local" check | none — Rust uses literal `127.0.0.1` / same-/24 logic in `realm/mod.rs::select_realm_ip_str` | ⚠️ partial |
+| `sLoginService.StartNetwork(...)` (DNS-resolves `LoginREST.{External,Local}Address`, registers 8 handlers, calls `_acceptor->AsyncAcceptWithCallback<&OnSocketAccept>()`) | — | bind `tokio::net::TcpListener`, accept-loop spawns one task per conn, no DNS resolution of hostnames | ⚠️ no DNS resolve, fewer handlers |
+| `sRealmList->Initialize(io, RealmsStateUpdateDelay)` | DB poll `LoginDatabase` every N s + initial `LoadBuildInfo` | `realm::init_realm_manager` does the same | ✅ |
+| `sSessionMgr.StartNetwork(io, BindIP, BattlenetPort)` | TLS RPC acceptor on 1119 | identical, separate `TlsAcceptor` | ✅ |
+| `boost::asio::signal_set(SIGINT, SIGTERM)` | graceful shutdown | only `tokio::signal::ctrl_c` (SIGINT); SIGTERM never installed | ❌ |
+| `SetProcessPriority(...)` | priority/affinity | none | ✅ accepted gap (Linux) |
+| `KeepDatabaseAliveHandler` (every `MaxPingTime` min) | `LoginDatabase.KeepAlive()` | none | ❌ |
+| `BanExpiryHandler` (every `BanExpiryCheckInterval` s) | DEL/UPD expired bans (3 statements) | identical (`start_ban_expiry_timer`) | ✅ |
+| `ServiceStatusWatcher` (Win32) | pump `m_ServiceStatus` | n/a | ✅ N/A |
+| `ioContext->run()` | block main | `tokio::select! { rest_handle, rpc_handle, ctrl_c }` | ✅ |
+| Shutdown: `signals.cancel()`, `LoginDatabase.Close()`, `MySQL::Library_End()` | clean drain | `state.login_db.close().await` only — no in-flight request drain, listener tasks just dropped | ⚠️ partial |
+
+### 13.3 REST endpoint coverage
+
+| Verb + path | TC | Rust | Notes |
+|---|---|---|---|
+| `GET /bnetserver/login/` | ✅ `HandleGetForm` | ✅ `get_form` | Rust adds extra `JSESSIONID` cookie that TC does not set (carry-over from C# fork). Form schema and `srp_url` match. |
+| `POST /bnetserver/login/` | ✅ `HandlePostLogin` | ✅ `post_login` | Both accept (a) direct password (legacy) and (b) `public_A` + `client_evidence_M1`. Rust verifies via `BnetSrp6::verify_client_evidence`; TC does the same with `BnetSRP6Base::VerifyChallengeResponse`. **Divergence:** on bad-credential path TC returns `LoginResult{ state=DONE }` *and also* increments `account_failedlogins` + applies `WrongPass.BanType` ban; Rust only `UPD_BNET_FAILED_LOGINS`s and never bans. |
+| `POST /bnetserver/login/srp/` | ✅ `HandlePostLoginSrpChallenge` | ✅ `post_login_srp_challenge` | Same SRP6 challenge response (modulus, generator, salt, public B, hash function name `"SHA-256"`). ✅ parity. |
+| `GET /bnetserver/gameAccounts/` | ✅ `HandleGetGameAccounts` | ✅ `get_game_accounts` | Same query (`SEL_BNET_GAME_ACCOUNT_LIST`). **Bug:** Rust treats `Authorization: Basic <X>` header value `<X>` as the raw ticket; TC base64-**decodes** then truncates at `:`. |
+| `GET /bnetserver/portal/` | ✅ `HandleGetPortal` | ✅ `get_portal` | TC returns `GetHostnameForClient(remoteIp):port`; Rust returns `X-Forwarded-For`-or-`external_address`:port. Different selection logic but same shape. |
+| `POST /bnetserver/refreshLoginTicket/` | ✅ `HandlePostRefreshLoginTicket` | ✅ `refresh_login_ticket` | TC returns `LoginRefreshResult{login_ticket_expiry}` or `is_expired=true`; Rust returns `{login_ticket: "<TC-…>"}` only. **Divergence in response shape.** Same DB write. |
+| `POST /login/srp/` (bot/mobile) | ✅ `HandlePostBotSrpChallenge` | ❌ missing | route returns 404 |
+| `POST /login/` (bot/mobile) | ✅ `HandlePostBotLogin` | ❌ missing | route returns 404 |
+| `OPTIONS *` (CORS preflight) | ❌ none | ❌ none | ✅ parity |
+
+### 13.4 Auth flow divergences (port 1119, BNet RPC)
+
+| Stage | TC | Rust | Status |
+|---|---|---|---|
+| TCP accept → TLS handshake | Boost.Asio `ssl::stream` (TLS_method, OpenSSL cipher list) | `tokio_rustls::TlsAcceptor` (TLS 1.2 only, rustls default ciphers) | ⚠️ rustls cipher set ⊂ OpenSSL |
+| ALPN | not advertised | not advertised | ✅ |
+| `LOGIN_SEL_IP_INFO` ip-ban check on `Start()` | ✅ | ❌ — Rust does not check `ip_banned` at session start (only on bnet REST login attempt) | ❌ |
+| `ConnectionService::Connect/Bind/Echo/KeepAlive` | full | `Bind`/`Echo` implemented; `Connect`/`KeepAlive` partial | ⚠️ |
+| `AuthenticationService.Logon` | validates program/platform/locale, optional `cached_web_credentials` shortcut, sends `ChallengeExternalRequest` | program+platform validated; **locale not validated**; `cached_web_credentials` shortcut **not** wired | ⚠️ |
+| `ChallengeListener::OnExternalChallenge` (web auth URL) | sent via `Service<ChallengeListener>` | sent via `send_request(CHALLENGE_LISTENER, 3, …)` | ✅ |
+| `AuthenticationService.VerifyWebCredentials` | loads account + char counts + last-played in chained query callback; checks IP lock, country lock (via `IPLocation`), `IsBanned` / `IsPermanenetlyBanned`; sets `_authed` and dispatches `AuthenticationListener::OnLogonComplete` (method 5) | similar; but **no country lock** (no `IPLocation`); 64-byte `session_key` is fresh random per call (TC also random — ✅); error codes used: 3, 12 | ⚠️ no country lock |
+| Error codes on auth failure | `ERROR_DENIED=3`, `ERROR_TIMED_OUT=8`, `ERROR_RISK_ACCOUNT_LOCKED=12`, `ERROR_GAME_ACCOUNT_BANNED=14`, `ERROR_GAME_ACCOUNT_SUSPENDED=15` | always uses 3 (DENIED) or 12 (LOCKED) — never distinguishes `BANNED` vs `SUSPENDED` vs `TIMED_OUT` | ❌ |
+| `GameUtilitiesService.ProcessClientRequest` (RealmList / RealmJoin / LastCharPlayed / RealmListTicket) | full | full | ✅ |
+| `GameUtilitiesService.GetAllValuesForAttribute` (sub-region enumeration) | full | full | ✅ |
+| `AccountService.GetAccountState/GetGameAccountState` | stubs | stubs | ✅ |
+| `session_key_bnet` / `UPD_BNET_GAME_ACCOUNT_LOGIN_INFO` write | TC writes 64 raw bytes via `setBinary` | Rust writes `combined` (`client_secret ‖ server_secret`, expected 64 raw bytes) via `set_bytes` | ✅ assuming `client_secret` is 32 bytes from launcher |
+
+### 13.5 Cookie / token signing
+
+There is **no JWT or HMAC-signed cookie** anywhere. Both TC and Rust use:
+
+- **Login ticket** = opaque random hex string (`TC-` + 20 random bytes, 40 hex chars). Stored verbatim in `battlenet_accounts.LoginTicket`. Validated by lookup, not signature. ✅ parity.
+- **`JSESSIONID` cookie** = 16 random bytes hex, only meaningful as an SRP-state-bag key. Not signed. Rust uses `DashMap<String, RestSessionState>`. TC keeps it in the per-connection `LoginSessionState`. ⚠️ Rust persists across connections (multi-request SRP works behind a load balancer); TC does not — slight divergence but harmless.
+- **Realm-list ticket** = literal ASCII `b"AuthRealmListTicket"` returned in `Param_RealmListTicket`. TC writes the same constant. ✅
+- **`Param_JoinSecret`** = 32 random bytes per `RealmJoinRequest`. Combined with `client_secret` and stored as `session_key_bnet`. ✅
+
+`SecretMgr::Initialize(SECRET_OWNER_BNETSERVER)` in TC does load an HMAC key — but **only worldserver consumes it** (for realm-list signing on the realmlist socket from the connect server). bnetserver itself initializes it but does not sign anything user-facing. So missing-`SecretMgr` is a worldserver-side gap, not a bnetserver one. (See worldserver doc.)
+
+### 13.6 TLS specifics
+
+| Concern | TC | Rust |
+|---|---|---|
+| Library | OpenSSL 1.1+/3.0 via Boost.Asio `ssl::context` | `rustls` 0.23 via `tokio-rustls` |
+| Protocol versions | `tls` (= TLS_method, all versions enabled) | TLS 1.2 only (pinned via `builder_with_protocol_versions(&[&TLS12])`) |
+| ALPN | not set | not set |
+| Cert source | `CertificatesFile` (chain), `PrivateKeyFile`, `PrivateKeyPassword` | hardcoded `bnet_cert.pem` / `bnet_key.pem`, fallback `bnet_fullchain.pem`. **`CertificatesFile` config is read but never used.** |
+| Client auth | none | none |
+| Cipher list | OpenSSL default (`HIGH:!aNULL:!MD5` + system policy) | rustls TLS 1.2 default (ECDHE-{RSA,ECDSA}-AES{128,256}-GCM-SHA{256,384}, plus a few CHACHA20 variants) |
+| Two contexts (REST vs RPC)? | one `ssl::context` shared | two separate `ServerConfig`s (functionally identical, just clones) |
+
+### 13.7 Recommended sub-tasks
+
+Add these to §9 (existing tasks #BNET.1–#BNET.14 stand):
+
+- [ ] **#BNET.15** Fix `extract_auth_ticket`: Base64-decode the `Basic <…>` payload, then truncate at first `:`. Match `LoginRESTService::ExtractAuthorization`.
+- [ ] **#BNET.16** Wire `CertificatesFile` config (already read in `main.rs:68` but ignored). Add `PrivateKeyFile` + optional `PrivateKeyPassword`. Fall back to current hardcoded names with a `tracing::warn!`.
+- [ ] **#BNET.17** Validate locale in `handle_logon` (TC returns `ERROR_BAD_LOCALE`). Use the same allow-list as `wow_constants::LocaleConstant`.
+- [ ] **#BNET.18** Honour `cached_web_credentials` in `LogonRequest`: short-circuit straight to `VerifyWebCredentials` instead of always sending the web-auth challenge. Saves one client round-trip.
+- [ ] **#BNET.19** Distinguish error codes in `VerifyWebCredentials`: emit 8 (TIMED_OUT) for expired ticket, 14 (BANNED), 15 (SUSPENDED), 12 (LOCKED) — currently always 3 or 12.
+- [ ] **#BNET.20** Add `LOGIN_SEL_IP_INFO` check in `Session::Start`-equivalent: reject TLS handshake if remote IP is in `ip_banned`.
+- [ ] **#BNET.21** Persist failed login attempts in `account_failedlogins` + `ip_auto_banned` per `WrongPass.MaxCount`/`BanTime`/`BanType` (currently in-memory only). Subsumes `#BNET.8`.
+- [ ] **#BNET.22** Install SIGTERM handler alongside `ctrl_c` so `kill <pid>` shuts down cleanly.
+- [ ] **#BNET.23** Match `HandlePostRefreshLoginTicket` response shape: `{ login_ticket_expiry: <unix> }` or `{ is_expired: true }`, not `{ login_ticket: "…" }`.
+- [ ] **#BNET.24** Resolve `LoginREST.{External,Local}Address` via DNS at startup (TC does, fails fast on bad hostname). Today Rust silently uses the literal string.
+
+### 13.8 Header status update
+
+Header status changed from `❌ not audited` → `⚠️ audited (2026-05-01)`. Functional state remains `⚠️ partial` because the audit confirmed gaps; will become `✅` only after #BNET.15 (the auth bug), #BNET.19 (error codes), and either #BNET.18 or explicit confirmation that the launcher always uses the challenge path.

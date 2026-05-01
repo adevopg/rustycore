@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/world-server/`
 > **Layer:** binary (executable entry point)
 > **Status:** ⚠️ partial (boot, DB init, listener spawn, session-per-connection work; freeze detector + RA + SOAP + CLI thread + `World::Update` tick loop are all missing)
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ⚠️ audited 2026-05-01 — **breaking divergence**: no global tick (see §13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -320,3 +320,241 @@ DBUpdater (auto-applies pending `.sql` files) is invoked by `DatabaseLoader::Loa
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Audited:**
+- C++: `/home/server/woltk-trinity-legacy/src/server/worldserver/Main.cpp` (742 lines), `World.cpp::Update`, `World.cpp::UpdateSessions`.
+- Rust: `/home/server/rustycore/crates/world-server/src/main.rs` (818 lines), `crates/wow-world/src/session.rs::WorldSession::update` (line 1063), `crates/wow-world/src/map_manager.rs` (no `update` / `tick` method exists), `crates/wow-database/src/database.rs::Database::open` (line 36), `crates/wow-database/src/updater.rs`.
+
+### 13.1 Audit summary
+
+The doc body's pre-audit hypothesis was correct on the most important point: **there is no `World::Update(diff)` global tick driver in RustyCore.** Each `WorldSession` is owned by its own per-connection Tokio task, runs `session.update(50)` followed by `tokio::time::sleep(50ms)`, and that is the only thing driving creature AI, combat, and aura ticks (`session.rs:1109-1124` calls `tick_creatures_sync`, `tick_combat_sync`, `tick_auras` modulo `creature_tick`). `MapManager` exists as shared state (`SharedMapManager = Arc<RwLock<MapManager>>`) but has **no `update()` / `tick()` method at all** — it is a passive container of grids and creatures, never updated from a single source. The `m_worldLoopCounter` analogue does not exist. Sessions independently tick "their" creatures, which means an idle creature on a map with no nearby session simply does not tick.
+
+Otherwise the boot sequence is largely on-parity for what's implemented (4 DB pools, DB updater, DB2/DBC store loads, dispatch table, listeners on 8085 + 8086, ConnectTo flow, `get_address_for_client` heuristic). The big gaps are in lifecycle/operational infrastructure: no freeze detector, no SIGTERM handler, no realmlist OFFLINE flag toggle, no `ClearOnlineAccounts`, no CLI/RA/SOAP, no graceful shutdown drain (sessions are dropped abruptly when listeners close), no PID file, no `--config` / `--update-databases-only` CLI args.
+
+### 13.2 Startup parity
+
+| TC step (Main.cpp) | Rust equivalent | Parity |
+|---|---|---|
+| `signal(SIGABRT, AbortHandler)` | — | ❌ missing |
+| `Trinity::Locale::Init()` | — | ❌ irrelevant (Rust uses UTF-8 by default) |
+| Parse `--config`, `--update-databases-only`, `--version` | — | ❌ missing (#WS.16) |
+| Win32 service / `timeBeginPeriod(1ms)` | — | n/a (Linux only) |
+| `sConfigMgr->LoadInitial(...) + LoadAdditionalDir + OverrideEnv` | `wow_config::load_config("WorldServer.conf")` w/ `.dist` fallback | ⚠️ no `conf.d/` dir, no env override |
+| `boost::asio::io_context` shared | implicit Tokio runtime | ✅ acceptable divergence |
+| `sLog->RegisterAppender<AppenderDB>(); Initialize(asyncIo)` | `tracing_subscriber::fmt().with_env_filter(...)` | ⚠️ no DB sink (#WS.7) |
+| `Trinity::Banner::Show(...)` | one `info!("RustyCore World Server starting...")` | ⚠️ #WS.19 |
+| `OpenSSLCrypto::threadsSetup` + `BigNumber::SetRand` warmup | — | ✅ irrelevant (rustls + getrandom) |
+| `CreatePIDFile(PidFile)` | — | ❌ missing (#WS.17) |
+| `signal_set(SIGINT, SIGTERM)` | only `tokio::signal::ctrl_c()` (line 509) | ❌ SIGTERM missing (#WS.18) |
+| `ThreadPool(numThreads)` posting `io->run()` | implicit Tokio workers | ✅ acceptable divergence (don't expose `Network.Threads` literally) |
+| `SetProcessPriority(...)` | — | ❌ out of scope |
+| `StartDB()` opens 4 pools (Login/Character/World/Hotfix) | `LoginDatabase::open` + `CharacterDatabase::open` + `WorldDatabase::open` + `HotfixDatabase::open` (lines 177-228) | ✅ four pools present |
+| `DatabaseLoader::Load()` runs `DBUpdater` per pool | `DbUpdater::new(...).populate(...).await` + `update(...).await` for auth/characters; `update` only for world/hotfix (lines 232-272) | ✅ implemented |
+| `realm.Id.Realm` from config; bail if 0 | `RealmID` config (line 390); defaults to 1, no validation | ⚠️ no zero-check |
+| `--update-databases-only` early exit | — | ❌ missing (#WS.16) |
+| `Trinity::Net::ScanLocalNetworks()` | `get_address_for_client` /24 heuristic (line 757) | ⚠️ partial |
+| `UPDATE realmlist SET flag\|=OFFLINE` at boot | — | ❌ missing (#WS.5) |
+| `sRealmList->Initialize(io, RealmsStateUpdateDelay)` background refresh | — | ❌ missing (#WS.12) |
+| `LoadRealmInfo()` | `load_realm_auth_seed` + `load_realm_addresses` (lines 530, 728) | ⚠️ partial (no global `realm` struct) |
+| `sMetric->Initialize(realmName, io, lambda)` | — | ❌ missing (#WS.13) |
+| `sScriptMgr->SetScriptLoader(AddScripts)` | — | ❌ missing (script registration is implicit but `OnStartup`/`OnShutdown` hooks aren't called) |
+| `sSecretMgr->Initialize(SECRET_OWNER_WORLDSERVER)` | — | ❌ missing (#WS.11) |
+| `sWorld->SetInitialWorldSettings()` (the big one) | scattered: `ItemStore::load`, `PlayerStatsStore::load`, `ItemStatsStore::load`, `build_hotfix_blob_cache`, `SkillStore::load`, `SpellStore::load`, `load_area_triggers`, `quest::load_quests`, `QuestXpStore::load` (lines 302-388) | ⚠️ partial (covered by `world.md`) |
+| `if (Ra.Enable) StartRaSocketAcceptor(io)` | — | ❌ missing (#WS.9) |
+| `if (SOAP.Enabled) std::thread(TCSoapThread, ...)` | — | ❌ recommend drop (#WS.10) |
+| `sWorldSocketMgr.StartWorldNetwork(io, ip, worldPort, instancePort, networkThreads)` | `start_world_listener(realm_addr, ...)` + `start_instance_listener(instance_addr, ...)` (lines 473-505) | ✅ functional equivalence |
+| `UPDATE realmlist SET flag &= ~OFFLINE` after listener | — | ❌ missing (#WS.5) |
+| `if (MaxCoreStuckTime > 0) FreezeDetector::Start(...)` | — | ❌ missing (#WS.3) |
+| `sScriptMgr->OnStartup()` | — | ❌ missing (#WS.14) |
+| `if (Console.Enable) std::thread(CliThread)` | — | ❌ missing (#WS.8) |
+| `WorldUpdateLoop()` (the meat) | per-session `loop { session.update(50); session.process_pending().await; sleep(50ms); }` | ❌ **breaking divergence** |
+
+### 13.3 Shutdown parity
+
+| TC step | Rust equivalent | Parity |
+|---|---|---|
+| `signals.async_wait(SignalHandler)` → `World::StopNow(SHUTDOWN_EXIT_CODE)` | `tokio::select! { ctrl_c => ... }` drops listener handles | ⚠️ no global stop flag, sessions don't see "stopping" state |
+| `sWorld->KickAll()` (save + send logout) | — | ❌ missing (#WS.15) |
+| `sWorld->UpdateSessions(1)` final flush | — | ❌ missing |
+| `sWorldSocketMgr.StopNetwork()` | listener task drop | ⚠️ implicit, no drain |
+| `ClearOnlineAccounts()` | — | ❌ missing (#WS.4) |
+| `WorldPackets::Auth::ConnectTo::ShutdownEncryption()` / `EnterEncryptedMode::ShutdownEncryption()` | — | ✅ irrelevant (per-session keys in Rust) |
+| `ioContextStopHandle.reset()` | — | ✅ implicit (Tokio runtime drops) |
+| `threadPool.reset()` | — | ✅ implicit |
+| `sLog->SetSynchronous()` | — | ⚠️ tracing flush not explicit |
+| `sScriptMgr->OnShutdown()` | — | ❌ missing (#WS.14) |
+| `UPDATE realmlist SET flag\|=OFFLINE` on exit | — | ❌ missing (#WS.5) |
+| `BattlegroundMgr::DeleteAllBattlegrounds → OutdoorPvPMgr::Die → MapMgr::UnloadAll → TerrainMgr::UnloadAll → InstanceLockMgr::Unload` | only partial `MapManager` exists; rest missing | ❌ missing |
+| `return World::GetExitCode()` | always `Ok(())` (exit code 0) | ⚠️ no error-path code |
+
+### 13.4 Main loop architectural divergence — verdict
+
+**Verdict: BREAKING DIVERGENCE.**
+
+TC's `WorldUpdateLoop()` is the single source of game time:
+
+```cpp
+while (!World::IsStopped()) {
+    ++World::m_worldLoopCounter;
+    realCurrTime = getMSTime();
+    diff = realCurrTime - realPrevTime;
+    if (diff < minUpdateDiff) sleep_for(minUpdateDiff - diff);
+    sWorld->Update(diff);          // → UpdateSessions(diff) + sMapMgr->Update(diff) + ...
+    realPrevTime = realCurrTime;
+}
+```
+
+- One thread, one `getMSTime()` per iteration shared by everything inside.
+- `sWorld->Update(diff)` calls `UpdateSessions(diff)` (line 2704 of `World.cpp`) which iterates **all** `m_sessions` once per tick, **then** calls `sMapMgr->Update(diff)` (line 2748) which ticks every loaded grid, every creature AI, every spawn-respawn timer, every BG timer, every transport.
+- `m_worldLoopCounter` is incremented from this thread and read by the freeze detector — if the thread hangs, the watchdog crashes the process so a supervisor can restart.
+
+RustyCore has **no equivalent**:
+
+- Each `WorldSession` runs in its own Tokio task with a `tokio::time::sleep(Duration::from_millis(50))` floor (`world-server/src/main.rs:705-721`).
+- Creature AI / combat / auras are ticked from inside `WorldSession::update` (`session.rs:1109-1124`) — i.e. each session ticks **its own copy** of creatures (`self.creatures: HashMap<ObjectGuid, CreatureAI>`), not the shared `MapManager`.
+- `MapManager` (`crates/wow-world/src/map_manager.rs`) has no `update()`, `tick()`, or any periodic method. It is a passive container.
+- There is no global counter, no freeze detector, no `World::IsStopped()`, no shared time base.
+
+**Concrete consequences**:
+
+1. With 0 connected sessions, no creature in the world ever updates (idle creatures freeze, BG timers don't run, respawn timers don't fire).
+2. With N connected sessions, each creature is ticked from N different real-time ms boundaries depending on each session's tick offset. AoE / aura ticks visible to different clients land at different real-time boundaries — visible in PvP and group play.
+3. The `MapManager` migration documented in `_attic/README.md` and `CLAUDE.md` ("two places: legacy per-session HashMap vs shared MapManager") is **a prerequisite** to fixing this, not just a refactor — the global tick driver can't usefully exist until creature state lives in `MapManager` only.
+4. There is no `MinWorldUpdateTime` enforcement — the per-session `sleep(50ms)` is hardcoded. No `MaxCoreStuckTime` warning when a tick takes too long.
+
+This is the most fundamental architectural difference between the two stacks and must be the root of the §9 sub-task tree.
+
+### 13.5 Connection-pool sizing
+
+TC opens **3 sub-pools per logical DB** (`SyncPool`, `AsyncPool`, callback pool) configured via `<DB>DatabaseInfo.{Synch,Async}.PoolSize` keys.
+
+Rust opens **one `sqlx::Pool<MySql>` per logical DB** with `max_connections=10` hardcoded in `Database::open` (`crates/wow-database/src/database.rs:36`). `open_with_pool_size` exists but is not used by `world-server/main.rs`. The four config keys `LoginDatabaseInfo.PoolSize` / `CharacterDatabaseInfo.PoolSize` / `WorldDatabaseInfo.PoolSize` / `HotfixDatabaseInfo.PoolSize` are not read.
+
+Under heavy login churn (server reboot at peak) this single 10-connection pool can become a bottleneck. (#WS.21)
+
+### 13.6 DB updater
+
+TC's `DBUpdater` (called by `DatabaseLoader::Load`) hashes every `.sql` in `sql/updates/<db>/`, compares against `updates` table, and applies pending files. Rust port (`crates/wow-database/src/updater.rs`) implements `populate(base_sql)` + `update(source_dir)` and is wired in `world-server/main.rs` lines 232-272. **Parity: ✅ implemented**, including the `auto_setup` flag from config. Failures during populate/update only emit `tracing::warn!` rather than aborting — milder than TC, which `return false` from `StartDB`.
+
+### 13.7 Signal handling
+
+| TC | Rust |
+|---|---|
+| `signal_set(io, SIGINT, SIGTERM)` + Win32 SIGBREAK → `World::StopNow(SHUTDOWN_EXIT_CODE)` | `tokio::signal::ctrl_c()` (SIGINT only) → break out of `tokio::select!` and drop listener tasks |
+| `signal(SIGABRT, AbortHandler)` writes coredump preamble | — |
+| Signal sets a flag; tick loop notices on next iteration | No flag; the listener tasks are simply abandoned |
+
+Gaps:
+- **SIGTERM is not handled.** A `systemctl stop` will only work because systemd falls back to SIGKILL after the timeout. The graceful path is never executed.
+- No graceful drain. Sessions are dropped mid-packet.
+- No "kick all + save + close listener + flush DB + exit" sequence.
+
+(#WS.18, #WS.15)
+
+### 13.8 Freeze detector
+
+**Missing entirely.** No equivalent of `FreezeDetector` class, no `m_worldLoopCounter`, no `ABORT_MSG`. If the runtime hangs (DB query stuck, scheduler livelock, deadlock), only an external systemd `WatchdogSec=` would catch it — and no `sd_notify(WATCHDOG=1)` is being emitted, so it wouldn't either.
+
+This must be implemented as `tokio::time::interval(1s)` reading an `AtomicU32` global tick counter, and calling `std::process::abort()` (not `exit(1)`) so the supervisor gets a coredump. (#WS.3)
+
+### 13.9 Console / RA / SOAP
+
+| Surface | TC | Rust |
+|---|---|---|
+| `CliThread` (stdin reader, `.commands`) | `CommandLine/CliRunnable.cpp` (130 lines) | ❌ missing (#WS.8) |
+| Remote Access (`Ra.Enable`, port 3443) | `RemoteAccess/RASession.cpp` (150 lines) | ❌ missing (#WS.9) |
+| SOAP (`SOAP.Enabled`, port 7878) | `TCSoap/TCSoap.cpp` (160 lines) | ❌ recommend drop (#WS.10) |
+
+GMs currently have **no in-process admin surface** — all administration must go through direct DB writes or restart cycles.
+
+### 13.10 Session tick architecture — CMSG arrival trace
+
+**TC path (single-threaded on the world thread):**
+
+```
+TCP read (network thread)
+  → WorldSocket::ReadHandler decodes header + decrypts body
+  → constructs WorldPacket
+  → enqueues into WorldSession::m_recvQueue (lockfree MPSC)
+WorldUpdateLoop (world thread, single):
+  → sWorld->Update(diff)
+    → World::UpdateSessions(diff) — for each session in m_sessions:
+      → WorldSession::Update(diff, packetFilter)
+        → drains m_recvQueue up to MAX_PACKETS_PER_UPDATE (100)
+        → for each packet: dispatches to opcode handler INLINE on this thread
+        → handler runs to completion before next packet (per-session serialization)
+    → sMapMgr->Update(diff) — ticks all maps' creatures/grids
+```
+
+All gameplay state mutation happens on **one thread**, so packet handlers don't need locks against each other. The `PacketFilter` selects which opcodes can run before login complete; handlers `_HandleNonReady` are deferred.
+
+**Rust path (per-session task):**
+
+```
+TCP read (per-session async task in wow-network)
+  → WorldSocket reads header (decrypts via AES-GCM HMAC-SHA256)
+  → sends wow_packet::WorldPacket through flume::Sender<WorldPacket>
+WorldSession owning task (per session, in world-server::create_session):
+  → loop:
+    → session.update(50)            — drains pkt_rx into pending_packets (up to MAX_PACKETS_PER_UPDATE)
+                                       AND ticks creatures/combat/auras every 2-4 calls
+    → session.process_pending().await — async dispatches via wow_handler::build_dispatch_table()
+    → if disconnecting: break
+    → tokio::time::sleep(50ms)
+```
+
+Each session's task is independent; there is no global ordering. Handlers that mutate **shared** state (e.g. `MapManager` via `Arc<RwLock<...>>`, `PlayerRegistry`, `GroupRegistry`) must take locks. The `tick_creatures_sync` etc. inside `session.update` mutate **per-session** `self.creatures` (legacy field), which is the migration-in-progress called out in `CLAUDE.md`.
+
+This is acceptable divergence **for packet dispatch** (Tokio gives us the per-session serialization for free), but **breaks for shared world state** — which is the §13.4 verdict.
+
+### 13.11 Missing infrastructure (consolidated)
+
+| Item | Severity | Sub-task |
+|---|---|---|
+| Global `World` singleton + `is_stopped()` / `stop_now(exit)` flag | High | #WS.1 |
+| Global `WorldUpdateLoop` driving `MapManager::update(diff)` + session ticks | **Critical** | #WS.2 |
+| `FreezeDetector` (process abort on tick stall) | High | #WS.3 |
+| `ClearOnlineAccounts` at boot + shutdown | Medium | #WS.4 |
+| Realmlist OFFLINE flag toggle (boot / listener-up / shutdown) | Medium | #WS.5 |
+| DB keep-alive ping (`MaxPingTime`) | Medium | #WS.6 |
+| `AppenderDB` for `tracing` (logs into `logs.logs` table) | Low | #WS.7 |
+| CLI thread (`Console.Enable`) | Medium | #WS.8 |
+| RA listener (`Ra.Enable`, port 3443) | Medium | #WS.9 |
+| SOAP — recommend **drop** with config warning | Low (drop) | #WS.10 |
+| `SecretMgr::initialize(WorldServer)` | Medium | #WS.11 |
+| `RealmList` background refresh | Medium | #WS.12 |
+| Metrics subsystem (`online_players`, `db_queue_*`) | Low | #WS.13 |
+| `ScriptMgr::on_startup` / `on_shutdown` hooks | Low | #WS.14 |
+| Graceful shutdown (kick + save + drain + close + DB cleanup) | High | #WS.15 |
+| CLI args (`--config`, `--update-databases-only`, `--version`) | Low | #WS.16 |
+| PID file (`PidFile` config) | Low | #WS.17 |
+| SIGTERM handler | High | #WS.18 |
+| Pre-listener startup banner (build hash, DB versions) | Low | #WS.19 |
+| Replace per-session sleep with broadcast tick from global loop | Medium | #WS.20 |
+| Connection-pool sizing config | Low | #WS.21 |
+
+### 13.12 Recommended sub-task ordering / additions
+
+The §9 list is largely correct; recommended **reorder by priority** (no renumbering — sub-task IDs are referenced elsewhere):
+
+1. **#WS.1, #WS.2, #WS.20** (the global tick + driver) — **prerequisite for everything else**, depends on completing the `_attic/`-flagged `MapManager` migration off `WorldSession.creatures`.
+2. **#WS.18** (SIGTERM) — trivial, do immediately.
+3. **#WS.15** (graceful shutdown) — depends on #WS.1.
+4. **#WS.3** (freeze detector) — depends on #WS.2 (needs the loop counter).
+5. **#WS.4, #WS.5** (DB cleanup at boot/shutdown) — independent, do anytime.
+6. **#WS.21** (pool sizing) — independent, trivial.
+7. **#WS.6** (DB keep-alive) — independent.
+8. Everything else as time allows.
+
+**Add new sub-tasks not currently in §9:**
+
+- [ ] **#WS.22** Migrate `tick_creatures_sync`, `tick_combat_sync`, `tick_auras` out of `WorldSession::update` into a `MapManager::update(diff)` method called from #WS.2's global loop. Coupled to the `_attic/` MapManager migration documented in `CLAUDE.md`. (XL)
+- [ ] **#WS.23** Move `time_sync_timer_ms` and `logout_time` ticks (currently in `session.rs:1130-1144`) to the global tick after #WS.2 lands; per-session sleep should only drive packet drain, not gameplay timers. (M)
+- [ ] **#WS.24** Add `sd_notify(WATCHDOG=1)` from the freeze detector when running under systemd, so the supervisor can do its own watchdog independent of `MaxCoreStuckTime`. (S)
+- [ ] **#WS.25** Wire `LoginDatabase.WarnAboutSyncQueries(true)` equivalent: log a warning when a "sync" query is issued from inside a tick (TC's safety net for accidental synchronous DB calls on the world thread). Likely impl: a debug-only `tokio::task::block_in_place` audit. (M)
+
+

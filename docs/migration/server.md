@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/Server/`
 > **Rust target crate(s):** `crates/wow-network/`, `crates/wow-world/`
 > **Layer:** L1 — Network, Session lifecycle, Packet I/O
-> **Status:** ⚠️ partial (WorldSocket handshake ✅, WorldSession dispatch partial)
-> **Audited vs C++:** ⚠️ partial (handshake complete, session state diverging)
+> **Status:** ⚠️ partial (WorldSocket handshake ✅, opcode dispatch ~23% coverage)
+> **Audited vs C++:** ⚠️ audited 2026-05-01 — large coverage gap, processing-mode mismatches widespread
 > **Last updated:** 2026-05-01
 
 ---
@@ -298,3 +298,152 @@ Server module handles ALL opcode dispatch. Listed by category:
 ---
 
 *Template version: 1.0. Status: ⚠️ partial — handshake & basic dispatch done; visibility & slot management divergent.*
+
+---
+
+## 13. Audit (2026-05-01)
+
+### Scope
+
+Cross-checked the Rust opcode dispatch layer (`crates/wow-handler/src/lib.rs` + `inventory::submit!`
+sites in `crates/wow-world/src/handlers/*.rs` + match block in `crates/wow-world/src/session.rs:1411-1920`)
+against the C++ TrinityCore wotlk_classic backport `Opcodes.cpp` (882 `DEFINE_HANDLER` entries; 621 with
+real handler bodies, the remainder being newer-expansion stubs that resolve to `Handle_NULL` /
+`STATUS_UNHANDLED` and are not relevant to a 3.4.3 server).
+
+### Coverage stats
+
+| Metric | Count |
+|---|---|
+| C++ `CMSG_*` opcodes defined in `Opcodes.cpp` | 882 |
+| C++ active handlers (excluding `Handle_NULL` + `Handle_EarlyProccess`) | 621 |
+| Rust `ClientOpcodes` enum constants in `wow-constants/src/opcodes.rs` | 663 |
+| Rust `inventory::submit!` registrations (incl. `register_move!` macro expansions) | 154 |
+| Match arms in `session.rs` dispatch block | 143 |
+| **Overlap** (active C++ ∩ Rust registered) | **145** |
+| Rust-registered with no corresponding C++ active handler (false positives) | 0 |
+| **C++-active without Rust registration (gap)** | **476** |
+| Rust-only opcode constants (`BuyStableSlot`, `Max`) without C++ handler | 2 |
+
+Overall coverage of the C++ active-handler surface in Rust: **~23%** (145/621). The remaining 476
+opcodes have no Rust `PacketHandlerEntry` and will fall through `dispatch_table.get()` returning
+`None` in `session.rs:1382`, producing only an `info!` log line and silently dropping the packet.
+
+### Status / processing mismatches
+
+**Six SessionStatus mismatches** (Rust enum vs `STATUS_*` in C++):
+
+| Opcode | C++ status | Rust status | Site |
+|---|---|---|---|
+| `CMSG_LOADING_SCREEN_NOTIFY` | `STATUS_AUTHED` | `LoggedIn` | `handlers/misc.rs` |
+| `CMSG_QUERY_CREATURE` | `STATUS_LOGGEDIN` | `Authed` | `handlers/character.rs` |
+| `CMSG_QUERY_GAME_OBJECT` | `STATUS_LOGGEDIN` | `Authed` | `handlers/character.rs` |
+| `CMSG_QUERY_NPC_TEXT` | `STATUS_LOGGEDIN` | `Authed` | `handlers/character.rs` |
+| `CMSG_QUERY_PLAYER_NAMES` | `STATUS_LOGGEDIN` | `Authed` | `handlers/character.rs` |
+| `CMSG_QUERY_REALM_NAME` | `STATUS_LOGGEDIN` | `Authed` | `handlers/character.rs` |
+
+The `CMSG_QUERY_*` cluster is registered as `Authed` but C++ requires `LoggedIn`. This means a
+valid pre-login client could trigger DB lookups via these handlers — a small abuse surface but
+behaviourally divergent.
+
+**54 PacketProcessing mismatches** (after granting RustyCore's binary `Inplace`/`ThreadUnsafe`
+split the leeway that C++'s `PROCESS_THREADSAFE` is acceptable as either). Pattern:
+
+- Most mismatches are `cpp=PROCESS_THREADUNSAFE rust=Inplace` — Rust runs handlers in the socket
+  thread that C++ explicitly demanded run on the per-session worker. Several of these (e.g.
+  `CMSG_AUCTION_LIST_*`, `CMSG_CALENDAR_*`, `CMSG_CHAT_JOIN_CHANNEL`, `CMSG_HOTFIX_REQUEST`,
+  `CMSG_GUILD_BANK_REMAINING_WITHDRAW_MONEY_QUERY`, `CMSG_LOGOUT_REQUEST`,
+  `CMSG_LOGOUT_CANCEL`) issue DB reads/writes; running them inplace risks blocking the I/O thread.
+- A second cluster is `cpp=PROCESS_INPLACE rust=ThreadUnsafe` (`CMSG_AREA_TRIGGER`,
+  `CMSG_AUTO_EQUIP_ITEM`, `CMSG_AUTO_STORE_BAG_ITEM`, `CMSG_BUY_ITEM`, `CMSG_DESTROY_ITEM`,
+  `CMSG_LIST_INVENTORY`, the `CMSG_QUEST_GIVER_*` group, `CMSG_QUERY_QUEST_INFO`). These are
+  actually fine functionally — running them on the worker is stricter than C++ — but they will
+  show up as latency outliers vs the reference.
+
+### Two-step dispatch invariant
+
+The dispatcher requires both (a) an `inventory::submit!` entry and (b) a match arm to actually
+execute a handler. Without (a), `dispatch_table.get(&opcode)` returns `None` and the function
+returns at `session.rs:1390` before the match executes. Without (b), the wildcard `_ => {}`
+branch (`session.rs:1902-1919`) just emits a `trace!` line and does nothing.
+
+| Class | Count | Severity |
+|---|---|---|
+| Match arm without `inventory::submit!` (hard silent drop) | 0 | — (clean) |
+| `inventory::submit!` without match arm (log-only no-op) | **11** | **High** |
+
+The 11 log-only no-ops are functionally dead handlers that look registered but never run:
+
+- `Emote`, `SendTextEmote` — `handlers/chat.rs`
+- `QueryQuestInfo`, `QuestGiverAcceptQuest`, `QuestGiverChooseReward`,
+  `QuestGiverCompleteQuest`, `QuestGiverQueryQuest`, `QuestGiverRequestReward`,
+  `QuestLogRemoveQuest` — `handlers/quest.rs`
+- `TrainerBuySpell` — `handlers/trainer.rs`
+- `WorldPortResponse` — `handlers/misc.rs`
+
+These are silent gameplay regressions: the handler bodies exist (so tests against the function
+directly may pass) but the dispatcher never reaches them.
+
+### Other findings
+
+- **One duplicate registration**: `ClientOpcodes::TrainerList` is registered in both
+  `handlers/character.rs` and `handlers/trainer.rs`. `inventory` does not de-duplicate; the table
+  builder will keep whichever `inventory::iter` yields last, producing a non-deterministic winner
+  across builds.
+- **Unknown-opcode handling parity**: C++ `OpcodeTable::operator[]` returns null and the dispatcher
+  drops with `LogUnprocessedTail`; Rust returns at `session.rs:1373` after an `info!` log. Behaviour
+  matches (log + drop, no error response sent to client). No regression vs C++.
+- **Arity sample (10 opcodes, fields read in order)**:
+  - `CMSG_CHAR_DELETE`: C++ reads `Guid` ↔ Rust reads packed GUID — **match**.
+  - `CMSG_LOOT_UNIT`: C++ reads `Unit` (ObjectGuid) ↔ Rust reads packed GUID — **match**.
+  - `CMSG_TAXI_NODE_STATUS_QUERY`: C++ reads `UnitGUID` ↔ Rust reads packed GUID — **match**.
+  - `CMSG_CHAT_MESSAGE_RAID`: C++ reads `Language(int32) + Bits(11) + IsSecure(bit) + text`;
+    Rust reads same fields in same order — **match**.
+  - `CMSG_AREA_TRIGGER`: C++ reads `int32 AreaTriggerID + bit Entered + bit FromClient`;
+    Rust reads `u32 trigger_id` and stops — **MISMATCH**, drops 2 trailing bits. Server cannot
+    distinguish entry/exit triggers.
+  - `CMSG_MOVE_SET_FLY`, `CMSG_AUCTION_LIST_BIDDER_ITEMS`, `CMSG_LOADING_SCREEN_NOTIFY`,
+    `CMSG_COMMERCE_TOKEN_GET_LOG`, `CMSG_QUEST_GIVER_QUERY_QUEST` — not deeply inspected, but
+    dispatch flow exists.
+
+The 1-in-10 arity defect rate, extrapolated, suggests a non-trivial number of similar truncated
+reads in the registered handlers — most likely in opcodes that gained bit-packed fields between
+classic-WotLK and the modern protocol the C++ backport actually uses.
+
+### Recommended sub-tasks
+
+- [ ] **#SERVER.AUDIT.1** Migrate the 11 log-only no-ops out of the `_ => {}` fall-through:
+      add explicit `ClientOpcodes::Foo => self.handle_foo(pkt).await,` arms in
+      `session.rs:1411-1920` for each registered-but-unmatched opcode (Emote, SendTextEmote,
+      WorldPortResponse, the 7 QuestGiver/Quest opcodes, TrainerBuySpell). Complejidad: S.
+- [ ] **#SERVER.AUDIT.2** Resolve the duplicate `TrainerList` registration: keep the
+      `handlers/trainer.rs` entry, remove the `handlers/character.rs` one, and add a
+      `cargo test`-time invariant that scans `inventory::iter` for duplicate opcodes.
+      Complejidad: S.
+- [ ] **#SERVER.AUDIT.3** Fix the 6 `SessionStatus` mismatches (`CMSG_QUERY_*` cluster + the
+      reverse on `CMSG_LOADING_SCREEN_NOTIFY`). Complejidad: S.
+- [ ] **#SERVER.AUDIT.4** Reconcile the 54 `PacketProcessing` mismatches. The right move is
+      probably to introduce a third `Inplace`/`ThreadSafe`/`ThreadUnsafe` variant and migrate the
+      handlers DB-touching while running inplace to `ThreadUnsafe`. Complejidad: M.
+- [ ] **#SERVER.AUDIT.5** Triage the 476 unregistered C++-active opcodes by frequency: the
+      hot path (login, movement, item, spell, inventory, chat) appears mostly covered; the
+      gap is dominated by guild bank, calendar, LFG, auction-house variants, void storage,
+      petitions, garrison-era opcodes that may legitimately be deferred. Catalog into
+      "must-port" / "P2 backlog" / "skip (modern-only)" lists. Complejidad: M.
+- [ ] **#SERVER.AUDIT.6** Add the missing `Entered` + `FromClient` bit reads to
+      `CMSG_AREA_TRIGGER` decoder; sweep the rest of `handlers/misc.rs` and `handlers/character.rs`
+      for similar truncated reads against C++ `*Packets.cpp::Read()` bodies. Complejidad: M.
+- [ ] **#SERVER.AUDIT.7** Add a build-time test that walks `inventory::iter::<PacketHandlerEntry>`
+      and asserts each opcode either has a match arm in `session.rs` or is explicitly listed in
+      a `#[allow(dead_handler)]` set, eliminating the silent-no-op class of bugs. Complejidad: M.
+
+### Audit confidence
+
+Coverage stats and two-step-dispatch findings: **high confidence** (mechanical comparison of
+parsed registrations against parsed match arms). Status/processing mismatch counts: **high
+confidence** (string compare with documented C++ → Rust mapping; the
+`PROCESS_THREADSAFE`/`Inplace` ambiguity is explicitly accounted for). Arity findings:
+**moderate confidence** (10-sample manual spot check, not exhaustive). The 476 missing-handler
+gap is well-supported but the practical importance of each missing opcode varies wildly and
+would need its own pass.
+

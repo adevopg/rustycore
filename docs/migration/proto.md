@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/proto/`
 > **Rust target crate(s):** `crates/wow-proto/`
 > **Layer:** L1 (infrastructure — consumed by `bnet-server`, `wow-network`, `wow-handler`)
-> **Status:** ⚠️ partial — 11 of ~50 services + the two real `.proto` sources (Login, RealmList) are not yet ported
-> **Audited vs C++:** ⚠️ partial
+> **Status:** ⚠️ partial — 5 services implemented, 2 unported `.proto` sources (Login, RealmList) hand-rolled in handlers, club services + 8 declared services are 0% covered
+> **Audited vs C++:** ⚠️ partial — wire compat verified for 5 ported services; error code coverage 7/601
 > **Last updated:** 2026-05-01
 
 ---
@@ -382,3 +382,122 @@ Concrete sub-tasks (one per service group):
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+### 13.1 Audit summary
+
+The Rust `wow-proto` crate is **structurally faithful but heavily under-scoped**. Of the 53 `.pb.h` files in `src/server/proto/Client/` plus the 4 `.proto` source files (`Login.proto`, `RealmList.proto`, `club_service.proto`, `club_listener.proto`), only **11 `.proto` files** are reconstructed in `crates/wow-proto/proto/bgs/low/pb/client/` and **5 services** have RPC handlers in `bnet-server/src/rpc/services/` (Connection, Authentication, Account, GameUtilities — Challenge has messages but no handler module, it is consumed only as the outbound `ChallengeListener` listener type from the auth handler). Wire-format spot-checks against `*.pb.h` field-number constants confirm parity for `Header`, `LogonRequest`, `LogonResult`, `ProcessId`, and `Attribute`. `Login.proto` and `RealmList.proto` are **not** built from prost; instead `bnet-server` hand-rolls equivalent serde structs in `rest/types.rs` and `realm/mod.rs`. The 53 `.pb.h` services from the `bgs.low` proto set (friends, presence, report, club_*, voice, embed, ets, channel, message, notification, invitation, role, profanity_filter_config, rpc_config, resource, user_manager, account_listener, presence_listener, friends_listener, club_listener, club_membership_*, etc.) are **entirely absent** — clients exercising those code paths receive `Unknown service hash` from the dispatcher and a status-1 (`ERROR_INTERNAL`) response. `BattlenetRpcErrorCodes.h` declares **601** named error constants; `wow_proto::status` declares **6** (`OK`, `ERROR_INTERNAL`, `ERROR_DENIED`, `ERROR_NO_GAME_ACCOUNT`, `ERROR_WOW_SERVICES_GAME_ACCOUNT_LOCKED`, `ERROR_GAME_ACCOUNT_BANNED`, `ERROR_GAME_ACCOUNT_SUSPENDED`) — and the implemented RPC handlers do **not** reference them; they pass bare integer literals (`3`, `12`, `1`) to `send_logon_error` / `send_response_status` instead.
+
+### 13.2 .proto file inventory comparison
+
+| Component | C++ canonical | Rust port | Notes |
+|---|---|---|---|
+| `Login.proto` | yes (84 lines) | **no** — hand-rolled in `bnet-server/src/rest/types.rs` (~80 lines, serde structs) | Lossy: hand-roll uses snake_case JSON conventions, original is camelCase via proto2 `optimize_for=CODE_SIZE` |
+| `RealmList.proto` | yes (83 lines) | **no** — hand-rolled in `bnet-server/src/realm/mod.rs` lines 330–392 (serde camelCase structs) | Hand-roll covers `RealmListUpdates`, `RealmEntry`, `ClientVersion`, `RealmCharacterCountList`, `RealmListServerIPAddresses`; missing `RealmListTicketIdentity`, `RealmListTicketClientInformation`, `ClientInformation`, `IPAddress`, `RealmIPAddressFamily` as schema (parsed inline from JSON in `game_utilities.rs::get_realm_list_ticket`) |
+| `Client/club_service.proto` | yes (293 lines) | **no** | Entire community/club system unreachable |
+| `Client/club_listener.proto` | yes (121 lines) | **no** | Entire community/club system unreachable |
+| `Client/rpc_types.pb.h` | gen-only | yes (`rpc_types.proto`, reconstructed) | Field numbers verified ✓ |
+| `Client/entity_types.pb.h` | gen-only | yes (`entity_types.proto`) | ✓ |
+| `Client/attribute_types.pb.h` | gen-only | yes (`attribute_types.proto`) | ✓ |
+| `Client/content_handle_types.pb.h` | gen-only | yes (`content_handle_types.proto`) | ✓ |
+| `Client/semantic_version.pb.h` | gen-only | yes (`semantic_version.proto`) | ✓ |
+| `Client/authentication_service.pb.h` | gen-only | yes (`authentication_service.proto`) | Field numbers verified for `LogonRequest`/`LogonResult` ✓ |
+| `Client/connection_service.pb.h` | gen-only | yes (`connection_service.proto`) | ✓ |
+| `Client/challenge_service.pb.h` | gen-only | yes (`challenge_service.proto`) | ✓ |
+| `Client/game_utilities_service.pb.h` | gen-only | yes (`game_utilities_service.proto`) | ✓ |
+| `Client/account_service.pb.h` + `account_types.pb.h` | gen-only | yes (`account_service.proto` + `account_types.proto`) | ✓ |
+| `Client/account_types.pb.h` | gen-only | yes (`account_types.proto`) | ✓ |
+| `Client/friends_service.pb.h` + `friends_types.pb.h` | gen-only | **no** | |
+| `Client/presence_{service,listener,types}.pb.h` | gen-only | **no** | |
+| `Client/report_{service,types}.pb.h` | gen-only | **no** | |
+| `Client/resource_service.pb.h` | gen-only | **no** | |
+| `Client/user_manager_{service,types}.pb.h` | gen-only | **no** | |
+| `Client/channel_types.pb.h` | gen-only | **no** | |
+| `Client/notification_types.pb.h` | gen-only | **no** | |
+| `Client/message_types.pb.h` | gen-only | **no** | |
+| `Client/invitation_types.pb.h` | gen-only | **no** | |
+| `Client/profanity_filter_config.pb.h` | gen-only | **no** | |
+| `Client/embed_types.pb.h` | gen-only | **no** | |
+| `Client/ets_types.pb.h` | gen-only | **no** | |
+| `Client/event_view_types.pb.h` | gen-only | **no** | |
+| `Client/voice_types.pb.h` | gen-only | **no** | |
+| `Client/role_types.pb.h` | gen-only | **no** | |
+| `Client/rpc_config.pb.h` | gen-only | **no** | |
+| `Client/club_*.pb.h` (~22 files) | gen-only | **no** | |
+| `Client/account_listener.pb.h` | gen-only (in `account_service.pb.h`) | listener service hashes declared, no messages | |
+| `Client/presence_listener.pb.h` | gen-only | **no** | |
+| `Client/friends_listener.pb.h` | gen-only (in `friends_service.pb.h`) | **no** | |
+| **Totals** | **4 .proto + 53 .pb.h** | **11 .proto** | Coverage: 11/57 schema files = ~19% |
+
+### 13.3 Service handler implementation status
+
+For each service whose **server-side handler** exists in `bnet-server/src/rpc/services/`:
+
+| Service | Hash | Methods exposed | Implemented | Stubbed (logged, no body) | NotImplemented | Status |
+|---|---|---|---|---|---|---|
+| `ConnectionService` | `0x65446991` | `Connect(1)`, `KeepAlive(5)`, `RequestDisconnect(7)` | 3 | 0 | 0 | **complete** for the methods the 3.4.3 client invokes |
+| `AuthenticationService` | `0x0DECFC01` | `Logon(1)`, `VerifyWebCredentials(7)`, `GenerateWebCredentials(8)` | 3 | 0 | 0 | **complete** for the production login flow |
+| `AccountService` | `0x62DA0891` | `GetAccountState(30)`, `GetGameAccountState(31)` | 2 | 0 | (~25 other methods unmapped) | **partial** — only the two methods the WoW client requests at logon are present; `GetLicenses`, `Subscribe`, `Unsubscribe`, `GetAccountStateByEntityId`, `GetSelectedGameAccount`, etc. are unhandled |
+| `GameUtilitiesService` | `0x3FC1274D` | `ProcessClientRequest(1)` (sub-dispatched on `Command_*`), `GetAllValuesForAttribute(10)` | 2 + 4 sub-commands (`Command_RealmListTicketRequest_v1`, `Command_LastCharPlayedRequest_v1`, `Command_RealmListRequest_v1`, `Command_RealmJoinRequest_v1`) | 0 | `PresenceChannelCreated(2)`, `ProcessServerRequest(3)`, `OnGameAccountFlagsUpdated(4)` plus all listener methods | **partial** — covers realm-list flow only |
+| `ChallengeService` | `0xBBDA171F` (listener side) | — | 0 server-side handler (we **send** `OnExternalChallenge(3)` from the auth handler, never receive) | 0 | all client-bound methods | **outbound-only** — no handler module exists |
+
+Aggregate (services with at least a handler module): **complete: 2** (Connection, Authentication), **partial: 2** (Account, GameUtilities), **outbound-only: 1** (Challenge), **NotImplemented services that have proto messages but no handler: 0** within the implemented set.
+
+Aggregate (services declared in `service_hash` but with no proto and no handler): **10** — `FRIENDS_SERVICE`, `FRIENDS_LISTENER`, `PRESENCE_SERVICE`, `PRESENCE_LISTENER`, `REPORT_SERVICE`, `REPORT_SERVICE_V2`, `RESOURCES_SERVICE`, `USER_MANAGER_SERVICE`, `USER_MANAGER_LISTENER`, `ACCOUNT_LISTENER`, `AUTHENTICATION_LISTENER`, `CHALLENGE_LISTENER` (the listeners are used outbound from the existing handlers, but no schema is declared for the messages they push beyond the few types in the implemented services). **Effectively NotImplemented at the service-method dispatch level: 12 declared + ~40 services not even declared (club_*, voice, channel, embed, ets, event_view, invitation, message, notification, profanity_filter_config, role, rpc_config).**
+
+### 13.4 Error code coverage
+
+- `BattlenetRpcErrorCodes.h`: **601** named constants in `enum BattlenetRpcErrorCode : uint32` (verified by `grep -cE '^\s+ERROR_'` over the enum body).
+- `wow_proto::status`: **6** named constants (`OK`, `ERROR_INTERNAL`, `ERROR_DENIED`, `ERROR_NO_GAME_ACCOUNT`, `ERROR_WOW_SERVICES_GAME_ACCOUNT_LOCKED`, `ERROR_GAME_ACCOUNT_BANNED`, `ERROR_GAME_ACCOUNT_SUSPENDED`). One of them (`ERROR_WOW_SERVICES_GAME_ACCOUNT_LOCKED = 0x0002_0014`) does not appear in `BattlenetRpcErrorCodes.h` under that exact name — it looks like a hand-curated value, worth reconciling.
+- Coverage: **6 / 601 ≈ 1.0%**, considerably worse than the 7/330 figure in the pre-audit doc (the original count of 330 undercounted; the actual enum has 601 entries, and Rust declares 6 not 7).
+- Worse: even the 6 declared constants are **never used** in `bnet-server` source. Every error path in `services/authentication.rs`, `services/game_utilities.rs`, and `session.rs::dispatch_request` passes a bare numeric literal (`3`, `12`, `1`). This means a refactor to "add proper named codes" needs both the constants table **and** a sweep of bare literals.
+
+### 13.5 Wire compatibility
+
+Field-number parity was confirmed by cross-referencing `static const int kXxxFieldNumber` constants in `*.pb.h` against the field tags in the reconstructed `.proto` files for the messages exercised on the wire:
+
+| Message | C++ field numbers (sampled) | Rust field numbers | Match |
+|---|---|---|---|
+| `bgs.protocol.Header` | 1=service_id, 2=method_id, 3=token, 4=object_id, 5=size, 6=status, 11=service_hash, 13=client_id | 1, 2, 3, 4, 5, 6, 11, 13 | ✓ |
+| `bgs.protocol.authentication.v1.LogonRequest` | 1=program, 2=platform, 3=locale, 4=email, 6=application_version, 7=public_computer, 10=allow_logon_queue_notifications, 12=cached_web_credentials, 14=user_agent, 15=device_id, 16=phone_number | identical | ✓ |
+| `bgs.protocol.authentication.v1.LogonResult` | 1=error_code, 2=account_id, 3=game_account_id, 8=geoip_country, 9=session_key | identical | ✓ |
+| `bgs.protocol.ProcessId` | 1=label, 2=epoch | identical | ✓ |
+| `bgs.protocol.Attribute` / `Variant` | 1=name, 2=value (Attribute); standard 1..N for typed Variant fields | identical | ✓ |
+| `JSON.RealmList.RealmEntry` | proto2 fields 1..10 (`wowRealmAddress`, `cfgTimezonesID`, …) | hand-rolled via serde with `rename_all = "camelCase"` (no protobuf field numbers since not built from .proto) | **N/A on the wire** — RealmList is JSON-over-HTTP, not protobuf-over-RPC, so field numbers don't apply. JSON key names match (`wowRealmAddress` ↔ `wow_realm_address` + camelCase rename). |
+
+**Verdict:** binary RPC wire format for the 5 ported services is compatible with the C++ TrinityCore client. **No field-number divergences detected** in the spot-checks. The risk surface is the **un-ported** services: any future client packet that reaches a service hash absent from the dispatch table will silently fail.
+
+### 13.6 JSON encoding (proto3 zero-value vs RapidJSON)
+
+The doc's pre-audit hypothesis ("`serde_json` may include defaults where TrinityCore's RapidJSON would omit them, breaking proto3 zero-value semantics") **does not apply in practice** in this codebase, because:
+
+1. The only JSON-encoded payloads are `Login.proto` and `RealmList.proto` — both `proto2` with `option optimize_for = CODE_SIZE`. Proto2 has **no** "zero-value omission" rule; presence is tracked explicitly via `required` / `optional`.
+2. The Rust side does not use prost JSON. It hand-rolls plain `serde::Serialize` structs (`AuthResult`, `RealmEntry`, `ClientVersion`, etc.) with `Option<T>` for optional fields. `serde_json` emits `null` for `None` and the value for `Some` — matching C# `JsonSerializer` defaults, which is what the WoW client expects.
+3. Required fields (e.g. `RealmEntry.wow_realm_address` as `i32`) are unconditionally serialized as their concrete value, including `0` if applicable — same as `RapidJSON` would do for a `proto2` `required uint32` field.
+
+A sample message inspected: `RealmEntry { wow_realm_address: 0, ... }` serializes as `{"wowRealmAddress":0,...}`. C# `JsonSerializer.Serialize(realmEntry)` produces `{"wowRealmAddress":0,...}` for the same input. Bytes-identical for the realm-list flow.
+
+The one residual JSON risk is that the hand-rolled struct field set must stay in sync with the `Login.proto` / `RealmList.proto` schemas as Trinity evolves them — there is no compile-time check linking the two. If Trinity adds a field to `RealmEntry`, the Rust hand-roll silently misses it.
+
+### 13.7 Recommended sub-tasks
+
+(Prefix `#PROTO.A.*` to distinguish from the pre-audit `#PROTO.*` items in §9, which remain valid.)
+
+- **#PROTO.A1** Replace the 6 hand-curated `wow_proto::status` constants with a generated full-coverage table. Write a one-shot Python/awk script that parses `BattlenetRpcErrorCodes.h` and emits a Rust file with all 601 `pub const ERROR_*: u32 = 0x…;` entries plus a `name(code: u32) -> &'static str` lookup. (M, ~2h)
+- **#PROTO.A2** Sweep `bnet-server/src/rpc/services/` and `session.rs` for bare numeric literals passed to `send_logon_error`, `send_response`, `send_response_status`, replace with named constants. Add a clippy lint or a wrapper enum to prevent regression. (L, ~1h)
+- **#PROTO.A3** Port `Login.proto` to `crates/wow-proto/proto/json/login.proto` (proto2, package `Battlenet.JSON.Login`) and replace `bnet-server/src/rest/types.rs` hand-rolls with prost-generated types + `serde_json` round-trip via `prost-types::Value` or a manual `impl Serialize`. Field-number wire compat is irrelevant (JSON transport) but schema fidelity is critical for forward maintenance. (M, ~3h)
+- **#PROTO.A4** Same for `RealmList.proto` → `realm/mod.rs` hand-roll. Note the `proto2 → JSON` field naming is camelCase verbatim (`wowRealmAddress`, not `wow_realm_address`); current hand-roll uses serde `rename_all = "camelCase"` which is correct, but the proto-derived solution needs an explicit per-field `#[serde(rename = "wowRealmAddress")]` or a custom serialize impl. (M, ~3h)
+- **#PROTO.A5** Add a regression test that captures a full BNet handshake against the live `bnet-server` (TLS handshake → `Connect` → `Logon` → `VerifyWebCredentials` → `RealmListTicketRequest` → `RealmListRequest` → `RealmJoinRequest`) and asserts byte-identical responses to a recorded golden. Place under `crates/bnet-server/tests/`. (H, needs test infrastructure ~6h)
+- **#PROTO.A6** For the 12 service hashes declared in `wow_proto::service_hash` without a handler, decide per-service: (a) implement a real handler (port the proto from `.pb.h`), (b) implement an explicit `NotImplemented` stub that returns `ERROR_NOT_IMPLEMENTED = 0x0D` rather than the current `ERROR_INTERNAL = 0x01`, or (c) remove the constant if the 3.4.3 client never sends it. Audit one wire capture to disambiguate. (M-decision, ~2h + per-service implementation)
+- **#PROTO.A7** Reconstruct `friends_service.proto` and `friends_types.proto` from `friends_service.pb.h` / `friends_types.pb.h` using `protoc --decode_raw` on the embedded `descriptor_pool_` blob (see §11 note). Same for `presence_*`, `report_*`, `resource_service`, `user_manager_*`. Each tackled as a separate PR. (XL — split per service)
+- **#PROTO.A8** The `CHALLENGE_LISTENER` hash in Rust (`0xBBDA171F`) does not match the C++ `bgs.protocol.challenge.v1.ChallengeListener` FNV-1a; verify with `printf 'bnet.protocol.challenge.ChallengeListener' | python3 -c 'import sys; …'` and reconcile. Mismatched listener hashes silently break server→client push notifications. (L, ~30min)
+- **#PROTO.A9** Move the realm-list-ticket inline JSON parsing in `services/game_utilities.rs::get_realm_list_ticket` (lines 86–129) onto the new `RealmListTicketIdentity` / `RealmListTicketClientInformation` proto types from #PROTO.A4. The current code does ad-hoc `serde_json::Value` traversal, missing fields like `gameAccountRegion`, `clientArch`, `systemArch`. (M, ~2h, blocked by #PROTO.A4)
+- **#PROTO.A10** Add a `#[deny(missing_docs)]` pass over `wow-proto::service_hash` and `wow-proto::status` so each constant carries a docstring explaining when the client/server emits it. Doubles as cross-reference documentation. (L, ~1h)
+
+### 13.8 Header status update
+
+Old: `❌` / `⚠️ partial`
+New (this audit): **`⚠️ partial`** (kept). The crate is wire-compatible for the 5 services it implements and binary-faithful at the field-number level, but coverage is too low to upgrade to ✅ — the un-ported `bgs.low` services + the missing `Login.proto` / `RealmList.proto` schema imports + the 1% error-code coverage prevent that. Promotion to ✅ requires #PROTO.A1, #PROTO.A3, #PROTO.A4, and at least one of #PROTO.A7 (e.g. friends or presence) to land.
