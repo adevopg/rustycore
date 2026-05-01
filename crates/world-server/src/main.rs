@@ -24,7 +24,7 @@ use wow_database::{
 use wow_network::{GroupRegistry, PendingInvites, PlayerRegistry, SessionResources};
 use wow_network::session_mgr::SessionManager;
 use wow_network::world_socket::{AccountInfo, AccountLookup};
-use wow_world::WorldSession;
+use wow_world::{MapManager, SharedMapManager, WorldSession};
 
 // ── Account lookup implementation ────────────────────────────────
 
@@ -422,6 +422,10 @@ async fn main() -> Result<()> {
     let group_registry = Arc::new(GroupRegistry::new());
     let pending_invites = Arc::new(PendingInvites::new());
 
+    // Shared world state (creatures/grids visible to every session on the same map).
+    // Each session gets a clone of this Arc on creation.
+    let shared_map: SharedMapManager = Arc::new(std::sync::RwLock::new(MapManager::new()));
+
     // Build session resources
     let session_resources = Arc::new(SessionResources {
         char_db: Some(Arc::clone(&char_db)),
@@ -470,6 +474,7 @@ async fn main() -> Result<()> {
         let lookup = Arc::clone(&account_lookup);
         let resources = Arc::clone(&session_resources);
         let mgr = Arc::clone(&session_mgr);
+        let smap = Arc::clone(&shared_map);
         let port = instance_port;
         async move {
             if let Err(e) = wow_network::start_world_listener(
@@ -478,7 +483,8 @@ async fn main() -> Result<()> {
                 resources,
                 move |account, pkt_rx, send_tx, res| {
                     let mgr = Arc::clone(&mgr);
-                    create_session(account, pkt_rx, send_tx, res, mgr, port)
+                    let smap = Arc::clone(&smap);
+                    create_session(account, pkt_rx, send_tx, res, mgr, smap, port)
                 },
             )
             .await
@@ -587,6 +593,7 @@ async fn create_session(
     send_tx: flume::Sender<Vec<u8>>,
     resources: Arc<SessionResources>,
     session_mgr: Arc<SessionManager>,
+    shared_map: SharedMapManager,
     instance_port: u16,
 ) {
     info!(
@@ -671,6 +678,7 @@ async fn create_session(
         session.set_group_registry(Arc::clone(greg), Arc::clone(pinv));
     }
     session.set_realm_id(resources.realm_id);
+    session.set_map_manager(shared_map);
 
     // Select the correct realm IP for ConnectTo based on client address.
     // C# logic: loopback → localAddress, otherwise → externalAddress.

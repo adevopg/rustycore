@@ -229,10 +229,17 @@ pub struct WorldSession {
 
     // ── Creature AI tracking ──────────────────────────────────────
     /// All creatures visible/tracked by this session, keyed by GUID.
+    /// Legacy per-session storage. New code should prefer `MapManager` access
+    /// (see `map_manager` field) which is shared across sessions on the same map.
     pub(crate) creatures: std::collections::HashMap<wow_core::ObjectGuid, wow_ai::CreatureAI>,
 
     /// Tick counter for creature movement (throttle to every N ticks).
     pub(crate) creature_tick: u32,
+
+    /// Shared, server-wide map state. When `Some`, creature reads/writes can
+    /// route through here so all sessions on the same map see the same world.
+    /// `None` until the world server injects the manager (see `set_map_manager`).
+    pub(crate) map_manager: Option<crate::map_manager::SharedMapManager>,
 
     // ── Combat state ─────────────────────────────────────────────
     /// Current auto-attack target (None if not in combat).
@@ -449,6 +456,7 @@ impl WorldSession {
             player_name: None,
             creatures: std::collections::HashMap::new(),
             creature_tick: 0,
+            map_manager: None,
             combat_target: None,
             in_combat: false,
             visible_auras: HashMap::new(),
@@ -475,6 +483,11 @@ impl WorldSession {
     /// Set the character database for this session.
     pub fn set_char_db(&mut self, db: Arc<CharacterDatabase>) {
         self.char_db = Some(db);
+    }
+
+    /// Inject the shared map manager. Call once at session creation, before login.
+    pub fn set_map_manager(&mut self, mgr: crate::map_manager::SharedMapManager) {
+        self.map_manager = Some(mgr);
     }
 
     /// Set the realm ID for GUID creation.
