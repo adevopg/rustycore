@@ -3,8 +3,8 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/shared/DataStores/` (+ the engine-side primitives in `/home/server/woltk-trinity-legacy/src/common/DataStores/`)
 > **Rust target crate(s):** `crates/wow-data/`
 > **Layer:** L1 (infrastructure — binary file format readers + DB-driven hotfix overlay)
-> **Status:** ⚠️ partial (raw WDC4 reader works; Storage<T>/hotfix overlay missing)
-> **Audited vs C++:** ✅ complete (5 files in `shared/DataStores`, 6 files in `common/DataStores`)
+> **Status:** ⚠️ partial — confirmed via audit 2026-05-01 (raw WDC4 reader works; Storage<T>/hotfix overlay missing; only 5 .db2 files parsed of ~325)
+> **Audited vs C++:** ⚠️ audited 2026-05-01 — gaps confirmed; one count corrected (5 files, not 8)
 > **Last updated:** 2026-05-01
 
 ---
@@ -250,3 +250,47 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+### Findings table
+
+| # | Pre-audit claim (sections 8–11) | Verified result | Evidence |
+|---|---|---|---|
+| 1 | "8 hand-rolled per-table readers (~2.4 KLoC)" | **PARTIALLY REFUTED.** Only **5 client `.db2` files** are parsed via `Wdc4Reader`: `Item.db2` (`item.rs`), `ItemSparse.db2` (`item_stats.rs`), `QuestXP.db2` (`quest_xp.rs`), `SkillLineAbility.db2` and `SkillRaceClassInfo.db2` (`skill.rs`). The other modules listed in sec. 8 — `spell.rs`, `quest.rs`, `area_trigger.rs`, `player_stats.rs` — load from **MariaDB world tables** via `HotfixDatabase` / `WorldDatabase`, not from .db2. So of the ~325 client DB2 tables, **5 are parsed (1.5%)**, not 8 (2.5%). LoC count is roughly right (~2.0 KLoC across the 5 .db2 readers — `item.rs` 123, `item_stats.rs` 424, `skill.rs` 608, `quest_xp.rs` 116, `area_trigger.rs` 312 [but that one's DB-driven]). | grep `Wdc4Reader::open` + `.db2` filename joins |
+| 2 | `LayoutHash` validation absent | **CONFIRMED.** `crates/wow-data/src/wdc4.rs:61` declares `_layout_hash: u32` (note the leading underscore — Rust convention for "intentionally unused"). It is read from the file (`:618`) and stored, but no public accessor exists and no consumer asserts it. Compare to TC's `DB2Storage::Load` which calls `loadInfo->Meta->LayoutHash` and aborts on mismatch. | `wdc4.rs:61, 618`; public-API grep shows `pub fn` list excludes layout_hash |
+| 3 | `RecordSize` validation against meta absent | **CONFIRMED.** `Wdc4Reader::record_size` (read at `wdc4.rs:58, 186`) is used as a stride for fixed-record offset math but is never compared against an expected `TableMeta::RecordSize`. Combined with #2, the next client patch can silently misread DB2s — there is no guard. | `wdc4.rs:186-330` |
+| 4 | `DB2Meta::Instance()` / per-table struct + meta autogen pattern absent | **CONFIRMED.** `grep -rn "DB2Meta\|TableMeta\|FieldMeta\|LoadInfo\|DB2Storage\|Storage<"` over `crates/wow-data/src/` returns **zero matches**. Each per-table reader hard-codes column indices as integer literals; there is no field-meta table, no `pub struct TableMeta`, and no codegen pipeline. | grep |
+| 5 | `HotfixBlobCache` is misnamed (preloads files, not DB hotfixes) | **CONFIRMED with nuance.** `crates/wow-data/src/hotfix_cache.rs:30-110` only opens `Item.db2` and `ItemSparse.db2` from disk and stores raw record bytes keyed by `(table_hash, record_id)`. It does **not** read from `hotfixes.hotfix_blob` or `hotfixes.hotfix_data`. **Nuance:** the runtime `DBQueryBulk` handler (`crates/wow-world/src/handlers/character.rs:1126-1142`) does fall back to a direct SQL query on `hotfixes.hotfix_blob` when the disk cache misses — using `WorldStatements::SEL_HOTFIX_BLOB` (`wow-database/src/statements/world.rs:290-293`). That fallback is **single-shot**, **enUS-only** (the SQL hard-codes `locale = 'enUS'`), and bypasses any in-memory `Storage<T>`. None of the structural overlay logic from `DB2DatabaseLoader::Load` (two-pass custom flag, `hotfix_data.Status`, `_MAX_ID` resize, locale stacking) is implemented. | `hotfix_cache.rs` (full file); `character.rs:1115-1149`; `world.rs:290-293` |
+| 6 | `HotfixStatements` enum is `_PLACEHOLDER` (not the ~783 statements TC needs) | **CONFIRMED.** `crates/wow-database/src/statements/hotfix.rs:14-25` contains exactly one variant (`_PLACEHOLDER`) returning empty SQL. The doc's "419+" comment in that file is itself an undercount — TC has 3 statements per table × ~261 tables ≈ 783. | `hotfix.rs` (full file) |
+| 7 | Doc claim re. C++ canonical files exists at the listed paths | **CONFIRMED.** `find /home/server/woltk-trinity-legacy/src/{common,server/shared}/DataStores` resolves to all 11 files at the line-counts cited (within ±5%). The audit metadata "✅ complete (5 files in shared/, 6 in common/)" is accurate. | filesystem |
+
+### Critical findings
+
+1. **Silent DB2 misreads on next client patch (gap #2 + #3).** The `_layout_hash` field is read but discarded; combined with no per-table meta, a TBC/Cata/Wrath-Classic content patch that re-orders a column will be parsed without error and produce silently wrong fields. This is the single highest-risk gap and is the prerequisite for #SDS.4/#SDS.5 (codegen) to be useful — without an assertion the codegen output drifts from reality. **Action:** add `Wdc4Reader::layout_hash() -> u32` accessor + an `expect_layout_hash` parameter to `open()`; have each per-table reader pin its hash. ~30 min, **L** complexity.
+2. **`HotfixBlobCache` name is actively misleading.** It loads from disk only; the runtime DB fallback lives in `handlers/character.rs`, not in this module. Recommend renaming to `Db2BlobCache` or `Db2DiskBlobCache` and documenting the runtime-path overlay in this doc's sec. 8.
+3. **Locale lock-in.** `SEL_HOTFIX_BLOB` (`world.rs:292`) hard-codes `locale = 'enUS'`. Multi-locale realms cannot serve localized hotfix blobs — this is a future regression even before the typed `Storage<T>` work begins.
+4. **Table coverage is even smaller than the doc admits.** 5 / ~325 ≈ 1.5% of the DB2 catalogue, not 8 / 325. The 3 doc-listed modules that are actually MariaDB-backed (`spell`, `quest`, `area_trigger`, `player_stats`) operate against the world DB and don't go through `Wdc4Reader` at all — they belong in a different migration doc, not this one.
+
+### Status verdict
+
+**Keep ⚠️ partial — but tighten the partial-coverage qualifier.** No upgrade is warranted (still ~5/325 of the table surface, no overlay, no meta, no `Storage<T>`). No downgrade either — the WDC4 file parser itself genuinely works. The header now says "1.5% of tables, no LayoutHash assertion, no DB overlay" so a casual reader doesn't mistake "⚠️ partial" for "almost done".
+
+### Recommended sub-task priority shuffle
+
+| Move | Reason |
+|---|---|
+| **#SDS.2 (LayoutHash assertion API) → top**, before #SDS.1. Promote complexity to a hard-blocker, even if tiny. | This is the only finding that produces silently-wrong output today. |
+| #SDS.3 (`TableMeta` / `FieldMeta` Rust types) **stays second**. | Required for both #SDS.4 codegen and #SDS.6 `Storage<T>`. |
+| **(new) #SDS.2.5** Rename `HotfixBlobCache` → `Db2BlobCache`; relocate the `SEL_HOTFIX_BLOB` runtime fallback documentation to this doc. **L**. | Reduces confusion for the next porter. |
+| #SDS.4 + #SDS.5 (codegen for meta and structs) — **split**: do meta first (~325 entries), structs second. The doc already says XL — keep that, but mark structs as blocked on meta. | Meta unlocks `Storage<T>::lookup`; struct shape can land in waves. |
+| #SDS.10 (populate `HotfixStatements` registry) — **promote** ahead of #SDS.6 (`Storage<T>`). | `Storage<T>::load_from_db` (#SDS.11) cannot land without it. |
+| #SDS.11 / #SDS.12 (overlay loading) — **after** the runtime DB fallback in `character.rs:1126` is widened to all locales. | Avoid landing typed overlay while the wire path stays enUS-only. |
+
+### Header status
+
+Updated to **⚠️ partial — confirmed via audit 2026-05-01**. "Audited vs C++" line clarified to call out that the audit corrected one inaccurate count (5 .db2 files parsed, not 8). No ✅ → ❌ downgrade applies because the WDC4 parser itself is a real working implementation; the Storage<T>/overlay portion is what's missing.
+
+

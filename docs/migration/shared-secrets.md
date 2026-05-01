@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-crypto/` (TODO) + `crates/bnet-server/` (TODO)
 > **Layer:** L1
 > **Status:** ❌ not started (~0%)
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ❌ confirmed not started — audit done 2026-05-01
 > **Last updated:** 2026-05-01
 
 ---
@@ -178,3 +178,46 @@ N/A — módulo enteramente offline/setup.
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+### Findings table
+
+| # | Pre-audit claim (sections 8–11) | Verified result | Evidence |
+|---|---|---|---|
+| 1 | `SecretMgr` 0% implemented — no struct, no Secret, no carga, no transición | **CONFIRMED.** `grep -ril -E "SecretMgr\|secret_mgr\|TOTPMaster\|TOTP_MASTER\|totp_master"` over `crates/` and `bins/` returns **zero matches**. No file references the symbol. | full-tree grep (negative) |
+| 2 | SQL prep statements `SEL/INS/DEL_SECRET_DIGEST` + `SEL/UPD_ACCOUNT_TOTP_SECRET` declared but no callers | **CONFIRMED.** The only references in the workspace are the declarations themselves at `crates/wow-database/src/statements/login.rs:86-90` (variants) and `:248-252` (SQL strings). No `prepare(LoginStatements::*_SECRET_*)` or `prepare(LoginStatements::*_TOTP_SECRET)` exists anywhere in the codebase. | grep |
+| 3 | TC encrypts TOTP with **AES-CBC + HMAC-SHA256** (per the doc body, sec. 11.2 + sec. 12 mapping note "NO usar AES-GCM") | **REFUTED.** TC actually uses **AES-128-GCM** with a 12-byte IV and a **truncated 12-byte tag**. See `src/common/Cryptography/AES.h:30-36` (`IV_SIZE_BYTES=12`, `KEY_SIZE_BYTES=16`, `TAG_SIZE_BYTES=12`) and `AES.cpp:25` (`EVP_aes_128_gcm()`). The `AEEncryptWithRandomIV` template (`CryptoGenerics.h:62-79`) appends `[ciphertext][iv(12)][tag(12)]` — *not* a separate HMAC. The doc's repeated claim "NO usar AES-GCM" is wrong; the right pattern is "use AES-128-GCM with a non-standard 12-byte tag". | C++ source |
+| 4 | No Argon2 wrapper in Rust | **CONFIRMED.** `wow-crypto/Cargo.toml` does not depend on the `argon2` crate (only `aes-gcm`, `aes`, `hmac`, `sha2`, `sha1`, `pbkdf2`, `ed25519-dalek`, `rsa`). No `Argon2` symbol exists in `crates/wow-crypto/src/`. | Cargo.toml + grep |
+| 5 | Master `TOTPMasterSecret` config key not read | **CONFIRMED.** Full-tree grep for `TOTPMasterSecret\|TOTPOldMasterSecret` returns only the doc itself. `wow-config` has no key for it. | grep |
+| 6 | wow-crypto has no AE keywrap for the TOTP secret payload | **CONFIRMED.** `wow_crypto::world_crypt` uses `AesGcm<Aes128, U12, U12>` but is scoped to per-connection world-packet stream crypto (encrypt/decrypt opcodes). It is **not** generalised into an `AEEncryptWithRandomIV<Cipher>` analogue and is not callable on arbitrary Vec<u8> payloads. A new keywrap module is still required. | `wow-crypto/src/world_crypt.rs:24-36` |
+
+### Critical findings
+
+1. **Doc body is wrong about TC's AES mode.** Lines 105-106 (sec. 8 "What's missing") and especially lines 152, 172 ("**NO usar AES-GCM** — formato no compatible") direct the migration toward AES-CBC + HMAC. The actual TC scheme is AES-128-GCM with a 12-byte tag. Existing `wow_crypto::world_crypt::WowAesGcm = AesGcm<Aes128, U12, U12>` already has the right primitive — it just needs to be re-used with a different IV layout (TC suffixes IV+tag to ciphertext; world_crypt generates IV from a counter). Doc must be corrected before any implementation work begins, otherwise existing TC databases will be unreadable.
+   - C++ refs: `src/common/Cryptography/AES.h:30-36`, `AES.cpp:25`, `CryptoGenerics.h:62-79`, `Secrets/SecretMgr.cpp:194,200` (call sites).
+   - Rust ref: `crates/wow-crypto/src/world_crypt.rs:24,36`.
+2. **No callers of the secret-related SQL.** The five prepared statements in `crates/wow-database/src/statements/login.rs:86-90` and `:248-252` are dead code at the call-graph level. There's no risk to leaving them, but the inventory ✅ for "SQL registered" was misread as ✅ for "module operational".
+3. **TOTP login path silently passes 2FA-protected accounts.** Because `bnet-server` never reads `account.totp_secret` and never validates a TOTP code, any account that has a non-NULL `totp_secret` in the DB can be logged into with password alone. Docs should explicitly call this out as a security regression vs C++ TC.
+
+### Status verdict
+
+**Keep ❌ (~0%) — but lock the doc before any work starts.** The status was already ❌; no downgrade needed. The audit's *real* product is correcting the AES-CBC / AES-GCM confusion that would have cost a sprint of wasted work.
+
+### Recommended sub-task priority shuffle
+
+| Old order | New order | Reason |
+|---|---|---|
+| #SEC.3 (AES keywrap) framed as **"AES-CBC + HMAC"** | **rewrite** as "AES-128-GCM with `[ct][iv(12)][tag(12)]` framing — refactor existing `world_crypt::WowAesGcm` into a generic `wow_crypto::ae_keywrap::{seal, open}` taking `&[u8; 16]` key, IV from `OsRng`, returning `Vec<u8>` with the trailing tag layout TC uses." Complexity drops from **M** → **L** because the AEAD primitive already exists. | Sec.11.2 + sec.12 mapping rows are wrong. |
+| #SEC.1 (`argon2` crate dep) | **same** L | Still required. |
+| #SEC.2 (Argon2 wrapper) | **same** M, but pin params: `Argon2id`, `t=10`, `m=2^17 KiB`, `p=1`, `outputLen=16`. Source: `Argon2.h:30-34`. | Doc didn't pin the constants; the Argon2 crate's defaults are different. |
+| #SEC.11 (TOTP RFC6238) | **deprioritise** until #SEC.4-#SEC.10 are landed; TOTP itself is ~2h, the encryption envelope is the hard part. | Smaller blast radius if shipped late. |
+| **(new) #SEC.0** | "Correct the doc body — replace every 'AES-CBC + HMAC' / 'NO usar AES-GCM' with 'AES-128-GCM, 12-byte tag'." Complexity **L**. Must precede any code. | Avoid mis-implementation. |
+
+### Header status
+
+Updated to **❌ confirmed not started** (the audit confirmed the existing ❌, no upgrade or downgrade applies). The "Audited vs C++" line is now `❌ confirmed not started — audit done 2026-05-01` so future readers know it was checked rather than skipped.
+
+

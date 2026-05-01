@@ -33,8 +33,8 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | L1 | shared/Packets | `src/server/shared/Packets/` | [shared-packets.md](shared-packets.md) | ⚠️ | ⚠️ |
 | L1 | Crypto (SRP6/AES-GCM/HMAC) | `src/server/shared/Cryptography/` + `src/common/Cryptography/` | [crypto.md](crypto.md) | ✅ ~95% | ⚠️ |
 | L1 | shared/Realm | `src/server/shared/Realm/` | [shared-realm.md](shared-realm.md) | ⚠️ | ❌ |
-| L1 | shared/Secrets | `src/server/shared/Secrets/` | [shared-secrets.md](shared-secrets.md) | ✅ | ❌ |
-| L1 | shared/DataStores | `src/server/shared/DataStores/` | [shared-datastores.md](shared-datastores.md) | ✅ | ❌ |
+| L1 | shared/Secrets | `src/server/shared/Secrets/` | [shared-secrets.md](shared-secrets.md) | ❌ (0%) | ⚠️ |
+| L1 | shared/DataStores | `src/server/shared/DataStores/` | [shared-datastores.md](shared-datastores.md) | ⚠️ ~1.5% | ⚠️ |
 | L1 | shared/Dynamic | `src/server/shared/Dynamic/` | [shared-dynamic.md](shared-dynamic.md) | n/a | ❌ |
 | L1 | shared/JSON | `src/server/shared/JSON/` | [shared-json.md](shared-json.md) | n/a | ❌ |
 | L1 | proto/ | `src/server/proto/` | [proto.md](proto.md) | ⚠️ | ⚠️ |
@@ -152,6 +152,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | 2026-05-01 | Primera ronda completa: 64/64 docs con plantilla de 12 secciones, plan de migración por módulo, gotchas y mapping C++→Rust. Audit aún 0/64. |
 | 2026-05-01 | Fase A (audit) — primer batch: crypto / shared-packets / shared-networking auditados vs C++ wotlk_classic. Status downgrade: shared-networking ✅→⚠️ (~75%), shared-packets ✅→⚠️, crypto ✅→⚠️ pero validado byte-exact en SRP6/AES-GCM/nonce. Audit: 3/64. |
 | 2026-05-01 | Fase A — segundo batch: server / proto / bnetserver / worldserver auditados. Hallazgos: server con 23% opcode coverage (145/621), worldserver con divergencia arquitectónica BREAKING (no existe MapManager::update; ticks viven en sesiones individuales — 0 sesiones = mundo congelado), bnetserver con bug de base64 ticket extraction, proto con 6/601 error codes mapeados. Audit: 7/64. |
+| 2026-05-01 | Fase A — tercer batch: shared-secrets / shared-datastores auditados. shared-secrets ✅→❌ (SecretMgr ausente en Rust; SQL declarado sin callers; doc anterior decía AES-CBC+HMAC pero TC usa AES-128-GCM 12-byte tag — el doc habría llevado a impl errónea). shared-datastores ✅→⚠️ (~1.5% de tablas DB2 parseadas: 5/325; sin LayoutHash validation; HotfixBlobCache misnamed — no toca BD hotfixes; HotfixStatements solo `_PLACEHOLDER`). Audit: 9/64 — fin primer barrido módulos ✅. |
 
 ---
 
