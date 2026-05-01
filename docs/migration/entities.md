@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/Entities/`
 > **Rust target crate(s):** `crates/wow-entities/` (PROPOSED — does not exist yet), partials in `crates/wow-core/`, `crates/wow-world/`, `crates/wow-ai/`, `crates/wow-data/`
 > **Layer:** L4 (Entity layer — depends on Maps/Grids L3, consumed by Combat/Spells/AI L5+)
-> **Status:** 🔧 broken (rewrite needed) — there is no `wow-entities` crate; entity state is scattered as flat fields inside `WorldSession` (Player) and `CreatureAI` (Creature), no polymorphic hierarchy, no `UpdateFields` system
-> **Audited vs C++:** ❌ not audited
+> **Status:** 🔧 broken (rewrite needed) — there is no `wow-entities` crate; entity state is scattered as flat fields inside `WorldSession` (Player) and `WorldCreature` (MapManager), no polymorphic hierarchy, no `UpdateMask` dirty-bit system, no `Item`/`GameObject`/`Pet`/`DynamicObject` entities at all
+> **Audited vs C++:** ✅ complete (2026-05-01)
 > **Last updated:** 2026-05-01
 
 ---
@@ -563,3 +563,41 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/Entities/` (Object/Object.{h,cpp}, Unit/Unit.{h,cpp}, Player/Player.{h,cpp}, Creature/Creature.{h,cpp}, GameObject/GameObject.{h,cpp}, Item/Item.{h,cpp}) against current Rust state in `crates/wow-core/`, `crates/wow-world/`, `crates/wow-packet/`, `crates/wow-ai/`. Verdict: **🔧 broken — no entity layer exists**, only a flat-field session and a flat-field creature record.
+
+### Object (`Object.{h,cpp}` — 845 + 3798 lines)
+
+C++ surface: `AddToWorld()` / `RemoveFromWorld()` / `IsInWorld()` invariants, `BuildCreateUpdateBlockForPlayer`, `BuildValuesUpdateBlockForPlayer`, `BuildOutOfRangeUpdateBlock`, `SendUpdateToPlayer`, `m_objectType` mask, `m_values` (UpdateFields blob), `GetGUID()` / `GetTypeId()`. Roughly 60 public methods. Rust: **none**. There is no `Object` struct, no `is_in_world()` predicate, no `add_to_world()` lifecycle. `crates/wow-core/src/guid.rs:112` defines `ObjectGuid` and `crates/wow-packet/src/world_packet.rs:422` has working `write_packed_guid`/`read_packed_guid` (tested) — that is all of `Object` that exists. Coverage: ~5% (GUID identity only).
+
+### Unit (`Unit.{h,cpp}` — 1953 + 13620 lines)
+
+C++ surface: `DealDamage`, `Kill`, `CastSpell`, `SetHealth` / `ModifyHealth` / `SetMaxHealth`, `AddAura` / `RemoveAura`, `SetSpeed`, `Attack` / `AttackerStateUpdate`, `EnterCombat` / `LeaveCombat`, threat manager, motion master, charm/possess plumbing, vehicle. **The 13620-line monster.** Rust: **none of it as a `Unit` type**. `crates/wow-world/src/map_manager.rs:52 WorldCreature` has only `health`, `max_health`, `take_damage(damage) -> bool` (line 176), `enter_combat(attacker)`, `die()`, `try_aggro`, `respawn`. No absorbs, no immunes, no reflections, no school masks, no resistances, no aura container, no threat list, no motion master integration with VMap, no spell-cast pipeline. **Worst divergence in this file (and possibly the project): `Unit::DealDamage` is the universe-touching combat entry point in C++ — multiple absorb passes, immune checks, school resist, reflect-back-to-caster, aura proc dispatch, threat update, kill detection — and the Rust replacement is `WorldCreature::take_damage(u32) -> bool` returning true on death. No Player-side counterpart exists.** Coverage: <2%.
+
+### Player (`Player.{h,cpp}` — 3189 + 29358 lines, ~600 public methods)
+
+C++ surface: `Create(CharacterCreateInfo*)`, `SaveToDB(create, logout)`, `LoadFromDB(guid, holder)`, `TeleportTo`, `GiveXP` / `GiveLevel`, `AddItem` / `StoreNewItem` / `CanStoreNewItem` / `CanEquipItem` / `DestroyItem`, `AddQuest`, `Update(diff)` (~50 sub-systems ticked: regen, dueling, tradeskill timers, GM cmds, save throttle, pvp timer, drunk decay, weather, taxi, contested-area, pet sync, instance-bind sliding-window, …), `SendDirectMessage`, etc. Rust: **no `Player` struct exists.** Player state is scattered as ~70 flat fields directly on `WorldSession` (`crates/wow-world/src/session.rs:181` `player_gold`, `:182` `player_xp`, `:189` `player_guid`, `:197` `inventory_items: HashMap<u8, InventoryItem>`, `:225` `player_position`, `:228` `player_name`, `:272` `player_quests`, etc.). The 4611-line `handlers/character.rs` operates directly on these fields. Login flow exists (`handle_continue_player_login` at `:1330`, ~400 lines including initial spells, action buttons, item load), and an idle save loop calls `save_player_gold` (`session.rs:615`), but `Player::Update(diff)` per-tick driver is **missing**: `tick_combat_sync` / `tick_creatures_sync` / `tick_active_spell_cast` / `tick_auras` exist as ~4 isolated ticks, vs C++'s ~50 sub-system orchestrator. **Conflates network connection with in-world avatar.** Coverage: ~15% (login + flat field bag + 4 ticks).
+
+### Creature (`Creature.{h,cpp}` — 547 + 3568 lines)
+
+C++ surface: `Create(guidlow, map, entry, position, CreatureData)`, `AIM_Initialize`, `Update(diff)`, `SetLootRecipient`, formation, respawn, vendor/quest-giver flags, loot, addon spell auras. Rust: `crates/wow-world/src/map_manager.rs:52 WorldCreature` is the closest analogue — 134 lines (52..285) covering position, hp, combat target, wander timer, melee swing timer, respawn timer, idle/wander/combat/dead state. AI separation does not exist (`crates/wow-ai/src/lib.rs:211 take_damage` is on the AI struct itself). No formation, no loot recipient, no addon spells, no `AIM_Initialize` strategy slot. Coverage: ~25% (movement + basic combat + respawn).
+
+### GameObject (`GameObject.{h,cpp}` — 516 + 4488 lines)
+
+C++ surface: `Create`, `Update(diff)` state machine (Ready → Active → Despawn), `Use(Unit*)` (open chest, click banner, fishing, doodad), loot, transport carry, lock check, OnGossipHello hook. Rust: **none.** No `GameObject` struct, no chest/door/banner code anywhere. Coverage: 0%.
+
+### Replication / UpdateFields infrastructure
+
+C++ has `UpdateFields.h` (943 lines of struct decls) + `UpdateFields.cpp` (5097 lines of descriptor tables) + `UpdateField<T>` mutator template + `UpdateMask` bit-vector + `ViewerDependentValues<T>` + `UpdateData::BuildPacket` accumulator. Roughly **1500 logical fields** across all object types with per-field `Owner / PartyMember / UnitAll / Itemowner / SpecialInfo / ViewerDependent` flags. Rust: **no UpdateMask dirty tracking at all.** `crates/wow-packet/src/packets/update.rs` (3072 lines) hand-rolls full create blocks per-type — `PlayerCreateData::write_values_create` (`:268`), `CreatureCreateData` (`:1060`), `GameObjectCreateData` (`:1295`), `UpdateObject::ServerPacket` (`:1714`) — but **every replication is a full create block; there is no values-only delta path, no per-viewer field filtering, no dirty bit on field write**. `wow-constants/src/update.rs:24` defines an `UpdateFieldFlag` bitflags wrapper but nothing reads it. **This is the worst divergence in the entire entities surface: every replication update will be a full re-create, which will visibly desync stats/auras and grow the bandwidth ~10-100×.** Note: the `flags = 0x03` (Owner|PartyMember) write at `update.rs:274` is hardcoded for self vs others — there is no per-viewer "is in same raid" computation.
+
+### ObjectGuid wire format
+
+`crates/wow-core/src/guid.rs:112` `ObjectGuid` is 128-bit, has `HighGuid` enum (Player/Creature/Pet/Item/GameObject/DynamicObject/Corpse/AreaTrigger/Transport/Party/Guild/SceneObject/Conversation/Cast — full coverage at `:7`), `to_raw_bytes`/`from_raw_bytes` round-trip (tested at `:719`), `is_player`/`is_creature`/etc. predicates. Packed-GUID 1-byte mask + variable-length form lives in `wow-packet/src/world_packet.rs:422` with 4 round-trip tests. **GUID layer is the single solid foundation in the entities mega-module — coverage ~70%, no critical wire-format divergence detected.**
+
+### Worst divergence
+
+**`UpdateMask` / dirty-bit replication is entirely missing.** Every entity broadcast goes out as a full create block instead of a delta values block. Combined with the absence of `Player::Update(diff)` orchestration and the lack of any `Unit` / `Item` / `GameObject` / `Pet` / `DynamicObject` types, the Rust port currently has **no entity layer in the C++ sense** — only a session-with-flat-fields façade and a creature record in `MapManager`. Roughly 95% of the ~95k C++ Entities/ lines have no Rust counterpart. Migration effort estimate: 6-12 person-months to reach behavioral parity for the WoLK 3.4.3 feature set.

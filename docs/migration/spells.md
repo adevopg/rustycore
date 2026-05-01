@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/Spells/` (incluye `Auras/`)
 > **Rust target crate(s):** `crates/wow-spell/`, `crates/wow-world/src/handlers/spell.rs`, `crates/wow-packet/src/packets/{spell,aura}.rs`
 > **Layer:** L5 (Game systems — combat / spells / auras)
-> **Status:** 🔧 broken (rewrite needed) — sólo cast handler básico + cooldown visible
-> **Audited vs C++:** ❌ not audited
+> **Status:** 🔧 broken (rewrite needed) — sólo cast handler básico + cooldown visible; crate `wow-spell` está **vacío**.
+> **Audited vs C++:** ✅ audited 2026-05-01 (engine missing — see §13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -493,3 +493,26 @@ Numerados para referencia desde `MIGRATION_ROADMAP.md`. Complejidad: **L** <1h, 
 ---
 
 *Template version: 1.0 (2026-05-01).* Initial complete audit port.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Scope.** Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/Spells/` (`Spell.{h,cpp}` ~10k lines, `SpellInfo.{h,cpp}` ~5.6k, `SpellMgr.{h,cpp}` ~5.8k, `SpellEffects.cpp` ~6k, `SpellHistory.{h,cpp}` ~1.3k, `SpellScript.{h,cpp}` ~3.5k) and the Auras subtree (`Auras/SpellAuras.{h,cpp}` ~3k, `Auras/SpellAuraEffects.{h,cpp}` ~6.7k, `Auras/SpellAuraDefines.h`) against the Rust workspace at `/home/server/rustycore/crates/`.
+
+**Empty-crate finding — CONFIRMED.** `crates/wow-spell/src/lib.rs` measures **exactly 0 lines** (verified via `wc -l`). The crate is registered in `Cargo.toml` and listed as a workspace member but contains **no code at all**: no `Spell`, no `SpellInfo`, no `SpellMgr`, no `SpellHistory`, no `Aura`, no `AuraEffect`, no `AuraApplication`, no `SpellScript`, no `SpellCastResult` enum, no `SpellMissInfo`, no `AuraType`, no `SpellEffect` enum, no `SpellSchool/Mask`, no `SpellAttr0..14` bitflags, no `Mechanics`. The 44k+ lines of C++ spell engine map to **zero lines** of Rust engine.
+
+**What exists outside the empty crate.**
+- `crates/wow-world/src/handlers/spell.rs` (288 lines) — single `handle_cast_spell` that parses `CastSpellRequest`, checks a `HashSet<u32> known_spells`, checks one global `last_spell_cast_time` plus per-spell `last_spell_cast_time_per_spell: HashMap<u32, Instant>`, sends either `SMSG_SPELL_START` (if cast time > 0) or jumps to a stub `execute_spell()`. `CMSG_CANCEL_CAST` and `CMSG_CANCEL_CHANNELLING` are registered as inplace handlers but their bodies are no-op stubs.
+- `crates/wow-packet/src/packets/spell.rs` (~466 lines) — wire structs only (`CastSpellRequest`, `SpellStartPkt`, `CastFailed`, `SpellTargetData`, `SpellCastVisual`).
+- `crates/wow-packet/src/packets/aura.rs` (~123 lines) — `AuraData` POD plus `AuraUpdate` writer; one round-trip test. **No server-side aura state at all** — the writer is fed manually by callers, not driven by a real `Aura::Update` tick.
+
+**Spell effects implemented.** **0 of ~151.** A grep for `EffectSchoolDMG`, `EffectHeal`, `EffectApplyAura`, `EffectTeleportUnits`, `effect_*`, `Effect` inside `crates/wow-world/src/handlers/spell.rs` and `crates/wow-spell/` returns empty. There is no dispatch table, no `match spell_effect`, no `SpellEffectHandlers[151]`. The 151-entry switch in C++ `SpellEffects.cpp` (one giant function per `SPELL_EFFECT_*` ID — `SCHOOL_DAMAGE`, `HEAL`, `APPLY_AURA`, `TELEPORT_UNITS`, `SUMMON`, `DISPEL`, `INTERRUPT_CAST`, `KNOCKBACK`, `JUMP`, `CHARGE`, `ENERGIZE`, etc.) has zero analog. The handler's stub `execute_spell(spell_id, target_guid)` is a name only — the body referenced from `session.rs` does not apply damage, healing, auras, teleport, summon, or any other effect; it's plumbing without payload.
+
+**Auras implemented.** **0 of ~280 `AuraType` handlers.** No `HandlePeriodicDamage`, no `HandleAuraModStat`, no `HandleSchoolAbsorb`, no `HandleModConfuse`/`Fear`/`Stun`/`Silence`/`Root`, no `HandleShapeshift`, no `HandleProcTriggerSpell`, no `HandleCharm`. The packet `AuraData` is a wire shape with no lifecycle behind it: no `Aura::Create`, no `_ApplyForTarget`, no `Update` (so DoT/HoT never tick), no `Remove(AuraRemoveMode)`, no stacking via `TryRefreshStackOrCreate`, no persistence to `character_aura`. Sending `AuraUpdate` to a client desynchronizes the moment the aura should expire because there is no server tracker.
+
+**SpellMgr / SpellInfo / SpellHistory.** All absent. No DB2 loader for `Spell.db2`, `SpellEffect.db2`, `SpellMisc.db2`, `SpellCooldowns.db2`, `SpellInterrupts.db2`, `SpellRange.db2`, `SpellRadius.db2`, `SpellCategories.db2`, `SpellAuraOptions.db2`, `SpellPower.db2`, `SpellCastTimes.db2`, `SpellLevels.db2`, `SpellTargetRestrictions.db2`, `SpellShapeshift.db2`, `SpellEquippedItems.db2`, `SpellClassOptions.db2`, `SpellReagents.db2`, `SpellTotems.db2`, `SpellScaling.db2`, `SpellEffectScaling.db2`. No SQL loader for `spell_proc`, `spell_target_position`, `spell_chain`, `spell_required`, `spell_learn_spell`, `spell_threat`, `spell_area`, `spell_group`, `spell_script_names`. The minimal `wow_data::SpellInfo` referenced from the handler exposes `cast_time_ms`, `recovery_time_ms`, `effective_cooldown_ms`, `has_cast_time` only — a tiny subset of the ~80 fields C++ `SpellInfo` carries.
+
+**Cooldowns / GCD / charges.** A single global `last_spell_cast_time: Option<Instant>` plus per-spell `last_spell_cast_time_per_spell: HashMap<u32, Instant>` substitute for what C++ implements as three orthogonal axes: `_globalCooldowns: map<SpellSchool, time>` (per-school 1.5s GCD modulated by haste), `_categoryCooldowns: map<u32 cat, time>` (Hunter Aspects, Paladin Seals share a category cd), and `_categoryCharges: map<u32 cat, ChargeEntry>` (multi-cast spells like Mind Flay's 3 charges). The Rust collapse-everything-into-one-timer model will block legal casts (e.g. casting Holy Light right after Frost Bolt — different schools, should not share GCD) and allow illegal ones (casting two spells in the same category back-to-back). `SMSG_SPELL_COOLDOWN`, `SMSG_COOLDOWN_EVENT`, `SMSG_CLEAR_COOLDOWN`, `SMSG_MODIFY_COOLDOWN` are not emitted. Cooldown persistence to `character_spell_cooldown` does not exist, so all cooldowns reset at logout.
+
+**Worst divergence.** The handler can be summarized as **"acknowledge a cast, set a per-id timer, send a packet, do nothing"** — there is no execution side at all. None of the consequences a player expects after casting actually occur server-side: the target's HP is not changed, no aura is applied or refreshed, no DoT/HoT ticks, no power is spent (no `CheckPower` / `TakePower`), no range/LoS/items/reagents/shapeshift validation runs, no `SpellMissInfo` roll is performed (every cast is a guaranteed hit by absence of logic), no projectile travel time is honored, no channel ticks are scheduled, no procs trigger, and no GCD-per-school is enforced. Together these mean the spell engine has no simulation behaviour whatsoever — `wow-spell` is the largest single greenfield in the workspace, with §9 tasks spanning #SPELLS.1 → #SPELLS.68 (multiple XL).

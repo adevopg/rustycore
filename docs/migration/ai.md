@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/AI/` (incluye `CoreAI/`, `ScriptedAI/`, `SmartScripts/`, `PlayerAI/`)
 > **Rust target crate(s):** `crates/wow-ai/`, `crates/wow-script/`, `crates/wow-scripts/`
 > **Layer:** L5/L6 (game systems — creature behavior + scripting)
-> **Status:** ❌ not started — sólo CreatureAI plain con states Idle/Walk/Combat
-> **Audited vs C++:** ❌ not audited
+> **Status:** 🔧 broken (rewrite needed) — sólo `CreatureAI` plain con states Idle/Walk/Combat; sin trait, sin SmartAI, sin polimorfismo. Crates `wow-script` y `wow-scripts` están **vacíos**.
+> **Audited vs C++:** ✅ audited 2026-05-01 (no SmartAI, see §13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -438,3 +438,21 @@ Numerados para referencia desde `MIGRATION_ROADMAP.md`. Complejidad: **L** <1h, 
 ---
 
 *Template version: 1.0 (2026-05-01).* Initial complete audit port.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Scope.** Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/AI/` (`CreatureAI.{h,cpp}`, `CoreAI/UnitAI.{h,cpp}`, `CoreAI/CombatAI.{h,cpp}`, `CoreAI/PetAI.{h,cpp}`, `CoreAI/TotemAI.{h,cpp}`, `CoreAI/PassiveAI.{h,cpp}`, `CoreAI/GuardAI.{h,cpp}`, `CoreAI/ReactorAI.{h,cpp}`, `CoreAI/ScheduledChangeAI.{h,cpp}`, `ScriptedAI/ScriptedCreature.{h,cpp}`, `ScriptedAI/ScriptedEscortAI.{h,cpp}`, `ScriptedAI/ScriptedFollowerAI.{h,cpp}`, `SmartScripts/SmartAI.{h,cpp}` ~1.6k lines, `SmartScripts/SmartScript.{h,cpp}` ~4.4k, `SmartScripts/SmartScriptMgr.{h,cpp}` ~4.3k, `CreatureAISelector.{h,cpp}`) against the Rust workspace at `/home/server/rustycore/crates/`.
+
+**Empty-crate finding — partial.** `crates/wow-script/src/lib.rs` and `crates/wow-scripts/src/lib.rs` measure **0 lines each** (verified via `wc -l`). The crates are workspace members but ship no code. `crates/wow-ai/src/lib.rs` is **not** empty: 346 lines containing a single concrete `struct CreatureAI` (no trait) plus a `CreatureState` enum with `Idle / WalkingRandom / WalkingWaypoint / InCombat / Dead / Returning`. There is no `trait CreatureAI`, no `trait UnitAI`, no `Box<dyn ...>` handle, no `CreatureAISelector`, no `inventory::submit!` factory registry. The 16k+ lines of C++ AI/ subtree map to one concrete struct with one update method.
+
+**SmartAI presence.** **None.** No `SmartAI`, no `SmartScript`, no `SmartScriptMgr`, no `SmartScriptHolder`, no `SmartTarget`, no `enum SmartEvent`, no `enum SmartAction`, no `process_event`, no `process_action`. The only trace of SmartScripts in the entire repo is a single SQL prepared-statement constant `SEL_SMART_SCRIPTS` in `crates/wow-database/src/statements/world.rs:15` (`SELECT ... FROM smart_scripts ORDER BY entryorguid, source_type, id, link`) that is **never executed by any consumer** — there is no loader code, no parser, no in-memory cache, no `mEventMap: HashMap<i64, Vec<SmartScriptHolder>>`. Since SmartAI is the data-driven engine that runs ~95% of the game's mob and boss content (~50k rows in the `smart_scripts` table — every boss's talk lines, phase transitions, ability rotations, summons, waypoint paths), the absence means **no creature in the game currently has any scripted behavior beyond random wandering and a flat-damage auto-attack**.
+
+**AI subclass coverage.** C++ ships at minimum the following concrete subclasses, all of which are **missing in Rust**: `NullCreatureAI`, `PassiveAI`, `PossessedAI`, `CritterAI`, `TriggerAI`, `CombatAI`, `AggressorAI`, `PetAI`, `TotemAI`, `GuardAI`, `ReactorAI`, `ScheduledChangeAI`, `ScriptedAI`, `BossAI`, `WorldBossAI`, `EscortAI`, `FollowerAI`, `SmartAI`. Rust has **one** struct masquerading as all of them. There is no `EventMap` (so no `ScheduleEvent`/`ExecuteEvent`/`SetPhase` for boss timer rotations), no `SummonList` (so summons cannot be tracked or cleaned up on `JustDied`), no `creature_text` loader (so no localized boss talk lines), no `waypoint_data`/`waypoint_path` loader (so no patrol/escort routes).
+
+**Hooks coverage.** C++ defines a wide hook surface — `Reset`, `JustEnteredCombat`, `JustEngagedWith`, `JustDied`, `KilledUnit`, `MoveInLineOfSight`, `TriggerAlert`, `EnterEvadeMode(EvadeReason)`, `SpellHit`, `SpellHitTarget`, `JustSummoned`, `IsSummonedBy`, `SummonedCreatureDies`, `JustReachedHome`, `ReceiveEmote`, `MovementInform`, `OnHealthDepleted`, `OnGameEvent`, `DoZoneInCombat`. **Rust dispatches none of these** — the existing struct only has `try_aggro`, `enter_combat`, `reset_combat`, `take_damage`, `die`, `respawn`, `should_wander` (each called inline from creature ticks). Because there is no hook surface, even when the missing engines (Combat/Spells/Movement) are filled in there is no place for them to call into the AI to inform it of `JustEnteredCombat` / `SpellHit` / `MovementInform` events.
+
+**Selector / ScriptName binding.** C++ `CreatureAISelector::selectAI(Creature*)` decides at spawn time whether to instantiate a Pet/Totem/Vehicle AI, then a SmartAI if the entry has rows in `smart_scripts`, then the AIName from `creature_template`, falling back to `NullCreatureAI`. Rust has no selector and no factory: every spawn becomes the same `CreatureAI` struct. The `creature_template.AIName` and `ScriptName` columns are unused.
+
+**Worst divergence.** **The data-driven content layer is completely disconnected from execution.** TrinityCore's design is that ~95% of NPC behavior is *not* compiled C++ — it lives in the `smart_scripts` SQL table and is interpreted at runtime by `SmartScript::OnUpdate`. Rust has the SQL connection, has the prepared statement constant, has the schema knowledge in this doc — but has zero interpreter, zero `SmartEvent`/`SmartAction`/`SmartTarget` enums, and no plan to wire the `inventory::submit!` registry that boss C++ scripts would use. Even if `wow-spell` and `wow-combat` are filled in tomorrow, **every boss fight will play as "stands in place, swings white melee, dies silently"** until the SmartScript interpreter (an estimated XL spanning §9 tasks #AI.17 → #AI.30, i.e. ~80 SmartEvent variants × ~150 SmartAction variants × ~30 SmartTarget variants × validation × loader × runtime dispatcher) is ported. This is the single biggest "content blocker" in the engines layer — engine work without it produces a server that boots, lets you connect, and shows you mobs that have nothing to say or do.

@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/world-server/`, `crates/wow-network/`
 > **Layer:** L0 — Global state, update loop, server lifecycle
 > **Status:** ❌ not started (core event loop skeleton exists; config/timers not ported)
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ❌ confirmed missing — 2026-05-01 audit; no `World` struct, no `World::Update()`, no `IntervalTimer` array, no `WUPDATE_*` timers, no `ShutdownServ`, no MapManager tick — world-server tick is per-session-only
 > **Last updated:** 2026-05-01
 
 ---
@@ -284,3 +284,46 @@ World module doesn't directly send packets; instead, it calls methods on session
 ---
 
 *Template version: 1.0. Status: ❌ not started — skeleton exists, major subsystems not ported.*
+
+---
+
+## 13. Audit (2026-05-01)
+
+Audited C++ tree: `/home/server/woltk-trinity-legacy/src/server/game/World/{World.h:934, World.cpp:3971}`. Audited Rust tree: `crates/world-server/src/main.rs:720` (only file in `world-server`); `crates/wow-world/src/{lib.rs:23, session.rs:2820, map_manager.rs:784}`. **Search confirms** no `struct World`, no `impl World`, no `WORLD: Lazy<...>`, no `world_update_loop`, no `WUPDATE_` symbol exists in any Rust source under `/home/server/archived/rustycore_ARCHIVED_20260312/crates/`.
+
+### 13.1 Coverage table
+
+| C++ symbol (file:line) | Rust equivalent | Status |
+|---|---|---|
+| `class World` singleton (World.h:42L+) | None — no `World`/`GameState` struct anywhere | ❌ |
+| `World* sWorld` global accessor | None | ❌ |
+| `World::SetInitialWorldSettings()` (World.h:651) — orchestrates ObjectMgr, MapManager, ScriptMgr, etc. on boot | None — `world-server/main.rs::main` (line 152-438) inlines DB connect → store loads → `tokio::spawn(start_world_listener)` directly, no orchestrator | ❌ |
+| `World::LoadConfigSettings(bool reload)` (World.h:660L) | `wow_config::load_config("WorldServer.conf")` (main.rs:164) — single TOML/INI parse, no hot reload, no setter API | ⚠️ |
+| `World::Update(uint32 diff)` (World.h:670L) — main game-loop tick | **MISSING** — no ticker exists. `main.rs` ends at `tokio::select! { ctrl_c \| realm_handle \| instance_handle }` (line 421) and exits | ❌ **breaking divergence** |
+| `World::UpdateSessions(uint32 diff)` (World.h:675) | None at world-level — each connection runs its own loop in `create_session()` (main.rs:606-623): `loop { session.update(50); session.process_pending().await; tokio::time::sleep(50ms) }`. Sessions are unaware of each other | ⚠️ |
+| `IntervalTimer m_timers[WUPDATE_COUNT]` (World.h:830) | None | ❌ |
+| `enum WUPDATE_* { WUPDATE_AUCTIONS, WUPDATE_AUCTIONS_PENDING, WUPDATE_UPTIME, WUPDATE_CORPSES, WUPDATE_EVENTS, WUPDATE_CLEANDB, WUPDATE_AUTOBROADCAST, WUPDATE_MAILBOXQUEUE, WUPDATE_DELETECHARS, WUPDATE_AHBOT, WUPDATE_PINGDB, WUPDATE_GUILDSAVE, WUPDATE_BLACKMARKET, WUPDATE_CHECK_FILECHANGES, WUPDATE_WHO_LIST, WUPDATE_CHANNEL_SAVE, WUPDATE_COUNT }` (World.h:82-98) | None — zero of the 16 maintenance timers exists | ❌ |
+| `uint32 m_int_configs[INT_CONFIG_VALUE_COUNT]` (World.h:847) | None — `wow_config::get_value(...)` is direct lookup against in-memory file map; no typed array, no enum keys | ⚠️ |
+| `bool m_bool_configs[BOOL_CONFIG_VALUE_COUNT]` (World.h:849) | None | ❌ |
+| `float m_float_configs[FLOAT_CONFIG_VALUE_COUNT]` (World.h:850) | None | ❌ |
+| `World::SendWorldText / SendGlobalText / SendGlobalMessage / SendServerMessage` (World.h:660-680L) | None — `PlayerRegistry` (network crate) is per-session iteration, no central broadcast helper | ⚠️ partial |
+| `World::ShutdownServ(uint32 time, uint32 options, uint8 exitcode, std::string reason)` (World.h:666) — graceful countdown + KickAll + save-all + exit | None — only `tokio::signal::ctrl_c()` (main.rs:422) → log → exit, no countdown, no save, no broadcast | ❌ |
+| `World::ShutdownMsg(bool, Player*)` | None | ❌ |
+| `World::KickAll()` | None | ❌ |
+| `World::LoadPersistentWorldVariables / SetPersistentWorldVariable` (World.h:680L+) — int32 world state DB persistence | None | ❌ |
+| MapManager integration in tick (`sMapMgr->Update(diff)`) | None — no Rust call site invokes `MapManager::*update*` because no such function exists in `crates/wow-world/src/map_manager.rs:455-613`. Confirmed against worldserver audit finding | ❌ |
+| Manager update integration: AuctionHouseMgr, GuildMgr, BattlegroundMgr, BattlefieldMgr, OutdoorPvPMgr, PoolMgr, GameEventMgr, AuctionHouseBot, LFGMgr, WardenCheckMgr, etc. | None — these crates either don't exist or have no tick hook surfaced | ❌ |
+| `World::SetInitialWorldSettings()` realm-info DB load | Inlined in main.rs: `load_realm_auth_seed` (main.rs:443) and `load_realm_addresses` (main.rs:630). One-shot, no `World` ownership | ⚠️ |
+
+### 13.2 Critical divergences
+
+1. **No global tick.** This is the headline finding the worldserver audit flagged. C++ has `WorldRunnable::run() { while(!stopEvent) { World::Update(diff); MapManager::Update(diff); ... } }` driving every subsystem on a single clock. Rust has no clock at all at the world level. The closest analog is `loop { session.update(50) }` per-connection (`world-server/src/main.rs:606-623`); maps, timers, respawns, scripts, auctions, corpses, DB pings, uptime logs all sit dormant. The `Arc<RwLock<MapManager>>` (`map_manager.rs:616`) is mutated by handlers but never ticked.
+2. **No graceful shutdown.** `tokio::select!` on `ctrl_c` (main.rs:421-435) logs "Shutdown signal received" and falls out of `main`. Sessions are not given a chance to save; characters in flight (open trades, cast bars, in-combat status) lose state. C++ `ShutdownServ(time, options, exitcode, reason)` runs a 30-min/5-min/1-min countdown, broadcasts `SMSG_SERVER_MESSAGE`, calls `WorldSessionMgr::KickAll`, flushes all `CharacterDatabase` transactions, logs uptime, then `_exit(exitcode)`.
+3. **No config typing.** C++ exposes 200+ keyed config values via `getBoolConfig(CONFIG_DURABILITY_LOSS_IN_PVP)` etc. (World.h:685-717). Rust `wow_config::get_value(&str)` returns by string lookup with `.unwrap_or(default)`; no compile-time enumeration of which keys exist, no default registry, no callback on change. Hot-reload (C++ `LoadConfigSettings(reload=true)`) is impossible.
+4. **No DB maintenance.** `WUPDATE_PINGDB` (every 30 min) prevents MariaDB connections from being torn down by `wait_timeout` (default 8h). RustyCore has no equivalent — long-idle sessions on staging/prod will silently lose DB connectivity. Same risk for `WUPDATE_CORPSES` (corpse cleanup), `WUPDATE_DELETECHARS` (finalize deletions), `WUPDATE_UPTIME` (`uptime` table never updated → no "online time" telemetry), `WUPDATE_AUCTIONS` (no auction expiry).
+5. **No central session registry.** C++ `WorldSessionMgr` owns the `std::unordered_map<uint32, WorldSession*>`. Rust uses `PlayerRegistry` (in `wow-network`) for chat/movement broadcast and `SessionManager` (main.rs:369) for the BNet→world `ConnectTo` redirect; neither exposes "iterate all sessions for World::Update". Without this, even if a `World` struct were added later, `SendGlobalMessage` would have nowhere to deliver.
+6. **No world-state persistence.** C++ `WorldStateMgr` loads `PersistentWorldVariable` rows on boot and persists changes — used by Wintergrasp/Tol Barad capture state, holiday flags, etc. Rust has neither the table interface nor the in-memory store.
+
+### 13.3 Verdict
+
+❌ **not started — keep status as-is, escalate audit field to ❌ confirmed.** The world-server binary is more accurately described as "two TCP listeners + per-connection async session driver"; it has no `World`-layer abstraction. The previous worldserver audit's claim that `MapManager::update()` does not exist is corroborated here from the **caller** side: even if such a function existed, no code path in `crates/world-server/` would invoke it. Bringing this module to parity is a green-field port, not an upgrade. The natural seam is to add a `wow-world::game_state::World` struct owning `Arc<RwLock<MapManager>>`, an `IntervalTimer` array indexed by a `WorldTimer` enum, and a `tokio::task` spawned from `main.rs` that runs `loop { world.update(diff_ms).await; tokio::time::sleep_until(next_tick).await; }`. Until that exists, every other module that needs a periodic tick (Maps, Grids, AuctionHouse, BG queues, respawns, scripts) is dead code in production. Treat #WORLD.1 + #WORLD.2 + #WORLD.7 as the unblock chain for the entire server.

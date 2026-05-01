@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-world/` (shared with Maps)
 > **Layer:** L3 (World layer, substrate for Maps)
 > **Status:** 🔧 broken (missing core state machine)
-> **Audited vs C++:** ⚠️ partial (architecture divergence: no NGrid/Cell hierarchy, no GridStates)
+> **Audited vs C++:** ❌ confirmed broken — 2026-05-01 audit; flat HashMap "grid" replaces NGrid/Cell hierarchy, no GridState machine, no GridInfo, no ObjectGridLoader, world→grid coords ignore Trinity's [-64..64] center-32 reorientation
 > **Last updated:** 2026-05-01
 
 ---
@@ -288,4 +288,65 @@ Tests demonstrating Rust behavior ≡ C++ behavior for grid lifecycle and loadin
 ---
 
 *Template version: 1.0 (2026-05-01).* Revision: initial complete audit port.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Audited C++ tree: `/home/server/woltk-trinity-legacy/src/server/game/Grids/{GridDefines.h:251, NGrid.h:183, GridStates.h:56, GridStates.cpp:65, ObjectGridLoader.{h:126,cpp:283}, GridReference.h:51, GridRefManager.h:38, GridLoader.h:76, Grid.h:142}`. Audited Rust tree: grid code lives entirely inside `crates/wow-world/src/map_manager.rs`. There is no `grid.rs`, no `ngrid.rs`, no `cell.rs`, no `grid_state.rs`, and `crates/wow-map/src/lib.rs` is empty.
+
+### 13.1 Coverage table
+
+| C++ symbol (file:line) | Rust equivalent | Status |
+|---|---|---|
+| `MAX_NUMBER_OF_GRIDS = 64` (GridDefines.h:38) | None — `GridCoord { x: i16, y: i16 }` is unbounded (map_manager.rs:21) | ❌ |
+| `MAX_NUMBER_OF_CELLS = 8` (GridDefines.h:36) | None — Rust has no Cell layer at all | ❌ |
+| `SIZE_OF_GRIDS = 533.3333f` (GridDefines.h:40) | `GRID_SIZE = 64.0` (map_manager.rs:11) — **8.33× too small**; numerically equals C++ `SIZE_OF_GRID_CELL` (66.67), suggesting "grid" was confused with "cell" | ❌ wrong scale |
+| `CENTER_GRID_ID = MAX_NUMBER_OF_GRIDS/2 = 32` (GridDefines.h:41) | None — no recentering | ❌ |
+| `CENTER_GRID_OFFSET = SIZE_OF_GRIDS/2` (GridDefines.h:43) | None | ❌ |
+| `SIZE_OF_GRID_CELL = 66.67f` (GridDefines.h:48) | None | ❌ |
+| `CENTER_GRID_CELL_ID = 256` (GridDefines.h:50) | None | ❌ |
+| `MAP_RESOLUTION = 128` (GridDefines.h:55) | None | ❌ |
+| `MAP_SIZE = 34133.33` (GridDefines.h:57) | None | ❌ |
+| `Trinity::ComputeGridCoord(x, y)` (GridDefines.h:194-204) — flips axes: `gx = (int)(CENTER_GRID_ID - x/SIZE_OF_GRIDS)`, returns `((MAX_NUMBER_OF_GRIDS-1) - gx, ...)` | `world_to_grid_x(x: f32) -> (x/64.0).floor() as i16` (map_manager.rs:620) — **no axis flip, no centering, no MAX-1 reorient** | ❌ wrong math |
+| `Trinity::ComputeCellCoord(x, y)` (GridDefines.h:206) | None | ❌ |
+| `class GridInfo` (NGrid.h:30-51) — `i_timer: TimeTracker`, `vis_Update: PeriodicTimer`, `i_unloadActiveLockCount: uint16`, `i_unloadExplicitLock: bool` | None — `Grid::last_player_time: Instant` (map_manager.rs:311) is the only timing field | ❌ |
+| `enum grid_state_t { INVALID, ACTIVE, IDLE, REMOVAL }` (NGrid.h:53-60) | None — no state field on `Grid` (map_manager.rs:307) | ❌ |
+| `class GridState` virtual base + `InvalidState/ActiveState/IdleState/RemovalState` (GridStates.h:26-55) | None | ❌ |
+| `InvalidState::Update()` no-op (GridStates.cpp:24) | None | ❌ |
+| `ActiveState::Update()` — calls `info.UpdateTimeTracker(diff)`, on expiry checks `GetWorldObjectCountInNGrid<Player>() && ActiveObjectsNearGrid()`, runs `ObjectGridStoper`, transitions to IDLE (GridStates.cpp:28-44) | None | ❌ |
+| `IdleState::Update()` — `ResetGridExpiry`, transition to REMOVAL (GridStates.cpp:47-51) | None | ❌ |
+| `RemovalState::Update()` — if `!info.getUnloadLock()` and timer passed, `map.UnloadGrid()` (GridStates.cpp:54-64) | None — `Grid::should_unload` :356 is a binary `empty + idle>timeout`, no lock concept | ⚠️ |
+| `template<N, ACTIVE_OBJECT, WORLD_OBJECT_TYPES, GRID_OBJECT_TYPES> class NGrid` (NGrid.h:62-182) | None | ❌ |
+| `NGrid::GetGridType(x,y)` returning `Grid<...>&` (NGrid.h:78) | None — Rust `Grid` is itself the leaf, no nested cell array | ❌ |
+| `NGrid::SetGridState / GetGridState` (NGrid.h:91-92) | None | ❌ |
+| `NGrid::isGridObjectDataLoaded() / setGridObjectDataLoaded()` (NGrid.h:100-101) | `Grid::loaded: bool` (map_manager.rs:312) — set to `true` at construction and never modified | ⚠️ vestigial |
+| `NGrid::VisitAllGrids<T,TT>(visitor)` / `VisitGrid(x,y,visitor)` (NGrid.h:135-148) | None — visitor pattern absent | ❌ |
+| `NGrid::GetWorldObjectCountInNGrid<T>()` (NGrid.h:163) | None — no typed counts | ❌ |
+| `Grid<A, W, G>` template (Grid.h:142) — heterogeneous `TypeMapContainer` of `WORLD_OBJECT_TYPES` (Player/Creature/Corpse/DynamicObject) and `GRID_OBJECT_TYPES` (GameObject/Creature/AreaTrigger/SceneObject/Conversation) | `Grid { creatures: HashMap<ObjectGuid, WorldCreature>, player_guids: HashSet<ObjectGuid> }` (:307) — only creatures + player GUIDs; missing Corpse, DynamicObject, GameObject, AreaTrigger, SceneObject, Conversation | ❌ |
+| `GridReference<T>` intrusive list node (GridReference.h:51) | None — Rust uses `HashMap<ObjectGuid, T>` (no intrusive backref from object → cell) | ❌ |
+| `GridRefManager<T>` (GridRefManager.h:38) | None | ❌ |
+| `GridLoader<...>` template (GridLoader.h:76) | None | ❌ |
+| `class ObjectGridLoaderBase` (ObjectGridLoader.h:29) — `i_creatures, i_gameObjects, i_corpses, i_areaTriggers` counts | None | ❌ |
+| `ObjectGridLoader::Visit(CreatureMapType&)` (ObjectGridLoader.cpp:138) | None | ❌ |
+| `ObjectGridLoader::Visit(GameObjectMapType&)` (ObjectGridLoader.cpp:131) | None | ❌ |
+| `ObjectGridLoader::Visit(AreaTriggerMapType&)` (ObjectGridLoader.cpp:145) | None | ❌ |
+| `ObjectGridLoader::LoadN()` (ObjectGridLoader.cpp:171) — iterates 8×8 cells, dispatches per-type loader | None | ❌ |
+| `ObjectGridStoper::Visit(CreatureMapType&)` (ObjectGridLoader.cpp:248) — pre-IDLE: stop combat, drop dynobjects/areatriggers | None | ❌ |
+| `ObjectGridUnloader::Visit<T>` (ObjectGridLoader.cpp:232) — pre-REMOVAL: cleanup-before-delete | `MapInstance::unload_empty_grids()` (map_manager.rs:430) just removes the HashMap entry; nothing calls cleanup, nothing despawns | ⚠️ |
+| `PersonalPhaseGridLoader` (ObjectGridLoader.h:73, .cpp:200-230) | None | ❌ |
+| `DEFAULT_VISIBILITY_NOTIFY_PERIOD = 1000` (NGrid.h:28) | None — Rust has no visibility-notify throttle; `get_visible_creatures` (:549) recomputes from scratch every call | ❌ |
+
+### 13.2 Critical divergences
+
+1. **Coordinate system is incompatible.** C++ stores grids in `CoordPair<MAX_NUMBER_OF_GRIDS=64>` (GridDefines.h:177) with origin re-centered: `gx = (MAX_NUMBER_OF_GRIDS-1) - (int)(CENTER_GRID_ID - world_x/SIZE_OF_GRIDS)` (GridDefines.h:201-203). World coord `(0, 0)` lands at grid `(31 or 32, 31 or 32)` — the map center. RustyCore's `world_to_grid_x = (x/64).floor() as i16` (map_manager.rs:620) puts world `(0,0)` at grid `(0,0)` and lets x/y go negative without bounds; the Trinity DB `creature.position_x` columns will hash to entirely different grids than the C++ server uses, breaking any future ObjectGridLoader port unless coords are renormalized.
+2. **Grid scale 8.33× off.** `GRID_SIZE = 64.0f` (map_manager.rs:11) numerically matches `SIZE_OF_GRID_CELL = 66.67f` (GridDefines.h:48), not `SIZE_OF_GRIDS = 533.33f` (GridDefines.h:40). What Rust calls a "grid" is what C++ calls a "cell", and there is no enclosing 64-grid super-structure. A Trinity `creature.grid_id` (1..4096 across the 64×64 grid lattice) cannot be looked up.
+3. **No state machine = no lifecycle.** The four-state lazy-load model (Invalid → first activate via `EnsureGridLoaded` → load DB spawns → Active → Idle on no-players-near → Removal → unload after expiry) is the entire reason Grids exists as a module. Rust collapses it to `loaded: bool` (always `true`) and `should_unload = empty AND idle>300s` (:356). Active spawn-point locks (`i_unloadActiveLockCount`), explicit locks (`i_unloadExplicitLock`), and `ResetGridExpiry(grid, 0.1f)` are all absent. Lookup in map_manager.rs returns no result for the keywords `GridState`, `GridInfo`, `unload_lock`, `Active`, `Idle`, `Invalid`, `Removal`.
+4. **"Load triggers when player enters" semantics are nonexistent.** C++ `Map::EnsureGridLoaded(Cell)` (Map.cpp:325) creates the NGrid, runs `ObjectGridLoader::LoadN`, marks `setGridObjectDataLoaded(true)` so subsequent enters don't re-query DB. Rust `MapInstance::get_or_create_grid` (:388) just `HashMap::insert(GridCoord, Grid::new())` with empty creature/player maps — there is no DB query, no per-cell spawn fetch, no idempotent flag. The "stays in grid" half of the semantic doesn't exist either: `ResetGridExpiry` has no Rust counterpart.
+5. **No type-segregated containers.** C++ separates `WORLD_OBJECT_TYPES = TYPELIST_4(Player, Creature, Corpse, DynamicObject)` from `GRID_OBJECT_TYPES = TYPELIST_7(GameObject, Creature, DynamicObject, Corpse, AreaTrigger, SceneObject, Conversation)` (GridDefines.h). Rust stores only `WorldCreature` keyed by GUID + a `HashSet<ObjectGuid>` of player GUIDs. GameObjects, AreaTriggers, DynamicObjects, Corpses, SceneObjects, Conversations have no home; the dispatcher silently drops them.
+6. **No intrusive object→grid backref.** C++ `GridReference<T>` (GridReference.h:51) lets a `Creature*` know which `NGrid` it lives in for O(1) relocation/removal. Rust must scan every grid's HashMap to find a creature by GUID (only `MapInstance::get_creature(x, y, guid)` :422 with explicit (x,y) hint works in O(1)).
+
+### 13.3 Verdict
+
+🔧 **broken — confirmed.** This module is structurally a single flat HashMap of "tiles" wearing the name `Grid`. The four canonical sub-systems of the C++ Grids module — coordinate math (`Compute*`), `NGrid<8>` template, `GridInfo`+`GridState` 4-state machine, `ObjectGridLoader` DB loader — are all missing. None of the existing code can be incrementally upgraded; coordinates and scale are wrong, so even creature persistence keys won't line up with the world DB. Recommend treating tasks #GRIDS.1-3 (constants + ComputeGridCoord/ComputeCellCoord) as **a hard prerequisite** and rewriting before #GRIDS.5+. Keep the existing `Grid`/`MapInstance` types only as a temporary integration shim while the real `NGrid` lands; do not extend them.
 

@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/Entities/Item/`, `src/server/game/Entities/Player/PlayerStorage.cpp` (logical split of `Player.cpp`), `src/server/game/Handlers/ItemHandler.cpp` + `BankHandler.cpp` + `VoidStorageHandler.cpp`, `src/server/game/Server/Packets/ItemPackets*.cpp`/`BankPackets.cpp`/`VoidStoragePackets.cpp`
 > **Rust target crate(s):** `crates/wow-data/` (Item.db2, ItemTemplate, ItemStats), `crates/wow-world/` (handlers, session inventory state), `crates/wow-database/` (item_instance + character_inventory + character_void_storage + character_transmog_outfits + character_equipmentsets prepared statements), `crates/wow-packet/` (item/bank/void packets)
 > **Layer:** L4 (item entity) + L6 (player storage logic + handlers) — straddles layers; primary index entry is L6.
-> **Status:** ⚠️ partial (basic equipped slots only; no bags, bank, void, transmog, durability, wrap, repair)
-> **Audited vs C++:** ✅ complete
+> **Status:** ⚠️ partial (flat `HashMap<u8 slot, InventoryItem>` of equipped + backpack only; no `Item` entity, no `Bag` containers, no bank, no void, no transmog, no durability, no wrap, no repair, no buyback queue, no enchant slots)
+> **Audited vs C++:** ✅ complete (re-audit 2026-05-01)
 > **Last updated:** 2026-05-01
 
 ---
@@ -548,3 +548,31 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/{Item.h,Item.cpp,ItemTemplate.h,ItemDefines.h,Container/Bag.h}` (378 + 2199 + 873 + 289 + 90 lines) and the inventory section of `Player.cpp` (the `_LoadInventory` / `_SaveInventory` / `CanStoreItem` / `CanEquipItem` / `StoreNewItem` / `EquipItem` / `DestroyItem` / `SwapItem` / `SplitItem` / `BuyItemFromVendorSlot` / `SellItem` / `RepairItem` / `WrapItem` / `OpenItem` / `_LoadEquipmentSets` / `_LoadVoidStorage` / `_LoadTransmogOutfits` cluster) against the current Rust state. Verdict: **⚠️ partial — only flat-slot equipped/backpack tracking; the entire `Item` entity layer and all secondary storage subsystems are absent**.
+
+### What actually exists
+
+- `crates/wow-data/src/item.rs:21 ItemRecord` (123 lines total) reads only 6 fields from `Item.db2`: id, class, subclass, material, inventory_type, sheathe. `inventory_type` is loaded as `i8` and exposed as such — but downstream callers cast to `u8`, so a value of `-1` (non-equippable) becomes `255` which collides with the `INVENTORY_SLOT_BAG_0=255` sentinel. **Latent equip-slot resolution bug confirmed.**
+- `crates/wow-data/src/item_stats.rs` (424 lines) holds ItemSparse-derived stat allocation logic (not deeply audited here, but doc claims it exists and grep confirms a `PlayerStatsStore` is wired into `WorldSession.player_stats`).
+- `crates/wow-packet/src/packets/item.rs:19 InventoryResult` enum exposes **14 codes** (Ok, CantEquipLevelI, WrongSlot, BagFull, NotEquippable, CantSwap, SlotEmpty, ItemNotFound, DropBoundItem, NotABag, NotOwner, PlayerDead, InvFull, InternalBagError) vs **118 codes** in C++ `ItemDefines.h::InventoryResult`. ~88% of reject paths are unrepresentable.
+- `crates/wow-world/src/session.rs:197` carries `inventory_items: HashMap<u8, InventoryItem>` keyed by slot byte. The `InventoryItem` struct (`session.rs:321`) is just `{ guid: ObjectGuid, entry_id: u32, db_guid: u64, inventory_type: Option<u8> }` — **no stack count, no durability, no enchantments, no charges, no soulbound flag, no creator GUID, no gems, no transmog, no random property, no expiration, no bonus list IDs.** Compared to C++ `Item` which has all of those plus the `UF::ItemData` update fields blob. The Rust struct is the bare minimum to remember "slot N has item X".
+- `crates/wow-world/src/handlers/character.rs` does the inventory work directly (no method on `Player` — there is no `Player`):
+  - `:1330+` login handler hydrates `inventory_items` from a `character_inventory ⨝ item_instance` SELECT (line `:1425` `inventory_items.insert(slot, InventoryItem {...})`).
+  - `:3273` BuyItem finds first free slot, inserts a new `item_instance` row + `character_inventory` tuple (`:3331`).
+  - `:3381` SellItem deletes both rows — **permanent destroy, no buyback queue**.
+  - `:3534-3557` SwapItem swaps map entries (no validation, no two-handed-with-shield check, no equip cooldown, no apply-mods).
+  - Auto-equip starting items at character creation via `equip_slot_for_inventory_type` (~line 3691).
+- `crates/wow-database/src/statements/character.rs` has prepared statements only for `character_inventory` SELECT/UPDATE/DELETE and `item_instance` INSERT/SELECT-MAX-GUID/DELETE. **Absent**: `item_instance_gems`, `item_instance_transmog`, `item_refund_instance`, `item_soulbound_trade_data`, `character_void_storage`, `character_equipmentsets`, `character_transmog_outfits`, `UPD_ITEM_OWNER`.
+
+### Slot model — the 211-slot tree
+
+Doc §3 enumerates the full C++ slot map: equipment 0-18 (19 slots) + profession 19-29 (11 slots, mostly unused in 3.4.3) + bag 30-33 (4 equipped bags) + reagent-bag 34 + backpack 35-58 (24 slots, default 16) + bank-items 59-86 (28) + bank-bags 87-93 (7) + buyback 94-105 (12) + keyring 106-137 (32, **3.4.3-specific**, modern-removed) + child-equipment 138-140 (3) + the `INVENTORY_SLOT_BAG_0=255` sentinel + `MAX_BAG_SIZE=36` for sub-bag arrays. Rust: a single `HashMap<u8, InventoryItem>`. **No slot-range enum exists, no validation that slot N belongs to the right range for the operation being performed, no two-level addressing (bag-slot, sub-slot).** The doc's claim "11 equipped slots in session state" understates it slightly — the HashMap is unbounded — but the architectural absence is the same.
+
+### Worst divergence
+
+**There is no `Item` entity.** Every C++ Item lifecycle method (`Create`, `LoadFromDB`, `SaveToDB`, `DeleteFromDB`, `SetBinding`, `SetState(NEW/CHANGED/UNCHANGED/REMOVED)`, `IsRefundable` / `IsBOPTradeable` / `IsWrapped` / `IsLocked` / `IsBroken`, `GetSpellCharges` / `SetSpellCharges`, `GetEnchantmentId(slot)` / `SetEnchantment`, `AddBonuses`, the `BonusData` cache) hangs off a Rust struct that doesn't exist. This propagates: durability ticking is impossible, repair cost can't be computed, enchantments can't be applied or expired, gems can't be socketed, refund 2-hour windows can't be tracked, BoP-tradeable groups can't be recorded, soulbinding can't auto-trigger on equip/pickup/use. Combined with the absence of `Bag` containers, **anything beyond "swap two items in fixed positions" is unimplementable in the current shape**. The auto-equip-starter-items + buy-from-vendor + sell-to-vendor (permanent) + swap path is the entire surface area today; the other ~40 inventory CMSG opcodes (auto-bank, auto-store-bank, banker-activate, buy-bank-slot, void-storage-query/unlock/transfer/swap, transmogrify-items, save-equipment-set, use-equipment-set, repair-item, socket-gems, wrap-item, open-item, read-item, sort-bags, cancel-temp-enchantment, item-purchase-refund, item-text-query, etc.) have no Rust handler. Coverage vs the 211-slot, 35-table-cluster C++ system: ~5%. The 56 sub-tasks in §9 stand essentially unchanged.

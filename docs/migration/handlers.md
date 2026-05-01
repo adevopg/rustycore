@@ -3,8 +3,8 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/Handlers/`
 > **Rust target crate(s):** `crates/wow-world/src/handlers/` + `crates/wow-handler/`
 > **Layer:** L2
-> **Status:** ⚠️ partial (~39% coverage)
-> **Audited vs C++:** ❌ not audited
+> **Status:** ⚠️ partial (~22% coverage by handler count, ~23% by registered opcodes)
+> **Audited vs C++:** ⚠️ audited 2026-05-01 — see §13. 121/~560 C++ HandleXxx covered, 19 of 45 C++ handler families have ZERO Rust counterpart, multiple silent read-order bugs in implemented handlers.
 > **Last updated:** 2026-05-01
 
 ---
@@ -358,3 +358,165 @@ Rust: `attack_swing`, `attack_stop`. Faltan duel-related (5).
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+Mechanical comparison between C++ TC wotlk_classic
+(`/home/server/woltk-trinity-legacy/src/server/game/Handlers/`) and Rust
+(`/home/server/rustycore/crates/wow-world/src/handlers/`). C++ method count is
+`grep -cE '^void WorldSession::Handle' *.cpp`; Rust function count is
+`grep -cE '^\s*(pub )?(async )?fn handle_'` per file. The earlier server.md
+audit (2026-05-01) measured **145/621 = ~23%** of C++ active handlers
+registered via `inventory::submit!`; this audit confirms the same gap from the
+opposite direction (counting `HandleXxx` symbols vs Rust `handle_*` fns).
+
+### 13.1 Coverage matrix — C++ family → Rust module → method count
+
+| C++ Handler family | C++ `HandleXxx` | Rust module | Rust `handle_*` | Inventory entries | % |
+|---|---|---|---|---|---|
+| MiscHandler.cpp | 63 | misc.rs | 43 | 43 | ~68% |
+| GuildHandler.cpp | 60 | — | 0 | 0 | **0%** |
+| CharacterHandler.cpp | 36 | character.rs | 40 (incl. NPC/item shims merged into the file) | 43 | ~50% real char-only |
+| BattleGroundHandler.cpp | 34 | — | 0 | 0 | **0%** |
+| GroupHandler.cpp | 31 | group.rs | 3 | 3 | ~10% |
+| AuctionHouseHandler.cpp | 23 | — | 0 | 0 | **0%** |
+| SpellHandler.cpp | 22 | spell.rs | 3 | 3 | ~14% |
+| LFGHandler.cpp | 22 | — | 0 | 0 | **0%** |
+| ItemHandler.cpp | 22 | (folded into character.rs) | ~6 item shims | — | ~27% |
+| MovementHandler.cpp | 19 | movement.rs | 3 | 3 | ~16% |
+| QuestHandler.cpp | 17 | quest.rs | 9 | 9 | ~53% |
+| ChatHandler.cpp | 17 | chat.rs | 5 | 11 (1 fn covers many opcodes) | ~65% by opcode |
+| CalendarHandler.cpp | 16 | — | 0 | 0 | **0%** |
+| PetHandler.cpp | 13 | — | 0 | 0 | **0%** |
+| NPCHandler.cpp | 13 | trainer.rs (+ misc.rs gossip/vendor) | 2 + ~5 in misc | 2 | ~30% |
+| TradeHandler.cpp | 12 | — | 0 | 0 | **0%** |
+| QueryHandler.cpp | 12 | (in character.rs / misc.rs) | ~5 | 5 | ~42% |
+| BattlePetHandler.cpp | 11 | — | 0 | 0 | **0%** (legion+, OK) |
+| VehicleHandler.cpp | 9 | — | 0 | 0 | **0%** |
+| TicketHandler.cpp | 9 | — | 0 | 0 | **0%** |
+| PetitionsHandler.cpp | 9 | — | 0 | 0 | **0%** |
+| MailHandler.cpp | 9 | — | 0 | 0 | **0%** |
+| BankHandler.cpp | 9 | — | 0 | 0 | **0%** |
+| SocialHandler.cpp | 7 | social.rs | 3 | 3 | ~43% |
+| SkillHandler.cpp | 7 | — | 0 | 0 | **0%** |
+| LootHandler.cpp | 7 | loot.rs | 3 | 3 | ~43% |
+| TaxiHandler.cpp | 5 | — | 0 | 0 | **0%** |
+| GarrisonHandler.cpp | 5 | — | 0 | 0 | (WoD+, skip) |
+| ChannelHandler.cpp | 5 | — | 0 | 0 | **0%** |
+| VoidStorageHandler.cpp | 4 | — | 0 | 0 | **0%** |
+| InspectHandler.cpp | 4 | inspect.rs | 1 | 1 | ~25% |
+| DuelHandler.cpp | 4 | — | 0 | 0 | **0%** |
+| CombatHandler.cpp | 3 | combat.rs | 3 | 3 | ✅ 100% |
+| ToyHandler / Scene / BlackMarket / Adventure* / Token / Hotfix / Transmog / Collections / Auth / Bnet / Scenario | 1–3 each | (battlenet.rs has 1) | 0–1 | — | mostly **0%** (legion+/MoP+) |
+| **TOTALS** | **~560** (~498 active for WoLK 3.4.3) | 13 modules | **121** `handle_*` | **128** registered | **~22% by fn count, ~23% by opcode (matches server.md)** |
+
+### 13.2 Critical missing handler families (zero Rust coverage, WoLK-relevant)
+
+19 C++ handler families have **no Rust file**:
+
+1. **GuildHandler** (60 fns) — no guild create/invite/roster/bank/rank ops
+2. **BattleGroundHandler** (34) — no BG queue/leave/port/score
+3. **AuctionHouseHandler** (23) — confirmed by `auctionhouse.md`
+4. **LFGHandler** (22) — no dungeon finder
+5. **CalendarHandler** (16) — no events/RSVP
+6. **PetHandler** (13) — no pet command/control/spell
+7. **TradeHandler** (12) — no player trade (begin/items/accept)
+8. **VehicleHandler** (9) — no vehicle enter/exit/seat
+9. **TicketHandler** (9) — no GM ticket/bug report
+10. **PetitionsHandler** (9) — no guild petition flow
+11. **MailHandler** (9) — confirmed; mail entirely absent
+12. **BankHandler** (9) — no bank/buyback slots
+13. **SkillHandler** (7) — no skill learn/level
+14. **TaxiHandler** (5) — no flight masters / activate taxi
+15. **ChannelHandler** (5) — chat channels (only chat.rs covers core msg types)
+16. **VoidStorageHandler** (4) — Cata+, lower priority
+17. **DuelHandler** (4) — no duel accept/decline/forfeit
+18. **TransmogrificationHandler** (1) — Cata+, lower priority
+19. Stubs (Adventure*, BattlePet, Garrison, Scene, Token, Toy, BlackMarket, Collections) — most are post-WoLK and acceptable to defer.
+
+### 13.3 Cross-reference with server.md audit
+
+`server.md` measured **145 of 621 active C++ opcodes** registered in
+`inventory::iter::<PacketHandlerEntry>` = **23.3%**. This audit counts
+**121 Rust `handle_*` functions** vs **~498 WoLK-relevant `HandleXxx`** =
+**~24%**. The two angles agree; the gap is the same gap. The ~24 delta
+between 121 fns and 145 registered opcodes is explained by `chat.rs` and
+`misc.rs` reusing one Rust function for multiple opcode variants
+(`handle_chat_message` covers SAY/PARTY/RAID/INSTANCE_CHAT etc.).
+
+### 13.4 Architectural pattern verification
+
+C++ uses `OpcodeTable::Initialize()` (`Opcodes.cpp`) with a `DEFINE_HANDLER`
+macro that records `(opcode, status, processing, &WorldSession::HandleXxx)`
+into a static array indexed by opcode. Dispatch is direct virtual call
+through a function pointer.
+
+Rust uses `inventory::submit!` to push `PacketHandlerEntry { opcode, status,
+processing, handler_name }` into a static collection assembled at startup.
+**Two-step dispatch (match arm + submit) means forgetting `submit!` silently
+drops the handler** — covered in CLAUDE.md.
+
+**SessionStatus parity:** ✅ Rust models all 4 C++ values
+(`STATUS_AUTHED`, `STATUS_LOGGEDIN`, `STATUS_TRANSFER`,
+`STATUS_LOGGEDIN_OR_RECENTLY_LOGGOUT`) one-for-one. server.md flags that
+several `CMSG_QUERY_*` Rust handlers use `Authed` where C++ requires
+`LoggedIn` — a behavioural divergence, not a missing axis.
+
+**PacketProcessing parity:** ❌ **Rust drops one mode.** C++ has three:
+`PROCESS_INPLACE`, `PROCESS_THREADUNSAFE`, `PROCESS_THREADSAFE`. Rust has
+**two**: `Inplace`, `ThreadUnsafe`. C++ uses `PROCESS_THREADSAFE` for ~30
+opcodes that are dispatched on `Map::Update()` rather than
+`World::UpdateSessions()` — e.g. `CMSG_ACTIVATE_TAXI`,
+`CMSG_AREA_TRIGGER` (when running thread-safe), several movement ack
+variants. Rust currently funnels these to `ThreadUnsafe`, losing the map
+locality. Mark `wow-handler::PacketProcessing` as needing a third variant
+before reviving the world-tick scheduler.
+
+### 13.5 Silent bugs in implemented handlers (5-handler spot-check)
+
+Sampled `handle_quest_giver_accept_quest`, `handle_quest_giver_choose_reward`,
+`handle_party_invite`, `handle_add_friend`, `handle_attack_swing`. C++ ground
+truth from `Server/Packets/{Quest,Party,Social,Combat}Packets.cpp`.
+
+| Handler | C++ Read order | Rust Read order | Verdict |
+|---|---|---|---|
+| `handle_attack_swing` | `>> Victim` (single GUID) | `AttackSwing::read` (single GUID via typed `ClientPacket`) | ✅ |
+| `handle_add_friend` | `ReadBits(9) name; ReadBits(9) notes; ReadString; ReadString` | identical | ✅ |
+| `handle_party_invite` | `ReadBit hasPartyIndex; ResetBitPos; ReadBits(9)x2; >>ProposedRoles; >>TargetGUID; ReadString x2; if hasPartyIndex >>PartyIndex` | identical (uses `read_packed_guid` which `ObjectGuid::operator>>` already implies) | ✅ |
+| `handle_quest_giver_accept_quest` | `>> QuestGiverGUID; >> QuestID; ReadBit StartCheat` | `read_packed_guid; read_uint32; read_uint8` | **❌ SILENT BUG** — `StartCheat` is a single bit in C++, Rust reads a full byte. Misaligns nothing here because it is the last field, but the `read_uint8` will pull the next packet byte if the wire format actually encodes 1 bit + flush. Real-world client may send 1 padded byte, so it limps; it is still wrong against the protocol spec. |
+| `handle_quest_giver_choose_reward` | `>> QuestGiverGUID; >> QuestID; >> Choice` where `Choice = QuestChoiceItem { ReadBits(2) LootItemType; >> ItemInstance (multi-field); >> Quantity (i32) }` | `read_packed_guid; read_uint32 quest_id; read_uint32 choice_item_id; read_uint32 loot_item_type` | **❌ MAJOR SILENT BUG** — Rust treats `Choice` as a flat `(item_id u32, loot_type u32)` pair. The C++ struct is `LootItemType (2 bits) + full ItemInstance (item_id + bonuses + modifications + ...) + Quantity (i32)`. Rust will misparse every quest reward selection where the chosen item has bonuses/mods, and the `loot_item_type` int Rust reads is actually the start of `ItemInstance::ItemID`. |
+
+Two bugs in five handlers (~40% sampling defect rate) suggests the rest of
+the implemented surface needs the same line-by-line audit. **Recommend a
+follow-up sweep** of every `handle_*` against `Server/Packets/*.cpp` `Read()`
+methods before declaring even the 22% covered handlers correct.
+
+### 13.6 Recommended sub-task priority shuffle
+
+Original §9 ordered sub-tasks by C++ family. Re-ordered by impact (player-facing
++ already partially-tested code paths first):
+
+1. **HANDLERS.PRIO-A — fix existing read-order bugs** (NEW). Sweep all 121
+   `handle_*` against C++ `::Read()` definitions in `Server/Packets/`. Two
+   confirmed bugs in 5 spot-checks; expect ~30–40 silent bugs total.
+   Owner: anyone touching an existing handler.
+2. **HANDLERS.PRIO-B — Mail (#HANDLERS.12-13)** (was M priority). Mail is
+   the blocking dependency for AH, calendar invitations, and refunded
+   purchases. 9 C++ fns, all backed by existing `mail` DB schema → fast win.
+3. **HANDLERS.PRIO-C — GroupHandler full coverage (#HANDLERS.20-21)**. We
+   have 3/31 fns and many systems (loot rolls, BG queue, raid markers)
+   silently depend on group state.
+4. **HANDLERS.PRIO-D — DuelHandler (#HANDLERS.24)** — 4 fns, low complexity,
+   unblocks PvP testing without needing BG infra.
+5. **HANDLERS.PRIO-E — TaxiHandler + BankHandler** (5 + 9 fns) — both small,
+   both unlock common gameplay loops.
+6. **HANDLERS.PRIO-F — `PacketProcessing::ThreadSafe` variant** in
+   `wow-handler::lib.rs` before any Map-tick scheduler refactor.
+7. Defer Auction/LFG/Calendar/BG/Pet/Trade until after PRIO-A–F land — they
+   are large (≥12 fns each) and currently have no DB-side scaffolding.
+8. Stubs for legion+/MoP+ handlers (Adventure*, BattlePet, BlackMarket,
+   Garrison, Scene, Token, Transmog, VoidStorage) stay at the bottom; not
+   relevant for WoLK 3.4.3 client.
+

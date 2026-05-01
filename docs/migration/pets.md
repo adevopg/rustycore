@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-world/src/pets/` (does not exist — no `Pet` entity, no `PetStable`, no spell book, no auras), `crates/wow-world/src/handlers/pets.rs` (does not exist — only the `handle_request_stabled_pets` info-stub at `handlers/character.rs:3042`), `crates/wow-packet/src/packets/pets.rs` (does not exist — none of the 16+ packet structs are defined), `crates/wow-database/` (no `character_pet`, `character_pet_declinedname`, `pet_aura`, `pet_aura_effect`, `pet_spell`, `pet_spell_cooldown`, `pet_spell_charges` schema or prepared statements). `crates/wow-constants/src/opcodes.rs` carries the opcode constants (~16 of them, see §7).
 > **Layer:** L6 (Game systems — depends on Entities/Creature L4, Spells L5, Auras L5, AI L6, Map/Grid L2, Player L4, ObjectAccessor L4; depended on by class-mechanic Scripts (Hunter, Warlock, Mage, DK), Group XP sharing, BG/Arena unsummoning logic)
 > **Status:** ❌ not started — opcodes are present in `crates/wow-constants/src/opcodes.rs` (see §7) and `handle_request_stabled_pets` is a logging stub returning nothing; no `Pet` struct, no spell book, no SQL loader, no spawn flow, no AI, no save/load roundtrip, no stable.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ complete (2026-05-01)
 > **Last updated:** 2026-05-01
 
 ---
@@ -511,3 +511,31 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/{Pet.h,Pet.cpp,PetDefines.h}` (167 + 1954 + 186 lines), `Handlers/PetHandler.cpp` (810 lines), `Server/Packets/PetPackets.{h,cpp}` (276 + 206 lines), and the stable subset of `Handlers/NPCHandler.cpp`, against the current Rust state. Verdict: **❌ not started — only opcode integers and one logging stub**. Pre-audit hypothesis confirmed exactly.
+
+### Verification of doc claim "16 opcode constants + 1 stub handler"
+
+Searched `crates/wow-constants/src/opcodes.rs` for pet/stable opcodes:
+- CMSG: `PetAbandon=0x348d`, `PetAction=0x348b`, `PetCancelAura=0x348e`, `PetCastSpell=0x329b`, `PetLearnTalent=0x3554`, `PetRename=0x3686`, `PetSetAction=0x348a`, `PetSpellAutocast=0x348f`, `PetStopAttack=0x348c`, `LearnPreviewTalentsPet=0x3555`, `RequestPetInfo=0x3490`, `QueryPetName=0x3275`, `RequestStabledPets=0x3491`, `StablePet=0x3168`, `UnstablePet=0x3169`. SMSG: e.g. battle-pet-related and `QueryPetName` reply but no SMSG_PET_SPELLS_MESSAGE / SMSG_PET_MODE / SMSG_PET_STABLE_LIST / SMSG_PET_NAME_INVALID / SMSG_PET_TAME_FAILURE / SMSG_PET_LEARNED_SPELLS lines visible — server→client side appears even thinner than the doc estimated.
+- Handler implementations searched via `grep "fn handle_pet_\|fn handle_stable\|fn handle_buy_stable\|fn handle_unstable\|fn handle_dismiss_critter\|fn handle_query_pet\|fn handle_request_pet\|fn handle_request_stabled" crates/wow-world/src/handlers/*.rs` — exactly **one** match: `crates/wow-world/src/handlers/character.rs:3042 handle_request_stabled_pets`, body is two lines: `info!("RequestStabledPets account {} (stub)", self.account_id);` followed by `return`. No DB query, no `SMSG_PET_STABLE_LIST` send.
+- The dispatcher entry at `character.rs:348` (`PacketHandlerEntry { opcode: ClientOpcodes::RequestStabledPets, …, handler_name: "handle_request_stabled_pets" }`) **is** registered via `inventory::submit!`, so the opcode is consumed by the stub rather than silently dropped — but every other pet opcode (PetAction, PetSetAction, PetRename, PetAbandon, PetStopAttack, PetSpellAutocast, PetCancelAura, PetCastSpell, RequestPetInfo, DismissCritter, LearnPreviewTalentsPet, QueryPetName, StablePet, UnstablePet) has **no handler and no `inventory::submit!`** — they fall through whatever default-dispatcher path exists in `crates/wow-handler/src/lib.rs`, almost certainly logging an "unknown opcode" and dropping.
+- `BattlePetRequestJournal` does have a stub handler (`crates/wow-world/src/handlers/misc.rs:606`) — but battle pets are a **separate** feature from creature pets and shouldn't be conflated.
+
+### Doc claim accuracy
+
+The §8 "Current state in RustyCore" section is **fully accurate**:
+- No `crates/wow-world/src/pets/` directory.
+- No `Pet` struct, no `Guardian`, no `TempSummon`, no `CharmInfo` anywhere in the workspace.
+- No `crates/wow-packet/src/packets/pets.rs` — none of the 18+ packet types from `PetPackets.h` (DismissCritter, RequestPetInfo, PetAbandon, PetStopAttack, PetSpellAutocast, PetSpells, PetStableResult, PetLearnedSpells, PetUnlearnedSpells, PetNameInvalid, PetRename, PetAction, PetSetAction, PetCancelAura, SetPetSpecialization, PetActionFeedback, PetActionSound, PetTameFailure, PetMode) are defined.
+- `crates/wow-database/` has no migrations for `character_pet`, `character_pet_declinedname`, `pet_aura`, `pet_aura_effect`, `pet_spell`, `pet_spell_cooldown`, `pet_spell_charges`. None of the ~25 prepared statements (`CHAR_SEL_CHAR_PETS`, `CHAR_INS_PET`, `CHAR_DEL_CHAR_PET_BY_ID`, `CHAR_UPD_CHAR_PET_NAME`, `CHAR_INS_PET_AURA`, etc.) exist.
+- `crates/wow-ai/src/lib.rs` has no `PetAI` — `CreatureAI` only.
+- No `Player::SummonPet` / `Player::RemovePet` / `Player::GetPetStable` analogue. `WorldSession` has no `current_pet: Option<ObjectGuid>`, no `pet_stable`, no `m_Controlled` or pet-temporary-unsummon state.
+
+### Worst divergence
+
+**The 1954-line `Pet.cpp` is 100% absent** — `LoadPetFromDB` (the 6-query async holder), `SavePetToDB(mode)` (17-column INSERT in a transaction with `_SaveAuras` + `_SaveSpells` + `SpellHistory<Pet>::SaveToDB`), `DeleteFromDB(petNumber)` (cascade across 7 tables), `Update(diff)` (focus regen + duration tick + save throttle), `setDeathState` override, `GivePetXP` / `GivePetLevel` / `SynchronizeLevelWithOwner`, `LearnPetPassives` / `LearnPetTalent`, `CastPetAuras`, `addSpell` / `removeSpell` / `CleanupActionBar`, `GenerateActionBarData`, `SetSpecialization`. With this missing, a 3.4.3 client logging in as Hunter or Warlock with a saved pet sees no pet entity, no spell book, no action bar, and any pet-summon spell (Hunter "Call Pet" 883, Warlock "Summon Imp", DK "Raise Dead", Mage "Summon Water Elemental") produces nothing because `Spell::EffectSummonPet` also doesn't exist in the Rust spell engine. **Pet identity and persistence (`pet_number` as the canonical id, slot bitfield with high-bit unslotted mask, declined-name table, the comma-separated `abdata` action-bar text format) are all undefined. Migration is a clean greenfield port — the ~95 sub-tasks in §9 stand as written.**

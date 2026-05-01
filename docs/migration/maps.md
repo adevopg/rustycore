@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-world/`, `crates/wow-map/`
 > **Layer:** L3 (World layer)
 > **Status:** 🔧 broken (rewrite needed)
-> **Audited vs C++:** ⚠️ partial (Maps.md audit log via MIGRATION_ROADMAP.md indicates core architecture divergence)
+> **Audited vs C++:** ❌ confirmed broken — 2026-05-01 audit; no Map class, no NGrid/Cell hierarchy, no GridState machine, no Map::Update(), no MapManager::update()
 > **Last updated:** 2026-05-01
 
 ---
@@ -308,4 +308,83 @@ Tests that demonstrate Rust behavior ≡ C++ behavior for key invariants.
 ---
 
 *Template version: 1.0 (2026-05-01).* Revision: initial complete audit port.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Audited C++ tree: `/home/server/woltk-trinity-legacy/src/server/game/Maps/{Map.cpp:4014, Map.h:917, MapManager.cpp:461, MapManager.h:183}`. Audited Rust tree: `/home/server/archived/rustycore_ARCHIVED_20260312/crates/wow-world/src/map_manager.rs:784` (one file; no `map.rs`, no `wow-map/src/lib.rs` content).
+
+### 13.1 Coverage table — Map class
+
+| C++ symbol | Rust equivalent | Status |
+|---|---|---|
+| `class Map : public GridRefManager<NGridType>` (Map.h:186) | None — only `MapInstance { map_id, instance_id, grids: HashMap<GridCoord, Grid> }` (map_manager.rs:371) | ❌ |
+| `Map::Update(uint32 t_diff)` (Map.cpp:666) | **MISSING** — no per-map tick exists anywhere | ❌ |
+| `Map::EnsureGridLoaded(Cell)` (Map.h:583, Map.cpp:325) | `MapInstance::get_or_create_grid()` (map_manager.rs:388) — creates blank grid, does **not** load DB spawns | ⚠️ name only |
+| `Map::EnsureGridLoadedForActiveObject` (Map.h:584, Map.cpp:348) | None | ❌ |
+| `Map::LoadGrid(float, float)` (Map.cpp:417) | None — Rust only has world→grid coord conversion (`world_to_grid_coords` :632) | ❌ |
+| `Map::UnloadGrid(NGridType&, bool)` (Map.cpp; declared Map.h:246) | `MapInstance::unload_empty_grids()` :430 / `unload_distant_grids()` :576 — timeout-only, never called | ⚠️ |
+| `Map::UnloadAll()` (Map.cpp:1646) | None | ❌ |
+| `Map::AddPlayerToMap(Player*, bool)` | `player_enter_grid()` (map_manager.rs:525) — only marks `HashSet<ObjectGuid>`; no `SMSG_NEW_WORLD`, no grid load | ⚠️ |
+| `Map::RemovePlayerFromMap(Player*, bool)` (Map.cpp:907) | `player_leave_grid()` :531 | ⚠️ |
+| `Map::AddToMap<T>` / `Map::AddToGrid<T>` (Map.cpp:190-242) | `MapInstance::add_creature()` :410 — creatures only; no Player/GO/DynamicObject/AreaTrigger/Corpse | ⚠️ creatures only |
+| `Map::RemoveFromMap<T>` (Map.cpp:934) | `MapInstance::remove_creature()` :414 — creatures only | ⚠️ |
+| `Map::PlayerRelocation` (Map.cpp:1015) | `player_move()` :538 — only swaps grid membership; no notify, no visibility recalc, no broadcast | ⚠️ |
+| `Map::CreatureRelocation` (Map.cpp:1042) | None (creature movement happens inside `WorldSession::tick_*`, not Map) | ❌ |
+| `Map::GameObjectRelocation` (Map.cpp:1074) | None | ❌ |
+| `Map::DynamicObjectRelocation` (Map.cpp:1103) | None | ❌ |
+| `Map::AreaTriggerRelocation` (Map.cpp:1133) | None | ❌ |
+| `Map::VisitNearbyCellsOf` (Map.cpp:622) | `MapManager::get_visible_creatures` :549 — 3×3 grid scan, **creatures only**, no visitor pattern, no `WorldTypeMapContainer`/`GridTypeMapContainer` distinction | ⚠️ |
+| `Map::ProcessRelocationNotifies` (Map.cpp:830) | None | ❌ |
+| `Map::ScriptsProcess()` (Map.h:598; MapScripts.cpp:899L) | None | ❌ |
+| `Map::AddObjectToRemoveList(WorldObject*)` (Map.h:345) | None | ❌ |
+| `Map::RemoveAllObjectsInRemoveList()` (Map.h:302) | None | ❌ |
+| `Map::ResetMarkedCells()` / `resetMarkedCells()` (Map.cpp:693) | None | ❌ |
+| `Map::ResetGridExpiry(NGridType&, float)` (Map.h:251) | None — `last_player_time: Instant` (:311) reset on player_enter only | ⚠️ |
+| `Map::MoveAllCreaturesInMoveList()` (Map.cpp:1239) | None | ❌ |
+| `Map::ProcessRespawns()` (Map.cpp:2191) / `Respawn()` :2025 | None — `WorldCreature::should_respawn` :209 is a per-creature wall-clock check, no heap, no DB persist | ⚠️ stub |
+| `Map::CleanupCorpses` / corpse decay | None — `WorldCreature::corpse_despawn_at: Option<Instant>` (:63) field exists, never read | ⚠️ |
+| `Map::SendObjectUpdates()` (Map.cpp:1929) | None | ❌ |
+| `Map::AddCreatureToMoveList` / move-list family (Map.cpp:1163-1230) | None | ❌ |
+| `Map::GetHeight / GetWaterLevel / GetZoneId / GetAreaId` | None — terrain queries unimplemented | ❌ |
+| `Map::SetWorldStateValue` (Map.cpp:480) | None | ❌ |
+| `Map::SendInitSelf / SendInitTransports` (Map.cpp:1826/1853) | None | ❌ |
+| `Map::InitStateMachine() / DeleteStateMachine()` (Map.cpp:124/132) | None — no state machine to init | ❌ |
+| `class InstanceMap : public Map` (Map.h:841) | None — `MapInstance` is a **flat** map+instance_id container, not subclass; no instance lock, no `InstanceLock`, no difficulty | ❌ |
+| `class BattlegroundMap : public Map` (Map.h:883) | None | ❌ |
+
+### 13.2 Coverage table — MapManager
+
+| C++ symbol | Rust equivalent | Status |
+|---|---|---|
+| `MapManager::Initialize()` (MapManager.cpp:44) | None | ❌ |
+| `MapManager::InitializeVisibilityDistanceInfo()` (MapManager.cpp:54) | None | ❌ |
+| `MapManager::Update(uint32 diff)` (MapManager.cpp:293) — schedules `Map::Update` per loaded map via `MapUpdater` thread pool | **MISSING** — no `MapManager::update()` exists; the only world-server tick is `session.update(50)` per-session inside `world-server/src/main.rs:609` | ❌ **breaking divergence** |
+| `MapManager::CreateMap(uint32, Player*)` | `get_or_create_map(map_id, instance_id)` (map_manager.rs:466) — no DB2 lookup, no instance creation rules, no transfer-abort | ⚠️ |
+| `MapManager::CreateInstance / CreateBattleground` | None | ❌ |
+| `MapManager::FindMap(uint32, uint32)` | `get_map(map_id, instance_id)` :476 | ✅ minimal |
+| `MapManager::DestroyMap(Map*)` (MapManager.cpp:328) | None — maps live forever in `HashMap<(u16,u32), MapInstance>` | ❌ |
+| `MapManager::UnloadAll()` (MapManager.cpp:350) | None | ❌ |
+| `MapManager::IsValidMAP / InitInstanceIds / RegisterInstanceId / FreeInstanceId` | None — `instance_id: u32` is a free parameter, no allocator | ❌ |
+| `m_updater: MapUpdater` (thread-pool dispatch) | None — no parallel map update | ❌ |
+
+### 13.3 NGrid / Cell architecture
+
+C++ uses a strict 3-tier hierarchy `Map → NGrid<8>[64][64] → Cell[8][8]`, with `MAX_NUMBER_OF_GRIDS=64`, `MAX_NUMBER_OF_CELLS=8`, `SIZE_OF_GRIDS=533.3333f`, `CENTER_GRID_ID=32`, `SIZE_OF_GRID_CELL=66.6667f`, `MAP_RESOLUTION=128` (GridDefines.h:36-57). Each `NGridType` carries `GridInfo` (timer + `i_unloadActiveLockCount: u16` + `i_unloadExplicitLock`) and a `grid_state_t` ∈ {INVALID, ACTIVE, IDLE, REMOVAL} (NGrid.h:30-60). The 4-state machine is virtual-dispatched via `GridState::Update()` overrides (GridStates.cpp:24-65).
+
+Rust replication: **none of this exists**. `GridCoord { x: i16, y: i16 }` (map_manager.rs:21) is unbounded (no [-64..64] clamp, no `CENTER_GRID_ID=32` reorientation — Trinity's `ComputeGridCoord` flips axes via `(MAX_NUMBER_OF_GRIDS-1) - gx`, GridDefines.h:201-203, which Rust ignores). `GRID_SIZE = 64.0` (line 11) is **wrong by 8.33×** vs C++ `SIZE_OF_GRIDS = 533.33` — Rust's "grid" is actually one C++ Cell. There is no NGrid layer, no `GridInfo`, no `GridState` enum, no `unloadActiveLockCount`, no per-grid `TimeTracker`. `Grid` (:307) is a flat `HashMap<ObjectGuid, WorldCreature>` + `HashSet<ObjectGuid>` — no typed `WorldTypeMapContainer`/`GridTypeMapContainer` partition.
+
+### 13.4 Critical divergences
+
+1. **No update loop reaches the map.** C++: `main → World::Update → MapManager::Update → Map::Update → NGrid state.Update → ObjectGridLoader / ObjectUpdater`. Rust: `main → tokio::spawn(start_world_listener)` then per-connection `loop { session.update(50); }` (`world-server/src/main.rs:606-623`). The `SharedMapManager = Arc<RwLock<MapManager>>` (map_manager.rs:616) is mutated from session handlers but **nothing ever calls a tick on it** — grids never expire, respawns never fire from the map side, scripts never process, remove-list never drains.
+2. **Grid scale mismatch.** Rust treats 64 yards as one grid (line 11); C++ treats 533.33 yards as one grid and 66.67 yards as one cell. Anything expecting "9-cell visibility ≈ 100 yards" works coincidentally because `VISIBILITY_RADIUS=100` (:14) ≈ 1.5 × Rust GRID_SIZE, but real Trinity visibility (`SIZE_OF_GRID_CELL=66.67` × 9 cells ≈ 600 yards span, capped to per-map `m_VisibleDistance` ~100 y) uses a different math.
+3. **No state machine.** The GridStates 4-state lifecycle (Invalid→Active→Idle→Removal, GridStates.cpp:24-65) — the entire purpose of the Grids module — is absent. `Grid::should_unload` (:356) is a single boolean (`empty AND idle>5min`); no INVALID/REMOVAL distinction, no `getUnloadLock()`, no `incUnloadActiveLock` for active spawn points.
+4. **No ObjectGridLoader.** When a grid is created in Rust (`get_or_create_grid` :388), nothing queries the world DB for spawns. C++ `ObjectGridLoader::LoadN()` (ObjectGridLoader.cpp:171-198) iterates 8×8 cells and pulls `creature` / `gameobject` / `areatrigger` / corpses for each cell. Creatures in Rust are inserted ad-hoc by handler code, not by grid activation.
+5. **Creature is conflated with Map.** `WorldCreature` (map_manager.rs:52-303) embeds `CreatureCreateData` + AI state (`combat_target`, `wander_timer`, `last_swing`, `move_target`) — these belong in `Creature`/`CreatureAI`, not in a Map cell. C++ Map only stores `Creature*`; AI runs via `Creature::Update` invoked by `ObjectUpdater` visitor inside `Map::Update`.
+6. **Two-creature-storage-systems coexist.** Per CLAUDE.md, `WorldSession.creatures: HashMap<ObjectGuid, CreatureAI>` is the legacy path still used by `handlers/character.rs` and `session.rs`; `MapManager` is the new path used by `handlers/loot.rs`, `handlers/misc.rs`, `handlers/trainer.rs`. Until the legacy path is removed, neither side is authoritative — visibility skew is structural.
+
+### 13.5 Verdict
+
+🔧 **broken — keep status as-is, downgrade audit field to ❌ confirmed**. The `MapManager` module compiles, holds 12 unit tests, and provides a credible-looking façade, but it is missing the four load-bearing C++ structures: (a) `Map::Update()` loop, (b) `MapManager::Update()` dispatcher, (c) NGrid + GridState 4-state machine, (d) ObjectGridLoader DB integration. The world server never ticks the map. Recommended work order: #MAPS.5 → #MAPS.6 → #MAPS.10 → #MAPS.13 (state machine before container before per-map tick before per-manager tick), then #MAPS.7 (`ObjectGridLoader`) once `wow-database` exposes per-cell spawn queries. `_attic/` is irrelevant here — that integration was bridging fields that don't exist on `CreatureCreateData`; this audit's blocker is upstream of that work.
 

@@ -3,8 +3,8 @@
 > **C++ canonical path:** `src/server/game/Combat/` (+ `src/server/game/Server/Packets/CombatPackets.{h,cpp}`, plus damage helpers spread across `Entities/Unit/Unit.cpp`)
 > **Rust target crate(s):** `crates/wow-combat/` (vacío hoy), `crates/wow-packet/src/packets/combat.rs` (packets), `crates/wow-world/src/handlers/combat.rs` (handlers)
 > **Layer:** L5 (depende de Entities L4 + Spells L5 + AI L5)
-> **Status:** ⚠️ partial — auto-attack server-driven trivial, sin school/resistance/threat real, sin tabla de outcomes (miss/dodge/parry/block).
-> **Audited vs C++:** ⚠️ partial (handlers + packets revisados; CombatManager / ThreatManager / damage pipeline no auditado).
+> **Status:** 🔧 broken (rewrite needed) — auto-attack server-driven trivial, sin school/resistance/threat real, sin tabla de outcomes (miss/dodge/parry/block); crate `wow-combat` está **vacío**.
+> **Audited vs C++:** ✅ audited 2026-05-01 (engine missing — see §13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -366,3 +366,21 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 ---
 
 *Template version: 1.0 (2026-05-01).* Last updated: 2026-05-01.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Scope.** Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/server/game/Combat/` (CombatManager.{h,cpp}, ThreatManager.{h,cpp}) and the damage pipeline embedded in `Entities/Unit/Unit.cpp` (`Unit::AttackerStateUpdate`, `Unit::CalculateMeleeDamage`, `Unit::RollMeleeOutcomeAgainst`, `Unit::DealMeleeDamage`, `Unit::DealDamage`, `Unit::Kill`) against the Rust workspace at `/home/server/rustycore/crates/`.
+
+**Empty-crate finding — CONFIRMED.** `crates/wow-combat/src/lib.rs` measures **exactly 0 lines** (verified via `wc -l`). The `Cargo.toml` exists, the crate is in the workspace member list, but **no code at all** is shipped: no `CombatManager`, no `ThreatManager`, no `CombatReference`, no `PvPCombatReference`, no `MeleeHitOutcome`, no `WeaponAttackType`, no `HitInfo`, no `CalcDamageInfo`, no `SpellSchool`/`SpellSchoolMask`, no `CompareThreatLessThan`. All combat logic that exists in the workspace lives in two side files:
+- `crates/wow-packet/src/packets/combat.rs` (~190 lines: AttackSwing/AttackStop/SetSheathed CMSG, AttackStart/SAttackStop/AttackerStateUpdate/AttackSwingError SMSG — wire shapes only, no logic).
+- `crates/wow-world/src/handlers/combat.rs` (152 lines: trivial `handle_attack_swing`/`handle_attack_stop`/`handle_set_sheathed` writing directly into `WorldSession.combat_target: Option<ObjectGuid>`).
+
+**Damage pipeline mapping (C++ → Rust).** The C++ chain is `Player::Attack → swing_timer → Unit::AttackerStateUpdate → CalculateMeleeDamage → RollMeleeOutcomeAgainst → MeleeDamageBonusDone/Taken → CalcArmorReducedDamage → DealMeleeDamage → DealDamage → Kill → ProcDamageAndSpell`. **None of those nine functions exist in Rust.** The closest analog is a flat HP decrement inside the legacy `wow-ai::CreatureAI::take_damage` (verified at `crates/wow-ai/src/lib.rs`), which subtracts an unmitigated random damage roll with `subsec_nanos` as RNG, ignoring armor, school, resistance, hit/dodge/parry/block, crit, glancing, crushing, off-hand penalty, and weapon swing time. There is no `SchoolMask`, no `DamageInfo`, no `HitInfo` flag bitfield — the `SMSG_ATTACKER_STATE_UPDATE` writer in `wow-packet` zero-fills its hit-info word.
+
+**ThreatManager / CombatManager.** Both are completely absent. The legacy `WorldSession.combat_target: Option<ObjectGuid>` (single target per player) and `WorldSession.in_combat: bool` (single boolean per session) replace what C++ implements as a per-Unit `CombatManager` with two `unordered_map<ObjectGuid, CombatReference*>` (PvE + PvP) plus a per-Creature `ThreatManager` heap with online/suppressed/offline state, taunt/detaunt tie-break, fixate, redirect (Misdirection / Tricks of the Trade), `MatchUnitThreatToHighestThreat`, and per-tick `Update` for PvP timers and victim re-evaluation. `CanHaveThreatList` filtering does not exist; `EndCombatBeyondRange` (leashing) does not exist; `RevalidateCombat` does not exist; the 5-second PvP timer does not exist. `SMSG_THREAT_UPDATE`/`THREAT_REMOVE`/`THREAT_CLEAR`/`HIGHEST_THREAT_UPDATE` are not emitted, so client threat UI is dark.
+
+**Outcome roll & mitigation order.** C++ enforces a strict `Avoid → Block → Resist → Armor → Multiplier → Absorb → HP delta` order with the well-known WotLK 8-row "white attack table" plus a separate "yellow attack table" for abilities, plus level-diff penalties (the −12% PvE crit hit against +3-level bosses). Rust does **none** of this — every melee swing is a guaranteed normal hit, never miss, never dodge, never parry, never block, never crit, never glance, never crushing.
+
+**Worst divergence.** **The kill pipeline has no rewards.** When `creature.hp ≤ 0` in Rust, the only thing that happens is `creature.is_alive = false` plus a `SMSG_ATTACK_STOP{now_dead: true}`. There is **no XP grant, no quest kill credit, no party kill log (`SMSG_PARTY_KILL_LOG`), no reputation gain, no loot generation hook, no durability damage on player death, and no AI hooks (`JustDied`, `KilledUnit`, `JustExitedCombat`)**. C++ chains all of those through `Unit::Kill → Player::RewardPlayerAndGroupAtKill → LootMgr::FillLoot`. In RustyCore today, killing a quest objective mob produces zero progression: no quest credit is granted, the corpse is not lootable, and no XP is awarded. This is a content-blocking divergence — every PvE gameplay loop (level, quest, gear) is broken until §9 tasks #COMBAT.15–#COMBAT.16 (`Unit::deal_damage` + `Unit::kill`) land, which themselves require the full `wow-combat` crate to exist first.
