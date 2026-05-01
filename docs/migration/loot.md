@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-loot/` (currently EMPTY — `lib.rs` is 0 bytes; cargo manifest exists but module is unbuilt), `crates/wow-packet/src/packets/loot.rs` (wire), `crates/wow-world/src/handlers/loot.rs` (session handlers)
 > **Layer:** L6 (Game systems — depends on Entities/Creature/GameObject L4, Group L6, Conditions L7, Items L4, Player inventory L4)
 > **Status:** 🔧 broken (rewrite needed) — only basic FFA copper drop hard-coded by creature level. No loot template tables loaded, no LootStore, no group loot rolls, no master loot, no loot threshold, no quest items, no fishing/skinning/pickpocketing/disenchant/milling/prospecting/mail/spell/gameobject/reference loot, no loot conditions, no `loot_template` reference resolution, no random suffix/property rolls.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (§13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -407,3 +407,54 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 ---
 
 *Generated: 2026-05-01. Mark `Audited vs C++ : ✅` only after a side-by-side audit of `Loot::FillLoot` + `LootTemplate::Process` + `LootRoll::Finish` against the Rust port. The current Rust impl is a stub; the real work begins by populating `crates/wow-loot/src/lib.rs`.*
+
+---
+
+## 13. Audit (2026-05-01)
+
+Side-by-side audit of `crates/wow-loot/src/lib.rs` + `crates/wow-world/src/handlers/loot.rs` vs `src/server/game/Loot/{Loot.cpp,LootMgr.cpp}` + `Handlers/LootHandler.cpp` + `Player::StoreLootItem`.
+
+### Flagged divergence — verdict
+
+**`CMSG_LOOT_ITEM` does not add items to inventory — CONFIRMED, silent loss.**
+`crates/wow-world/src/handlers/loot.rs:135-167` is `handle_loot_item`. After locating the slot and flipping `entry.taken = true`, the loop pushes the slot into `taken_items`, sends `SMSG_LOOT_REMOVED` to the client, and ends with the literal comment `// TODO: actually add item to player inventory (DB write).` (`loot.rs:165`). There is no call to any `Player::store_loot_item` analogue, no inventory module reference, no DB write, no `Item` row insertion. The slot disappears from the loot window and the item ceases to exist anywhere — both on the wire (sent removal) and in the database. Compare with C++ `LootHandler.cpp::HandleAutostoreLootItemOpcode` → `Player::StoreLootItem` → `Item::CreateItem` + `Player::StoreNewItem` + DB queue. **Total data loss on every loot pickup.**
+
+### Crate state
+
+- `crates/wow-loot/src/lib.rs` — **0 bytes confirmed** (`ls -la` reports `0` size, file is empty). The crate compiles as an empty library; nothing of `Loot.cpp`'s 1083 lines is ported.
+- `crates/wow-world/src/handlers/loot.rs` — 247 lines, registers and implements `LootUnit`, `LootItem`, `LootRelease`. No `LootMoney`, no `LootRoll`, no `LootMasterGive`, no `SetLootMethod`, no `OptOutOfLoot`, no `LootList`.
+- `WorldSession.loot_table` is a `HashMap<ObjectGuid, CreatureLoot>` per session (loot.rs:99-104), not shared on the creature; group loot impossible by construction.
+
+### Coverage matrix — C++ → Rust
+
+| C++ symbol | Rust | Verdict |
+|---|---|---|
+| `class Loot`, `LootItem`, `LootStoreItem`, `LootStore`, `LootTemplate`, `LootGroup`, `LootRoll`, `AELootResult`, `LootItemStorage` | none | ❌ all missing |
+| 12 `LootStore` globals (Creature/Disenchant/Fishing/Gameobject/Item/Mail/Milling/Pickpocketing/Prospecting/Reference/Skinning/Spell) | none | ❌ |
+| `LoadLootTemplates_*` (12 SQL loaders) | none | ❌ |
+| `LootStoreItem::Roll` (chance roll) | none | ❌ |
+| `LootTemplate::Process` (recursive ref resolution) | none | ❌ |
+| `LootGroup` weighted single-pick | none | ❌ |
+| `Loot::FillLoot` | replaced by stub `generate_creature_loot` (`loot.rs:229`, `level*200 + seed%(level*300+1)` copper, no items) | ❌ |
+| `Loot::generateMoneyLoot` honoring `Rate.Drop.Money` | hardcoded formula above | ❌ |
+| `LootItem::AllowedForPlayer` (class/quest/race/condition) | none | ❌ |
+| `Loot::BuildLootResponse` per-viewer | one global view, hardcoded `loot_method=0`, `threshold=2`, `ui_type=0` (`loot.rs:88-130`) | ❌ |
+| `HandleAutostoreLootItemOpcode` → `StoreLootItem` | mark taken + send removed; **inventory write missing** | ❌ critical |
+| `HandleLootMoneyOpcode` | not registered | ❌ |
+| `HandleLootMasterGiveOpcode` | not registered | ❌ |
+| `HandleLootRoll` (CMSG_LOOT_ROLL) | not registered | ❌ |
+| `HandleSetLootMethod`, `HandleOptOutOfLoot`, `HandleLootList` | not registered | ❌ |
+| `HandleLootReleaseOpcode` | ✅ `loot.rs:174` (with 30s hardcoded decay vs Trinity `RateCorpseDecayLooted * m_corpseDelay`) |  partial |
+| `HandleLootOpcode` (CMSG_LOOT_UNIT) | ✅ `loot.rs:58` | partial (no items, no group view) |
+| `LootError` failure codes (15+ values) | only `failure_reason: 2` is ever sent (`loot.rs:85`); comment claims `AlreadyPickedUp` but value `2` in TC enum is `LOOT_ERROR_TOO_FAR`. Wrong code regardless. | ❌ |
+| `LootItemStorage` (item-loot persistence) | none | ❌ |
+| `ItemRandomProperties.dbc`/`ItemRandomSuffix.dbc` rolls | none | ❌ |
+
+### Other observed bugs
+
+- `loot.rs:85` — `failure_reason: 2` with comment `// LootError::AlreadyPickedUp or similar`. Trinity `LOOT_ERROR_TOO_FAR = 4`, `LOOT_ERROR_LOCKED = 6`, `LOOT_ERROR_NOTSTANDING = 8`. Value 2 doesn't map to any documented code; should be `DIDNT_KILL = 0` for "alive creature".
+- `loot.rs:99-104` — loot is generated lazily inside `WorldSession`; if two players try to loot the same corpse, each sees a fresh independent roll — duplicated drops, no FFA semantics.
+- `loot.rs:230-235` — random copper formula uses GUID counter as seed → deterministic per-creature instead of per-kill; the same mob always drops the same amount.
+- `loot.rs:206-218` — corpse decay is hardcoded `30s`; Trinity uses `RateCorpseDecayLooted` × `Creature::m_corpseDelay` (default 60s normal, longer for elites).
+
+**Verdict:** loot module is essentially a dead stub. The flagged silent-loss bug on `CMSG_LOOT_ITEM` is real and is the most visible symptom of an entire system that does not exist yet. The whole `crates/wow-loot/` crate must be written from scratch (#LOOT.1–#LOOT.33 in §9). Of 33 listed sub-tasks, 1 is partially complete (`HandleLootReleaseOpcode`); the rest are open.

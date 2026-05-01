@@ -4,7 +4,7 @@
 > **Rust target crate(s):** **No crate exists.** The opcodes `Warden3Data` (CMSG 0x35ed, SMSG 0x2577), `Warden3Disabled` (SMSG 0x2823), `Warden3Enabled` (SMSG 0x2822) are present in `crates/wow-constants/src/opcodes.rs` (lines 671, 1619-1621); nothing else exists. No handler arm in `crates/wow-world/src/session.rs`. No `Warden` struct, no `WardenCheckMgr`, no module binary, no DB schema, no SQL loader, no SmartEnum scaffolding, no per-OS variant. **0 lines of Warden code.**
 > **Layer:** L7 (anti-cheat infrastructure — depends on Crypto L1 (RC4 + SHA1 + HMAC + MD5), WorldSession L4, World config L1, Auth Bn-Net session key L1; depended on by Account banning + Player kick + GM tooling for cheat report)
 > **Status:** ❌ not started — only opcode constants exist (3 of them). All ~3690 lines of C++ Warden code have no Rust counterpart. The Trinity Warden module binaries (`WardenModuleWin.h` / `WardenModuleMac.h` — large embedded RC4-encrypted blobs) are not vendored in the Rust repo either.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — exactly 3 opcode constants, no module code)
 > **Last updated:** 2026-05-01
 
 ---
@@ -374,3 +374,25 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — exactly 3 opcode constants, zero implementation.**
+
+```
+$ grep -rn -i "warden" crates/ --include='*.rs'
+crates/wow-constants/src/opcodes.rs:671:    Warden3Data = 0x35ed,
+crates/wow-constants/src/opcodes.rs:1619:    Warden3Data = 0x2577,
+crates/wow-constants/src/opcodes.rs:1620:    Warden3Disabled = 0x2823,
+crates/wow-constants/src/opcodes.rs:1621:    Warden3Enabled = 0x2822,
+```
+
+Four hits in total, but `Warden3Data` appears once on each side of the protocol (CMSG 0x35ed at line 671, SMSG 0x2577 at line 1619), so this is the §0 doc claim "3 opcode constants" verified — one CMSG + two SMSG distinct opcodes. No struct, no handler arm in `wow-world/src/session.rs`, no DB schema, no SQL loader, no `WardenCheck` / `WardenCheckMgr` / `WardenWin` / `WardenMac`, no embedded module binaries (the ~18 KB `WardenModuleWin.h` and ~12 KB `WardenModuleMac.h` blobs are not vendored).
+
+`grep -rn -i "warden"` finds only the four opcode definitions — nothing else.
+
+**No silent-default bug.** The Warden opcodes that arrive on CMSG `0x35ed` (`Warden3Data`) currently land on the dispatcher's "unknown opcode" fallback because no `inventory::submit!(PacketHandlerEntry { opcode: Warden3Data, ... })` registration exists. The client receives no `Warden3Enabled` (0x2822) at session start, which is exactly what an "anti-cheat off" deployment looks like — clients won't run Warden checks but won't disconnect over it either. Functionally equivalent to `CONFIG_WARDEN_ENABLED=false` in TC dist (also the default upstream).
+
+**Recommendation:** Warden is a low-priority anti-cheat layer that the project can defer. For a private server's threat model the cost/benefit is poor: porting requires (a) RC4 + custom XOR ciphers, (b) embedding two large opaque encrypted blobs of unknown provenance, (c) per-OS variants tied to `WoW.exe` PE offsets that may drift across 3.4.3 sub-revisions, (d) a `warden_checks` SQL schema + content. Consider documenting Warden as explicit non-goal in scope unless cheating becomes an operational issue.

@@ -3,8 +3,9 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/Calendar/` + `src/server/game/Handlers/CalendarHandler.cpp`
 > **Rust target crate(s):** `crates/wow-world/` (handlers, CalendarMgr global), `crates/wow-database/` (calendar prepared statements), `crates/wow-packet/` (CalendarPackets), `crates/wow-core/` (calendar enums)
 > **Layer:** L7
-> **Status:** ❌ not started (only 2 noop stubs `handle_calendar_get` / `handle_calendar_get_num_pending` in `crates/wow-world/src/handlers/misc.rs`)
+> **Status:** ⚠️ stub-only (2 noop handlers, audit confirmed)
 > **Audited vs C++:** ✅ complete
+> **Audited vs Rust impl:** ✅ 2026-05-01
 > **Last updated:** 2026-05-01
 
 ---
@@ -327,6 +328,20 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 | `WorldSession::HandleCalendarRsvp(...)` | `async fn handle_calendar_rsvp(&mut self, pkt: WorldPacket)` in `crates/wow-world/src/handlers/calendar.rs` | New file |
 | `MailDraft(MailMessageType::MAIL_CALENDAR, eventId)` | `MailDraft::calendar(event_id)` constructor | Once Mails module migrated |
 | `CALENDAR_DEFAULT_RESPONSE_TIME = 946684800` | `pub const CALENDAR_DEFAULT_RESPONSE_TIME: i64 = 946_684_800;` | Y2K sentinel |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines `CalendarMgr` Rust impl | ✅ | `grep -rn "CalendarMgr\|CalendarEvent\|CalendarInvite" crates/ → 0` |
+| 35 calendar opcodes in `wow-constants` | ✅ | `grep -c "Calendar" crates/wow-constants/src/opcodes.rs` = 35 |
+| Only 2 noop handlers wired | ✅ | `handlers/misc.rs:603` `handle_calendar_get_num_pending(_pkt) {}` and `:614` `handle_calendar_get(_pkt) {}`; dispatched at `session.rs:1808,1841` |
+| 33 remaining opcodes silently dropped | ⚠️ | Other 33 (`CalendarAddEvent`, `CalendarInvite`, `CalendarRsvp`, etc.) have NO match arm AND NO inventory submit — fall through to default unhandled-opcode path. Not a silent-hang risk per se because the client won't receive `SMSG_CALENDAR_*`, but UI showing the calendar tab will appear empty/broken. |
+| No DB schema/prepared statements | ✅ | grep `calendar_event\|calendar_invite\|CALENDAR_INS` in `crates/wow-database` → 0 |
+
+**Net status:** doc's `❌` was slightly off — there's a 2-handler stub. Reclassified to ⚠️ stub-only.
 
 ---
 

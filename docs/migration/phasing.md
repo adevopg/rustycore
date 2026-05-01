@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load `phase_definitions`/`phase_area`/`terrain_swap_defaults`/`terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet.
 > **Layer:** L7 (Game systems — depends on Conditions L7, Maps L4, Entities/Unit L4, Aura/Spell L5; depended on by Visibility/Grid loading L4)
 > **Status:** 🔧 broken — only a 1-shot SMSG_PHASE_SHIFT_CHANGE stub that always sends `PhaseShiftFlags::Unphased` with empty phase/visible-map/UI-map lists. No PhaseShift state on objects, no `PhasingHandler::OnAreaChange`, no condition-driven phase suppression, no personal phases, no terrain-swap evaluation, no controlled-unit propagation, no SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed 🔧 — hardcoded-Unphased bug located at `misc.rs:1628`)
 > **Last updated:** 2026-05-01
 
 ---
@@ -274,3 +274,41 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: 🔧 confirmed broken — exact silent-default location identified.**
+
+The hardcoded "always Unphased" stub claimed by §8 is real and lives at `crates/wow-packet/src/packets/misc.rs:1611–1638`. Verbatim:
+
+```rust
+impl ServerPacket for PhaseShiftChange {
+    const OPCODE: ServerOpcodes = ServerOpcodes::PhaseShiftChange;
+    fn write(&self, pkt: &mut crate::WorldPacket) {
+        pkt.write_packed_guid(&self.player_guid);
+        pkt.write_uint32(0x08); // PhaseShiftFlags::Unphased  ← HARDCODED
+        pkt.write_int32(0);     // Phases.Count = 0          ← HARDCODED
+        pkt.write_packed_guid(&ObjectGuid::EMPTY); // PersonalGUID = empty
+        pkt.write_int32(0);     // VisibleMapIDs * 2
+        pkt.write_int32(0);     // PreloadMapIDs * 2
+        pkt.write_int32(0);     // UiMapPhaseIDs * 2
+    }
+}
+```
+
+The struct only carries a `player_guid`; there is no `PhaseShift` field. The single caller is `crates/wow-world/src/handlers/character.rs:4425` (`self.send_packet(&PhaseShiftChange::default_for(guid))`) inside the post-login init pipeline — emitted exactly once and never updated.
+
+**Silent-default consequences confirmed:**
+
+- Every `WorldObject::is_within_sight` path implicitly returns "phase-compatible" because no `PhaseShift::can_see` exists (zero hits for `PhaseShift` outside of `wow-packet`).
+- Quest-driven phased duplicates (Borean Tundra D.E.H.T.A., Death Knight starting zone) will render every variant simultaneously once those NPCs land.
+- `SMSG_PARTY_MEMBER_FULL_STATE` writes `PhaseShiftFlags = 0` (`packets/party.rs:281`) so party UI never marks anyone out-of-phase.
+- `OnAreaChange` / `OnMapChange` / `OnConditionChange` are not called anywhere — the packet is fire-and-forget at login. Crossing into phased areas re-sends nothing.
+- DB tables `phase_definitions`, `phase_area`, `terrain_swap_defaults`, `terrain_worldmap` are not loaded by `wow-database`.
+- `Phase.db2` and `PhaseXPhaseGroup.db2` are not parsed by `wow-data`.
+
+**Coupling to ConditionMgr:** §8's claim is correct that this can't be fixed properly without ConditionMgr (also ❌). #PHASE.15 / #PHASE.16 / #PHASE.17 explicitly take a `ConditionContainer`. Treat #PHASE.* as blocked-on #COND.1–#COND.20.
+
+**Quick-fix scope:** §11 note about WoLK 3.4.3 packet body is correct — fixing #PHASE.19 alone (replace constant payload with `&PhaseShift` source) is M, but yields nothing visible until #PHASE.4 (`can_see`) and #PHASE.26 (visibility integration) land. Do not patch the stub in isolation.

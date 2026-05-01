@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-data/` (templates + XP), `crates/wow-packet/src/packets/quest.rs` (wire), `crates/wow-world/src/handlers/quest.rs` (session handlers). No dedicated `wow-quest` crate yet.
 > **Layer:** L6 (Game systems — depends on Entities/Player L4, Loot L6 quest items, Conditions L7, Achievements L7, Pools L7)
 > **Status:** ⚠️ partial — Phase 1 + 2 complete (template loading, accept/complete/abandon, kill credit, XP via QuestXP.db2). No quest pool, no daily/weekly/monthly rotation, no escort/timed quests, no area-trigger objectives, no objective groups, no item collection objective, no repeatable cooldown logic, no quest condition checks, no faction/reputation rewards, no spell rewards, no QuestRequestItems flow.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (§13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -409,3 +409,48 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 ---
 
 *Generated: 2026-05-01. Mark `Audited vs C++ : ✅` only after a side-by-side line-by-line audit of `Quest::CanTakeQuest`/`RewardQuest` against the Rust port.*
+
+---
+
+## 13. Audit (2026-05-01)
+
+Side-by-side audit of `crates/wow-data/src/quest.rs` + `crates/wow-world/src/handlers/quest.rs` + `crates/wow-world/src/session.rs::on_creature_killed` vs `src/server/game/Quests/QuestDef.{h,cpp}` + `Player::KilledMonsterCredit`.
+
+### Flagged divergences — verdicts
+
+**1. `is_repeatable` daily flag bug — CONFIRMED.**
+`crates/wow-data/src/quest.rs:101-104` — `flags & 0x4000` is checked. C++ `QuestDef.h:208` defines `QUEST_FLAGS_DEPRECATED = 0x00004000` and `QuestDef.h:206` `QUEST_FLAGS_DAILY = 0x00001000`. The Rust check is therefore selecting deprecated quests as "repeatable" and missing every actual daily. Trinity also routes true repeatable status through `_specialFlags & QUEST_SPECIAL_FLAGS_REPEATABLE = 0x001` (`QuestDef.h:298`, `IsRepeatable()` at `QuestDef.h:643`) — that field is loaded from `quest_template_addon.SpecialFlags`, which the Rust loader does not read at all. Both halves of the check are wrong.
+
+**2. Kill credit fires on creature death — CONFIRMED working (doc was conservative).**
+The doc says "Kill credit (`MONSTER` objective only) via combat hook"; tracing the call chain confirms it: `crates/wow-world/src/session.rs:2959` invokes `on_creature_killed(entry, guid)` from the kill-resolution branch, and `session.rs:753-829` walks `player_quests`, matches `obj.obj_type == OBJ_TYPE_MONSTER (0)` against `obj.object_id == creature_entry`, increments `objective_counts[storage_index]`, sends `SMSG_QUEST_UPDATE_ADD_CREDIT`, and on full completion sends `SMSG_QUEST_UPDATE_COMPLETE` and flips `qs.status = 2` in memory. So basic single-player kill credit works end-to-end. Gaps vs C++ `Player::KilledMonsterCredit` (Trinity `Player.cpp`): no group propagation (group members on the same map don't get credit), no `KillCreditId[2]` proxy entries (Trinity reads two extra `creature_template.KillCredit1/2` columns and credits those entries too — note `character.rs:2251-2336` already loads them as `proxy_creature_ids`, but `on_creature_killed` only matches the primary entry), no `QUEST_OBJECTIVE_FLAG_KILL_PLAYERS_SAME_FACTION`, no spell-cast credit (`SPELL_EFFECT_KILL_CREDIT_PERSONAL`), and the new state is never persisted to `character_queststatus_objectives` — restart wipes mid-quest progress.
+
+### Quest objective type coverage
+
+| C++ `QuestObjectiveType` | id | Rust impl |
+|---|---|---|
+| MONSTER | 0 | ✅ `session.rs:764` (`OBJ_TYPE_MONSTER`) |
+| ITEM | 1 | ❌ no inventory hook |
+| GAMEOBJECT | 2 | ❌ |
+| TALKTO | 3 | ❌ |
+| CURRENCY | 4 | ❌ |
+| LEARNSPELL | 5 | ❌ |
+| MIN_REPUTATION | 6 | ❌ |
+| MAX_REPUTATION | 7 | ❌ |
+| MONEY | 8 | ❌ |
+| PLAYERKILLS | 9 | ❌ |
+| AREATRIGGER | 10 | ❌ |
+| WINPETBATTLE / CRITERIA_TREE / PROGRESS_BAR / HAVE/OBTAIN_CURRENCY / INCREASE_REPUTATION / AREA_TRIGGER_ENTER/EXIT | 11+ | ❌ |
+
+**1 of ~21** objective types implemented.
+
+### Quest opcode handler coverage (`handlers/quest.rs`)
+
+`QuestGiverStatusQuery` ✅, `QuestGiverHello` ✅, `QuestGiverQueryQuest` ✅, `QuestGiverAcceptQuest` ✅, `QuestLogRemoveQuest` ✅, `QueryQuestInfo` ✅, `QuestGiverRequestReward` ✅, `QuestGiverCompleteQuest` ✅, `QuestGiverChooseReward` ✅. Missing: `QuestGiverStatusMultipleQuery`, `QuestGiverCancel`, `QuestConfirmAccept`, `QuestPushResult`, `PushQuestToParty`, `QuestPOIQuery`. The dispatcher at `handlers/quest.rs:120-548` covers ~9 of 14 client→server quest opcodes.
+
+### Other observed bugs
+
+- `quest.rs:111` — `1u64 << (race.saturating_sub(1))`. `race=0` produces `1u64 << 0xFF` which is UB in debug and wraps to 0 in release. C++ uses `1 << (race-1)` only for race ids 1..11 — should clamp/validate.
+- `quest.rs:251` — `result.try_read::<i64>(35).map(|v| v as u64)`. If the column is `BIGINT UNSIGNED` with the high bit set this is fine, but a negative legacy value would silently wrap. The TC schema is `bigint(20) unsigned`.
+- `quest_template_addon` is never queried, so `prev_quest_id` (`quest.rs:93`) is wired in but never populated; chain prerequisites cannot work.
+
+**Verdict:** quest module is ~30% of C++. The flagged daily-flag bug is real (`0x4000` vs `0x1000`); kill credit *does* fire and updates progress correctly for the single MONSTER objective type, but stops short of group propagation, persistence, and the other 20 objective types.

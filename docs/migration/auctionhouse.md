@@ -3,8 +3,9 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouse/` + `src/server/game/Handlers/AuctionHouseHandler.cpp` + `src/server/game/Server/Packets/AuctionHousePackets.{h,cpp}`
 > **Rust target crate(s):** `crates/wow-world/` (handlers + AuctionHouseMgr global), `crates/wow-database/` (prepared statements), `crates/wow-packet/` (auction packet types)
 > **Layer:** L6
-> **Status:** ❌ not started
+> **Status:** ⚠️ effectively not started — only an `AuctionHelloResponse` open-window stub + 3 noop list handlers (audit confirmed)
 > **Audited vs C++:** ✅ complete
+> **Audited vs Rust impl:** ✅ 2026-05-01
 > **Last updated:** 2026-05-01
 
 ---
@@ -351,6 +352,20 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 | `MailDraft::SendMailTo` | `wow_world::mail::MailDraft::send` | Cross-module call |
 | `Player::ModifyMoney(int64)` | `wow_world::Player::modify_money(i64) -> Result<()>` | Money cap enforced |
 | `sAuctionMgr` macro | `auction_mgr()` accessor returning `&'static AuctionHouseMgr` | — |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines `AuctionHouseMgr` Rust impl | ✅ | `grep -rn "AuctionHouseMgr\|AuctionHouseObject" crates/ → 0` (no struct, no global) |
+| Auction packet types absent | ⚠️ partial | Only `AuctionHelloResponse` exists in `crates/wow-packet/src/packets/misc.rs:1907` (returns hardcoded `auction_house_id: 7` neutral) |
+| No auction handlers wired | ⚠️ partial | 1 hello + 3 noop list handlers exist: `handle_auction_hello_request` (sends `AuctionHelloResponse`), `handle_auction_list_bidder_items`/`_owner_items`/`_pending_sales` (all `_pkt: WorldPacket {}` body) at `handlers/misc.rs:620-634`, dispatched at `session.rs:1538,1848-1854` |
+| 25 auction opcodes in `wow-constants` | ✅ | `grep -c "Auction" crates/wow-constants/src/opcodes.rs` = 25 |
+| No DB schema/prepared statements | ✅ | grep `auction` in `crates/wow-database` → 0 hits |
+
+**Net status:** opcode constants + a single "open empty window" packet exist. Clicking an auctioneer NPC opens the UI but every list/post/bid action is silently dropped. Doc's `❌ not started` is accurate at the system level; reclassified to ⚠️ in YAML to flag the small surface area already wired.
 
 ---
 

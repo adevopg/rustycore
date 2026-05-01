@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-data/` (load `conditions` table, store `ConditionContainer` keyed by `(SourceType, SourceGroup, SourceEntry)`), `crates/wow-world/src/conditions/` (the `Meets` evaluator with access to `Player`/`Unit`/`Map`), no dedicated crate yet.
 > **Layer:** L7 (Game systems — depends on Entities/Player+Unit L4, Quests L6, Reputation L6, Achievements L7, Map L4, World/DB2 L1; depended on by Phasing L7, Loot L6, Gossip L6, SmartScripts L7, SpellMgr L5, Vendors, Trainers, Graveyards, AreaTriggers, Conversation, GameObjects)
 > **Status:** ❌ not started — there is no `ConditionMgr` in Rust, no `Condition` struct, no `conditions` table loader. Several upstream systems (Phasing, Gossip menus, Loot drops, Vendor item visibility, Trainer spell prerequisites) depend on a working ConditionMgr; right now those callsites either return "always true" or are absent entirely.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — silent-default bug catalogued in §13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -282,3 +282,30 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — completely absent. Critical silent-default bug (the entire module).**
+
+Evidence collected by exhaustive grep across `crates/`:
+
+- `grep -rn "evaluate_conditions\|condition_meets\|ConditionMgr\|conditions::" crates/ --include='*.rs'` returns **zero hits**. No struct, no enum, no module, no loader, no evaluator.
+- The `LogFilter::Condition` variant noted in §8 (`crates/wow-logging/src/lib.rs:84`) remains the only mention of the word "Condition" in the wow-logging tree, and it has no producers.
+- Mentions of the word "condition" in code are unrelated: `npc_vendor.PlayerConditionID` is selected by `wow-database/src/statements/world.rs:148` but the column is **read into the row and never evaluated** — it just rides along into the `VendorInventory` packet's `player_condition_failed` field (`misc.rs:1686`) where a hard-coded `0` is written, meaning every item is unconditionally "available". `update.rs:2128` only references `Owner conditional fields` in a doc comment.
+- No `conditions` SQL table loader anywhere in `wow-database`. No `disables` loader either (DisableMgr is also absent).
+
+**Silent-default bug — confirmed and quantified.** Because no callsite ever invokes a ConditionMgr, every system that *would* gate behaviour on `conditions` rows currently behaves as "all rows pass". Consumers verified silently-permissive:
+
+| Consumer | File | Behaviour right now |
+|---|---|---|
+| Loot drops | `crates/wow-loot/` (entire crate) | Every loot row drops; `LOOT_TEMPLATE` rows in `conditions` are ignored. |
+| NPC vendors | `wow-packet/src/packets/misc.rs:1686` | `player_condition_failed = 0` always — every vendor item is shown to every player. |
+| Gossip menus / options | gossip dispatch in `wow-world/src/handlers/` | Every menu/option visible; `GOSSIP_MENU` and `GOSSIP_MENU_OPTION` rows ignored. |
+| Trainer spells | `handlers/trainer.rs` | All trainer rows shown unconditionally (`TRAINER_SPELL` rows ignored). |
+| Spell implicit targets | `wow-spell` | No filter on AoE / chained targets. |
+| Phasing area entry | `phasing.md` (also ❌) | N/A — phasing itself stubbed (see phasing audit). |
+| Smart-script branches | not yet implemented | N/A. |
+
+**Migration unblock priority:** ConditionMgr is the L7 keystone. Phasing, Loot quest filtering, Gossip polish, Vendors, Trainers all unblock here. Recommend tackling **#COND.1 → #COND.20** before any of the dependent modules can claim ✅. No code change made by this audit; all 32 sub-tasks (#COND.1 – #COND.32) remain accurate and are still the work plan.

@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-script/` (the framework: `ScriptMgr` equivalent + every `*Script` trait + dispatch tables); content scripts live in `crates/wow-scripts/` (covered by `scripts.md`).
 > **Layer:** L7 (Game systems framework — depends on virtually every L0–L6 layer because every script type takes pointers to game entities; depended on by `wow-scripts` and indirectly by every gameplay path that fires `ScriptMgr::On*` hooks).
 > **Status:** ❌ not started — `crates/wow-script/src/lib.rs` is **0 bytes**. There is no `ScriptMgr`, no script trait, no dispatch table, no registration macro, no reload manager. **Every** `sScriptMgr->OnX(...)` callsite in C++ has no Rust counterpart yet, which means none of the ~160 script hooks fire. Boss AI, instance scripts, spell scripts, command scripts, item-use scripts, area triggers, gossip, and PlayerScript hooks (login/logout/zone change/level up/etc.) are all silent.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — `wc -l` on `lib.rs` returns 0)
 > **Last updated:** 2026-05-01
 
 ---
@@ -325,3 +325,24 @@ Each line below is one trait. Bodies will fill in as game-side hookpoints land.
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — `crates/wow-script/src/lib.rs` is empty (0 lines).**
+
+```
+$ wc -l crates/wow-script/src/lib.rs
+0 crates/wow-script/src/lib.rs
+```
+
+`crates/wow-script/Cargo.toml` declares deps on `wow-core`, `wow-constants`, `inventory` — the framework dependencies are queued up but no source has been written. No `ScriptObject` trait, no `ScriptMgr`, no per-hook trait, no `inventory::collect!`/`submit!` registration, no name→script-id resolver. `cargo test -p wow-script` runs **0 tests**.
+
+Cross-cutting confirmation: zero callsites of any `sScriptMgr->OnX`-equivalent across `crates/`. Every game-side hookpoint listed in §9 Phase C is also absent — `WorldSession::login_handler`, `MapManager::create_map`, world tick loop, `world_socket` packet observer, `wow-conditions` evaluator. The framework gap is mirrored by an equally-wide game-side gap.
+
+**No silent-default bug per se** — the absence is total, so there's no half-wired hook firing the wrong default. Risk is "feature class entirely missing," not "feature incorrectly true." Adding the framework will require also adding ~40 `script_mgr.on_x(...)` callsites across the workspace (the two-step dispatch trap from `CLAUDE.md`).
+
+**Recommendation:** Tackle in the order from §9 — Phase A (#SCRIPTING.1–4) → minimal hook subset (Phase B for `WorldScript`, `PlayerScript`, `CreatureScript`, `CommandScript` first) → Phase C wiring. Drop `ScriptReloadMgr` (#SCRIPTING.44) as explicit non-goal. `SpellScript`/`AuraScript` (#SCRIPTING.36) are correctly flagged XL — they need their own migration doc and should not be attempted in the first pass.
+
+Coupling: ConditionMgr (#COND.*) blocks `ConditionScript::on_check` (#SCRIPTING.20). Otherwise wow-script is independent of other ❌ modules.

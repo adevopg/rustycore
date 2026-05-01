@@ -5,6 +5,7 @@
 > **Layer:** L6 (Game systems — depends on Items L4 (charter item 5863), Guild L6, Player L4, ObjectMgr L1 for name validation, World config for cost & min signatures; depended on by Guild creation flow)
 > **Status:** ❌ not started — opcodes are listed in `crates/wow-constants/src/opcodes.rs` (CMSG_PETITION_BUY 0x34c8, CMSG_PETITION_SHOW_LIST 0x34c7, CMSG_PETITION_SHOW_SIGNATURES 0x34c9, CMSG_QUERY_PETITION 0x3277, CMSG_SIGN_PETITION 0x3533, CMSG_DECLINE_PETITION 0x3534, CMSG_TURN_IN_PETITION 0x3535, CMSG_PETITION_RENAME_GUILD 0x36d1, CMSG_OFFER_PETITION 0x32fd; SMSG_PETITION_SHOW_LIST 0x26bf, SMSG_PETITION_SHOW_SIGNATURES 0x26c0, SMSG_QUERY_PETITION_RESPONSE 0x291b, SMSG_PETITION_SIGN_RESULTS 0x274c, SMSG_PETITION_RENAME_GUILD_RESPONSE 0x29fa, SMSG_TURN_IN_PETITION_RESULT 0x274e, SMSG_PETITION_ALREADY_SIGNED 0x259f, SMSG_OFFER_PETITION_ERROR 0x26b6) but no handlers, no `Petition` struct, no in-memory store, no SQL loader, no charter-item integration.
 > **Audited vs C++:** ❌ not audited
+> **Audited vs Rust impl:** ✅ 2026-05-01 — see §13
 > **Last updated:** 2026-05-01
 
 ---
@@ -294,6 +295,22 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 | `CharacterDatabaseTransaction trans` | `let mut tx = self.char_db.begin().await?` … `tx.commit().await?` | Match existing transactional pattern |
 | `CHARTER_DISPLAY_ID = 16161`, `GUILD_CHARTER_ITEM_ID = 5863` | `pub const CHARTER_DISPLAY_ID: u32 = 16161;`, `pub const GUILD_CHARTER_ITEM_ID: u32 = 5863;` | In `crates/wow-constants/src/petitions.rs` |
 | `Item::SetPetitionId(uint64)` / `SetPetitionNumSignatures(u32)` | `Item::set_petition_id` / `set_petition_num_signatures` | These mutate item fields stored in the EnchantmentSlot at `ENCHANTMENT_SLOT_PETITION_ID` in 3.4.3 — verify against the inventory crate |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines petition Rust impl | ✅ | `grep -rn "Petition" crates/wow-world crates/wow-handler → 0` (NO `Petition` struct, NO `PetitionMgr`, NO `petitions/` module, NO handler file) |
+| Doc claim "all 18 opcodes registered" | ❌ off-by-one | Actual count is **17**: 9 client (`PetitionBuy`, `PetitionShowList`, `PetitionShowSignatures`, `QueryPetition`, `SignPetition`, `DeclinePetition`, `TurnInPetition`, `PetitionRenameGuild`, `OfferPetition`) + 8 server (`PetitionShowList`, `PetitionShowSignatures`, `QueryPetitionResponse`, `PetitionSignResults`, `PetitionRenameGuildResponse`, `TurnInPetitionResult`, `PetitionAlreadySigned`, `OfferPetitionError`) in `crates/wow-constants/src/opcodes.rs`. Doc lists 18 in YAML but enumerates the same 9+8=17. Off-by-one wording. |
+| 0 dispatch arms in `session.rs` | ✅ | `grep -E "Petition" crates/wow-world/src/session.rs → 0` |
+| 0 `inventory::submit!` registrations | ✅ | `grep -rn "PetitionBuy\|SignPetition\|TurnInPetition\|QueryPetition\|OfferPetition\|DeclinePetition\|PetitionShowList\|PetitionShowSignatures\|PetitionRenameGuild" crates/wow-world/src → 0` |
+| `UNIT_NPC_FLAG_PETITIONER` defined | ✅ | `crates/wow-constants/src/unit.rs:333` `const PETITIONER = 0x40000` |
+| Item flag `PETITION = 0x2000` defined | ✅ | `crates/wow-constants/src/item.rs:898` |
+| No `petition`/`petition_sign` schema | ✅ | grep in `crates/wow-database` → 0 |
+
+**Silent-hang risk:** REAL but different from doc's framing. Because no opcodes are even dispatched (no match arm), the petition opcodes hit the unhandled-opcode default path. Client buys a charter (no `CHARTER_DISPLAY_ID` reservation, no money charge, no `Petition` row), then opens the petition UI → no `SMSG_QUERY_PETITION_RESPONSE` → dialog hangs. Doc's "18 opcodes registered but no handlers" was wrong: it's "17 opcodes constants only, ZERO dispatched, ZERO handlers" — even worse than register-without-handler.
 
 ---
 

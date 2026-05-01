@@ -3,8 +3,9 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/`
 > **Rust target crate(s):** *none yet* — would live under `crates/wow-world/src/auctionhousebot/` (alongside the future auction crate) or a new `wow-ahbot` crate. Depends on a working `AuctionHouseMgr` (see `auctionhouse.md`), which is also not yet ported.
 > **Layer:** L7 (game systems, opt-in fixture; depends on L6 AuctionHouse + L4 DB2 stores)
-> **Status:** ❌ not started
+> **Status:** ❌ not started (audit confirmed 2026-05-01)
 > **Audited vs C++:** ✅ complete
+> **Audited vs Rust impl:** ✅ 2026-05-01
 > **Last updated:** 2026-05-01
 > **WoLK 3.4.3 relevance:** ⚠️ **Post-WoLK content from upstream TC.** AHBot was contributed long after vanilla TC and the Wrath Classic fork inherits it as `AuctionHouseBot.Enabled = false` by default; the legacy 3.3.5 server emulators (mangos/SkyFire/etc.) shipped a different, simpler AHBot. None of the bot's auction-creation paths are needed for a "vanilla WoLK PvE realm" — list this as "tier-3, opt-in, after AuctionHouse is fully working." See `worldserver.conf.dist` AHBot section for the live runtime knobs.
 
@@ -226,6 +227,19 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 | `AuctionHouseBot::Update()` from `World::Update(diff)` | `world_tick` in `wow-world` calls `wow_ahbot::tick()` if feature enabled | Cargo feature `ahbot` to compile out cleanly. |
 | `CHAR_SEL_CHARS_BY_ACCOUNT_ID` | Existing prepared statement in `wow-database::statements::character` | Reuse — already needed by character listing. |
 | `WorldDatabase.PQuery(...UNION...)` | `wow-database::statements::world::SEL_AHBOT_LOOT_ITEMS_UNION` (new) | Single registered prepared statement. |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines AHBot Rust impl | ✅ | `grep -rn "AuctionHouseBot\|AhBot\|auctionhousebot" crates/ → 0` |
+| No `wow-ahbot` crate | ✅ | `ls crates/` → no entry; only `wow-achievement` & `wow-auction` (also absent) |
+| No AHBot opcodes/SQL | ✅ | grep `AHBOT\|ahbot` across `wow-constants`, `wow-database` → 0 |
+| Depends on AuctionHouse (also ❌) | ✅ | `auctionhouse.md` audit confirms only hello-stub exists |
+
+**Net status:** absent. As doc notes, AHBot is post-WoLK opt-in fixture; deferring is correct. No silent-stub hazard because no opcodes are wired.
 
 ---
 

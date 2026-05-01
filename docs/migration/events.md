@@ -4,7 +4,7 @@
 > **Rust target crate(s):** No dedicated crate yet. Recommend a new `crates/wow-gameevents/` (or fold into `wow-world` if minimal). Cross-cutting: spawn/despawn drives `MapManager`, NPC flags drive `wow-world`, vendor swaps drive `wow-database`'s prepared-statement registry.
 > **Layer:** L7 (uses Map/Spawn/Pool L4–L6, Vendor/Quest/WorldState L6, Achievement L7; depended on by Smart-Scripts L7, Quests L6, Vendors L6, Pools L6, the holiday scripts in `scripts/Events/`).
 > **Status:** ❌ not started — `GameEventMgr` does not exist in any form in `crates/`. **No** holiday scheduling, **no** Hallow's End / Brewfest / Winter Veil / Lunar Festival cycle, **no** Darkmoon Faire, **no** quest seasonal-availability gating, **no** `IsHolidayActive()` lookup, **no** event-driven creature/gameobject swap (model/equipment/NPC flag changes during holidays), **no** event-driven vendor inventory swap, **no** event-driven world state updates. The `GameEvents::Trigger` pipeline (which fires `event_scripts` on spell `EFFECT_SEND_EVENT`) is also missing — that one cross-cuts with `wow-spell`'s effect dispatcher.
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — only debug opcodes + 2 DELETE statements wired)
 > **Last updated:** 2026-05-01
 
 ---
@@ -318,3 +318,24 @@ Numbering: `#EVENTS.N`. Complexity: **L** (<1h), **M** (1–4h), **H** (4–12h)
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — `GameEventMgr` and `GameEventSender` are entirely absent.**
+
+Evidence from `grep -rn -i "GameEvent\|HolidayId\|IsHolidayActive\|IsEventActive" crates/ --include='*.rs'`:
+
+- `wow-constants/src/opcodes.rs:237,238,577` — three GM **debug** opcodes (`GameEventDebugDisable=0x31b2`, `GameEventDebugEnable=0x31b1`, `SetGameEventDebugViewState=0x31b9`). No handler — these would be dispatched to "unknown opcode" if anyone ever sent them.
+- `wow-database/src/statements/world.rs:62,63,141,211,212` — two `DELETE` prepared statements (`DEL_GAME_EVENT_CREATURE`, `DEL_GAME_EVENT_MODEL_EQUIP`, `DEL_EVENT_GAMEOBJECT`). These appear to be wired into `wow-database`'s `.gobject delete` / creature deletion paths so that removing a spawn cleans up its `game_event_*` row references — purely a referential-integrity cleanup. **They do not load, evaluate, or schedule events.** The 16+ `SELECT` queries listed in §6 are all missing.
+
+Zero hits for `IsHolidayActive`, `IsEventActive`, `HolidayIds`, `GameEventState`, `GAMEEVENT_NORMAL`, `GameEventMgr`, `m_ActiveEvents`, `mGameEventCreatureGuids`, etc.
+
+**Silent-default consequences:**
+- `CONDITION_ACTIVE_EVENT` would always evaluate true / false consistent (depending on caller default) — moot because ConditionMgr is also ❌.
+- Seasonal quests (`game_event_seasonal_questrelation`) are unfiltered: every holiday quest is takeable year-round. Hallow's End candy buckets, brewfest dailies, all quest helper NPCs would be permanently unavailable (no spawn) **and** permanently available (no gate) simultaneously depending on which side of the system you look at — but in practice the spawns simply don't happen because `game_event_creature` rows are never read.
+- Holiday scripts in `crates/wow-scripts/Events/` (also ❌) have nothing to hook into.
+- `SPELL_EFFECT_SEND_EVENT` and `GAMEOBJECT_TYPE_GOOBER` event-trigger paths (`GameEvents::Trigger`) silently do nothing.
+
+**Coupling:** Mostly self-contained. Soft-blocked on ConditionMgr (#COND.* — for `CONDITION_ACTIVE_EVENT` and `game_event_quest_condition` evaluation). The state machine itself can be built in isolation. Tractable mid-priority; ICC content does not require it.

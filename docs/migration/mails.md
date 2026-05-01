@@ -295,3 +295,34 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — effectively zero mail code.** The doc's "❌ not started" with a single stub is exact. Only one CMSG handler is wired and it returns a permanent "no mail" sentinel.
+
+**Inventory verified:**
+- **No `crates/wow-mail/`** crate.
+- **No `crates/wow-world/src/handlers/mail.rs`** (handler file list confirmed: battlenet, character, chat, combat, group, inspect, loot, misc, mod, movement, quest, social, spell, trainer).
+- **No `crates/wow-data/src/mail.rs`** type module.
+- **No `Mail`, `MailDraft`, `MailSender`, `MailReceiver`** types anywhere — full grep yields zero hits in `crates/` outside test/comment text.
+- **No mail SQL statements**: `crates/wow-database/src/statements/character.rs` has no `INS_MAIL`, `SEL_MAIL`, `DEL_MAIL`, `INS_MAIL_ITEM`, `UPD_MAIL`, etc. Verified by grep — only `EMAIL`-related rows in `login.rs` (account email column, unrelated).
+- **No `mail_loot_template`** reader in any DB module.
+
+**The single stub:**
+- `crates/wow-world/src/handlers/misc.rs:573-581` — `handle_query_next_mail_time` registered at line 92-96 with opcode `QueryNextMailTime`. Implementation is one line: `self.send_packet(&MailQueryNextTimeResult::no_mail());` which sends `next_mail_time = -1.0, count = 0`. Hard-coded "no mail forever" — the player will never receive a `SMSG_RECEIVED_MAIL` notification regardless of true state.
+- Packet builder at `crates/wow-packet/src/packets/misc.rs:2027-2051` — `MailQueryNextTimeResult { next_mail_time: f32 }` with `no_mail()` constructor. That is the **only mail-related ServerPacket type** in the whole packet crate.
+
+**Confirmed bug from doc §8:**
+- Other 9 mail CMSGs (`SEND_MAIL`, `MAIL_GET_LIST`, `MAIL_MARK_AS_READ`, `MAIL_DELETE`, `MAIL_RETURN_TO_SENDER`, `MAIL_TAKE_ITEM`, `MAIL_TAKE_MONEY`, `MAIL_CREATE_TEXT_ITEM`, `ITEM_TEXT_QUERY`) have **no `inventory::submit!`** registration anywhere. `SendMail` is defined as opcode `0x35fb` in `wow-constants/src/opcodes.rs:560` but no handler exists. The mailbox UI will produce silent "unhandled opcode" warnings on every interaction and remain frozen, exactly as the doc predicted.
+- Opcode constants `MailListResult = 0x2756`, `MailQueryNextTimeResult = 0x2757` exist in opcodes.rs but no `MailListResult` packet builder exists. The `AuctionListPendingSalesResult` packet at misc.rs:2000 writes a `Mails.Count = 0` field — that is purely a coincidence of the auction-listing wire format and has nothing to do with the mail subsystem.
+
+**Largest missing surfaces (confirmed):**
+- All 9 CMSG handlers + 6 SMSG packet types (`MAIL_LIST_RESULT`, `SEND_MAIL_RESULT`, `RECEIVED_MAIL`, `NOTIFY_RECEIVED_MAIL`, `QUERY_ITEM_TEXT_RESPONSE`).
+- Persistence: zero rows of mail SQL exist; the `mail` and `mail_items` tables are not touched by Rust at any point.
+- Type system: `Mail`, `MailItemInfo`, `MailDraft`, `MailSender`, `MailReceiver`, `MailMessageType`, `MailCheckMask`, `MailStationery`, `MailState` — none exist.
+- COD payment loop, return-to-sender flow, expire-sweep, cross-account 1h delay, guild-instant-delivery shortcut, mail-template loot generation, plain-letter (item 8383) creation, mailbox-source validation (`CanOpenMailBox`).
+- Cross-module integrations: auction expire-mail, calendar invite-mail, quest reward-mail, BG offline-reward-mail, blackmarket delivery — all blocked on this module.
+
+**Estimate: <1% complete.** A single dummy SMSG response is the entirety of the implementation.

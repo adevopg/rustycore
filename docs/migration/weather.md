@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-world/` (no dedicated crate; would live next to `MapManager` / zone systems)
 > **Layer:** L8 (service — per-zone tick loop on top of map/zone)
 > **Status:** ❌ not started
-> **Audited vs C++:** ✅ complete (module is small: 4 files, ~480 lines total)
+> **Audited vs C++:** ✅ complete (module is small: 4 files, ~480 lines total) — re-verified 2026-05-01: Rust-side absence confirmed
 > **Last updated:** 2026-05-01
 
 ---
@@ -159,3 +159,21 @@ Payload: `WeatherState (uint32)`, `intensity (float, 0..1)`, `bool unk` (transit
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — completely absent in Rust.**
+
+`grep -rn -i "weather\|WeatherState\|WeatherType" crates/ --include='*.rs'` returns just three hits, none of them implementation:
+
+- `wow-constants/src/shared.rs:416` — bitflag `DISABLE_SHARED_WEATHER_SYSTEMS = 0x40000` (a config-side disable bit; never read because there's no weather system to disable).
+- `wow-constants/src/spell.rs:261` — `SpellCastResult::WrongWeather = 170` enum variant (used by `Spells.WeatherRequired` checks; currently dead code).
+- `wow-constants/src/opcodes.rs:1625` — `Weather = 0x26a6` SMSG opcode definition only.
+
+Zero hits for the implementation surface: no `Weather` struct, no `WeatherMgr`, no `WeatherData` / `WeatherSeasonChances`, no `LoadWeatherData`, no `ReGenerate`, no Markov chain, no per-zone tick, no zone-message broadcast, no DB loader of `world.game_weather`. `MapManager` (the post-MapManager-landing replacement for per-zone state in `crates/wow-world/src/map_manager.rs`) does not own a `weather` map.
+
+**No silent-default bug** — without the SMSG_WEATHER opcode being emitted, the client renders "fine" everywhere, which is the natural visual default. No incorrect behaviour is being masked.
+
+**Recommendation:** Tractable, self-contained, low-risk migration target. Module is genuinely small (~480 LOC C++, four files). The `Map`-side ownership model from C++ should map to a `HashMap<u32 /* zone_id */, Weather>` field on `MapManager` (since RustyCore has unified Map ownership through `MapManager` per `CLAUDE.md`). Markov chain is a pure function. `World::SendZoneMessage` translates to iterating `PlayerRegistry` filtered by zone (per §12 mapping) — `wow-network` already exposes this. Defer until ConditionMgr lands only if you also want `CONDITION_ACTIVE_EVENT`-style per-zone weather overrides; otherwise can be done standalone.

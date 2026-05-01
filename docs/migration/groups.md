@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-network/src/group_registry.rs`, `crates/wow-world/src/handlers/group.rs`, `crates/wow-packet/src/packets/party.rs`
 > **Layer:** L6
 > **Status:** ⚠️ partial (~15% — invite, accept, decline, leave only; no roles, no loot rules, no ready check, no markers, no DB persistence, no raid conversion)
-> **Audited vs C++:** ⚠️ partial
+> **Audited vs C++:** ✅ complete
 > **Last updated:** 2026-05-01
 
 ---
@@ -380,3 +380,32 @@ DBC/DB2 stores read:
 ---
 
 *Template version: 1.0 (2026-05-01).* Status: ⚠️ partial — invite/leave only (~15% of behaviour). Critical gaps: no DB persistence, no roles, no loot rules, no ready check, no raid layout, no target icons, no markers.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ⚠️ partial — pre-audit estimate of "~15%" confirmed.** Reality is closer to **~8–10%**: only 3 of the ~30 group-related opcode handlers are wired and several previously-listed bugs are confirmed.
+
+**Inventory verified:**
+- `crates/wow-network/src/group_registry.rs`: **53 lines** (doc said 54). Holds `GroupInfo { group_guid: u64, leader_guid, members: Vec<ObjectGuid>, loot_method: u8, sequence_num: u32 }`. No `MemberSlot`, no per-member `subgroup`/`flags`/`roles`/`ready_checked`, no raid markers, no target icons, no instance bind. `is_empty()` returns true at <2 members which is consistent with auto-disband threshold but doesn't match C++ semantics ("no members" vs "auto-dissolve").
+- `crates/wow-world/src/handlers/group.rs`: **467 lines** (matches doc). Three `inventory::submit!` registrations exactly: `PartyInvite`, `PartyInviteResponse`, `LeaveGroup`. **Zero** other group opcodes wired.
+
+**Confirmed bugs:**
+1. **Faction-group race bug**: doc flagged this; verified at `group.rs:77`: `faction_group: if entry.race <= 5 { 1 } else { 2 }`. Race 5 = Undead (Horde) is mis-classified as Alliance. Should be a race→team table lookup.
+2. **HP/power placeholders 1000/500**: confirmed at `group.rs:124-127`. Real Player HP/mana is ignored.
+3. **`raid_difficulty_id = 14`**: confirmed at `group.rs:105`. Value 14 is post-Cata; 3.4.3 valid IDs are 0..3. Likely renders garbage in client raid difficulty dropdown.
+4. **No invite expiry / phantom group**: confirmed — `pending_invites` has no timer; if inviter logs out before target accepts, `handle_party_invite_response` will still create a group with the (now-offline) inviter as leader.
+5. **O(N) group lookup on accept**: confirmed at `group.rs:348-351` (`group_reg.iter().find(...)`).
+6. **Group GUID is plain `u64`**: confirmed. C++ uses `ObjectGuid::Create<HighGuid::Party>(counter)`. The wire packet `PartyUpdate.party_guid` is fed this raw `u64`; whether the client interprets it correctly depends on how `ObjectGuid` serialization wraps it (needs separate wire-format check, not done here).
+7. **No `Group::Update(diff)` per-tick**: confirmed — there is no tick handler at all. Ready-check timer and leader-offline timer cannot exist without it.
+
+**Largest missing surfaces (confirmed):**
+- All 25+ remaining CMSG opcodes (uninvite, set leader, set role, loot method, ready check, raid markers, target icons, convert raid, sub-groups, difficulty, minimap ping, random roll, opt-out-of-loot, role poll, restrict pings, low-level raid, raid info request, member stats request).
+- DB persistence: zero `groups` / `group_member` / `group_instance` reads or writes. `wow-database/src/statements/character.rs` has no group statements.
+- `MemberSlot` struct: per-member `subgroup`, `flags` (Assistant/MainTank/MainAssist), `roles`, `readyChecked` all absent.
+- Raid (40-cap, 8 sub-groups) entirely absent — cap hard-coded to 5 at `group.rs:249`.
+- Loot rules: only `loot_method: u8` field, no master-looter/threshold persistence, no `UpdateLooterGuid` round-robin, no roll machinery.
+- Tests: 0 unit tests covering `GroupInfo` (verified — the file has no `#[cfg(test)]` block) and 0 integration tests for invite/accept/leave handshake.
+
+**Refuted nothing.** Every concern raised in §8's "Suspicious / likely divergent" list checks out.

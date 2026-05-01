@@ -5,6 +5,7 @@
 > **Layer:** L7 (Game systems — depends on Spawn data L4, Maps L4, Creatures/GameObjects L4, Quests L6, ObjectMgr L1, GameEventMgr L7; depended on by Map spawn lifecycle and the daily/weekly/monthly reset scheduler)
 > **Status:** ❌ not started — there is no `PoolMgr`, no `QuestPoolMgr`, no pool tables loader, no `SpawnedPoolData` per Map, no `PoolGroup<T>` template specializations. Every DB-defined creature/gameobject in `pool_members` is currently spawned unconditionally (or, more accurately, the spawn pipeline ignores pool membership entirely so all members spawn or none do, depending on how the spawn loader treats the rows).
 > **Audited vs C++:** ❌ not audited
+> **Audited vs Rust impl:** ✅ 2026-05-01 — see §13
 > **Last updated:** 2026-05-01
 
 ---
@@ -330,6 +331,20 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 | `static void RegeneratePool(QuestPool&)` | `fn regenerate_pool(pool: &mut QuestPool, rng: &mut impl Rng)` | Inject RNG for testability |
 | `CharacterDatabasePreparedStatement* CHAR_INS_POOL_QUEST_SAVE` | `crate::statements::CharStatement::InsPoolQuestSave` | sqlx prepared statement |
 | `Quest::IsDaily/IsWeekly/IsMonthly` | `Quest::is_daily()` / `is_weekly()` / `is_monthly()` (from `wow-data/quests`) | Already on the radar via the Quests migration doc |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines `PoolMgr` Rust impl | ✅ | `grep -rn "PoolMgr\|QuestPoolMgr\|SpawnedPoolData\|PoolGroup" crates/ → 0` |
+| 0 references to pool tables | ✅ | `grep -rn "pool_template\|pool_members\|pool_quest_save\|quest_pool_template" crates/ → 0` |
+| No `crates/wow-world/src/pools/` directory | ✅ | not present in `ls crates/wow-world/src/` |
+| No DB loader / prepared statements | ✅ | grep `pool` in `crates/wow-database/src` → 0; grep in `crates/wow-data/src` → 0 |
+| No opcodes (correct — pools are server-internal) | ✅ | n/a, pools never go on the wire |
+
+**Silent-hang risk:** none (no client-visible packets). Behavioural impact: as doc states, every row in `pool_members` is currently spawned unconditionally OR ignored entirely depending on the spawn loader's table list. Need to verify which by checking `wow-database` creature-spawn loader, but that's a separate audit.
 
 ---
 

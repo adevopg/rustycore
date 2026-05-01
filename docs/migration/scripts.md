@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-scripts/` (content) + lateral crates (`wow-spell` for `spell_*` scripts, `wow-pvp`/`wow-battleground` for OutdoorPvP & Battlefield, `wow-pet` for Pet scripts, etc.). The framework that scripts plug into lives in `crates/wow-script/` and is covered by `scripting.md`.
 > **Layer:** L8 (content layer — depends on **everything** below it: scripting framework L7, instance/BG/OPvP L7, spells L5, AI L5, conditions L7, loot L6, quests L6, all entity types L4, …).
 > **Status:** ❌ not started — `crates/wow-scripts/src/lib.rs` is **0 bytes**. **No** boss AI, **no** instance script, **no** spell script, **no** GM command, **no** holiday event, **no** OutdoorPvP, **no** Wintergrasp, **no** quest helper exists in Rust. This is the largest single migration surface in the entire project: ~725 `.cpp` files and ~294,137 lines (it dwarfs every other subsystem in line count).
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — `wc -l` on `lib.rs` returns 0)
 > **Last updated:** 2026-05-01
 
 ---
@@ -444,3 +444,29 @@ These are encounter-level acceptance tests; one per major sub-system. **All depe
 ---
 
 *Template version: 1.0 (2026-05-01).*
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — `crates/wow-scripts/src/lib.rs` is empty (0 lines).**
+
+```
+$ wc -l crates/wow-scripts/src/lib.rs
+0 crates/wow-scripts/src/lib.rs
+```
+
+`crates/wow-scripts/Cargo.toml` deps: `wow-script`, `wow-core`, `wow-constants` — the dependency edges are correct (content depends on framework) but neither side has any code. There is no `northrend/`, no `easternkingdoms/`, no `kalimdor/`, no `outland/`, no `commands/`, no `spells/`, no `events/`, no `pet/`, no `world/` submodule directory. **Zero** boss scripts, **zero** instance scripts, **zero** GM commands.
+
+C++ comparison (from §2):
+- ~725 `.cpp` files in `src/server/scripts/`
+- ~294,137 lines aggregate
+- ICC alone: 16 files, ~20,387 lines (largest single dungeon)
+- Northrend (the WoLK content): 169 files
+- Spells: 15 files holding hundreds of `SpellScript`/`AuraScript` per file (estimated ~3,000 spell scripts total across `Spells/`)
+
+**No silent-default bug** — without `wow-script` framework (also ❌, see scripting.md audit), there is no hookpoint to silently no-op against. Bosses simply spawn as inert mobs running default `CreatureAI` (whatever lands in `wow-ai`); GMs have no `.gm fly` etc.; holidays do nothing; OutdoorPvP zones offer no objectives.
+
+**Hard blocker:** `wow-scripts` is double-blocked. (1) #SCRIPTING.* must land in `wow-script` first to provide the trait set. (2) Every script also needs the underlying gameplay primitives (spell engine, instance state machine, AI base classes, conditions, gossip flow, vehicle hooks, conversation/scene). Realistically only `Commands/` (42 files) and a handful of `World/` helper NPCs (innkeepers, banker scripts) are tractable in the first year of porting; the boss/instance/spell content is a multi-year backlog.
+
+**Recommendation:** Treat this doc as the canonical content roadmap, not as work that ships in the next migration cycle. Prioritise framework (scripting.md) + a single dungeon vertical slice (e.g. one ICC boss with its instance script) as the first end-to-end demonstration; defer the bulk to post-1.0.

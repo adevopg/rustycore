@@ -3,7 +3,7 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/Reputation/` + `src/server/game/Server/Packets/ReputationPackets.cpp/.h`
 > **Rust target crate(s):** `crates/wow-world/` (per-session ReputationMgr), `crates/wow-data/` (FactionEntry/FactionTemplateEntry DB2 readers), `crates/wow-database/` (character_reputation prepared statements), `crates/wow-packet/` (reputation packets)
 > **Layer:** L6
-> **Status:** ❌ not started
+> **Status:** ⚠️ stub (enums + opcode + dummy SMSG_INITIALIZE_FACTIONS only; no per-player state, no DB persistence, no spillover)
 > **Audited vs C++:** ✅ complete
 > **Last updated:** 2026-05-01
 
@@ -291,3 +291,33 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 ---
 
 *Template version: 1.0 (2026-05-01).* Cuando se rellene, actualizar header de status y `Last updated`.
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ⚠️ refuted on the headline bug — `SMSG_INITIALIZE_FACTIONS` IS sent on login. But the packet is a fixed-zero placeholder, so the symptom (rep pane appears empty/all-neutral) holds in practice.**
+
+**Inventory verified:**
+- Enums present in `crates/wow-constants/src/shared.rs:131-216`: `ReputationRank` (Hated..Exalted, with `None=-1` as sentinel — matches C++ `MAX_REPUTATION_RANK=8`), `ReputationSource` (Kill/Quest/Daily/Weekly/Monthly/Repeatable/Spell), `FactionTemplates` (~45 hard-coded constants), `ReputationFlags: u16` bitflags (Visible/AtWar/...). Pre-audit "❌ not started" overstates absence — these enum scaffolds exist.
+- `crates/wow-packet/src/packets/misc.rs:704-725` — `pub struct InitializeFactions;` (unit struct, no fields). Its `write` method emits **1000 fixed-zero `(u16 flags, i32 standing)` pairs** then **1000 fixed-`false` bonus bits**. No per-player data — every login gets the exact same packet.
+- `crates/wow-world/src/handlers/character.rs:4310-4311` — at login step 16: `self.send_packet(&InitializeFactions);`. **The packet IS sent.** The doc-flagged bug ("`SMSG_INITIALIZE_FACTIONS` not sent on login → rep pane empty") is **partially refuted**: the opcode goes out, the client should not freeze, but because every faction reports `flags=0, standing=0` and `bonus=false`, the rep pane will show every faction as default-neutral, hidden, no-bonus — visually indistinguishable from "not sent" for any player who has earned rep.
+- `crates/wow-world/src/` has **no** `reputation/` module, no `ReputationMgr`, no `FactionState` (verified — full grep yields zero hits for those names).
+- `crates/wow-data/src/` has **no** `Faction.db2` or `FactionTemplate.db2` reader (no `faction.rs`).
+- `crates/wow-database/src/statements/character.rs` has **no** `SEL_CHARACTER_REPUTATION`, `INS_CHAR_REPUTATION_BY_FACTION`, etc.
+
+**Refined bug status:**
+- **Original claim "`SMSG_INITIALIZE_FACTIONS` not sent on login":** REFUTED — verified at character.rs:4311.
+- **Underlying user-visible bug "rep pane empty":** STILL TRUE in practice — every standing is hard-coded to 0, no `character_reputation` load, no `RewardReputation` from kills/quests, so even if standings were transmitted faithfully there would be nothing to transmit.
+
+**Largest missing surfaces (confirmed):**
+- Whole `ReputationMgr` per-session state machine (`FactionStateList`, `ForcedReactions`, rank counters).
+- `Faction.db2` + `FactionTemplate.db2` DB2 readers (the doc-§9 #REP.1/#REP.2 tasks).
+- `SetReputation` + spillover propagation + `set_one_faction_reputation`.
+- All CMSG handlers: `SetFactionAtWar`, `SetFactionInactive`, `RequestForcedReactions`, `SetWatchedFaction` — none registered (no `inventory::submit!` matches).
+- `SMSG_SET_FACTION_STANDING` / `_VISIBLE` / `_AT_WAR` / `_FORCED_REACTIONS` packet types — only `InitializeFactions` and `SetFactionStanding` opcode constants exist (`opcodes.rs:1068, 1481`); no packet structs in `wow-packet` for the latter family.
+- `creature_onkill_reputation` and `reputation_reward_rate` worldserver tables — no readers.
+- Quest reputation reward integration (Quest module already exists but the reward-faction arrays are not consumed).
+- `Player::GetReactionTo` / forced-reaction lookup for combat AI.
+
+**Estimate: ~3% complete** — enums and opcode names defined, dummy `SMSG_INITIALIZE_FACTIONS` shell shipped, everything else absent.

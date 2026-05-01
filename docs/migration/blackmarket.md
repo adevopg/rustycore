@@ -3,8 +3,9 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/` + `src/server/game/Handlers/BlackMarketHandler.cpp` + `src/server/game/Server/Packets/BlackMarketPackets.{h,cpp}`
 > **Rust target crate(s):** *none yet* — would live as `crates/wow-world/src/blackmarket/` or new `wow-blackmarket` crate. Depends on Mail (`wow-world` mail handlers), `wow-database` (4 prepared statements + 2 tables), `wow-packet` (4 SMSG + 2 CMSG opcodes already enumerated).
 > **Layer:** L7 (game systems, optional content)
-> **Status:** ❌ not started
+> **Status:** ❌ not started — **intentionally unported** (post-MoP content); audit confirms 0 lines + dead enum variants
 > **Audited vs C++:** ✅ complete
+> **Audited vs Rust impl:** ✅ 2026-05-01
 > **Last updated:** 2026-05-01
 > **WoLK 3.4.3 relevance:** ❌ **Post-WoLK content (Mists of Pandaria 5.4, October 2013).** The Black Market Auction House was added in patch 5.4 and does **not** exist on a vanilla 3.3.5 client. The fact that this file is in the WotLK Classic branch is purely because TrinityCore's WotLK Classic fork was created from the modern (BfA-era) main branch and never deleted MoP+ subsystems. The 3.4.3.54261 client should never send `CMSG_BLACK_MARKET_OPEN` or `..._BID_ON_ITEM` — and the corresponding opcodes (already defined in our `wow-constants/src/opcodes.rs`) are vestigial. **Do not implement for the WoLK Classic relaunch.** Document for completeness, then either no-op or hard-reject the opcodes.
 
@@ -213,6 +214,19 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 | `Item::CreateItem(id, qty, ItemContext::Black_Market)` | Existing item factory in `wow-world::entities::item` | Pass context as `ItemContext::BlackMarket` enum variant. |
 | `Player::ModifyMoney(-bid)` | `wow_world::session::with_player(|p| p.modify_money(-bid as i64))` | Beware sign cast. |
 | `sBlackMarketMgr` | `wow_blackmarket::mgr()` returning `&'static RwLock<BlackMarketMgr>` | Or via dependency injection from world tick. |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| 0 lines `BlackMarketMgr` Rust impl | ✅ | `grep -rn "BlackMarket\|black_market\|BMAH" crates/wow-world crates/wow-handler → 0` (no struct, no global, no handler) |
+| Dead enum variants exist in opcodes | ✅ | 5 hits, all in `crates/wow-constants/src/opcodes.rs`: `BlackMarketOpen` (CMSG `0x352b`), `BlackMarketBidOnItemResult` `0x2628`, `BlackMarketOutbid` `0x2629`, `BlackMarketRequestItemsResult` `0x2627`, `BlackMarketWon` `0x262a` (SMSG). Plus item-class `BlackMarket = 15` at `item.rs:291`. Doc says 4 SMSG + 2 CMSG; reality is 4 SMSG + **1 CMSG** (only `BlackMarketOpen`; `BidOnItem` CMSG is missing). |
+| No DB tables / prepared statements | ✅ | grep `blackmarket_template\|blackmarket_auctions` in `crates/wow-database` → 0 |
+| WoLK 3.4.3 client never sends these | ✅ confirmed by spec | MoP 5.4 feature; doc's recommendation to "no-op or hard-reject" is correct |
+
+**Silent-hang risk:** none. The 3.4.3 client doesn't have a Black Market UI. The CMSG `0x352b` will never arrive. The dead variants in `opcodes.rs` are vestigial constants only — leaving them as dead code is fine, or remove for hygiene.
 
 ---
 

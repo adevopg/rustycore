@@ -4,7 +4,7 @@
 > **Rust target crate(s):** **NONE — entire system missing.** Should be `crates/wow-guild/` (not yet created), `crates/wow-world/src/handlers/guild.rs` (not yet created), `crates/wow-packet/src/packets/guild.rs` (not yet created).
 > **Layer:** L6
 > **Status:** ❌ not started (0% — no crate, no handler, no packet definitions, no DB schema in Rust)
-> **Audited vs C++:** ❌ not audited
+> **Audited vs C++:** ✅ complete
 > **Last updated:** 2026-05-01
 
 ---
@@ -470,3 +470,33 @@ DBC/DB2 stores read:
 ---
 
 *Template version: 1.0 (2026-05-01).* Status: ❌ NOT STARTED — 0% implemented. Largest single missing module in the L6 batch (~10000 C++ lines, 60 opcodes, 15 DB tables).
+
+---
+
+## 13. Audit (2026-05-01)
+
+**Verdict: ❌ confirmed — 0% implemented.** The pre-audit "0%" estimate is exact. No `Guild` type, no `GuildMgr`, no DB schema, no handler module, no packet builders.
+
+**Inventory verified:**
+- No `crates/wow-guild/` directory exists (`find` returned empty).
+- No `crates/wow-world/src/handlers/guild.rs` (handler file list: `battlenet, character, chat, combat, group, inspect, loot, misc, mod, movement, quest, social, spell, trainer`).
+- No `crates/wow-packet/src/packets/guild.rs`. Guild references in `wow-packet` are incidental: `mail.rs` mentions "guild bank" once, `chat.rs` defines the `ChatMsg::Guild` enum value, `update.rs` carries `guild_guid: ObjectGuid::EMPTY`, `inspect.rs` carries `guild_club_member_id: 0`. None of these constitute guild module code.
+- No guild SQL statements in `crates/wow-database/src/statements/character.rs` (no `INS_GUILD*`, `SEL_GUILD*`, `DEL_GUILD*`).
+
+**Opcode counting (refining the doc's "~70 GuildHandler functions" claim):**
+- `wow-constants/src/opcodes.rs` defines **89 client opcodes whose name starts with `Guild`** plus several more that conceptually belong (e.g. `AcceptGuildInvite`, `DeclineGuildInvites`, `ChatMessageGuild`, `AutoGuildBankItem`, `AutoStoreGuildBankItem`, `SaveGuildEmblem`, `RequestGuildPartyState`, `RequestGuildRewardsList`, `MoveGuildBankItem`, `MergeGuildBankItem*`, `SplitGuildBankItem*`, `SwapItemWithGuildBankItem*`, `StoreGuildBankItem`). Total guild-relevant CMSG surface is **~100 opcodes**, not 60-70 — the doc's count is conservative. Of those, **only 2 stub handlers** are wired (verified): `handle_guild_set_achievement_tracking` and `handle_guild_bank_remaining_withdraw_money_query` in `handlers/misc.rs:595, 605` — both are empty `pub async fn ... (_pkt) {}` bodies that consume the packet and return without sending anything.
+- All other ~98 guild CMSG opcodes are dispatched through the session match in `session.rs` and either fall through to "unhandled opcode" warning or are silently dropped. Verified by absence of `inventory::submit!` for any other guild opcode.
+
+**Confirmed bug from doc §8:**
+- `CMSG_CHAT_MESSAGE_GUILD/OFFICER` is wired (`session.rs:1724-1725`) but routes into `handle_chat_message(pkt, ChatMsg::Guild)` which falls into the generic chat dispatcher; without a `Guild` to broadcast through, the message is lost or mis-routed (proximity broadcast). Confirmed mis-route per doc claim — fix needed alongside guild module bring-up.
+
+**Largest missing surfaces (confirmed):**
+- Entire `Guild` / `Member` / `RankInfo` / `BankTab` / `EmblemInfo` / `LogHolder` type hierarchy.
+- All 15 character-DB tables (`guild`, `guild_member`, `guild_rank`, `guild_bank_tab`, `guild_bank_item`, `guild_bank_right`, `guild_bank_eventlog`, `guild_eventlog`, `guild_member_withdraw`, `guild_newslog`, `guild_achievement`, `guild_achievement_progress`, plus `arena_team` cross-ref).
+- 8-tab × 98-slot guild bank with item-instance-level move/swap/split/merge logic (the C++ `MoveItemData` triad).
+- Guild chat / officer chat broadcast.
+- Member presence broadcasts.
+- Petition→guild conversion (signature flow, depends on petition module which is also absent).
+- Disband-cleanup mail (depends on missing mails module — see mails.md).
+
+**Estimate:** ~10,000 lines of C++ (per doc §2 totals: 956 + 3656 + 71 + 565 + ~150 + ~600 + 813 + ~3000 + ~70 = 9,881) → **largest single missing module in the L6 batch** as the doc footer states. Validated.

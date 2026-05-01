@@ -4,7 +4,7 @@
 > **Rust target crate(s):** `crates/wow-chat/` (empty placeholder), `crates/wow-world/src/handlers/chat.rs`, `crates/wow-packet/src/packets/chat.rs`
 > **Layer:** L6
 > **Status:** ⚠️ partial (~25% — say/yell/whisper/emote work in-proximity; channels, addon msg, hyperlinks, languages, AFK/DND, ignored-report all missing)
-> **Audited vs C++:** ⚠️ partial
+> **Audited vs C++:** ✅ audited 2026-05-01 (§13)
 > **Last updated:** 2026-05-01
 
 ---
@@ -311,3 +311,53 @@ DBC/DB2 stores read:
 ---
 
 *Template version: 1.0 (2026-05-01).* Status: ⚠️ partial — ~25% of C++ behaviour. Critical confidentiality bug: party/guild/raid msgs use proximity broadcast.
+
+---
+
+## 13. Audit (2026-05-01)
+
+Side-by-side audit of `crates/wow-chat/src/lib.rs` (empty) + `crates/wow-world/src/handlers/chat.rs` vs `src/server/game/Handlers/ChatHandler.cpp` + `src/server/game/Chat/Channels/`.
+
+### Flagged divergence — verdict
+
+**Party/Guild/Raid/Officer/InstanceChat broadcast by proximity instead of group/guild membership — CONFIRMED, confidentiality bug.**
+`crates/wow-world/src/handlers/chat.rs:38-101` registers seven `inventory::submit!` entries (`ChatMessageSay`, `Yell`, `Party`, `Guild`, `Raid`, `RaidWarning`, `InstanceChat`) but examination of `chat.rs:141-184` shows that `handle_chat_message` is the single shared body for all of them and ends with:
+
+```
+let range = if msg_type == ChatMsg::Yell { RANGE_YELL } else { RANGE_SAY };
+self.broadcast_chat_packet(&chat, range);
+```
+
+— a plain `broadcast_raw_packet` (`chat.rs:376-412`) that walks `player_registry()`, filters by `info.map_id == sender_map`, and applies a 25y (or 300y for yell) distance check. There is no branch on `msg_type`, no `Group`/`GroupRegistry` lookup, no `Guild` lookup. Confirmed by `grep` — `GroupRegistry`, `groups`, `members`, `guild_id` do not appear anywhere in `handlers/chat.rs`. Thus `CHAT_MSG_PARTY` is delivered to **anyone within 25 yards on the same map regardless of group membership**, never to a remote group member, and `CHAT_MSG_GUILD` likewise leaks to nearby non-guild players and is invisible to guildmates on different maps. C++ contrast: `Player::Say/Yell` is in-range, but `Group::BroadcastPacket` (in `Group.cpp`) iterates `m_memberSlots` and `Guild::BroadcastToGuild` iterates the guild member set; neither uses spatial range.
+
+The seven distinct inventory entries each list their own `handler_name` (`handle_chat_say`, `handle_chat_party`, …) but those names are only labels for the dispatch table — the actual function bodies converge on `handle_chat_message`, which receives `msg_type` and ignores it for routing.
+
+### Coverage matrix
+
+| C++ opcode handler | Rust | Verdict |
+|---|---|---|
+| `HandleChatMessageSay/Yell/Emote` | ✅ proximity broadcast (correct for Say/Yell, wrong for Party-as-Say) |  partial |
+| `HandleChatMessageParty/Raid/RaidWarning/Officer/InstanceChat/Guild` | ✅ registered, ❌ misrouted to proximity (`chat.rs:182-183`) | bug |
+| `HandleChatMessageWhisper` | ✅ `chat.rs:187-257` via `player_registry` name lookup; offline → inform-only echo |  partial |
+| `HandleChatMessageAFK/DND` | ❌ unregistered |  |
+| `HandleChatAddonMessage` (3 variants) | ❌ unregistered |  |
+| `HandleChatIgnoredOpcode` | ❌ unregistered |  |
+| `HandleEmoteOpcode` | ✅ `chat.rs:297-301` (logs only, no `Unit::SetEmoteState`) | stub |
+| `HandleTextEmoteOpcode` | ✅ `chat.rs:313-358` but no `EmotesText.db2` lookup, no `Player::HandleEmoteCommand` chain |  partial |
+| `HandleJoinChannel/LeaveChannel/Command/PlayerCommand/Password/DeclineInvite` | ❌ all unregistered (channel system absent) |  |
+| `Channel`, `ChannelMgr`, `LanguageMgr`, `Hyperlinks::CheckAllLinks`, `ChatCommand` | ❌ none, `crates/wow-chat/src/lib.rs` is 0 bytes |  |
+
+### Other observed bugs
+
+- `chat.rs:280` — `Emote` chat sets `language: 0` unconditionally (`LANG_UNIVERSAL`), but Trinity uses `LANG_UNIVERSAL=0` only as a literal — fine here.
+- `chat.rs:208-212` — whisper target lookup is O(N) iter over the entire `PlayerRegistry` per whisper (`reg.iter().find(|e| e.value().player_name.eq_ignore_ascii_case(&target_name))`). At realm scale this is a per-message linear scan.
+- Hyperlinks pass through unvalidated — `chat.rs` has no `Hyperlinks::check_all_links` analogue. Fake tooltips trivial to craft.
+- No `GM_SILENCE_AURA = 1852` check; muted players can still chat.
+- AFK/DND opcodes silently dropped; `PLAYER_FLAGS_AFK/DND` never toggled.
+- No ignore-list cross-check — whispers from blocked senders pass through (see also `social.md` §13).
+
+### Channels system
+
+Entirely absent. The Trinity `Channel.cpp` (1026 lines), `ChannelMgr.cpp` (287 lines), and `ChannelAppenders.h` (476 lines) have **zero** Rust equivalent. No `CHAT_MSG_CHANNEL` handling, no `SMSG_CHANNEL_NOTIFY` family, no `channels` table read/write, no built-in channel auto-join on zone change. Players cannot create or use Trade/General/LFG/custom channels at all.
+
+**Verdict:** the flagged proximity-broadcast routing bug for Party/Raid/Guild/Officer/InstanceChat is real and dangerous (confidentiality leak + reverse leak: remote group members never see chat). Approximately 25% of `ChatHandler.cpp` is ported; channels are 0%. Hyperlink validation, language scrambling, AFK/DND, addon msg, and the `.gm` command parser are all unimplemented.

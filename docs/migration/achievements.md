@@ -3,8 +3,9 @@
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/Achievements/` + `src/server/game/Handlers/AchievementHandler.cpp` + `src/server/game/Server/Packets/AchievementPackets.{h,cpp}`
 > **Rust target crate(s):** `crates/wow-achievement/` (currently empty), with handler/wire-up in `crates/wow-world/src/handlers/` (and existing SMSG stubs in `crates/wow-packet/src/packets/misc.rs`).
 > **Layer:** L6 (game systems; depends on L5 entities, L4 DB2, L3 database)
-> **Status:** ❌ not started (placeholder crate exists, `lib.rs` is empty)
+> **Status:** ❌ not started (placeholder crate confirmed empty 2026-05-01)
 > **Audited vs C++:** ✅ complete
+> **Audited vs Rust impl:** ✅ 2026-05-01
 > **Last updated:** 2026-05-01
 > **WoLK 3.4.3 relevance:** ✅ **Core WoLK content.** Achievements were added in patch 3.0 (Wrath of the Lich King). The full achievement UI, point system, guild achievements (added 4.0 Cataclysm but ported back to Wrath Classic), reward titles/items, and inspect-other-player achievement panel are all expected to work on a 3.3.5/3.4.3 realm. **This is a must-have for the WoLK Classic relaunch**, although real players can level to 80 without it; missing achievements just means an empty achievement window and no toast popups.
 
@@ -336,6 +337,21 @@ Strategy: build the static catalog (criteria mgr) first, then the per-player run
 | `WorldPackets::Achievement::AllAchievementData::Write()` | `impl ServerPacket for AllAchievementData { fn body_to_bytes(...) }` in `wow-packet` | **Replaces the existing empty-payload stub at `crates/wow-packet/src/packets/misc.rs:912`.** |
 | `SystemTimePoint` (realm-first ms) | `chrono::DateTime<Utc>` or `i64` epoch ms | Pick one and stick with it; the wire format is shifted by timezone, so keep raw UTC and shift at write-time. |
 | `GuidSet` | `HashSet<ObjectGuid>` | Direct. |
+
+---
+
+## 13. Audit (2026-05-01)
+
+| Claim | Verified | Evidence |
+|---|---|---|
+| `wow-achievement` crate is 0-byte stub | ✅ | `wc -l crates/wow-achievement/src/lib.rs` = `0`; only file in crate |
+| C++ canonical 4285+1365 lines | n/a | not re-counted; original audit stands |
+| Login sends empty `SMSG_ALL_ACHIEVEMENT_DATA` | ✅ | `crates/wow-packet/src/packets/misc.rs:912-918` defines `pub struct AllAchievementData;` with empty payload (`ServerPacket` impl writes 0 bytes); `crates/wow-world/src/handlers/character.rs:4322-4323` sends it during login sequence (step 20). Client treats this as "you have no achievements." |
+| One stub handler `handle_guild_set_achievement_tracking` | ✅ | `handlers/misc.rs:595` body = `{}`; dispatched at `session.rs:1784` |
+| No `AchievementMgr` / `CriteriaMgr` / `AchievementGlobalMgr` | ✅ | `grep -rn "AchievementMgr\|CriteriaMgr\|AchievementGlobalMgr" crates/ → 0` |
+| No achievement DB schema / prepared statements | ✅ | grep `character_achievement\|character_achievement_progress\|achievement_reward` in `crates/wow-database` → 0 |
+
+**Silent-hang risk:** none. Client receives a well-formed empty packet and the achievement tab simply renders empty — no UI hang. `CMSG_QUERY_INSPECT_ACHIEVEMENTS` and other unsolicited client-side opcodes will fall through unhandled but won't block gameplay.
 
 ---
 
