@@ -1,7 +1,9 @@
+pub mod cell;
 pub mod coords;
 
 use std::fmt;
 
+pub use cell::{Cell, CellArea, GridObjectGuids, WorldObjectGuids};
 pub use coords::{
     CellCoord, GridCoord, MAX_NUMBER_OF_CELLS, MAX_NUMBER_OF_GRIDS, SIZE_OF_GRID_CELL,
     SIZE_OF_GRIDS, TOTAL_NUMBER_OF_CELLS_PER_MAP, cell_to_grid_local, compute_cell_coord,

@@ -157,6 +157,7 @@ Grids module **does not originate** any packets directly. All object creation/de
 
 **Files in `/home/server/rustycore`:**
 - `crates/wow-map/src/coords.rs` — TrinityCore grid/cell constants and `ComputeGridCoord` / `ComputeCellCoord` equivalents.
+- `crates/wow-map/src/cell.rs` — first-pass cell container with TrinityCore grid/cell decomposition and separate world/grid object GUID sets.
 - `crates/wow-world/src/map_manager.rs` — legacy scaffold only; still not the canonical Map/NGrid/Cell implementation.
 - No dedicated `grid.rs` or grid state machine file yet.
 
@@ -164,12 +165,13 @@ Grids module **does not originate** any packets directly. All object creation/de
 - `CoordPair<LIMIT>`, `GridCoord`, `CellCoord`.
 - Constants from `GridDefines.h`: `MAX_NUMBER_OF_GRIDS=64`, `MAX_NUMBER_OF_CELLS=8`, `SIZE_OF_GRIDS=533.3333`, `SIZE_OF_GRID_CELL=66.6666...`, `TOTAL_NUMBER_OF_CELLS_PER_MAP=512`.
 - `compute_grid_coord`, `compute_grid_coord_simple`, `compute_cell_coord`, `compute_cell_coord_with_offset`, `cell_to_grid_local`, map-coordinate validation/clamping.
+- `Cell`, `CellArea`, `WorldObjectGuids`, `GridObjectGuids` with separate typed GUID containers matching the C++ split between `i_objects` and `i_container`.
 
 **What's missing vs C++:**
 1. **No NGrid<> template/struct** — no 8x8 cell array container
 2. **No GridInfo** — no state timer, unload locks, visibility tracker
 3. **No GridState state machine** — no InvalidState, ActiveState, IdleState, RemovalState
-4. **No Grid<T> generic container** — no cell-level entity storage
+4. **No Grid<T> generic container** — cell-level GUID storage exists, but no entity refs or visitor machinery yet
 5. **No GridReference / GridRefManager** — no intrusive list tracking for entities
 6. **No ObjectGridLoader** — no DB spawn loading on grid activation
 7. ~~No coordinate conversions~~ — first-pass world→grid/cell conversions now exist in `wow-map::coords`; not yet wired into Map/NGrid lifecycle.
@@ -184,6 +186,7 @@ Grids module **does not originate** any packets directly. All object creation/de
 
 **Tests existing:**
 - 6 tests for grid/cell coordinate math in `crates/wow-map/src/coords.rs`.
+- 5 tests for cell decomposition and typed GUID storage in `crates/wow-map/src/cell.rs`.
 - 0 tests for state transitions or entity loading.
 
 ---
@@ -197,7 +200,7 @@ Complexity: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>1
 - [x] **#GRIDS.1** Port GridDefines constants: MAX_NUMBER_OF_GRIDS=64, MAX_NUMBER_OF_CELLS=8, SIZE_OF_GRIDS=533.33, SIZE_OF_GRID_CELL=66.67 (L)
 - [x] **#GRIDS.2** Implement world-to-grid coordinate conversion: world_x,y → grid_idx (Trinity::ComputeGridCoord equivalent) with unit tests (L)
 - [x] **#GRIDS.3** Implement world-to-cell coordinate conversion within grid: world_x,y → cell_x,cell_y (0-7 range) (L)
-- [ ] **#GRIDS.4** Enhance GridCoord: add `cell_from_world(x,y)`, boundary checking, GridCoord↔u32 serialization (M)
+- [ ] **#GRIDS.4** Enhance GridCoord: add `cell_from_world(x,y)`, boundary checking, GridCoord↔u32 serialization (M) — partially covered by `Cell::from_world`, `Cell::cell_coord`, and `CoordPair::get_id`; reverse/id helpers still pending.
 - [ ] **#GRIDS.5** Implement GridInfo struct: timer (TimeTracker), unload_locks (u16), vis_timer (PeriodicTimer), methods inc/dec locks (M)
 - [ ] **#GRIDS.6** Implement GridState enum + Update trait: { Invalid, Active, Idle, Removal } each with update_state(&mut self, grid, info, diff) (M)
 - [ ] **#GRIDS.7** Implement InvalidState::update() → no-op (L)

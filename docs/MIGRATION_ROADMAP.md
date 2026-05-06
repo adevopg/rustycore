@@ -488,7 +488,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 
 - [x] **#001** `wow-map`: módulo `coords.rs` con constantes y `compute_grid_coord` / `compute_cell_coord`. Tests vs `GridDefines.h`. Cerrado en `crates/wow-map/src/coords.rs` contra `GridDefines.h`.
 - [x] **#002** `wow-map`: `MapKey { map_id: u32, instance_id: u32 }`, matching C++ `std::pair<uint32, uint32>`.
-- [ ] **#003** `wow-map`: `Cell` struct con containers tipados (`HashMap<ObjectGuid, CreatureRef>`, similar para GO/AT).
+- [x] **#003** `wow-map`: `Cell` struct con containers tipados por GUID para world/grid objects; referencias reales quedan para NGrid/entities.
 - [ ] **#004** `wow-map`: `NGrid` (8×8 `Cell` + `GridInfo` con timer).
 - [ ] **#005** `wow-map`: `GridState` enum + `update(state, &mut NGrid, &Map, diff)` para cada estado (referenciar `GridStates.cpp` línea por línea).
 - [ ] **#006** `wow-map`: `Map` con `i_grids: [[Option<Box<NGrid>>; 64]; 64]`, `add_player`, `remove_player`, `update(diff)`, `load_grid`, `unload_grid`, `ensure_grid_loaded`.
