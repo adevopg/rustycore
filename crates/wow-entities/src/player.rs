@@ -606,6 +606,29 @@ pub struct SwapItemEmptyDestinationPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapItemMergeFillResult {
+    ContinueToRealSwap,
+    InvalidDestinationNoop,
+    MoveMergedStackToInventory,
+    MoveMergedStackToBank,
+    EquipMergedStack {
+        dest: u16,
+        auto_unequip_offhand: bool,
+    },
+    PartialFill {
+        source_remaining_count: u32,
+        destination_count: u32,
+        send_updates: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapItemMergeFillPlan {
+    pub result: SwapItemMergeFillResult,
+    pub send_refund_info: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -3807,6 +3830,82 @@ impl Player {
 
         SwapItemEmptyDestinationPlan {
             result: SwapItemEmptyDestinationResult::InvalidDestinationNoop,
+        }
+    }
+
+    pub fn swap_item_merge_fill_plan(
+        &self,
+        dst: u16,
+        source_is_bag: bool,
+        destination_is_bag: bool,
+        source_count: u32,
+        destination_count: u32,
+        source_max_stack_size: u32,
+        can_store_result: InventoryResult,
+        can_bank_result: InventoryResult,
+        can_equip_result: InventoryResult,
+        equip_dest: u16,
+        is_in_world: bool,
+    ) -> SwapItemMergeFillPlan {
+        if source_is_bag || destination_is_bag {
+            return SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::ContinueToRealSwap,
+                send_refund_info: false,
+            };
+        }
+
+        let destination_kind = if is_inventory_packed_pos(dst) {
+            Some((
+                can_store_result,
+                SwapItemMergeFillResult::MoveMergedStackToInventory,
+            ))
+        } else if is_bank_packed_pos(dst) {
+            Some((
+                can_bank_result,
+                SwapItemMergeFillResult::MoveMergedStackToBank,
+            ))
+        } else if is_equipment_packed_pos(dst) {
+            Some((
+                can_equip_result,
+                SwapItemMergeFillResult::EquipMergedStack {
+                    dest: equip_dest,
+                    auto_unequip_offhand: true,
+                },
+            ))
+        } else {
+            None
+        };
+
+        let Some((validation_result, move_result)) = destination_kind else {
+            return SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::InvalidDestinationNoop,
+                send_refund_info: false,
+            };
+        };
+
+        if validation_result != InventoryResult::Ok {
+            return SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::ContinueToRealSwap,
+                send_refund_info: false,
+            };
+        }
+
+        if source_count.saturating_add(destination_count) <= source_max_stack_size {
+            return SwapItemMergeFillPlan {
+                result: move_result,
+                send_refund_info: true,
+            };
+        }
+
+        SwapItemMergeFillPlan {
+            result: SwapItemMergeFillResult::PartialFill {
+                source_remaining_count: source_count
+                    .saturating_add(destination_count)
+                    .saturating_sub(source_max_stack_size),
+                destination_count: source_max_stack_size,
+                send_updates: is_in_world,
+            },
+            send_refund_info: true,
         }
     }
 
@@ -10127,6 +10226,142 @@ mod tests {
             ),
             SwapItemEmptyDestinationPlan {
                 result: SwapItemEmptyDestinationResult::InvalidDestinationNoop,
+            }
+        );
+    }
+
+    #[test]
+    fn swap_item_merge_fill_plan_matches_cpp_occupied_non_bag_case() {
+        let player = Player::new(None, false);
+        let inventory_dst = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let bank_dst = make_item_pos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START);
+        let equip_dst = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+        let equip_dest = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                inventory_dst,
+                true,
+                false,
+                3,
+                4,
+                20,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::ContinueToRealSwap,
+                send_refund_info: false,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                inventory_dst,
+                false,
+                false,
+                3,
+                4,
+                20,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::ContinueToRealSwap,
+                send_refund_info: false,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                inventory_dst,
+                false,
+                false,
+                3,
+                4,
+                20,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::MoveMergedStackToInventory,
+                send_refund_info: true,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                bank_dst,
+                false,
+                false,
+                3,
+                4,
+                20,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::MoveMergedStackToBank,
+                send_refund_info: true,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                equip_dst,
+                false,
+                false,
+                3,
+                4,
+                20,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::EquipMergedStack {
+                    dest: equip_dest,
+                    auto_unequip_offhand: true,
+                },
+                send_refund_info: true,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_merge_fill_plan(
+                inventory_dst,
+                false,
+                false,
+                15,
+                12,
+                20,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                equip_dest,
+                true,
+            ),
+            SwapItemMergeFillPlan {
+                result: SwapItemMergeFillResult::PartialFill {
+                    source_remaining_count: 7,
+                    destination_count: 20,
+                    send_updates: true,
+                },
+                send_refund_info: true,
             }
         );
     }
