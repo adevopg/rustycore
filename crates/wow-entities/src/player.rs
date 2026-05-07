@@ -629,6 +629,37 @@ pub struct SwapItemMergeFillPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapItemRealSwapValidationSubject {
+    Source,
+    Destination,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapItemRealSwapTarget {
+    Inventory,
+    Bank,
+    Equip { dest: u16 },
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapItemRealSwapValidationResult {
+    Error {
+        result: InventoryResult,
+        subject: SwapItemRealSwapValidationSubject,
+    },
+    Continue {
+        source_target: SwapItemRealSwapTarget,
+        destination_target: SwapItemRealSwapTarget,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapItemRealSwapValidationPlan {
+    pub result: SwapItemRealSwapValidationResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -3909,6 +3940,63 @@ impl Player {
         }
     }
 
+    pub fn swap_item_real_swap_validation_plan(
+        &self,
+        src: u16,
+        dst: u16,
+        source_can_store_result: InventoryResult,
+        source_can_bank_result: InventoryResult,
+        source_can_equip_result: InventoryResult,
+        source_equip_dest: u16,
+        source_equip_dest_can_unequip_result: InventoryResult,
+        destination_can_store_result: InventoryResult,
+        destination_can_bank_result: InventoryResult,
+        destination_can_equip_result: InventoryResult,
+        destination_equip_dest: u16,
+        destination_equip_dest_can_unequip_result: InventoryResult,
+    ) -> SwapItemRealSwapValidationPlan {
+        let (source_result, source_target) = swap_item_real_swap_target_for_destination(
+            dst,
+            source_can_store_result,
+            source_can_bank_result,
+            source_can_equip_result,
+            source_equip_dest,
+            source_equip_dest_can_unequip_result,
+        );
+        if source_result != InventoryResult::Ok {
+            return SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Error {
+                    result: source_result,
+                    subject: SwapItemRealSwapValidationSubject::Source,
+                },
+            };
+        }
+
+        let (destination_result, destination_target) = swap_item_real_swap_target_for_destination(
+            src,
+            destination_can_store_result,
+            destination_can_bank_result,
+            destination_can_equip_result,
+            destination_equip_dest,
+            destination_equip_dest_can_unequip_result,
+        );
+        if destination_result != InventoryResult::Ok {
+            return SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Error {
+                    result: destination_result,
+                    subject: SwapItemRealSwapValidationSubject::Destination,
+                },
+            };
+        }
+
+        SwapItemRealSwapValidationPlan {
+            result: SwapItemRealSwapValidationResult::Continue {
+                source_target,
+                destination_target,
+            },
+        }
+    }
+
     pub fn store_bag_item(
         &mut self,
         bag: u8,
@@ -4910,6 +4998,39 @@ fn destroy_filtered_scan_bag_ranges(
             }
         }
     }
+}
+
+fn swap_item_real_swap_target_for_destination(
+    destination: u16,
+    can_store_result: InventoryResult,
+    can_bank_result: InventoryResult,
+    can_equip_result: InventoryResult,
+    equip_dest: u16,
+    equip_dest_can_unequip_result: InventoryResult,
+) -> (InventoryResult, SwapItemRealSwapTarget) {
+    if is_inventory_packed_pos(destination) {
+        return (can_store_result, SwapItemRealSwapTarget::Inventory);
+    }
+
+    if is_bank_packed_pos(destination) {
+        return (can_bank_result, SwapItemRealSwapTarget::Bank);
+    }
+
+    if is_equipment_packed_pos(destination) {
+        if can_equip_result == InventoryResult::Ok {
+            return (
+                equip_dest_can_unequip_result,
+                SwapItemRealSwapTarget::Equip { dest: equip_dest },
+            );
+        }
+
+        return (
+            can_equip_result,
+            SwapItemRealSwapTarget::Equip { dest: equip_dest },
+        );
+    }
+
+    (InventoryResult::Ok, SwapItemRealSwapTarget::None)
 }
 
 fn is_bag_storage_slot(slot: u8) -> bool {
@@ -10362,6 +10483,132 @@ mod tests {
                     send_updates: true,
                 },
                 send_refund_info: true,
+            }
+        );
+    }
+
+    #[test]
+    fn swap_item_real_swap_validation_plan_matches_cpp_bidirectional_checks() {
+        let player = Player::new(None, false);
+        let inventory_src = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let bank_dst = make_item_pos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START);
+        let equip_src = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+        let equip_dst = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_LEGS);
+        let equip_dest = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_LEGS);
+        let equip_dest2 = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+
+        assert_eq!(
+            player.swap_item_real_swap_validation_plan(
+                inventory_src,
+                bank_dst,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                equip_dest,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                equip_dest2,
+                InventoryResult::Ok,
+            ),
+            SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Continue {
+                    source_target: SwapItemRealSwapTarget::Bank,
+                    destination_target: SwapItemRealSwapTarget::Inventory,
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_real_swap_validation_plan(
+                inventory_src,
+                bank_dst,
+                InventoryResult::CantSwap,
+                InventoryResult::InvFull,
+                InventoryResult::CantSwap,
+                equip_dest,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                equip_dest2,
+                InventoryResult::Ok,
+            ),
+            SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Error {
+                    result: InventoryResult::InvFull,
+                    subject: SwapItemRealSwapValidationSubject::Source,
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_real_swap_validation_plan(
+                inventory_src,
+                bank_dst,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                InventoryResult::CantSwap,
+                equip_dest,
+                InventoryResult::Ok,
+                InventoryResult::ClientLockedOut,
+                InventoryResult::Ok,
+                InventoryResult::Ok,
+                equip_dest2,
+                InventoryResult::Ok,
+            ),
+            SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Error {
+                    result: InventoryResult::ClientLockedOut,
+                    subject: SwapItemRealSwapValidationSubject::Destination,
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_real_swap_validation_plan(
+                equip_src,
+                equip_dst,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                equip_dest,
+                InventoryResult::DestroyNonemptyBag,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::Ok,
+                equip_dest2,
+                InventoryResult::Ok,
+            ),
+            SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Error {
+                    result: InventoryResult::DestroyNonemptyBag,
+                    subject: SwapItemRealSwapValidationSubject::Source,
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_real_swap_validation_plan(
+                make_item_pos(BUYBACK_SLOT_START, 0),
+                make_item_pos(BUYBACK_SLOT_START + 1, 0),
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                equip_dest,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                InventoryResult::CantSwap,
+                equip_dest2,
+                InventoryResult::CantSwap,
+            ),
+            SwapItemRealSwapValidationPlan {
+                result: SwapItemRealSwapValidationResult::Continue {
+                    source_target: SwapItemRealSwapTarget::None,
+                    destination_target: SwapItemRealSwapTarget::None,
+                },
             }
         );
     }

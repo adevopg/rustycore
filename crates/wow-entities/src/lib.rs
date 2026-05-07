@@ -147,10 +147,12 @@ pub use player::{
     PlayerValuesUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, SKILL_MAIL, SKILL_PLATE_MAIL,
     SocketedGemUniqueRef, SwapItemEmptyDestinationPlan, SwapItemEmptyDestinationResult,
     SwapItemMergeFillPlan, SwapItemMergeFillResult, SwapItemPreflightItem, SwapItemPreflightPlan,
-    SwapItemPreflightResult, TEAM_ALLIANCE_ID, TEAM_HORDE_ID, TEAM_OTHER, TitanGripPenaltyAction,
-    VisibleItemValues, is_bag_pos, is_bank_packed_pos, is_bank_pos, is_child_equipment_packed_pos,
-    is_child_equipment_pos, is_equipment_packed_pos, is_equipment_pos, is_inventory_packed_pos,
-    is_inventory_pos, make_item_pos,
+    SwapItemPreflightResult, SwapItemRealSwapTarget, SwapItemRealSwapValidationPlan,
+    SwapItemRealSwapValidationResult, SwapItemRealSwapValidationSubject, TEAM_ALLIANCE_ID,
+    TEAM_HORDE_ID, TEAM_OTHER, TitanGripPenaltyAction, VisibleItemValues, is_bag_pos,
+    is_bank_packed_pos, is_bank_pos, is_child_equipment_packed_pos, is_child_equipment_pos,
+    is_equipment_packed_pos, is_equipment_pos, is_inventory_packed_pos, is_inventory_pos,
+    make_item_pos,
 };
 pub use scene_object::{
     SCENE_OBJECT_DATA_CREATED_BY_BIT, SCENE_OBJECT_DATA_PARENT_BIT,
