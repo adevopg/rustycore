@@ -25,6 +25,8 @@ use crate::{
 
 pub const MAX_MONEY_AMOUNT: u64 = 99_999_999_999;
 pub const TEAM_OTHER: u8 = 0;
+pub const TEAM_HORDE_ID: u32 = 67;
+pub const TEAM_ALLIANCE_ID: u32 = 469;
 pub const NULL_BAG: u8 = 0;
 
 pub const PLAYER_DATA_PARENT_BIT: usize = 0;
@@ -318,6 +320,35 @@ pub struct CanUnequipItemArgs<'a> {
     pub is_charmed: bool,
     pub is_in_combat: bool,
     pub is_in_progress_arena: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CanUseItemTemplateArgs<'a> {
+    pub proto: Option<&'a ItemStorageTemplate>,
+    pub skip_required_level_check: bool,
+    pub player_level: u8,
+    pub team: u32,
+    pub allowable_class_matches: bool,
+    pub allowable_race_matches: bool,
+    pub internal_item: bool,
+    pub faction_horde: bool,
+    pub faction_alliance: bool,
+    pub required_skill: u32,
+    pub required_skill_rank: u32,
+    pub required_skill_value: u32,
+    pub required_spell: u32,
+    pub has_required_spell: bool,
+    pub base_required_level: u8,
+    pub holiday_id: u32,
+    pub holiday_active: bool,
+    pub required_reputation_faction: u32,
+    pub required_reputation_rank: u32,
+    pub player_reputation_rank: u32,
+    pub effect0_spell_id: Option<u32>,
+    pub effect1_spell_id: Option<u32>,
+    pub has_effect1_spell: bool,
+    pub artifact_specialization: Option<u32>,
+    pub primary_specialization: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2104,6 +2135,72 @@ impl Player {
         InventoryResult::Ok
     }
 
+    pub fn can_use_item_template(&self, args: CanUseItemTemplateArgs<'_>) -> InventoryResult {
+        if args.proto.is_none() {
+            return InventoryResult::ItemNotFound;
+        }
+
+        if args.internal_item {
+            return InventoryResult::CantEquipEver;
+        }
+
+        if args.faction_horde && args.team != TEAM_HORDE_ID {
+            return InventoryResult::CantEquipEver;
+        }
+
+        if args.faction_alliance && args.team != TEAM_ALLIANCE_ID {
+            return InventoryResult::CantEquipEver;
+        }
+
+        if !args.allowable_class_matches || !args.allowable_race_matches {
+            return InventoryResult::CantEquipEver;
+        }
+
+        if args.required_skill != 0 {
+            if args.required_skill_value == 0 {
+                return InventoryResult::ProficiencyNeeded;
+            }
+
+            if args.required_skill_value < args.required_skill_rank {
+                return InventoryResult::CantEquipSkill;
+            }
+        }
+
+        if args.required_spell != 0 && !args.has_required_spell {
+            return InventoryResult::ProficiencyNeeded;
+        }
+
+        if !args.skip_required_level_check && args.player_level < args.base_required_level {
+            return InventoryResult::CantEquipLevelI;
+        }
+
+        if args.holiday_id != 0 && !args.holiday_active {
+            return InventoryResult::ClientLockedOut;
+        }
+
+        if args.required_reputation_faction != 0
+            && args.player_reputation_rank < args.required_reputation_rank
+        {
+            return InventoryResult::CantEquipReputation;
+        }
+
+        if matches!(args.effect0_spell_id, Some(483 | 55_884))
+            && args.effect1_spell_id.is_some()
+            && args.has_effect1_spell
+        {
+            return InventoryResult::InternalBagError;
+        }
+
+        if args
+            .artifact_specialization
+            .is_some_and(|spec| spec != args.primary_specialization)
+        {
+            return InventoryResult::CantUseItem;
+        }
+
+        InventoryResult::Ok
+    }
+
     pub fn can_bank_item(
         &self,
         dest: &mut Vec<ItemPosCount>,
@@ -3523,6 +3620,38 @@ mod tests {
         }
     }
 
+    fn can_use_template_args<'a>(
+        proto: Option<&'a ItemStorageTemplate>,
+    ) -> CanUseItemTemplateArgs<'a> {
+        CanUseItemTemplateArgs {
+            proto,
+            skip_required_level_check: false,
+            player_level: 70,
+            team: TEAM_HORDE_ID,
+            allowable_class_matches: true,
+            allowable_race_matches: true,
+            internal_item: false,
+            faction_horde: false,
+            faction_alliance: false,
+            required_skill: 0,
+            required_skill_rank: 0,
+            required_skill_value: 0,
+            required_spell: 0,
+            has_required_spell: false,
+            base_required_level: 0,
+            holiday_id: 0,
+            holiday_active: false,
+            required_reputation_faction: 0,
+            required_reputation_rank: 0,
+            player_reputation_rank: 0,
+            effect0_spell_id: None,
+            effect1_spell_id: None,
+            has_effect1_spell: false,
+            artifact_specialization: None,
+            primary_specialization: 0,
+        }
+    }
+
     #[test]
     fn player_constructor_matches_cpp_base_state() {
         let player = Player::new(Some(42), false);
@@ -4182,6 +4311,132 @@ mod tests {
 
         non_empty_bag.swap = true;
         assert_eq!(player.can_unequip_item(non_empty_bag), InventoryResult::Ok);
+    }
+
+    #[test]
+    fn can_use_item_template_matches_cpp_access_requirement_order() {
+        let player = Player::new(None, false);
+        let proto = ItemStorageTemplate::regular_item(500, 1);
+
+        assert_eq!(
+            player.can_use_item_template(can_use_template_args(None)),
+            InventoryResult::ItemNotFound
+        );
+
+        let mut args = can_use_template_args(Some(&proto));
+        args.internal_item = true;
+        args.faction_horde = true;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipEver
+        );
+
+        args.internal_item = false;
+        args.team = TEAM_ALLIANCE_ID;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipEver
+        );
+
+        args.faction_horde = false;
+        args.faction_alliance = true;
+        args.team = TEAM_HORDE_ID;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipEver
+        );
+
+        args.faction_alliance = false;
+        args.allowable_class_matches = false;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipEver
+        );
+
+        args.allowable_class_matches = true;
+        args.allowable_race_matches = false;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipEver
+        );
+
+        args.allowable_race_matches = true;
+        args.required_skill = 164;
+        args.required_skill_rank = 75;
+        args.required_skill_value = 0;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::ProficiencyNeeded
+        );
+
+        args.required_skill_value = 50;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipSkill
+        );
+
+        args.required_skill_value = 75;
+        args.required_spell = 1000;
+        args.has_required_spell = false;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::ProficiencyNeeded
+        );
+    }
+
+    #[test]
+    fn can_use_item_template_matches_cpp_late_requirement_order() {
+        let player = Player::new(None, false);
+        let proto = ItemStorageTemplate::regular_item(501, 1);
+        let mut args = can_use_template_args(Some(&proto));
+
+        args.player_level = 20;
+        args.base_required_level = 30;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipLevelI
+        );
+
+        args.skip_required_level_check = true;
+        assert_eq!(player.can_use_item_template(args), InventoryResult::Ok);
+
+        args.skip_required_level_check = false;
+        args.player_level = 70;
+        args.holiday_id = 1;
+        args.holiday_active = false;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::ClientLockedOut
+        );
+
+        args.holiday_active = true;
+        args.required_reputation_faction = 72;
+        args.required_reputation_rank = 5;
+        args.player_reputation_rank = 4;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantEquipReputation
+        );
+
+        args.player_reputation_rank = 5;
+        args.effect0_spell_id = Some(483);
+        args.effect1_spell_id = Some(9000);
+        args.has_effect1_spell = true;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::InternalBagError
+        );
+
+        args.has_effect1_spell = false;
+        args.artifact_specialization = Some(2);
+        args.primary_specialization = 1;
+        assert_eq!(
+            player.can_use_item_template(args),
+            InventoryResult::CantUseItem
+        );
+
+        args.primary_specialization = 2;
+        assert_eq!(player.can_use_item_template(args), InventoryResult::Ok);
     }
 
     #[test]
