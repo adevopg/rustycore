@@ -29,6 +29,30 @@ The game-side `DataStores` is therefore the *catalog of every numeric/textual co
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/DataStores/DB2HotfixGenerator.cpp` | 30 | `prefix` |
+| `game/DataStores/DB2HotfixGenerator.h` | 70 | `prefix` |
+| `game/DataStores/DB2LoadInfo.h` | 6357 | `prefix` |
+| `game/DataStores/DB2Metadata.h` | 12067 | `prefix` |
+| `game/DataStores/DB2Stores.cpp` | 3104 | `prefix` |
+| `game/DataStores/DB2Stores.h` | 516 | `prefix` |
+| `game/DataStores/DB2Structure.h` | 4538 | `prefix` |
+| `game/DataStores/DBCEnums.h` | 2514 | `prefix` |
+| `game/DataStores/GameTables.cpp` | 148 | `prefix` |
+| `game/DataStores/GameTables.h` | 415 | `prefix` |
+| `game/DataStores/M2Stores.cpp` | 270 | `prefix` |
+| `game/DataStores/M2Stores.h` | 35 | `prefix` |
+| `game/DataStores/M2Structure.h` | 136 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

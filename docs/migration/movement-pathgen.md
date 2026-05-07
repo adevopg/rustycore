@@ -19,6 +19,19 @@ Bridges server motion to **walkable terrain**: given a `(start, end)` pair, prod
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Movement/PathGenerator.cpp` | 1045 | `prefix` |
+| `game/Movement/PathGenerator.h` | 150 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

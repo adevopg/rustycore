@@ -17,6 +17,40 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Player/CUFProfile.h` | 116 | `prefix` |
+| `game/Entities/Player/CinematicMgr.cpp` | 178 | `prefix` |
+| `game/Entities/Player/CinematicMgr.h` | 63 | `prefix` |
+| `game/Entities/Player/CollectionMgr.cpp` | 939 | `prefix` |
+| `game/Entities/Player/CollectionMgr.h` | 175 | `prefix` |
+| `game/Entities/Player/EquipmentSet.h` | 71 | `prefix` |
+| `game/Entities/Player/KillRewarder.cpp` | 304 | `prefix` |
+| `game/Entities/Player/KillRewarder.h` | 59 | `prefix` |
+| `game/Entities/Player/Player.cpp` | 29358 | `prefix` |
+| `game/Entities/Player/Player.h` | 3189 | `prefix` |
+| `game/Entities/Player/PlayerTaxi.cpp` | 229 | `prefix` |
+| `game/Entities/Player/PlayerTaxi.h` | 95 | `prefix` |
+| `game/Entities/Player/RestMgr.cpp` | 172 | `prefix` |
+| `game/Entities/Player/RestMgr.h` | 92 | `prefix` |
+| `game/Entities/Player/SceneDefines.h` | 37 | `prefix` |
+| `game/Entities/Player/SceneMgr.cpp` | 247 | `prefix` |
+| `game/Entities/Player/SceneMgr.h` | 87 | `prefix` |
+| `game/Entities/Player/SocialMgr.cpp` | 313 | `prefix` |
+| `game/Entities/Player/SocialMgr.h` | 163 | `prefix` |
+| `game/Entities/Player/TradeData.cpp` | 153 | `prefix` |
+| `game/Entities/Player/TradeData.h` | 90 | `prefix` |
+| `game/Entities/Taxi/TaxiPathGraph.cpp` | 258 | `prefix` |
+| `game/Entities/Taxi/TaxiPathGraph.h` | 34 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/`.
 
 The Player module is **not split per-feature** in this branch (unlike the C# port `Player.QuestHandler.cs`/`Player.SpellMods.cs`/`Player.Stats.cs`). It is one monolith with neighbour managers.

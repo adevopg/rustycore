@@ -17,6 +17,19 @@ Per-Creature threat list. Tracks every Unit that has dealt damage to (or healed 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Combat/ThreatManager.cpp` | 913 | `prefix` |
+| `game/Combat/ThreatManager.h` | 321 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

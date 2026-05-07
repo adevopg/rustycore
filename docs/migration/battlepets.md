@@ -21,6 +21,19 @@ Bottom line: **document so future maintainers don't re-implement** when a confus
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/BattlePets/BattlePetMgr.cpp` | 929 | `prefix` |
+| `game/BattlePets/BattlePetMgr.h` | 217 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

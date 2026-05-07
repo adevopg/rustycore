@@ -21,6 +21,23 @@ Three concerns bundled together:
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Time/GameTime.cpp` | 112 | `prefix` |
+| `game/Time/GameTime.h` | 59 | `prefix` |
+| `game/Time/UpdateTime.cpp` | 36 | `prefix` |
+| `game/Time/UpdateTime.h` | 45 | `prefix` |
+| `game/Time/WowTime.cpp` | 219 | `prefix` |
+| `game/Time/WowTime.h` | 90 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Time/GameTime.h` | 60 | Namespace declaration |

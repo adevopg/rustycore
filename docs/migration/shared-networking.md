@@ -17,6 +17,30 @@ Framework genérico de sockets TCP asíncronos basado en CRTP (`Socket<T>`) sobr
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/Networking/AsyncAcceptor.h` | 153 | `prefix` |
+| `shared/Networking/Http/BaseHttpSocket.cpp` | 115 | `prefix` |
+| `shared/Networking/Http/BaseHttpSocket.h` | 191 | `prefix` |
+| `shared/Networking/Http/HttpCommon.h` | 55 | `prefix` |
+| `shared/Networking/Http/HttpService.cpp` | 267 | `prefix` |
+| `shared/Networking/Http/HttpService.h` | 188 | `prefix` |
+| `shared/Networking/Http/HttpSessionState.h` | 35 | `prefix` |
+| `shared/Networking/Http/HttpSocket.h` | 75 | `prefix` |
+| `shared/Networking/Http/HttpSslSocket.h` | 97 | `prefix` |
+| `shared/Networking/NetworkThread.h` | 174 | `prefix` |
+| `shared/Networking/Socket.h` | 313 | `prefix` |
+| `shared/Networking/SocketMgr.h` | 142 | `prefix` |
+| `shared/Networking/SslSocket.h` | 88 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines (aprox) | Purpose |
 |---|---|---|
 | `src/server/shared/Networking/Socket.h` | 313 | Template CRTP base; async I/O, read/write queues |

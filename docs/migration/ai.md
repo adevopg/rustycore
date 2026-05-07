@@ -17,6 +17,28 @@ El módulo AI de TrinityCore es la capa que **decide qué hacen los NPCs cada ti
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/AI/AIException.h` | 35 | `prefix` |
+| `game/AI/CreatureAI.cpp` | 464 | `prefix` |
+| `game/AI/CreatureAI.h` | 260 | `prefix` |
+| `game/AI/CreatureAIFactory.h` | 49 | `prefix` |
+| `game/AI/CreatureAIImpl.h` | 102 | `prefix` |
+| `game/AI/CreatureAIRegistry.cpp` | 63 | `prefix` |
+| `game/AI/CreatureAIRegistry.h` | 25 | `prefix` |
+| `game/AI/CreatureAISelector.cpp` | 190 | `prefix` |
+| `game/AI/CreatureAISelector.h` | 44 | `prefix` |
+| `game/AI/GameObjectAIFactory.h` | 47 | `prefix` |
+| `game/AI/SelectableAI.h` | 45 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

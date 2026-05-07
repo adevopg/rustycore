@@ -17,6 +17,23 @@ Conjunto de templates C++ que dan TrinityCore su zoo de "smart pointers caseros"
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/Dynamic/FactoryHolder.h` | 54 | `prefix` |
+| `shared/Dynamic/LinkedList.h` | 231 | `prefix` |
+| `shared/Dynamic/LinkedReference/RefManager.h` | 54 | `prefix` |
+| `shared/Dynamic/LinkedReference/Reference.h` | 104 | `prefix` |
+| `shared/Dynamic/ObjectRegistry.h` | 85 | `prefix` |
+| `shared/Dynamic/TypeList.h` | 45 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/shared/Dynamic/LinkedList.h` | 231 | `LinkedListElement` + `LinkedListHead` (doubly-linked intrusivo, bidirectional iterator) |

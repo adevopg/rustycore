@@ -19,6 +19,50 @@ The "base AI" sub-module is the polymorphic foundation that every NPC controller
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/AI/CoreAI/AreaTriggerAI.cpp` | 28 | `prefix` |
+| `game/AI/CoreAI/AreaTriggerAI.h` | 79 | `prefix` |
+| `game/AI/CoreAI/CombatAI.cpp` | 309 | `prefix` |
+| `game/AI/CoreAI/CombatAI.h` | 107 | `prefix` |
+| `game/AI/CoreAI/GameObjectAI.cpp` | 42 | `prefix` |
+| `game/AI/CoreAI/GameObjectAI.h` | 134 | `prefix` |
+| `game/AI/CoreAI/GuardAI.cpp` | 69 | `prefix` |
+| `game/AI/CoreAI/GuardAI.h` | 37 | `prefix` |
+| `game/AI/CoreAI/PassiveAI.cpp` | 119 | `prefix` |
+| `game/AI/CoreAI/PassiveAI.h` | 93 | `prefix` |
+| `game/AI/CoreAI/PetAI.cpp` | 651 | `prefix` |
+| `game/AI/CoreAI/PetAI.h` | 75 | `prefix` |
+| `game/AI/CoreAI/ReactorAI.cpp` | 32 | `prefix` |
+| `game/AI/CoreAI/ReactorAI.h` | 33 | `prefix` |
+| `game/AI/CoreAI/ScheduledChangeAI.cpp` | 22 | `prefix` |
+| `game/AI/CoreAI/ScheduledChangeAI.h` | 40 | `prefix` |
+| `game/AI/CoreAI/TotemAI.cpp` | 87 | `prefix` |
+| `game/AI/CoreAI/TotemAI.h` | 39 | `prefix` |
+| `game/AI/CoreAI/UnitAI.cpp` | 401 | `prefix` |
+| `game/AI/CoreAI/UnitAI.h` | 182 | `prefix` |
+| `game/AI/CoreAI/UnitAICommon.cpp` | 186 | `prefix` |
+| `game/AI/CoreAI/UnitAICommon.h` | 117 | `prefix` |
+| `game/AI/CoreAI/enuminfo_UnitAICommon.cpp` | 73 | `prefix` |
+| `game/AI/PlayerAI/PlayerAI.cpp` | 1307 | `prefix` |
+| `game/AI/PlayerAI/PlayerAI.h` | 113 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedCreature.cpp` | 714 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedCreature.h` | 428 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedEscortAI.cpp` | 431 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedEscortAI.h` | 100 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedFollowerAI.cpp` | 294 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedFollowerAI.h` | 73 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedGossip.cpp` | 74 | `prefix` |
+| `game/AI/ScriptedAI/ScriptedGossip.h` | 103 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

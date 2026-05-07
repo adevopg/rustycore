@@ -17,6 +17,19 @@ Infraestructura de serialización/deserialización de paquetes binarios del prot
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/Packets/ByteBuffer.cpp` | 207 | `prefix` |
+| `shared/Packets/ByteBuffer.h` | 666 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines (aprox) | Purpose |
 |---|---|---|
 | `src/server/shared/Packets/ByteBuffer.h` | ~800 | Clase ByteBuffer: read<T>/write<T>, bit-packing, posición lectura/escritura, excepciones |

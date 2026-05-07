@@ -17,6 +17,29 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Creature/Creature.cpp` | 3568 | `prefix` |
+| `game/Entities/Creature/Creature.h` | 547 | `prefix` |
+| `game/Entities/Creature/CreatureData.h` | 735 | `prefix` |
+| `game/Entities/Creature/CreatureGroups.cpp` | 307 | `prefix` |
+| `game/Entities/Creature/CreatureGroups.h` | 101 | `prefix` |
+| `game/Entities/Creature/GossipDef.cpp` | 689 | `prefix` |
+| `game/Entities/Creature/GossipDef.h` | 281 | `prefix` |
+| `game/Entities/Creature/TemporarySummon.cpp` | 584 | `prefix` |
+| `game/Entities/Creature/TemporarySummon.h` | 169 | `prefix` |
+| `game/Entities/Creature/Trainer.cpp` | 246 | `prefix` |
+| `game/Entities/Creature/Trainer.h` | 90 | `prefix` |
+| `game/Entities/Creature/enuminfo_CreatureData.cpp` | 154 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

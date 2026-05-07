@@ -17,6 +17,25 @@ El módulo Spells de TrinityCore es el motor que **transforma una intención de 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Spells/Spell.cpp` | 9303 | `prefix` |
+| `game/Spells/Spell.h` | 994 | `prefix` |
+| `game/Spells/SpellCastRequest.h` | 43 | `prefix` |
+| `game/Spells/SpellDefines.h` | 549 | `prefix` |
+| `game/Spells/SpellHistory.cpp` | 1093 | `prefix` |
+| `game/Spells/SpellHistory.h` | 207 | `prefix` |
+| `game/Spells/SpellScript.cpp` | 1200 | `prefix` |
+| `game/Spells/SpellScript.h` | 2271 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

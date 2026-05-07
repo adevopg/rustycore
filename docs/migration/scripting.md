@@ -17,6 +17,23 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Scripting/ScriptMgr.cpp` | 3271 | `prefix` |
+| `game/Scripting/ScriptMgr.h` | 1421 | `prefix` |
+| `game/Scripting/ScriptReloadMgr.cpp` | 1626 | `prefix` |
+| `game/Scripting/ScriptReloadMgr.h` | 85 | `prefix` |
+| `game/Scripting/ScriptSystem.cpp` | 120 | `prefix` |
+| `game/Scripting/ScriptSystem.h` | 55 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

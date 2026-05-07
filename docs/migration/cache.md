@@ -17,6 +17,19 @@ In-memory index of every character row that exists on the realm — name, GUID, 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Cache/CharacterCache.cpp` | 316 | `prefix` |
+| `game/Cache/CharacterCache.h` | 77 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Cache/CharacterCache.h` | 78 | `CharacterCacheEntry` struct, `CharacterCache` class (Meyers singleton) |

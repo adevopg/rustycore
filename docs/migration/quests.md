@@ -17,6 +17,22 @@ The Quests module is the player-progression spine of TrinityCore: it loads `ques
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Quests/QuestDef.cpp` | 724 | `prefix` |
+| `game/Quests/QuestDef.h` | 835 | `prefix` |
+| `game/Quests/QuestObjectiveCriteriaMgr.cpp` | 312 | `prefix` |
+| `game/Quests/QuestObjectiveCriteriaMgr.h` | 64 | `prefix` |
+| `game/Quests/enuminfo_QuestDef.cpp` | 259 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

@@ -19,6 +19,23 @@ Scenarios son *3-player adventures* introducidos en **Mists of Pandaria (5.0, 20
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Scenarios/InstanceScenario.cpp` | 112 | `prefix` |
+| `game/Scenarios/InstanceScenario.h` | 37 | `prefix` |
+| `game/Scenarios/Scenario.cpp` | 362 | `prefix` |
+| `game/Scenarios/Scenario.h` | 111 | `prefix` |
+| `game/Scenarios/ScenarioMgr.cpp` | 224 | `prefix` |
+| `game/Scenarios/ScenarioMgr.h` | 127 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

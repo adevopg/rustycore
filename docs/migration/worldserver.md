@@ -17,6 +17,25 @@ The "Trinityd" daemon. Hosts the game world: accepts encrypted WoW client TCP co
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `worldserver/CommandLine/CliRunnable.cpp` | 180 | `prefix` |
+| `worldserver/CommandLine/CliRunnable.h` | 29 | `prefix` |
+| `worldserver/Main.cpp` | 742 | `prefix` |
+| `worldserver/RemoteAccess/RASession.cpp` | 192 | `prefix` |
+| `worldserver/RemoteAccess/RASession.h` | 56 | `prefix` |
+| `worldserver/TCSoap/TCSoap.cpp` | 152 | `prefix` |
+| `worldserver/TCSoap/TCSoap.h` | 68 | `prefix` |
+| `worldserver/resource.h` | 15 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/worldserver/`.
 
 | File | Lines (approx) | Purpose |

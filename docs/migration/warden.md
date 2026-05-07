@@ -17,6 +17,28 @@ Warden is Blizzard's client-side anti-cheat. The server boots an opaque RC4-encr
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Warden/Modules/WardenModuleMac.h` | 613 | `prefix` |
+| `game/Warden/Modules/WardenModuleWin.h` | 1239 | `prefix` |
+| `game/Warden/Warden.cpp` | 274 | `prefix` |
+| `game/Warden/Warden.h` | 131 | `prefix` |
+| `game/Warden/WardenCheckMgr.cpp` | 191 | `prefix` |
+| `game/Warden/WardenCheckMgr.h` | 140 | `prefix` |
+| `game/Warden/WardenMac.cpp` | 244 | `prefix` |
+| `game/Warden/WardenMac.h` | 43 | `prefix` |
+| `game/Warden/WardenWin.cpp` | 560 | `prefix` |
+| `game/Warden/WardenWin.h` | 86 | `prefix` |
+| `game/Warden/enuminfo_WardenCheckMgr.cpp` | 169 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

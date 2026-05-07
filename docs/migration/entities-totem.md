@@ -17,6 +17,19 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Totem/Totem.cpp` | 168 | `prefix` |
+| `game/Entities/Totem/Totem.h` | 59 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Entities/Totem/Totem.h` | 59 | `Totem` class (final, inherits `Minion`) |

@@ -27,6 +27,27 @@ The "inventory" subsystem is the player's complete item storage tree:
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Item/Container/Bag.cpp` | 311 | `prefix` |
+| `game/Entities/Item/Container/Bag.h` | 89 | `prefix` |
+| `game/Entities/Item/Item.cpp` | 2199 | `prefix` |
+| `game/Entities/Item/Item.h` | 378 | `prefix` |
+| `game/Entities/Item/ItemDefines.h` | 289 | `prefix` |
+| `game/Entities/Item/ItemEnchantmentMgr.cpp` | 204 | `prefix` |
+| `game/Entities/Item/ItemEnchantmentMgr.h` | 53 | `prefix` |
+| `game/Entities/Item/ItemTemplate.cpp` | 222 | `prefix` |
+| `game/Entities/Item/ItemTemplate.h` | 873 | `prefix` |
+| `game/Entities/Item/enuminfo_ItemDefines.cpp` | 538 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

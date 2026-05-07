@@ -25,6 +25,22 @@ The World tick is the heartbeat: it calls Update() on all subsystems every 10–
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/World/World.cpp` | 3971 | `prefix` |
+| `game/World/World.h` | 934 | `prefix` |
+| `game/World/WorldStates/WorldStateDefines.h` | 37 | `prefix` |
+| `game/World/WorldStates/WorldStateMgr.cpp` | 283 | `prefix` |
+| `game/World/WorldStates/WorldStateMgr.h` | 52 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/game/World/`.
 
 | File | Lines (approx) | Purpose |

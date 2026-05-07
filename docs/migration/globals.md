@@ -19,6 +19,27 @@ Together this module is the canonical "is X already known to the server?" entry 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Globals/AreaTriggerDataStore.cpp` | 448 | `prefix` |
+| `game/Globals/AreaTriggerDataStore.h` | 49 | `prefix` |
+| `game/Globals/CharacterTemplateDataStore.cpp` | 118 | `prefix` |
+| `game/Globals/CharacterTemplateDataStore.h` | 60 | `prefix` |
+| `game/Globals/ConversationDataStore.cpp` | 283 | `prefix` |
+| `game/Globals/ConversationDataStore.h` | 114 | `prefix` |
+| `game/Globals/ObjectAccessor.cpp` | 309 | `prefix` |
+| `game/Globals/ObjectAccessor.h` | 114 | `prefix` |
+| `game/Globals/ObjectMgr.cpp` | 11444 | `prefix` |
+| `game/Globals/ObjectMgr.h` | 1944 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

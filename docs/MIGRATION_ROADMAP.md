@@ -485,7 +485,12 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#REFINE.015** Inventario config world/bnet en `docs/migration/inventory/cpp-config-keys.md`.
 - [x] **#REFINE.016** Inventario entity types en `docs/migration/inventory/cpp-entity-types.md`.
 - [x] **#REFINE.017** Inventario `scripts/*` en `docs/migration/inventory/cpp-scripts-tree.md`.
-- [ ] **#REFINE.020** WBS granular por cada doc de módulo.
+- [x] **#REFINE.020** Cobertura canonica de ficheros C++ en cada doc de modulo.
+- [ ] **#REFINE.021** Rust target exacto por cada doc de modulo.
+- [ ] **#REFINE.022** WBS granular por cada doc de modulo.
+- [ ] **#REFINE.023** Divergencias/bugs conocidos con evidencia C++.
+- [ ] **#REFINE.024** Tests required por modulo.
+- [ ] **#REFINE.025** Sistemas post-WoLK/desactivados marcados sin omision silenciosa.
 - [ ] **#REFINE.030** Registros transversales de opcodes, SQL, update fields, managers y scripts.
 - [ ] **#REFINE.040** DAG de dependencias y gates por fase.
 - [ ] **#REFINE.050** Gap audit de archivos/opcodes/SQL/scripts.

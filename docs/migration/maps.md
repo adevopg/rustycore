@@ -17,6 +17,40 @@ The Maps module in TrinityCore manages the world's spatiotemporal state: loading
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Maps/AreaBoundary.cpp` | 107 | `prefix` |
+| `game/Maps/AreaBoundary.h` | 167 | `prefix` |
+| `game/Maps/GridMap.cpp` | 694 | `prefix` |
+| `game/Maps/GridMap.h` | 103 | `prefix` |
+| `game/Maps/Map.cpp` | 4014 | `prefix` |
+| `game/Maps/Map.h` | 917 | `prefix` |
+| `game/Maps/MapManager.cpp` | 461 | `prefix` |
+| `game/Maps/MapManager.h` | 183 | `prefix` |
+| `game/Maps/MapObject.h` | 60 | `prefix` |
+| `game/Maps/MapRefManager.h` | 40 | `prefix` |
+| `game/Maps/MapReference.cpp` | 39 | `prefix` |
+| `game/Maps/MapReference.h` | 40 | `prefix` |
+| `game/Maps/MapScripts.cpp` | 899 | `prefix` |
+| `game/Maps/MapUpdater.cpp` | 123 | `prefix` |
+| `game/Maps/MapUpdater.h` | 65 | `prefix` |
+| `game/Maps/SpawnData.h` | 128 | `prefix` |
+| `game/Maps/TerrainMgr.cpp` | 877 | `prefix` |
+| `game/Maps/TerrainMgr.h` | 167 | `prefix` |
+| `game/Maps/TransportMgr.cpp` | 714 | `prefix` |
+| `game/Maps/TransportMgr.h` | 185 | `prefix` |
+| `game/Maps/ZoneScript.cpp` | 40 | `prefix` |
+| `game/Maps/ZoneScript.h` | 104 | `prefix` |
+| `game/Maps/enuminfo_SpawnData.cpp` | 67 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

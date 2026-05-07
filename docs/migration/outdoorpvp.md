@@ -17,6 +17,21 @@ OutdoorPvP gestiona los *world PvP zones* clásicos pre-Wintergrasp: zonas con o
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/OutdoorPvP/OutdoorPvP.cpp` | 255 | `prefix` |
+| `game/OutdoorPvP/OutdoorPvP.h` | 232 | `prefix` |
+| `game/OutdoorPvP/OutdoorPvPMgr.cpp` | 224 | `prefix` |
+| `game/OutdoorPvP/OutdoorPvPMgr.h` | 112 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

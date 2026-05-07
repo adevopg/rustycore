@@ -17,6 +17,24 @@ The Loot module turns dead creatures, opened gameobjects, fishing nodes, gatheri
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Loot/Loot.cpp` | 1083 | `prefix` |
+| `game/Loot/Loot.h` | 378 | `prefix` |
+| `game/Loot/LootItemStorage.cpp` | 362 | `prefix` |
+| `game/Loot/LootItemStorage.h` | 95 | `prefix` |
+| `game/Loot/LootItemType.h` | 29 | `prefix` |
+| `game/Loot/LootMgr.cpp` | 1350 | `prefix` |
+| `game/Loot/LootMgr.h` | 178 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

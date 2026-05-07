@@ -17,6 +17,23 @@ Owns the lifecycle of game-side **accounts** (`account` table) and **Battle.net 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Accounts/AccountMgr.cpp` | 607 | `prefix` |
+| `game/Accounts/AccountMgr.h` | 99 | `prefix` |
+| `game/Accounts/BattlenetAccountMgr.cpp` | 215 | `prefix` |
+| `game/Accounts/BattlenetAccountMgr.h` | 50 | `prefix` |
+| `game/Accounts/RBAC.cpp` | 282 | `prefix` |
+| `game/Accounts/RBAC.h` | 1018 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

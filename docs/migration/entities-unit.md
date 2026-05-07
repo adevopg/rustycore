@@ -23,6 +23,24 @@ This sub-doc describes the entire `Unit/` directory and the contract the rest of
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Unit/CharmInfo.cpp` | 283 | `prefix` |
+| `game/Entities/Unit/CharmInfo.h` | 157 | `prefix` |
+| `game/Entities/Unit/StatSystem.cpp` | 1311 | `prefix` |
+| `game/Entities/Unit/Unit.cpp` | 13620 | `prefix` |
+| `game/Entities/Unit/Unit.h` | 1953 | `prefix` |
+| `game/Entities/Unit/UnitDefines.h` | 526 | `prefix` |
+| `game/Entities/Unit/enuminfo_UnitDefines.cpp` | 619 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

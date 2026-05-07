@@ -19,6 +19,47 @@ Drive **what a Unit decides to do next**: idle, wander, patrol a waypoint path, 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Movement/MovementGenerators/ChaseMovementGenerator.cpp` | 260 | `prefix` |
+| `game/Movement/MovementGenerators/ChaseMovementGenerator.h` | 59 | `prefix` |
+| `game/Movement/MovementGenerators/ConfusedMovementGenerator.cpp` | 177 | `prefix` |
+| `game/Movement/MovementGenerators/ConfusedMovementGenerator.h` | 49 | `prefix` |
+| `game/Movement/MovementGenerators/FleeingMovementGenerator.cpp` | 282 | `prefix` |
+| `game/Movement/MovementGenerators/FleeingMovementGenerator.h` | 67 | `prefix` |
+| `game/Movement/MovementGenerators/FlightPathMovementGenerator.cpp` | 338 | `prefix` |
+| `game/Movement/MovementGenerators/FlightPathMovementGenerator.h` | 75 | `prefix` |
+| `game/Movement/MovementGenerators/FollowMovementGenerator.cpp` | 215 | `prefix` |
+| `game/Movement/MovementGenerators/FollowMovementGenerator.h` | 62 | `prefix` |
+| `game/Movement/MovementGenerators/FormationMovementGenerator.cpp` | 222 | `prefix` |
+| `game/Movement/MovementGenerators/FormationMovementGenerator.h` | 57 | `prefix` |
+| `game/Movement/MovementGenerators/GenericMovementGenerator.cpp` | 99 | `prefix` |
+| `game/Movement/MovementGenerators/GenericMovementGenerator.h` | 55 | `prefix` |
+| `game/Movement/MovementGenerators/HomeMovementGenerator.cpp` | 158 | `prefix` |
+| `game/Movement/MovementGenerators/HomeMovementGenerator.h` | 41 | `prefix` |
+| `game/Movement/MovementGenerators/IdleMovementGenerator.cpp` | 231 | `prefix` |
+| `game/Movement/MovementGenerators/IdleMovementGenerator.h` | 81 | `prefix` |
+| `game/Movement/MovementGenerators/PathMovementBase.h` | 43 | `prefix` |
+| `game/Movement/MovementGenerators/PointMovementGenerator.cpp` | 227 | `prefix` |
+| `game/Movement/MovementGenerators/PointMovementGenerator.h` | 75 | `prefix` |
+| `game/Movement/MovementGenerators/RandomMovementGenerator.cpp` | 263 | `prefix` |
+| `game/Movement/MovementGenerators/RandomMovementGenerator.h` | 58 | `prefix` |
+| `game/Movement/MovementGenerators/SplineChainMovementGenerator.cpp` | 238 | `prefix` |
+| `game/Movement/MovementGenerators/SplineChainMovementGenerator.h` | 61 | `prefix` |
+| `game/Movement/MovementGenerators/WaypointMovementGenerator.cpp` | 469 | `prefix` |
+| `game/Movement/MovementGenerators/WaypointMovementGenerator.h` | 93 | `prefix` |
+| `game/Movement/Waypoints/WaypointDefines.h` | 86 | `prefix` |
+| `game/Movement/Waypoints/WaypointManager.cpp` | 321 | `prefix` |
+| `game/Movement/Waypoints/WaypointManager.h` | 73 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

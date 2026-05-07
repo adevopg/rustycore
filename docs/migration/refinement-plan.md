@@ -70,7 +70,7 @@ Aceptacion de R1: todo archivo fuente C++ queda asignado o excluido explicitamen
 
 Para cada modulo de `_INDEX.md`:
 
-- [ ] **#REFINE.020** Asegurar seccion "C++ canonical files" con todos los archivos C++ asignados.
+- [x] **#REFINE.020** Asegurar seccion "C++ canonical files" con todos los archivos C++ asignados.
 - [ ] **#REFINE.021** Asegurar seccion "Rust target" con crates/modulos exactos.
 - [ ] **#REFINE.022** Añadir "Task WBS" con IDs, dependencias y criterios de aceptacion.
 - [ ] **#REFINE.023** Añadir "Known divergences / bugs" con evidencia desde C++.

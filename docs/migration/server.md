@@ -17,6 +17,181 @@ The Server module in TrinityCore manages the per-client connection lifecycle: TC
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Server/Packet.cpp` | 49 | `prefix` |
+| `game/Server/Packet.h` | 80 | `prefix` |
+| `game/Server/Packets/AccountPackets.cpp` | 29 | `prefix` |
+| `game/Server/Packets/AccountPackets.h` | 69 | `prefix` |
+| `game/Server/Packets/AchievementPackets.cpp` | 251 | `prefix` |
+| `game/Server/Packets/AchievementPackets.h` | 297 | `prefix` |
+| `game/Server/Packets/AddonPackets.cpp` | 41 | `prefix` |
+| `game/Server/Packets/AddonPackets.h` | 41 | `prefix` |
+| `game/Server/Packets/AdventureJournalPackets.cpp` | 54 | `prefix` |
+| `game/Server/Packets/AdventureJournalPackets.h` | 66 | `prefix` |
+| `game/Server/Packets/AdventureMapPackets.cpp` | 29 | `prefix` |
+| `game/Server/Packets/AdventureMapPackets.h` | 39 | `prefix` |
+| `game/Server/Packets/AllPackets.h` | 92 | `prefix` |
+| `game/Server/Packets/AreaTriggerPackets.cpp` | 101 | `prefix` |
+| `game/Server/Packets/AreaTriggerPackets.h` | 91 | `prefix` |
+| `game/Server/Packets/ArenaTeamPackets.cpp` | 82 | `prefix` |
+| `game/Server/Packets/ArenaTeamPackets.h` | 127 | `prefix` |
+| `game/Server/Packets/ArtifactPackets.cpp` | 71 | `prefix` |
+| `game/Server/Packets/ArtifactPackets.h` | 105 | `prefix` |
+| `game/Server/Packets/AuctionHousePackets.cpp` | 772 | `prefix` |
+| `game/Server/Packets/AuctionHousePackets.h` | 642 | `prefix` |
+| `game/Server/Packets/AuthenticationPackets.cpp` | 366 | `prefix` |
+| `game/Server/Packets/AuthenticationPackets.h` | 317 | `prefix` |
+| `game/Server/Packets/AzeritePackets.cpp` | 71 | `prefix` |
+| `game/Server/Packets/AzeritePackets.h` | 110 | `prefix` |
+| `game/Server/Packets/BankPackets.cpp` | 63 | `prefix` |
+| `game/Server/Packets/BankPackets.h` | 112 | `prefix` |
+| `game/Server/Packets/BattlePayPackets.cpp` | 25 | `prefix` |
+| `game/Server/Packets/BattlePayPackets.h` | 47 | `prefix` |
+| `game/Server/Packets/BattlePetPackets.cpp` | 210 | `prefix` |
+| `game/Server/Packets/BattlePetPackets.h` | 270 | `prefix` |
+| `game/Server/Packets/BattlegroundPackets.cpp` | 523 | `prefix` |
+| `game/Server/Packets/BattlegroundPackets.h` | 717 | `prefix` |
+| `game/Server/Packets/BattlenetPackets.cpp` | 90 | `prefix` |
+| `game/Server/Packets/BattlenetPackets.h` | 110 | `prefix` |
+| `game/Server/Packets/BlackMarketPackets.cpp` | 108 | `prefix` |
+| `game/Server/Packets/BlackMarketPackets.h` | 126 | `prefix` |
+| `game/Server/Packets/CalendarPackets.cpp` | 512 | `prefix` |
+| `game/Server/Packets/CalendarPackets.h` | 590 | `prefix` |
+| `game/Server/Packets/ChannelPackets.cpp` | 196 | `prefix` |
+| `game/Server/Packets/ChannelPackets.h` | 198 | `prefix` |
+| `game/Server/Packets/CharacterPackets.cpp` | 727 | `prefix` |
+| `game/Server/Packets/CharacterPackets.h` | 835 | `prefix` |
+| `game/Server/Packets/ChatPackets.cpp` | 358 | `prefix` |
+| `game/Server/Packets/ChatPackets.h` | 396 | `prefix` |
+| `game/Server/Packets/ClientConfigPackets.cpp` | 76 | `prefix` |
+| `game/Server/Packets/ClientConfigPackets.h` | 102 | `prefix` |
+| `game/Server/Packets/CollectionPackets.cpp` | 25 | `prefix` |
+| `game/Server/Packets/CollectionPackets.h` | 49 | `prefix` |
+| `game/Server/Packets/CombatLogPackets.cpp` | 488 | `prefix` |
+| `game/Server/Packets/CombatLogPackets.h` | 364 | `prefix` |
+| `game/Server/Packets/CombatLogPacketsCommon.cpp` | 195 | `prefix` |
+| `game/Server/Packets/CombatLogPacketsCommon.h` | 160 | `prefix` |
+| `game/Server/Packets/CombatPackets.cpp` | 166 | `prefix` |
+| `game/Server/Packets/CombatPackets.h` | 240 | `prefix` |
+| `game/Server/Packets/CraftingPacketsCommon.cpp` | 62 | `prefix` |
+| `game/Server/Packets/CraftingPacketsCommon.h` | 60 | `prefix` |
+| `game/Server/Packets/DuelPackets.cpp` | 79 | `prefix` |
+| `game/Server/Packets/DuelPackets.h` | 127 | `prefix` |
+| `game/Server/Packets/EquipmentSetPackets.cpp` | 132 | `prefix` |
+| `game/Server/Packets/EquipmentSetPackets.h` | 111 | `prefix` |
+| `game/Server/Packets/EventPackets.cpp` | 28 | `prefix` |
+| `game/Server/Packets/EventPackets.h` | 49 | `prefix` |
+| `game/Server/Packets/GameObjectPackets.cpp` | 103 | `prefix` |
+| `game/Server/Packets/GameObjectPackets.h` | 169 | `prefix` |
+| `game/Server/Packets/GarrisonPackets.cpp` | 484 | `prefix` |
+| `game/Server/Packets/GarrisonPackets.h` | 443 | `prefix` |
+| `game/Server/Packets/GuildPackets.cpp` | 1047 | `prefix` |
+| `game/Server/Packets/GuildPackets.h` | 1307 | `prefix` |
+| `game/Server/Packets/HotfixPackets.cpp` | 127 | `prefix` |
+| `game/Server/Packets/HotfixPackets.h` | 102 | `prefix` |
+| `game/Server/Packets/InspectPackets.cpp` | 247 | `prefix` |
+| `game/Server/Packets/InspectPackets.h` | 198 | `prefix` |
+| `game/Server/Packets/InstancePackets.cpp` | 168 | `prefix` |
+| `game/Server/Packets/InstancePackets.h` | 251 | `prefix` |
+| `game/Server/Packets/ItemPackets.cpp` | 363 | `prefix` |
+| `game/Server/Packets/ItemPackets.h` | 538 | `prefix` |
+| `game/Server/Packets/ItemPacketsCommon.cpp` | 267 | `prefix` |
+| `game/Server/Packets/ItemPacketsCommon.h` | 139 | `prefix` |
+| `game/Server/Packets/LFGPackets.cpp` | 497 | `prefix` |
+| `game/Server/Packets/LFGPackets.h` | 559 | `prefix` |
+| `game/Server/Packets/LFGPacketsCommon.cpp` | 42 | `prefix` |
+| `game/Server/Packets/LFGPacketsCommon.h` | 49 | `prefix` |
+| `game/Server/Packets/LootPackets.cpp` | 248 | `prefix` |
+| `game/Server/Packets/LootPackets.h` | 322 | `prefix` |
+| `game/Server/Packets/MailPackets.cpp` | 305 | `prefix` |
+| `game/Server/Packets/MailPackets.h` | 244 | `prefix` |
+| `game/Server/Packets/MiscPackets.cpp` | 832 | `prefix` |
+| `game/Server/Packets/MiscPackets.h` | 1052 | `prefix` |
+| `game/Server/Packets/MovementPackets.cpp` | 1097 | `prefix` |
+| `game/Server/Packets/MovementPackets.h` | 728 | `prefix` |
+| `game/Server/Packets/MythicPlusPacketsCommon.cpp` | 130 | `prefix` |
+| `game/Server/Packets/MythicPlusPacketsCommon.h` | 107 | `prefix` |
+| `game/Server/Packets/NPCPackets.cpp` | 291 | `prefix` |
+| `game/Server/Packets/NPCPackets.h` | 327 | `prefix` |
+| `game/Server/Packets/PacketUtilities.cpp` | 62 | `prefix` |
+| `game/Server/Packets/PacketUtilities.h` | 322 | `prefix` |
+| `game/Server/Packets/PartyPackets.cpp` | 790 | `prefix` |
+| `game/Server/Packets/PartyPackets.h` | 774 | `prefix` |
+| `game/Server/Packets/PerksProgramPacketsCommon.cpp` | 38 | `prefix` |
+| `game/Server/Packets/PerksProgramPacketsCommon.h` | 42 | `prefix` |
+| `game/Server/Packets/PetPackets.cpp` | 206 | `prefix` |
+| `game/Server/Packets/PetPackets.h` | 276 | `prefix` |
+| `game/Server/Packets/PetitionPackets.cpp` | 192 | `prefix` |
+| `game/Server/Packets/PetitionPackets.h` | 246 | `prefix` |
+| `game/Server/Packets/QueryPackets.cpp` | 534 | `prefix` |
+| `game/Server/Packets/QueryPackets.h` | 452 | `prefix` |
+| `game/Server/Packets/QuestPackets.cpp` | 823 | `prefix` |
+| `game/Server/Packets/QuestPackets.h` | 776 | `prefix` |
+| `game/Server/Packets/ReferAFriendPackets.cpp` | 30 | `prefix` |
+| `game/Server/Packets/ReferAFriendPackets.h` | 40 | `prefix` |
+| `game/Server/Packets/ReputationPackets.cpp` | 70 | `prefix` |
+| `game/Server/Packets/ReputationPackets.h` | 89 | `prefix` |
+| `game/Server/Packets/ScenarioPackets.cpp` | 136 | `prefix` |
+| `game/Server/Packets/ScenarioPackets.h` | 125 | `prefix` |
+| `game/Server/Packets/ScenePackets.cpp` | 56 | `prefix` |
+| `game/Server/Packets/ScenePackets.h` | 87 | `prefix` |
+| `game/Server/Packets/SocialPackets.cpp` | 148 | `prefix` |
+| `game/Server/Packets/SocialPackets.h` | 170 | `prefix` |
+| `game/Server/Packets/SpellPackets.cpp` | 1042 | `prefix` |
+| `game/Server/Packets/SpellPackets.h` | 1090 | `prefix` |
+| `game/Server/Packets/SystemPackets.cpp` | 278 | `prefix` |
+| `game/Server/Packets/SystemPackets.h` | 244 | `prefix` |
+| `game/Server/Packets/TalentPackets.cpp` | 179 | `prefix` |
+| `game/Server/Packets/TalentPackets.h` | 202 | `prefix` |
+| `game/Server/Packets/TaxiPackets.cpp` | 78 | `prefix` |
+| `game/Server/Packets/TaxiPackets.h` | 130 | `prefix` |
+| `game/Server/Packets/TicketPackets.cpp` | 392 | `prefix` |
+| `game/Server/Packets/TicketPackets.h` | 315 | `prefix` |
+| `game/Server/Packets/TokenPackets.cpp` | 55 | `prefix` |
+| `game/Server/Packets/TokenPackets.h` | 84 | `prefix` |
+| `game/Server/Packets/TotemPackets.cpp` | 46 | `prefix` |
+| `game/Server/Packets/TotemPackets.h` | 69 | `prefix` |
+| `game/Server/Packets/ToyPackets.cpp` | 57 | `prefix` |
+| `game/Server/Packets/ToyPackets.h` | 71 | `prefix` |
+| `game/Server/Packets/TradePackets.cpp` | 138 | `prefix` |
+| `game/Server/Packets/TradePackets.h` | 207 | `prefix` |
+| `game/Server/Packets/TraitPackets.cpp` | 68 | `prefix` |
+| `game/Server/Packets/TraitPackets.h` | 106 | `prefix` |
+| `game/Server/Packets/TraitPacketsCommon.cpp` | 137 | `prefix` |
+| `game/Server/Packets/TraitPacketsCommon.h` | 67 | `prefix` |
+| `game/Server/Packets/TransmogrificationPackets.cpp` | 53 | `prefix` |
+| `game/Server/Packets/TransmogrificationPackets.h` | 69 | `prefix` |
+| `game/Server/Packets/VehiclePackets.cpp` | 69 | `prefix` |
+| `game/Server/Packets/VehiclePackets.h` | 149 | `prefix` |
+| `game/Server/Packets/VoidStoragePackets.cpp` | 106 | `prefix` |
+| `game/Server/Packets/VoidStoragePackets.h` | 138 | `prefix` |
+| `game/Server/Packets/WardenPackets.cpp` | 29 | `prefix` |
+| `game/Server/Packets/WardenPackets.h` | 39 | `prefix` |
+| `game/Server/Packets/WhoPackets.cpp` | 135 | `prefix` |
+| `game/Server/Packets/WhoPackets.h` | 121 | `prefix` |
+| `game/Server/Packets/WorldStatePackets.cpp` | 52 | `prefix` |
+| `game/Server/Packets/WorldStatePackets.h` | 64 | `prefix` |
+| `game/Server/Protocol/Opcodes.cpp` | 2280 | `prefix` |
+| `game/Server/Protocol/Opcodes.h` | 2274 | `prefix` |
+| `game/Server/Protocol/PacketLog.cpp` | 153 | `prefix` |
+| `game/Server/Protocol/PacketLog.h` | 64 | `prefix` |
+| `game/Server/WorldPacket.h` | 98 | `prefix` |
+| `game/Server/WorldSession.cpp` | 1596 | `prefix` |
+| `game/Server/WorldSession.h` | 2125 | `prefix` |
+| `game/Server/WorldSocket.cpp` | 1083 | `prefix` |
+| `game/Server/WorldSocket.h` | 178 | `prefix` |
+| `game/Server/WorldSocketMgr.cpp` | 157 | `prefix` |
+| `game/Server/WorldSocketMgr.h` | 72 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/game/Server/`.
 
 | File | Lines (approx) | Purpose |

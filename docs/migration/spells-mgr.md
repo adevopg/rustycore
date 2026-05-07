@@ -21,6 +21,21 @@ The class also enforces cross-table invariants: it rejects a `spell_required` ro
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Spells/SpellMgr.cpp` | 5028 | `prefix` |
+| `game/Spells/SpellMgr.h` | 827 | `prefix` |
+| `game/Spells/TraitMgr.cpp` | 752 | `prefix` |
+| `game/Spells/TraitMgr.h` | 87 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

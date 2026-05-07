@@ -17,6 +17,38 @@ Player-to-player text communication. Covers proximity chat (Say/Yell/Emote), tar
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Chat/Channels/Channel.cpp` | 1026 | `prefix` |
+| `game/Chat/Channels/Channel.h` | 271 | `prefix` |
+| `game/Chat/Channels/ChannelAppenders.h` | 476 | `prefix` |
+| `game/Chat/Channels/ChannelMgr.cpp` | 287 | `prefix` |
+| `game/Chat/Channels/ChannelMgr.h` | 68 | `prefix` |
+| `game/Chat/Channels/enuminfo_Channel.cpp` | 172 | `prefix` |
+| `game/Chat/Chat.cpp` | 795 | `prefix` |
+| `game/Chat/Chat.h` | 168 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommand.cpp` | 482 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommand.h` | 280 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandArgs.cpp` | 136 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandArgs.h` | 338 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandHelpers.cpp` | 30 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandHelpers.h` | 133 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandTags.cpp` | 155 | `prefix` |
+| `game/Chat/ChatCommands/ChatCommandTags.h` | 326 | `prefix` |
+| `game/Chat/HyperlinkTags.cpp` | 490 | `prefix` |
+| `game/Chat/Hyperlinks.cpp` | 730 | `prefix` |
+| `game/Chat/Hyperlinks.h` | 549 | `prefix` |
+| `game/Chat/LanguageMgr.cpp` | 282 | `prefix` |
+| `game/Chat/LanguageMgr.h` | 99 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

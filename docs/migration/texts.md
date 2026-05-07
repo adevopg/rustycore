@@ -17,6 +17,22 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Texts/ChatTextBuilder.cpp` | 92 | `prefix` |
+| `game/Texts/ChatTextBuilder.h` | 124 | `prefix` |
+| `game/Texts/CreatureTextMgr.cpp` | 445 | `prefix` |
+| `game/Texts/CreatureTextMgr.h` | 130 | `prefix` |
+| `game/Texts/CreatureTextMgrImpl.h` | 164 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Texts/CreatureTextMgr.h` | 131 | Public API: `CreatureTextEntry`, `CreatureTextMap`, `CreatureTextMgr` singleton, `CreatureTextRange`, `SoundKitPlayType` |

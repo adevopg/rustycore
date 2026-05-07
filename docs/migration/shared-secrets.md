@@ -17,6 +17,19 @@ Manager de secretos persistentes del servidor (singleton `SecretMgr`) que carga 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/Secrets/SecretMgr.cpp` | 237 | `prefix` |
+| `shared/Secrets/SecretMgr.h` | 85 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/shared/Secrets/SecretMgr.h` | 85 | Class declaration + `Secret` POD + `SecretOwner`/`Secrets` enums |

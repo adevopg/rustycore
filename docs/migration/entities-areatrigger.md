@@ -17,6 +17,21 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/AreaTrigger/AreaTrigger.cpp` | 1453 | `prefix` |
+| `game/Entities/AreaTrigger/AreaTrigger.h` | 238 | `prefix` |
+| `game/Entities/AreaTrigger/AreaTriggerTemplate.cpp` | 111 | `prefix` |
+| `game/Entities/AreaTrigger/AreaTriggerTemplate.h` | 271 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Entities/AreaTrigger/AreaTrigger.h` | 238 | `AreaTrigger` class (final, WorldObject + GridObject + MapObject) |

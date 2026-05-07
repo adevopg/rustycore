@@ -17,6 +17,60 @@ The "commands" subsystem is the entire **GM / dev / RA / SOAP administration sur
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `scripts/Commands/cs_account.cpp` | 1026 | `prefix` |
+| `scripts/Commands/cs_achievement.cpp` | 67 | `prefix` |
+| `scripts/Commands/cs_ahbot.cpp` | 208 | `prefix` |
+| `scripts/Commands/cs_arena.cpp` | 251 | `prefix` |
+| `scripts/Commands/cs_ban.cpp` | 765 | `prefix` |
+| `scripts/Commands/cs_battlenet_account.cpp` | 390 | `prefix` |
+| `scripts/Commands/cs_bf.cpp` | 141 | `prefix` |
+| `scripts/Commands/cs_cast.cpp` | 228 | `prefix` |
+| `scripts/Commands/cs_character.cpp` | 968 | `prefix` |
+| `scripts/Commands/cs_cheat.cpp` | 254 | `prefix` |
+| `scripts/Commands/cs_debug.cpp` | 1799 | `prefix` |
+| `scripts/Commands/cs_deserter.cpp` | 187 | `prefix` |
+| `scripts/Commands/cs_disable.cpp` | 354 | `prefix` |
+| `scripts/Commands/cs_event.cpp` | 190 | `prefix` |
+| `scripts/Commands/cs_gm.cpp` | 246 | `prefix` |
+| `scripts/Commands/cs_go.cpp` | 623 | `prefix` |
+| `scripts/Commands/cs_gobject.cpp` | 636 | `prefix` |
+| `scripts/Commands/cs_group.cpp` | 531 | `prefix` |
+| `scripts/Commands/cs_guild.cpp` | 309 | `prefix` |
+| `scripts/Commands/cs_honor.cpp` | 120 | `prefix` |
+| `scripts/Commands/cs_instance.cpp` | 269 | `prefix` |
+| `scripts/Commands/cs_learn.cpp` | 481 | `prefix` |
+| `scripts/Commands/cs_lfg.cpp` | 182 | `prefix` |
+| `scripts/Commands/cs_list.cpp` | 731 | `prefix` |
+| `scripts/Commands/cs_lookup.cpp` | 1551 | `prefix` |
+| `scripts/Commands/cs_message.cpp` | 257 | `prefix` |
+| `scripts/Commands/cs_misc.cpp` | 2687 | `prefix` |
+| `scripts/Commands/cs_mmaps.cpp` | 308 | `prefix` |
+| `scripts/Commands/cs_modify.cpp` | 1056 | `prefix` |
+| `scripts/Commands/cs_npc.cpp` | 1435 | `prefix` |
+| `scripts/Commands/cs_pet.cpp` | 209 | `prefix` |
+| `scripts/Commands/cs_quest.cpp` | 303 | `prefix` |
+| `scripts/Commands/cs_rbac.cpp` | 300 | `prefix` |
+| `scripts/Commands/cs_reload.cpp` | 1168 | `prefix` |
+| `scripts/Commands/cs_reset.cpp` | 317 | `prefix` |
+| `scripts/Commands/cs_scene.cpp` | 120 | `prefix` |
+| `scripts/Commands/cs_script_loader.cpp` | 108 | `prefix` |
+| `scripts/Commands/cs_send.cpp` | 266 | `prefix` |
+| `scripts/Commands/cs_server.cpp` | 530 | `prefix` |
+| `scripts/Commands/cs_tele.cpp` | 390 | `prefix` |
+| `scripts/Commands/cs_ticket.cpp` | 431 | `prefix` |
+| `scripts/Commands/cs_titles.cpp` | 201 | `prefix` |
+| `scripts/Commands/cs_wp.cpp` | 508 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 ### 2a. Dispatcher / framework

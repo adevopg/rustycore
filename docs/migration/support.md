@@ -23,6 +23,19 @@ The in-game player feedback system. Three ticket kinds:
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Support/SupportMgr.cpp` | 808 | `prefix` |
+| `game/Support/SupportMgr.h` | 312 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Support/SupportMgr.h` | 313 | All enums + `Ticket` base + `BugTicket` / `ComplaintTicket` / `SuggestionTicket` + `SupportMgr` singleton |

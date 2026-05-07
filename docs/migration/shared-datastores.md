@@ -17,6 +17,22 @@ Binary readers and in-memory containers for the WoW client's DB2/DBC data files 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/DataStores/DB2DatabaseLoader.cpp` | 287 | `prefix` |
+| `shared/DataStores/DB2DatabaseLoader.h` | 49 | `prefix` |
+| `shared/DataStores/DB2Store.cpp` | 145 | `prefix` |
+| `shared/DataStores/DB2Store.h` | 90 | `prefix` |
+| `shared/DataStores/DBStorageIterator.h` | 74 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

@@ -19,6 +19,29 @@ Implements the **server-side spline math + serialization** that Trinity uses to 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Movement/Spline/MoveSpline.cpp` | 400 | `prefix` |
+| `game/Movement/Spline/MoveSpline.h` | 155 | `prefix` |
+| `game/Movement/Spline/MoveSplineFlag.h` | 141 | `prefix` |
+| `game/Movement/Spline/MoveSplineInit.cpp` | 294 | `prefix` |
+| `game/Movement/Spline/MoveSplineInit.h` | 220 | `prefix` |
+| `game/Movement/Spline/MoveSplineInitArgs.h` | 94 | `prefix` |
+| `game/Movement/Spline/MovementTypedefs.h` | 85 | `prefix` |
+| `game/Movement/Spline/MovementUtil.cpp` | 212 | `prefix` |
+| `game/Movement/Spline/Spline.cpp` | 312 | `prefix` |
+| `game/Movement/Spline/Spline.h` | 217 | `prefix` |
+| `game/Movement/Spline/SplineChain.h` | 50 | `prefix` |
+| `game/Movement/Spline/SplineImpl.h` | 96 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

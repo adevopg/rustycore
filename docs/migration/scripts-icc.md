@@ -19,6 +19,34 @@ Icecrown Citadel is the final WotLK 25-/10-man raid (`map_id = 631`). The script
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `scripts/Northrend/IcecrownCitadel/boss_blood_prince_council.cpp` | 1341 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_blood_queen_lana_thel.cpp` | 778 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_deathbringer_saurfang.cpp` | 1257 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_festergut.cpp` | 457 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp` | 2243 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_lady_deathwhisper.cpp` | 1081 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_lord_marrowgar.cpp` | 697 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_professor_putricide.cpp` | 1488 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_rotface.cpp` | 796 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_sindragosa.cpp` | 1526 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_sister_svalna.cpp` | 1487 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp` | 2815 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/boss_valithria_dreamwalker.cpp` | 1284 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/go_icecrown_citadel_teleport.cpp` | 121 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | 1596 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/icecrown_citadel.h` | 578 | `prefix` |
+| `scripts/Northrend/IcecrownCitadel/instance_icecrown_citadel.cpp` | 1420 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

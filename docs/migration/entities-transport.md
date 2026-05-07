@@ -19,6 +19,19 @@ WoLK 3.4 distinguishes **MOTransport** (moving, world-spanning, follows TaxiPath
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Transport/Transport.cpp` | 740 | `prefix` |
+| `game/Entities/Transport/Transport.h` | 129 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Entities/Transport/Transport.h` | 129 | `Transport` class; final, inherits `GameObject` + `TransportBase` |

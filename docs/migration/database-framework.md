@@ -17,6 +17,61 @@ The TrinityCore database framework is an N-thread async MySQL connection pool wi
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `database/Database/AdhocStatement.cpp` | 38 | `prefix` |
+| `database/Database/AdhocStatement.h` | 34 | `prefix` |
+| `database/Database/DatabaseEnv.cpp` | 23 | `prefix` |
+| `database/Database/DatabaseEnv.h` | 44 | `prefix` |
+| `database/Database/DatabaseEnvFwd.h` | 98 | `prefix` |
+| `database/Database/DatabaseLoader.cpp` | 189 | `prefix` |
+| `database/Database/DatabaseLoader.h` | 78 | `prefix` |
+| `database/Database/DatabaseWorkerPool.cpp` | 585 | `prefix` |
+| `database/Database/DatabaseWorkerPool.h` | 243 | `prefix` |
+| `database/Database/Field.cpp` | 169 | `prefix` |
+| `database/Database/Field.h` | 142 | `prefix` |
+| `database/Database/FieldValueConverter.cpp` | 48 | `prefix` |
+| `database/Database/FieldValueConverter.h` | 50 | `prefix` |
+| `database/Database/FieldValueConverters.h` | 112 | `prefix` |
+| `database/Database/Implementation/CharacterDatabase.cpp` | 732 | `prefix` |
+| `database/Database/Implementation/CharacterDatabase.h` | 611 | `prefix` |
+| `database/Database/Implementation/HotfixDatabase.cpp` | 1916 | `prefix` |
+| `database/Database/Implementation/HotfixDatabase.h` | 1122 | `prefix` |
+| `database/Database/Implementation/LoginDatabase.cpp` | 204 | `prefix` |
+| `database/Database/Implementation/LoginDatabase.h` | 195 | `prefix` |
+| `database/Database/Implementation/WorldDatabase.cpp` | 90 | `prefix` |
+| `database/Database/Implementation/WorldDatabase.h` | 104 | `prefix` |
+| `database/Database/MySQLConnection.cpp` | 605 | `prefix` |
+| `database/Database/MySQLConnection.h` | 116 | `prefix` |
+| `database/Database/MySQLHacks.h` | 34 | `prefix` |
+| `database/Database/MySQLPreparedStatement.cpp` | 201 | `prefix` |
+| `database/Database/MySQLPreparedStatement.h` | 71 | `prefix` |
+| `database/Database/MySQLThreading.cpp` | 34 | `prefix` |
+| `database/Database/MySQLThreading.h` | 30 | `prefix` |
+| `database/Database/MySQLWorkaround.h` | 26 | `prefix` |
+| `database/Database/PreparedStatement.cpp` | 182 | `prefix` |
+| `database/Database/PreparedStatement.h` | 125 | `prefix` |
+| `database/Database/QueryCallback.cpp` | 221 | `prefix` |
+| `database/Database/QueryCallback.h` | 67 | `prefix` |
+| `database/Database/QueryHolder.cpp` | 94 | `prefix` |
+| `database/Database/QueryHolder.h` | 81 | `prefix` |
+| `database/Database/QueryResult.cpp` | 457 | `prefix` |
+| `database/Database/QueryResult.h` | 85 | `prefix` |
+| `database/Database/Transaction.cpp` | 107 | `prefix` |
+| `database/Database/Transaction.h` | 119 | `prefix` |
+| `database/Updater/DBUpdater.cpp` | 445 | `prefix` |
+| `database/Updater/DBUpdater.h` | 96 | `prefix` |
+| `database/Updater/UpdateFetcher.cpp` | 424 | `prefix` |
+| `database/Updater/UpdateFetcher.h` | 143 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (approx) | Purpose |

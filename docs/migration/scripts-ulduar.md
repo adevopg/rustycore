@@ -21,6 +21,46 @@ Ulduar is the WotLK 25-/10-man engineering raid (`map_id = 603`). 14 encounters 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `scripts/Northrend/Ulduar/HallsOfLightning/boss_general_bjarngrim.cpp` | 499 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfLightning/boss_ionar.cpp` | 358 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfLightning/boss_loken.cpp` | 222 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfLightning/boss_volkhan.cpp` | 496 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfLightning/halls_of_lightning.h` | 86 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfLightning/instance_halls_of_lightning.cpp` | 126 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/boss_krystallus.cpp` | 183 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/boss_maiden_of_grief.cpp` | 137 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/boss_sjonnir.cpp` | 490 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/halls_of_stone.cpp` | 726 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/halls_of_stone.h` | 82 | `prefix` |
+| `scripts/Northrend/Ulduar/HallsOfStone/instance_halls_of_stone.cpp` | 141 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_algalon_the_observer.cpp` | 1227 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_assembly_of_iron.cpp` | 870 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_auriaya.cpp` | 671 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_flame_leviathan.cpp` | 1804 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_freya.cpp` | 1694 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_general_vezax.cpp` | 600 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_hodir.cpp` | 1092 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_ignis.cpp` | 508 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_kologarn.cpp` | 674 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp` | 2791 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_razorscale.cpp` | 1733 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | 2121 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_xt002.cpp` | 1002 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp` | 3172 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/instance_ulduar.cpp` | 1009 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/ulduar.cpp` | 80 | `prefix` |
+| `scripts/Northrend/Ulduar/Ulduar/ulduar.h` | 526 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

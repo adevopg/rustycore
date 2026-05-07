@@ -19,6 +19,25 @@ Because every other module includes one of these headers, this directory is effe
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Miscellaneous/CommonPredicates.cpp` | 53 | `prefix` |
+| `game/Miscellaneous/CommonPredicates.h` | 98 | `prefix` |
+| `game/Miscellaneous/Formulas.h` | 290 | `prefix` |
+| `game/Miscellaneous/Language.h` | 1245 | `prefix` |
+| `game/Miscellaneous/RaceMask.h` | 200 | `prefix` |
+| `game/Miscellaneous/SharedDefines.h` | 8184 | `prefix` |
+| `game/Miscellaneous/enuminfo_RaceMask.cpp` | 139 | `prefix` |
+| `game/Miscellaneous/enuminfo_SharedDefines.cpp` | 5199 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

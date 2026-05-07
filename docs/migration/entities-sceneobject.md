@@ -17,6 +17,19 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/SceneObject/SceneObject.cpp` | 207 | `prefix` |
+| `game/Entities/SceneObject/SceneObject.h` | 89 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Entities/SceneObject/SceneObject.h` | 89 | `SceneObject` class (final, WorldObject + GridObject) |

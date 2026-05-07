@@ -19,6 +19,23 @@ SmartScripts is TrinityCore's **data-driven AI interpreter**. Instead of writing
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/AI/SmartScripts/SmartAI.cpp` | 1259 | `prefix` |
+| `game/AI/SmartScripts/SmartAI.h` | 354 | `prefix` |
+| `game/AI/SmartScripts/SmartScript.cpp` | 4253 | `prefix` |
+| `game/AI/SmartScripts/SmartScript.h` | 152 | `prefix` |
+| `game/AI/SmartScripts/SmartScriptMgr.cpp` | 2497 | `prefix` |
+| `game/AI/SmartScripts/SmartScriptMgr.h` | 1769 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

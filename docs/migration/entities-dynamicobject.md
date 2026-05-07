@@ -17,6 +17,19 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/DynamicObject/DynamicObject.cpp` | 322 | `prefix` |
+| `game/Entities/DynamicObject/DynamicObject.h` | 95 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/game/Entities/DynamicObject/DynamicObject.h` | 95 | `DynamicObject` class def; final, inherits `WorldObject`, `GridObject<DynamicObject>`, `MapObject` |

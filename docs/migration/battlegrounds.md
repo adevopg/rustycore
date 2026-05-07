@@ -19,6 +19,60 @@ In WoLK 3.4.3 there are 6 battlegrounds (AB, AV, EotS, IoC, SotA, WSG) plus aren
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Battlegrounds/Arena.cpp` | 289 | `prefix` |
+| `game/Battlegrounds/Arena.h` | 78 | `prefix` |
+| `game/Battlegrounds/ArenaScore.cpp` | 66 | `prefix` |
+| `game/Battlegrounds/ArenaScore.h` | 58 | `prefix` |
+| `game/Battlegrounds/ArenaTeam.cpp` | 834 | `prefix` |
+| `game/Battlegrounds/ArenaTeam.h` | 192 | `prefix` |
+| `game/Battlegrounds/ArenaTeamMgr.cpp` | 134 | `prefix` |
+| `game/Battlegrounds/ArenaTeamMgr.h` | 55 | `prefix` |
+| `game/Battlegrounds/Battleground.cpp` | 1883 | `prefix` |
+| `game/Battlegrounds/Battleground.h` | 604 | `prefix` |
+| `game/Battlegrounds/BattlegroundMgr.cpp` | 754 | `prefix` |
+| `game/Battlegrounds/BattlegroundMgr.h` | 196 | `prefix` |
+| `game/Battlegrounds/BattlegroundQueue.cpp` | 1089 | `prefix` |
+| `game/Battlegrounds/BattlegroundQueue.h` | 184 | `prefix` |
+| `game/Battlegrounds/BattlegroundScore.cpp` | 74 | `prefix` |
+| `game/Battlegrounds/BattlegroundScore.h` | 96 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundAB.cpp` | 529 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundAB.h` | 305 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundAV.cpp` | 1483 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundAV.h` | 1734 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundBE.cpp` | 99 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundBE.h` | 69 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundBFG.cpp` | 26 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundBFG.h` | 73 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundDS.cpp` | 167 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundDS.h` | 113 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundEY.cpp` | 533 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundEY.h` | 359 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundIC.cpp` | 913 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundIC.h` | 1056 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundNA.cpp` | 96 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundNA.h` | 68 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundRL.cpp` | 94 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundRL.h` | 64 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundRV.cpp` | 165 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundRV.h` | 110 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundSA.cpp` | 1036 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundSA.h` | 710 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundTP.cpp` | 26 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundTP.h` | 73 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundWS.cpp` | 580 | `prefix` |
+| `game/Battlegrounds/Zones/BattlegroundWS.h` | 247 | `prefix` |
+| `game/Battlegrounds/enuminfo_ArenaTeam.cpp` | 67 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

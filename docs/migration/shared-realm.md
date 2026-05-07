@@ -17,6 +17,21 @@ Modela el conjunto de realms (servidores de juego) que el bnetserver ofrece al c
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `shared/Realm/Realm.cpp` | 61 | `prefix` |
+| `shared/Realm/Realm.h` | 102 | `prefix` |
+| `shared/Realm/RealmList.cpp` | 434 | `prefix` |
+| `shared/Realm/RealmList.h` | 98 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Purpose |
 |---|---|---|
 | `src/server/shared/Realm/Realm.h` | 102 | `Realm` struct, `RealmHandle`, `RealmFlags`, `RealmType` |

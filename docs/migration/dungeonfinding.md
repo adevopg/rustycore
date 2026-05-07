@@ -17,6 +17,31 @@ LFG (*Looking For Group / Dungeon Finder*) automatiza la formación de grupos de
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/DungeonFinding/LFG.cpp` | 106 | `prefix` |
+| `game/DungeonFinding/LFG.h` | 144 | `prefix` |
+| `game/DungeonFinding/LFGGroupData.cpp` | 140 | `prefix` |
+| `game/DungeonFinding/LFGGroupData.h` | 87 | `prefix` |
+| `game/DungeonFinding/LFGList.cpp` | 161 | `prefix` |
+| `game/DungeonFinding/LFGList.h` | 68 | `prefix` |
+| `game/DungeonFinding/LFGMgr.cpp` | 2241 | `prefix` |
+| `game/DungeonFinding/LFGMgr.h` | 509 | `prefix` |
+| `game/DungeonFinding/LFGPlayerData.cpp` | 126 | `prefix` |
+| `game/DungeonFinding/LFGPlayerData.h` | 81 | `prefix` |
+| `game/DungeonFinding/LFGQueue.cpp` | 739 | `prefix` |
+| `game/DungeonFinding/LFGQueue.h` | 148 | `prefix` |
+| `game/DungeonFinding/LFGScripts.cpp` | 254 | `prefix` |
+| `game/DungeonFinding/LFGScripts.h` | 57 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

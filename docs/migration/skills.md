@@ -24,6 +24,21 @@ WoLK 3.4.3 has the classic skill system (skill ranks 0-450 typical, weapon skill
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Skills/SkillDiscovery.cpp` | 261 | `prefix` |
+| `game/Skills/SkillDiscovery.h` | 31 | `prefix` |
+| `game/Skills/SkillExtraItems.cpp` | 241 | `prefix` |
+| `game/Skills/SkillExtraItems.h` | 35 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

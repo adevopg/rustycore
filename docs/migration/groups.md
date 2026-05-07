@@ -17,6 +17,27 @@ Manages parties (≤5) and raids (≤40 in 8 sub-groups of 5), the membership li
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Groups/Group.cpp` | 1894 | `prefix` |
+| `game/Groups/Group.h` | 427 | `prefix` |
+| `game/Groups/GroupInstanceRefManager.h` | 43 | `prefix` |
+| `game/Groups/GroupInstanceReference.cpp` | 32 | `prefix` |
+| `game/Groups/GroupInstanceReference.h` | 40 | `prefix` |
+| `game/Groups/GroupMgr.cpp` | 205 | `prefix` |
+| `game/Groups/GroupMgr.h` | 63 | `prefix` |
+| `game/Groups/GroupRefManager.h` | 33 | `prefix` |
+| `game/Groups/GroupReference.cpp` | 37 | `prefix` |
+| `game/Groups/GroupReference.h` | 41 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

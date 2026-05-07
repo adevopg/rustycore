@@ -21,6 +21,21 @@ Each "criteria type" corresponds to a verb the player performs (`KillCreature`, 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Achievements/AchievementMgr.cpp` | 1365 | `prefix` |
+| `game/Achievements/AchievementMgr.h` | 191 | `prefix` |
+| `game/Achievements/CriteriaHandler.cpp` | 4285 | `prefix` |
+| `game/Achievements/CriteriaHandler.h` | 421 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

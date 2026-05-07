@@ -23,6 +23,39 @@ This sub-doc covers exclusively the `Object/` directory. Subclasses (`Unit`, `Pl
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Entities/Object/G3DPosition.hpp` | 29 | `prefix` |
+| `game/Entities/Object/GridObject.h` | 37 | `prefix` |
+| `game/Entities/Object/MovementInfo.h` | 204 | `prefix` |
+| `game/Entities/Object/Object.cpp` | 3798 | `prefix` |
+| `game/Entities/Object/Object.h` | 845 | `prefix` |
+| `game/Entities/Object/ObjectDefines.h` | 122 | `prefix` |
+| `game/Entities/Object/ObjectGuid.cpp` | 811 | `prefix` |
+| `game/Entities/Object/ObjectGuid.h` | 492 | `prefix` |
+| `game/Entities/Object/ObjectPosSelector.cpp` | 152 | `prefix` |
+| `game/Entities/Object/ObjectPosSelector.h` | 154 | `prefix` |
+| `game/Entities/Object/Position.cpp` | 209 | `prefix` |
+| `game/Entities/Object/Position.h` | 223 | `prefix` |
+| `game/Entities/Object/SmoothPhasing.cpp` | 67 | `prefix` |
+| `game/Entities/Object/SmoothPhasing.h` | 58 | `prefix` |
+| `game/Entities/Object/Updates/UpdateData.cpp` | 72 | `prefix` |
+| `game/Entities/Object/Updates/UpdateData.h` | 67 | `prefix` |
+| `game/Entities/Object/Updates/UpdateField.cpp` | 63 | `prefix` |
+| `game/Entities/Object/Updates/UpdateField.h` | 991 | `prefix` |
+| `game/Entities/Object/Updates/UpdateFields.cpp` | 5097 | `prefix` |
+| `game/Entities/Object/Updates/UpdateFields.h` | 943 | `prefix` |
+| `game/Entities/Object/Updates/UpdateMask.h` | 164 | `prefix` |
+| `game/Entities/Object/Updates/ViewerDependentValues.h` | 367 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 ### 2.1 Core hierarchy

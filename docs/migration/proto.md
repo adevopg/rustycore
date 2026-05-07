@@ -19,6 +19,86 @@ The C++ tree contains both the **canonical service definitions** (a couple of `.
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `proto/BattlenetRpcErrorCodes.h` | 671 | `prefix` |
+| `proto/Client/account_service.pb.h` | 4780 | `prefix` |
+| `proto/Client/account_types.pb.h` | 10692 | `prefix` |
+| `proto/Client/api/client/v1/channel_id.pb.h` | 278 | `prefix` |
+| `proto/Client/api/client/v2/attribute_types.pb.h` | 857 | `prefix` |
+| `proto/Client/api/client/v2/report_service.pb.h` | 485 | `prefix` |
+| `proto/Client/api/client/v2/report_types.pb.h` | 1065 | `prefix` |
+| `proto/Client/attribute_types.pb.h` | 1069 | `prefix` |
+| `proto/Client/authentication_service.pb.h` | 3109 | `prefix` |
+| `proto/Client/challenge_service.pb.h` | 608 | `prefix` |
+| `proto/Client/channel_types.pb.h` | 2362 | `prefix` |
+| `proto/Client/club_ban.pb.h` | 738 | `prefix` |
+| `proto/Client/club_core.pb.h` | 6073 | `prefix` |
+| `proto/Client/club_enum.pb.h` | 290 | `prefix` |
+| `proto/Client/club_invitation.pb.h` | 2267 | `prefix` |
+| `proto/Client/club_listener.pb.h` | 107 | `prefix` |
+| `proto/Client/club_member.pb.h` | 3438 | `prefix` |
+| `proto/Client/club_member_id.pb.h` | 212 | `prefix` |
+| `proto/Client/club_membership_listener.pb.h` | 1498 | `prefix` |
+| `proto/Client/club_membership_service.pb.h` | 1559 | `prefix` |
+| `proto/Client/club_membership_types.pb.h` | 1308 | `prefix` |
+| `proto/Client/club_name_generator.pb.h` | 1015 | `prefix` |
+| `proto/Client/club_notification.pb.h` | 4522 | `prefix` |
+| `proto/Client/club_range_set.pb.h` | 1708 | `prefix` |
+| `proto/Client/club_request.pb.h` | 14861 | `prefix` |
+| `proto/Client/club_role.pb.h` | 2330 | `prefix` |
+| `proto/Client/club_service.pb.h` | 199 | `prefix` |
+| `proto/Client/club_stream.pb.h` | 4552 | `prefix` |
+| `proto/Client/club_tag.pb.h` | 676 | `prefix` |
+| `proto/Client/club_type.pb.h` | 247 | `prefix` |
+| `proto/Client/club_types.pb.h` | 81 | `prefix` |
+| `proto/Client/connection_service.pb.h` | 2701 | `prefix` |
+| `proto/Client/content_handle_types.pb.h` | 516 | `prefix` |
+| `proto/Client/embed_types.pb.h` | 1233 | `prefix` |
+| `proto/Client/entity_types.pb.h` | 355 | `prefix` |
+| `proto/Client/ets_types.pb.h` | 186 | `prefix` |
+| `proto/Client/event_view_types.pb.h` | 409 | `prefix` |
+| `proto/Client/friends_service.pb.h` | 3384 | `prefix` |
+| `proto/Client/friends_types.pb.h` | 2690 | `prefix` |
+| `proto/Client/game_utilities_service.pb.h` | 2085 | `prefix` |
+| `proto/Client/game_utilities_types.pb.h` | 441 | `prefix` |
+| `proto/Client/global_extensions/field_options.pb.h` | 2342 | `prefix` |
+| `proto/Client/global_extensions/message_options.pb.h` | 192 | `prefix` |
+| `proto/Client/global_extensions/method_options.pb.h` | 764 | `prefix` |
+| `proto/Client/global_extensions/range.pb.h` | 444 | `prefix` |
+| `proto/Client/global_extensions/register_method_types.pb.h` | 84 | `prefix` |
+| `proto/Client/global_extensions/routing.pb.h` | 84 | `prefix` |
+| `proto/Client/global_extensions/service_options.pb.h` | 754 | `prefix` |
+| `proto/Client/invitation_types.pb.h` | 848 | `prefix` |
+| `proto/Client/message_types.pb.h` | 211 | `prefix` |
+| `proto/Client/notification_types.pb.h` | 1270 | `prefix` |
+| `proto/Client/presence_listener.pb.h` | 472 | `prefix` |
+| `proto/Client/presence_service.pb.h` | 1869 | `prefix` |
+| `proto/Client/presence_types.pb.h` | 1141 | `prefix` |
+| `proto/Client/profanity_filter_config.pb.h` | 408 | `prefix` |
+| `proto/Client/report_service.pb.h` | 376 | `prefix` |
+| `proto/Client/report_types.pb.h` | 2324 | `prefix` |
+| `proto/Client/resource_service.pb.h` | 533 | `prefix` |
+| `proto/Client/role_types.pb.h` | 971 | `prefix` |
+| `proto/Client/rpc_config.pb.h` | 984 | `prefix` |
+| `proto/Client/rpc_types.pb.h` | 2138 | `prefix` |
+| `proto/Client/semantic_version.pb.h` | 311 | `prefix` |
+| `proto/Client/user_manager_service.pb.h` | 1896 | `prefix` |
+| `proto/Client/user_manager_types.pb.h` | 662 | `prefix` |
+| `proto/Client/voice_types.pb.h` | 536 | `prefix` |
+| `proto/Login/Login.pb.h` | 3351 | `prefix` |
+| `proto/RealmList/RealmList.pb.h` | 2671 | `prefix` |
+| `proto/ServiceBase.cpp` | 69 | `prefix` |
+| `proto/ServiceBase.h` | 66 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines (aprox) | Purpose |

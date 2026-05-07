@@ -17,6 +17,63 @@ Procesa packets CMSG del cliente y produce SMSG. ~560 métodos `HandleXxx` distr
 
 ## 2. C++ canonical files (45 handlers)
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Handlers/AdventureJournalHandler.cpp` | 67 | `prefix` |
+| `game/Handlers/AdventureMapHandler.cpp` | 40 | `prefix` |
+| `game/Handlers/AuctionHouseHandler.cpp` | 1124 | `prefix` |
+| `game/Handlers/AuthHandler.cpp` | 126 | `prefix` |
+| `game/Handlers/BankHandler.cpp` | 324 | `prefix` |
+| `game/Handlers/BattleGroundHandler.cpp` | 1346 | `prefix` |
+| `game/Handlers/BattlePetHandler.cpp` | 134 | `prefix` |
+| `game/Handlers/BattlenetHandler.cpp` | 88 | `prefix` |
+| `game/Handlers/BlackMarketHandler.cpp` | 158 | `prefix` |
+| `game/Handlers/CalendarHandler.cpp` | 575 | `prefix` |
+| `game/Handlers/ChannelHandler.cpp` | 219 | `prefix` |
+| `game/Handlers/CharacterHandler.cpp` | 2895 | `prefix` |
+| `game/Handlers/ChatHandler.cpp` | 830 | `prefix` |
+| `game/Handlers/CollectionsHandler.cpp` | 43 | `prefix` |
+| `game/Handlers/CombatHandler.cpp` | 82 | `prefix` |
+| `game/Handlers/DuelHandler.cpp` | 106 | `prefix` |
+| `game/Handlers/GarrisonHandler.cpp` | 44 | `prefix` |
+| `game/Handlers/GroupHandler.cpp` | 783 | `prefix` |
+| `game/Handlers/GuildHandler.cpp` | 813 | `prefix` |
+| `game/Handlers/HotfixHandler.cpp` | 126 | `prefix` |
+| `game/Handlers/InspectHandler.cpp` | 152 | `prefix` |
+| `game/Handlers/ItemHandler.cpp` | 1220 | `prefix` |
+| `game/Handlers/LFGHandler.cpp` | 971 | `prefix` |
+| `game/Handlers/LootHandler.cpp` | 508 | `prefix` |
+| `game/Handlers/MailHandler.cpp` | 676 | `prefix` |
+| `game/Handlers/MiscHandler.cpp` | 1440 | `prefix` |
+| `game/Handlers/MovementHandler.cpp` | 816 | `prefix` |
+| `game/Handlers/NPCHandler.cpp` | 577 | `prefix` |
+| `game/Handlers/NPCHandler.h` | 39 | `prefix` |
+| `game/Handlers/PetHandler.cpp` | 810 | `prefix` |
+| `game/Handlers/PetitionsHandler.cpp` | 464 | `prefix` |
+| `game/Handlers/QueryHandler.cpp` | 333 | `prefix` |
+| `game/Handlers/QuestHandler.cpp` | 849 | `prefix` |
+| `game/Handlers/ScenarioHandler.cpp` | 43 | `prefix` |
+| `game/Handlers/SceneHandler.cpp` | 43 | `prefix` |
+| `game/Handlers/SkillHandler.cpp` | 117 | `prefix` |
+| `game/Handlers/SocialHandler.cpp` | 184 | `prefix` |
+| `game/Handlers/SpellHandler.cpp` | 569 | `prefix` |
+| `game/Handlers/TaxiHandler.cpp` | 239 | `prefix` |
+| `game/Handlers/TicketHandler.cpp` | 152 | `prefix` |
+| `game/Handlers/TokenHandler.cpp` | 43 | `prefix` |
+| `game/Handlers/ToyHandler.cpp` | 102 | `prefix` |
+| `game/Handlers/TradeHandler.cpp` | 814 | `prefix` |
+| `game/Handlers/TransmogrificationHandler.cpp` | 314 | `prefix` |
+| `game/Handlers/VehicleHandler.cpp` | 196 | `prefix` |
+| `game/Handlers/VoidStorageHandler.cpp` | 249 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 | File | Lines | Opcodes (~) | Purpose |
 |---|---|---|---|
 | `AdventureJournalHandler.cpp` | 67 | 1-2 | Adventure journal (legion+, stub) |

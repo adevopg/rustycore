@@ -17,6 +17,21 @@
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Events/GameEventMgr.cpp` | 1782 | `prefix` |
+| `game/Events/GameEventMgr.h` | 182 | `prefix` |
+| `game/Events/GameEventSender.cpp` | 72 | `prefix` |
+| `game/Events/GameEventSender.h` | 34 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |

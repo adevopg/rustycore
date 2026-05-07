@@ -17,6 +17,40 @@ The standalone Battle.net authentication daemon. Listens on **port 1119** (BNet 
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `bnetserver/Main.cpp` | 432 | `prefix` |
+| `bnetserver/REST/LoginHttpSession.cpp` | 118 | `prefix` |
+| `bnetserver/REST/LoginHttpSession.h` | 61 | `prefix` |
+| `bnetserver/REST/LoginRESTService.cpp` | 825 | `prefix` |
+| `bnetserver/REST/LoginRESTService.h` | 96 | `prefix` |
+| `bnetserver/Server/Session.cpp` | 842 | `prefix` |
+| `bnetserver/Server/Session.h` | 191 | `prefix` |
+| `bnetserver/Server/SessionManager.cpp` | 45 | `prefix` |
+| `bnetserver/Server/SessionManager.h` | 45 | `prefix` |
+| `bnetserver/Server/SslContext.cpp` | 66 | `prefix` |
+| `bnetserver/Server/SslContext.h` | 34 | `prefix` |
+| `bnetserver/Services/AccountService.cpp` | 32 | `prefix` |
+| `bnetserver/Services/AccountService.h` | 43 | `prefix` |
+| `bnetserver/Services/AuthenticationService.cpp` | 37 | `prefix` |
+| `bnetserver/Services/AuthenticationService.h` | 44 | `prefix` |
+| `bnetserver/Services/ConnectionService.cpp` | 55 | `prefix` |
+| `bnetserver/Services/ConnectionService.h` | 44 | `prefix` |
+| `bnetserver/Services/GameUtilitiesService.cpp` | 32 | `prefix` |
+| `bnetserver/Services/GameUtilitiesService.h` | 43 | `prefix` |
+| `bnetserver/Services/Service.h` | 45 | `prefix` |
+| `bnetserver/Services/ServiceDispatcher.cpp` | 49 | `prefix` |
+| `bnetserver/Services/ServiceDispatcher.h` | 72 | `prefix` |
+| `bnetserver/resource.h` | 15 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/bnetserver/`.
 
 | File | Lines (approx) | Purpose |

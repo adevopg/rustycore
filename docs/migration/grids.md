@@ -17,6 +17,36 @@ Grids is the spatial partitioning system that subdivides a Map into a 64x64 grid
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Grids/Cells/Cell.h` | 123 | `prefix` |
+| `game/Grids/Cells/CellImpl.h` | 254 | `prefix` |
+| `game/Grids/Dynamic/TypeContainer.h` | 225 | `prefix` |
+| `game/Grids/Dynamic/TypeContainerFunctions.h` | 157 | `prefix` |
+| `game/Grids/Dynamic/TypeContainerVisitor.h` | 101 | `prefix` |
+| `game/Grids/Grid.h` | 142 | `prefix` |
+| `game/Grids/GridDefines.h` | 251 | `prefix` |
+| `game/Grids/GridLoader.h` | 76 | `prefix` |
+| `game/Grids/GridRefManager.h` | 38 | `prefix` |
+| `game/Grids/GridReference.h` | 51 | `prefix` |
+| `game/Grids/GridStates.cpp` | 65 | `prefix` |
+| `game/Grids/GridStates.h` | 56 | `prefix` |
+| `game/Grids/NGrid.cpp` | 36 | `prefix` |
+| `game/Grids/NGrid.h` | 183 | `prefix` |
+| `game/Grids/Notifiers/GridNotifiers.cpp` | 301 | `prefix` |
+| `game/Grids/Notifiers/GridNotifiers.h` | 1804 | `prefix` |
+| `game/Grids/Notifiers/GridNotifiersImpl.h` | 320 | `prefix` |
+| `game/Grids/ObjectGridLoader.cpp` | 283 | `prefix` |
+| `game/Grids/ObjectGridLoader.h` | 126 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 All paths relative to `/home/server/woltk-trinity-legacy/src/server/game/`.
 
 | File | Lines (approx) | Purpose |

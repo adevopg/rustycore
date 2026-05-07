@@ -23,6 +23,22 @@ Cubre los ~280 `AuraType` handlers en `SpellAuraEffects.cpp` — uno por cada `S
 
 ## 2. C++ canonical files
 
+<!-- REFINE.020:BEGIN canonical-file-coverage -->
+
+### R2 canonical file coverage (generated)
+
+> Fuente: `docs/migration/inventory/cpp-files-by-module.md`; C++ canonico: `/home/server/woltk-trinity-legacy/src/server/`. No valida que Rust este correcto.
+
+| C++ file | Lines | Assignment basis |
+|---|---:|---|
+| `game/Spells/Auras/SpellAuraDefines.h` | 734 | `prefix` |
+| `game/Spells/Auras/SpellAuraEffects.cpp` | 6342 | `prefix` |
+| `game/Spells/Auras/SpellAuraEffects.h` | 410 | `prefix` |
+| `game/Spells/Auras/SpellAuras.cpp` | 2665 | `prefix` |
+| `game/Spells/Auras/SpellAuras.h` | 398 | `prefix` |
+
+<!-- REFINE.020:END canonical-file-coverage -->
+
 Todas las rutas relativas a `/home/server/woltk-trinity-legacy/`.
 
 | File | Lines | Purpose |
