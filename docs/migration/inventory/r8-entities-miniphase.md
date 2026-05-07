@@ -70,6 +70,11 @@
   Rust targets: `crates/wow-entities/src/conversation.rs`, `crates/wow-entities/src/update_fields.rs`, `crates/wow-entities/src/lib.rs`.
   Acceptance: base `Conversation` constructor matches C++ type id/mask, `WorldObject(false)`, stationary and conversation create flags, creator/duration/texture/stationary-position defaults; lines, actors and last-line-end-time use C++ `ConversationData` bits; actor world-object/talking-head variants match C++ field shape; max last-line-end-time plus 10s despawn delay is represented; values update sets `TYPEID_CONVERSATION`.
 
+- [x] **#NEXT.R8.ENTITIES.032** Port `Totem` base state and core rules.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Totem/Totem.h`, `Totem.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/TemporarySummon.h`, `TemporarySummon.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.h`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h`.
+  Rust targets: `crates/wow-entities/src/totem.rs`, `crates/wow-entities/src/creature.rs`, `crates/wow-entities/src/lib.rs`.
+  Acceptance: base `Totem` remains a `Creature`/`Unit` shape with `UNIT_MASK_SUMMON|UNIT_MASK_MINION|UNIT_MASK_TOTEM`; owner/summoner bridge, properties slot, totem type and duration defaults match C++; inherited spell slots back `GetSpell(slot)`; passive/active init-summon rules, update duration/owner-alive unsummon shape, delayed unsummon bridge, totem-created packet slot offset and positive/aura immunity special cases are represented.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
@@ -90,3 +95,4 @@
 - [ ] **#NEXT.R8.ENTITIES.027** Complete `AreaTrigger` create/load/update runtime: AreaTriggerDataStore templates/spawns, GUID creation, phase inheritance, static spawn store, AI selection, shape search, unit enter/exit actions, splines/orbit/attached movement, server-side visibility, transport offset and map relocation.
 - [ ] **#NEXT.R8.ENTITIES.029** Complete `SceneObject` create/map/update runtime: SceneTemplate lookup, GUID creation, private object owner, phase inheritance, random seed time source, map insertion, creator/aura lookup and removal scheduling.
 - [ ] **#NEXT.R8.ENTITIES.031** Complete `Conversation` create/start/update runtime: ConversationDataStore templates, conditions, actor fill visitor, line locale timings, private owner locale, script hooks, map insertion, actor unit/creature lookup and removal scheduling.
+- [ ] **#NEXT.R8.ENTITIES.033** Complete `TempSummon`/`Minion`/`Totem` runtime: SummonProperties, owner slots, usable totem slot selection, model lookup by spell/race, `SMSG_TOTEM_CREATED`, spell casting, CombatStop, aura removal from owner/group, cooldown event and map removal scheduling.

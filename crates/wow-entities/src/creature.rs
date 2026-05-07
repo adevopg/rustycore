@@ -280,6 +280,12 @@ impl Creature {
         self.spells
     }
 
+    pub fn set_spell(&mut self, slot: usize, spell_id: u32) {
+        if slot < MAX_CREATURE_SPELLS {
+            self.spells[slot] = spell_id;
+        }
+    }
+
     pub const fn disable_reputation_gain(&self) -> bool {
         self.disable_reputation_gain
     }

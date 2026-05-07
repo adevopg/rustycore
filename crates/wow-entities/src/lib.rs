@@ -15,6 +15,7 @@ mod object;
 mod object_accessor;
 mod player;
 mod scene_object;
+mod totem;
 mod unit;
 mod update_fields;
 mod world_object;
@@ -89,6 +90,12 @@ pub use scene_object::{
     SCENE_OBJECT_DATA_RND_SEED_VAL_BIT, SCENE_OBJECT_DATA_SCENE_TYPE_BIT,
     SCENE_OBJECT_DATA_SCRIPT_PACKAGE_ID_BIT, SceneObject, SceneObjectDataUpdate,
     SceneObjectDataValues, SceneObjectValuesUpdate, SceneType,
+};
+pub use totem::{
+    MAX_TOTEM_SLOT, SUMMON_SLOT_ANY_TOTEM, SUMMON_SLOT_TOTEM, SUMMON_SLOT_TOTEM_2,
+    SUMMON_SLOT_TOTEM_3, SUMMON_SLOT_TOTEM_4, SpellAuraKind, SpellEffectKind, Totem,
+    TotemCreatedPacket, TotemType, TotemUpdateOutcome, UNIT_MASK_MINION, UNIT_MASK_SUMMON,
+    UNIT_MASK_TOTEM,
 };
 pub use unit::{
     BASE_MAXDAMAGE, BASE_MINDAMAGE, BASE_MOVE_SPEED, DEFAULT_PLAYER_DISPLAY_SCALE, MAX_ATTACK,
