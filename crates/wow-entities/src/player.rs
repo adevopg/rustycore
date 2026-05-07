@@ -889,6 +889,57 @@ pub enum UpdateEnchantTimeAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaEnchantmentItemRef {
+    pub guid: ObjectGuid,
+    pub bag: u8,
+    pub slot: u8,
+    pub enchantment_id: i32,
+    pub arena_allowed: bool,
+}
+
+impl ArenaEnchantmentItemRef {
+    pub const fn new(
+        guid: ObjectGuid,
+        bag: u8,
+        slot: u8,
+        enchantment_id: i32,
+        arena_allowed: bool,
+    ) -> Self {
+        Self {
+            guid,
+            bag,
+            slot,
+            enchantment_id,
+            arena_allowed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveArenaEnchantmentAction {
+    RemoveDurationReference {
+        item_guid: ObjectGuid,
+        enchantment_slot: EnchantmentSlot,
+    },
+    ClearEquippedEnchantment {
+        item_guid: ObjectGuid,
+        enchantment_slot: EnchantmentSlot,
+    },
+    ClearInventoryEnchantment {
+        item_guid: ObjectGuid,
+        bag: u8,
+        slot: u8,
+        enchantment_slot: EnchantmentSlot,
+    },
+    MissingInventoryItemRef {
+        item_guid: ObjectGuid,
+        bag: u8,
+        slot: u8,
+        enchantment_slot: EnchantmentSlot,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -900,6 +951,38 @@ fn item_ref_by_pos<'a>(items: &'a [ItemSlotRef<'a>], bag: u8, slot: u8) -> Optio
         .iter()
         .find(|slot_item| slot_item.bag == bag && slot_item.slot == slot)
         .map(|slot_item| slot_item.item)
+}
+
+fn arena_enchantment_ref_by_guid(
+    items: &[ArenaEnchantmentItemRef],
+    guid: ObjectGuid,
+) -> Option<ArenaEnchantmentItemRef> {
+    items.iter().find(|item| item.guid == guid).copied()
+}
+
+fn push_arena_inventory_enchantment_action(
+    actions: &mut Vec<RemoveArenaEnchantmentAction>,
+    items: &[ArenaEnchantmentItemRef],
+    item_guid: ObjectGuid,
+    bag: u8,
+    slot: u8,
+    enchantment_slot: EnchantmentSlot,
+) {
+    match arena_enchantment_ref_by_guid(items, item_guid) {
+        Some(item) if item.arena_allowed => {}
+        Some(_) => actions.push(RemoveArenaEnchantmentAction::ClearInventoryEnchantment {
+            item_guid,
+            bag,
+            slot,
+            enchantment_slot,
+        }),
+        None => actions.push(RemoveArenaEnchantmentAction::MissingInventoryItemRef {
+            item_guid,
+            bag,
+            slot,
+            enchantment_slot,
+        }),
+    }
 }
 
 fn bag_template_by_pos<'a>(
@@ -5160,6 +5243,81 @@ impl Player {
             kept.push(duration);
         }
         self.enchant_durations = kept;
+        actions
+    }
+
+    pub fn remove_arena_enchantments(
+        &mut self,
+        enchantment_slot: EnchantmentSlot,
+        items: &[ArenaEnchantmentItemRef],
+    ) -> Vec<RemoveArenaEnchantmentAction> {
+        let mut actions = Vec::new();
+        let mut kept_durations = Vec::with_capacity(self.enchant_durations.len());
+
+        for duration in std::mem::take(&mut self.enchant_durations) {
+            if duration.slot != enchantment_slot {
+                kept_durations.push(duration);
+                continue;
+            }
+
+            if let Some(item) = arena_enchantment_ref_by_guid(items, duration.item_guid) {
+                if item.enchantment_id != 0 && item.arena_allowed {
+                    kept_durations.push(duration);
+                    continue;
+                }
+                if item.enchantment_id != 0 {
+                    actions.push(RemoveArenaEnchantmentAction::ClearEquippedEnchantment {
+                        item_guid: duration.item_guid,
+                        enchantment_slot,
+                    });
+                    continue;
+                }
+            }
+
+            actions.push(RemoveArenaEnchantmentAction::RemoveDurationReference {
+                item_guid: duration.item_guid,
+                enchantment_slot,
+            });
+        }
+        self.enchant_durations = kept_durations;
+
+        let inventory_end =
+            INVENTORY_SLOT_ITEM_START.saturating_add(self.active_data.num_backpack_slots);
+        for slot in INVENTORY_SLOT_ITEM_START..inventory_end {
+            if let Some(item_guid) = self.get_item_by_pos(INVENTORY_SLOT_BAG_0, slot) {
+                push_arena_inventory_enchantment_action(
+                    &mut actions,
+                    items,
+                    item_guid,
+                    INVENTORY_SLOT_BAG_0,
+                    slot,
+                    enchantment_slot,
+                );
+            }
+        }
+
+        for bag_slot in INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END {
+            if let Some(bag) = self
+                .inventory
+                .bags
+                .get(bag_slot as usize)
+                .and_then(Option::as_ref)
+            {
+                for slot in 0..bag.bag_size {
+                    if let Some(item_guid) = bag.item_by_pos(slot) {
+                        push_arena_inventory_enchantment_action(
+                            &mut actions,
+                            items,
+                            item_guid,
+                            bag_slot,
+                            slot,
+                            enchantment_slot,
+                        );
+                    }
+                }
+            }
+        }
+
         actions
     }
 
@@ -11051,6 +11209,164 @@ mod tests {
             ]
         );
         assert!(player.enchant_durations().is_empty());
+    }
+
+    #[test]
+    fn remove_arena_enchantments_cleans_duration_list_like_cpp() {
+        let mut player = Player::new(None, false);
+        let mut allowed = item_with_guid_entry(1250, 7500);
+        let mut blocked = item_with_guid_entry(1251, 7501);
+        let mut zero = item_with_guid_entry(1252, 7502);
+
+        player.add_enchantment_duration(
+            &mut allowed,
+            EnchantmentSlot::EnhancementTemporary,
+            10_000,
+        );
+        player.add_enchantment_duration(
+            &mut blocked,
+            EnchantmentSlot::EnhancementTemporary,
+            11_000,
+        );
+        player.add_enchantment_duration(&mut zero, EnchantmentSlot::EnhancementTemporary, 12_000);
+        player.add_enchantment_duration(&mut blocked, EnchantmentSlot::EnhancementPermanent, 1_000);
+
+        let actions = player.remove_arena_enchantments(
+            EnchantmentSlot::EnhancementTemporary,
+            &[
+                ArenaEnchantmentItemRef::new(
+                    allowed.object().guid(),
+                    INVENTORY_SLOT_BAG_0,
+                    EQUIPMENT_SLOT_MAINHAND,
+                    10,
+                    true,
+                ),
+                ArenaEnchantmentItemRef::new(
+                    blocked.object().guid(),
+                    INVENTORY_SLOT_BAG_0,
+                    EQUIPMENT_SLOT_OFFHAND,
+                    20,
+                    false,
+                ),
+                ArenaEnchantmentItemRef::new(
+                    zero.object().guid(),
+                    INVENTORY_SLOT_BAG_0,
+                    EQUIPMENT_SLOT_BACK,
+                    0,
+                    false,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            actions,
+            vec![
+                RemoveArenaEnchantmentAction::ClearEquippedEnchantment {
+                    item_guid: blocked.object().guid(),
+                    enchantment_slot: EnchantmentSlot::EnhancementTemporary,
+                },
+                RemoveArenaEnchantmentAction::RemoveDurationReference {
+                    item_guid: zero.object().guid(),
+                    enchantment_slot: EnchantmentSlot::EnhancementTemporary,
+                },
+            ]
+        );
+        assert_eq!(
+            player.enchant_durations(),
+            &[
+                PlayerEnchantDuration {
+                    item_guid: allowed.object().guid(),
+                    slot: EnchantmentSlot::EnhancementTemporary,
+                    left_duration_ms: 10_000,
+                },
+                PlayerEnchantDuration {
+                    item_guid: blocked.object().guid(),
+                    slot: EnchantmentSlot::EnhancementPermanent,
+                    left_duration_ms: 1_000,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_arena_enchantments_scans_inventory_and_bags_like_cpp() {
+        let mut player = Player::new(None, false);
+        player.set_inventory_slot_count(2);
+        let allowed = item_with_guid_entry(1260, 7600);
+        let blocked = item_with_guid_entry(1261, 7601);
+        let missing_ref = item_with_guid_entry(1262, 7602);
+        let bag = ObjectGuid::create_item(1, 1263);
+        let bag_blocked = item_with_guid_entry(1264, 7604);
+
+        player
+            .store_top_level_item(INVENTORY_SLOT_ITEM_START, allowed.object().guid())
+            .unwrap();
+        player
+            .store_top_level_item(INVENTORY_SLOT_ITEM_START + 1, blocked.object().guid())
+            .unwrap();
+        player
+            .store_top_level_item(INVENTORY_SLOT_BAG_START, bag)
+            .unwrap();
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag, 3)
+            .unwrap();
+        player
+            .store_bag_item(INVENTORY_SLOT_BAG_START, 0, bag_blocked.object().guid())
+            .unwrap();
+        player
+            .store_bag_item(INVENTORY_SLOT_BAG_START, 1, missing_ref.object().guid())
+            .unwrap();
+
+        let actions = player.remove_arena_enchantments(
+            EnchantmentSlot::EnhancementTemporary,
+            &[
+                ArenaEnchantmentItemRef::new(
+                    allowed.object().guid(),
+                    INVENTORY_SLOT_BAG_0,
+                    INVENTORY_SLOT_ITEM_START,
+                    100,
+                    true,
+                ),
+                ArenaEnchantmentItemRef::new(
+                    blocked.object().guid(),
+                    INVENTORY_SLOT_BAG_0,
+                    INVENTORY_SLOT_ITEM_START + 1,
+                    200,
+                    false,
+                ),
+                ArenaEnchantmentItemRef::new(
+                    bag_blocked.object().guid(),
+                    INVENTORY_SLOT_BAG_START,
+                    0,
+                    300,
+                    false,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            actions,
+            vec![
+                RemoveArenaEnchantmentAction::ClearInventoryEnchantment {
+                    item_guid: blocked.object().guid(),
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: INVENTORY_SLOT_ITEM_START + 1,
+                    enchantment_slot: EnchantmentSlot::EnhancementTemporary,
+                },
+                RemoveArenaEnchantmentAction::ClearInventoryEnchantment {
+                    item_guid: bag_blocked.object().guid(),
+                    bag: INVENTORY_SLOT_BAG_START,
+                    slot: 0,
+                    enchantment_slot: EnchantmentSlot::EnhancementTemporary,
+                },
+                RemoveArenaEnchantmentAction::MissingInventoryItemRef {
+                    item_guid: missing_ref.object().guid(),
+                    bag: INVENTORY_SLOT_BAG_START,
+                    slot: 1,
+                    enchantment_slot: EnchantmentSlot::EnhancementTemporary,
+                },
+            ]
+        );
     }
 
     #[test]
