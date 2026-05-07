@@ -59,7 +59,7 @@ No crear tareas de implementacion llamadas solo "port X". Hay que partir por com
 - [x] **#REFINE.011** Generar `docs/migration/inventory/cpp-files-by-module.md`: todo `.h/.cpp/.hpp` asignado a un modulo de migracion.
 - [x] **#REFINE.012** Generar `docs/migration/inventory/cpp-handlers-opcodes.md`: handlers, nombres CMSG/SMSG, registro/status/processing y dueño Rust.
 - [x] **#REFINE.013** Generar `docs/migration/inventory/cpp-sql-prepared.md`: prepared statements y SQL inline por DB (`auth`, `characters`, `world`, `hotfixes`).
-- [ ] **#REFINE.014** Generar `docs/migration/inventory/cpp-dbc-db2-stores.md`: stores DB2/DBC, tablas hotfix, loaders y dueño Rust.
+- [x] **#REFINE.014** Generar `docs/migration/inventory/cpp-dbc-db2-stores.md`: stores DB2/DBC, tablas hotfix, loaders y dueño Rust.
 - [ ] **#REFINE.015** Generar `docs/migration/inventory/cpp-config-keys.md`: claves de config world/bnet y equivalente Rust.
 - [ ] **#REFINE.016** Generar `docs/migration/inventory/cpp-entity-types.md`: archivos y ownership de Object/WorldObject/Unit/Player/Creature/GO/etc.
 - [ ] **#REFINE.017** Generar `docs/migration/inventory/cpp-scripts-tree.md`: scripts por familia (`Commands`, `Spells`, continentes, raids, events, PvP).

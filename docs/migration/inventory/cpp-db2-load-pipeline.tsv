@@ -1,0 +1,12 @@
+stage	cxx_ref	behavior	rust_ref	notes
+DB2Manager::LoadStores	game/DataStores/DB2Stores.cpp:593	Scans dataPath/dbc locales, validates default locale, calls LOAD_DB2 for 324 runtime stores, performs version sentinel checks, then builds DB2Manager lookup indexes.	-	ArtifactQuestXP store is defined but not loaded here.
+LoadDB2 helper	game/DataStores/DB2Stores.cpp:502	Validates DB2 metadata against C++ record size, loads default-locale DB2 file, overlays hotfix DB rows, loads extra locale files and locale hotfix rows, registers table hash.	-	This is the behavioral gate Rust must reproduce before individual stores are considered complete.
+DB2StorageBase::Load	shared/DataStores/DB2Store.cpp:88	Loads base DB2 file from dataPath/dbc/<locale>/<file>, materializes records and string pool.	crates/wow-data/src/wdc4.rs	Rust has a generic WDC4 parser but no central DB2Storage equivalent.
+DB2StorageBase::LoadFromDB	shared/DataStores/DB2Store.cpp:127	Calls DB2DatabaseLoader for main hotfix rows using the store DB2LoadInfo statement.	-	Depends on full HotfixStatements registry.
+DB2DatabaseLoader::Load	shared/DataStores/DB2DatabaseLoader.cpp:28	Executes HOTFIX_SEL_* and HOTFIX_SEL_*_MAX_ID; merges custom/non-custom records into index table.	-	Rust HotfixStatements is placeholder, so this path is absent.
+DB2DatabaseLoader::LoadStrings	shared/DataStores/DB2DatabaseLoader.cpp:187	Executes HOTFIX_SEL_*_LOCALE and fills localized DB2 string slots per locale.	-	Locale hotfix overlay is absent in Rust.
+DB2Manager::LoadHotfixData	game/DataStores/DB2Stores.cpp:1539	Loads client hotfix metadata for SMSG_HOTFIX_* tracking.	crates/wow-data/src/hotfix_cache.rs	Rust has raw blob cache for Item/ItemSparse only, not full C++ hotfix metadata containers.
+DB2Manager::LoadHotfixBlob	game/DataStores/DB2Stores.cpp:1609	Loads hotfix blob payloads indexed by table hash, record id and locale.	crates/wow-data/src/hotfix_cache.rs	Rust cache is file-derived for a narrow set, not DB-driven equivalent.
+DB2Manager::LoadHotfixOptionalData	game/DataStores/DB2Stores.cpp:1661	Loads optional hotfix metadata by table hash, record id and locale.	-	No Rust equivalent found.
+DB2HotfixGenerator	game/DataStores/DB2HotfixGenerator.h:32	Applies in-memory record fixups and records client-visible hotfixes via InsertNewHotfix.	-	No Rust equivalent found.
+LoadM2Cameras	game/DataStores/M2Stores.cpp:174	Loads M2 cinematic camera data after DB2 stores.	-	Related DataStores asset path, separate from DB2Storage registry.

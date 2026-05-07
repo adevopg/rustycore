@@ -481,7 +481,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#REFINE.011** Inventario C++ por archivo y módulo en `docs/migration/inventory/cpp-files-by-module.md`.
 - [x] **#REFINE.012** Inventario handlers/opcodes en `docs/migration/inventory/cpp-handlers-opcodes.md`.
 - [x] **#REFINE.013** Inventario SQL/prepared statements en `docs/migration/inventory/cpp-sql-prepared.md`.
-- [ ] **#REFINE.014** Inventario DB2/DBC/hotfix stores.
+- [x] **#REFINE.014** Inventario DB2/DBC/hotfix stores en `docs/migration/inventory/cpp-dbc-db2-stores.md`.
 - [ ] **#REFINE.017** Inventario `scripts/*`.
 - [ ] **#REFINE.020** WBS granular por cada doc de módulo.
 - [ ] **#REFINE.030** Registros transversales de opcodes, SQL, update fields, managers y scripts.
