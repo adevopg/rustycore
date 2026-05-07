@@ -493,7 +493,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#REFINE.025** Sistemas post-WoLK/desactivados marcados sin omision silenciosa (`docs/migration/inventory/r2-product-scope.md`).
 - [x] **#REFINE.030** Registros transversales de opcodes, SQL, update fields, managers, scripts y harness (`docs/migration/inventory/r3-cross-registry-summary.md`).
 - [x] **#REFINE.040** DAG de dependencias y gates por fase (`docs/migration/inventory/r4-dependency-gate-summary.md`).
-- [ ] **#REFINE.050** Gap audit de archivos/opcodes/SQL/scripts.
+- [x] **#REFINE.050** Gap audit de archivos/opcodes/SQL/scripts (`docs/migration/inventory/r5-gap-audit.md`).
 - [ ] **#REFINE.060** Selección de la siguiente mini-fase lista para implementación.
 
 ### Inmediato (Fase 0 — Maps rewrite)

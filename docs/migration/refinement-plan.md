@@ -102,11 +102,11 @@ Aceptacion de R4: ninguna tarea depende de un sistema que no este implementado n
 
 ### R5 — Gap audit
 
-- [ ] **#REFINE.050** Ejecutar check de cobertura de archivos: C++ asignados vs total.
-- [ ] **#REFINE.051** Ejecutar check de cobertura de opcodes: handlers/opcodes C++ asignados vs total.
-- [ ] **#REFINE.052** Ejecutar check de cobertura SQL: statements/loaders C++ asignados vs total.
-- [ ] **#REFINE.053** Ejecutar check de cobertura de scripts: archivos de scripts asignados vs total.
-- [ ] **#REFINE.054** Ejecutar check de dirty/backlog Rust: trabajo aparcado revisado y convertido en tareas o descartado.
+- [x] **#REFINE.050** Ejecutar check de cobertura de archivos: C++ asignados vs total.
+- [x] **#REFINE.051** Ejecutar check de cobertura de opcodes: handlers/opcodes C++ asignados vs total.
+- [x] **#REFINE.052** Ejecutar check de cobertura SQL: statements/loaders C++ asignados vs total.
+- [x] **#REFINE.053** Ejecutar check de cobertura de scripts: archivos de scripts asignados vs total.
+- [x] **#REFINE.054** Ejecutar check de dirty/backlog Rust: trabajo aparcado revisado y convertido en tareas o descartado.
 
 Aceptacion de R5: no quedan "unknown unknowns" a nivel de inventario de archivos/opcodes/scripts.
 
