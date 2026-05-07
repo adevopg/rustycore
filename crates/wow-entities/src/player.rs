@@ -533,6 +533,57 @@ pub struct DestroyFilteredItemAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapItemPreflightItem {
+    pub is_bag: bool,
+    pub is_empty_bag: bool,
+    pub is_child: bool,
+    pub parent_pos: Option<u16>,
+    pub can_unequip_result: InventoryResult,
+}
+
+impl SwapItemPreflightItem {
+    pub const fn regular() -> Self {
+        Self {
+            is_bag: false,
+            is_empty_bag: false,
+            is_child: false,
+            parent_pos: None,
+            can_unequip_result: InventoryResult::Ok,
+        }
+    }
+
+    pub const fn bag(is_empty_bag: bool) -> Self {
+        Self {
+            is_bag: true,
+            is_empty_bag,
+            is_child: false,
+            parent_pos: None,
+            can_unequip_result: InventoryResult::Ok,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapItemPreflightResult {
+    NoSource,
+    ChildRedirect {
+        first_src: u16,
+        first_dst: u16,
+        second_src: u16,
+        second_dst: u16,
+    },
+    Error(InventoryResult),
+    Continue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapItemPreflightPlan {
+    pub result: SwapItemPreflightResult,
+    pub src_unequip_swap: Option<bool>,
+    pub dst_unequip_swap: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -3554,6 +3605,123 @@ impl Player {
             INVENTORY_SLOT_BAG_END,
         );
         actions
+    }
+
+    pub fn swap_item_preflight_plan(
+        &self,
+        src: u16,
+        dst: u16,
+        is_alive: bool,
+        src_item: Option<SwapItemPreflightItem>,
+        dst_item: Option<SwapItemPreflightItem>,
+    ) -> SwapItemPreflightPlan {
+        let Some(src_item) = src_item else {
+            return SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::NoSource,
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            };
+        };
+
+        if src_item.is_child {
+            if let Some(parent_pos) = src_item.parent_pos {
+                if is_equipment_packed_pos(src) {
+                    return SwapItemPreflightPlan {
+                        result: SwapItemPreflightResult::ChildRedirect {
+                            first_src: dst,
+                            first_dst: src,
+                            second_src: parent_pos,
+                            second_dst: dst,
+                        },
+                        src_unequip_swap: None,
+                        dst_unequip_swap: None,
+                    };
+                }
+            }
+        } else if let Some(dst_item) = dst_item {
+            if dst_item.is_child {
+                if let Some(parent_pos) = dst_item.parent_pos {
+                    if is_equipment_packed_pos(dst) {
+                        return SwapItemPreflightPlan {
+                            result: SwapItemPreflightResult::ChildRedirect {
+                                first_src: src,
+                                first_dst: dst,
+                                second_src: parent_pos,
+                                second_dst: src,
+                            },
+                            src_unequip_swap: None,
+                            dst_unequip_swap: None,
+                        };
+                    }
+                }
+            }
+        }
+
+        if !is_alive {
+            return SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::PlayerDead),
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            };
+        }
+
+        let mut src_unequip_swap = None;
+        if is_equipment_packed_pos(src) || is_bag_pos(src) {
+            let swap = !is_bag_pos(src)
+                || is_bag_pos(dst)
+                || dst_item.is_some_and(|item| item.is_bag && item.is_empty_bag);
+            src_unequip_swap = Some(swap);
+            if src_item.can_unequip_result != InventoryResult::Ok {
+                return SwapItemPreflightPlan {
+                    result: SwapItemPreflightResult::Error(src_item.can_unequip_result),
+                    src_unequip_swap,
+                    dst_unequip_swap: None,
+                };
+            }
+        }
+
+        let [_src_bag, src_slot] = src.to_be_bytes();
+        let [dst_bag, _dst_slot] = dst.to_be_bytes();
+        if is_bag_pos(src) && src_slot == dst_bag {
+            return SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::BagInBag),
+                src_unequip_swap,
+                dst_unequip_swap: None,
+            };
+        }
+
+        let [src_bag, _src_slot] = src.to_be_bytes();
+        let [_dst_bag, dst_slot] = dst.to_be_bytes();
+        if is_bag_pos(dst) && src_bag == dst_slot {
+            return SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::CantSwap),
+                src_unequip_swap,
+                dst_unequip_swap: None,
+            };
+        }
+
+        let mut dst_unequip_swap = None;
+        if let Some(dst_item) = dst_item {
+            if is_equipment_packed_pos(dst) || is_bag_pos(dst) {
+                let swap = !is_bag_pos(dst)
+                    || is_bag_pos(src)
+                    || (src_item.is_bag && src_item.is_empty_bag);
+                dst_unequip_swap = Some(swap);
+                if dst_item.can_unequip_result != InventoryResult::Ok {
+                    return SwapItemPreflightPlan {
+                        result: SwapItemPreflightResult::Error(dst_item.can_unequip_result),
+                        src_unequip_swap,
+                        dst_unequip_swap,
+                    };
+                }
+            }
+        }
+
+        SwapItemPreflightPlan {
+            result: SwapItemPreflightResult::Continue,
+            src_unequip_swap,
+            dst_unequip_swap,
+        }
     }
 
     pub fn store_bag_item(
@@ -9615,6 +9783,157 @@ mod tests {
         assert_eq!(
             player.check_titan_grip_penalty_action(true, false),
             TitanGripPenaltyAction::None
+        );
+    }
+
+    #[test]
+    fn swap_item_preflight_matches_cpp_no_source_child_and_dead_order() {
+        let player = Player::new(None, false);
+        let src = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+        let dst = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let parent = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_HEAD);
+
+        assert_eq!(
+            player.swap_item_preflight_plan(src, dst, true, None, None),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::NoSource,
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            }
+        );
+
+        let mut child_source = SwapItemPreflightItem::regular();
+        child_source.is_child = true;
+        child_source.parent_pos = Some(parent);
+        assert_eq!(
+            player.swap_item_preflight_plan(src, dst, false, Some(child_source), None),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::ChildRedirect {
+                    first_src: dst,
+                    first_dst: src,
+                    second_src: parent,
+                    second_dst: dst,
+                },
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            }
+        );
+
+        let mut child_dst = SwapItemPreflightItem::regular();
+        child_dst.is_child = true;
+        child_dst.parent_pos = Some(parent);
+        assert_eq!(
+            player.swap_item_preflight_plan(
+                dst,
+                src,
+                true,
+                Some(SwapItemPreflightItem::regular()),
+                Some(child_dst)
+            ),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::ChildRedirect {
+                    first_src: dst,
+                    first_dst: src,
+                    second_src: parent,
+                    second_dst: dst,
+                },
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            }
+        );
+
+        let mut blocked_source = SwapItemPreflightItem::regular();
+        blocked_source.can_unequip_result = InventoryResult::CantEquipEver;
+        assert_eq!(
+            player.swap_item_preflight_plan(src, dst, false, Some(blocked_source), None),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::PlayerDead),
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            }
+        );
+    }
+
+    #[test]
+    fn swap_item_preflight_matches_cpp_unequip_and_bag_self_guards() {
+        let player = Player::new(None, false);
+        let equipped_src = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+        let inventory_dst = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let source = SwapItemPreflightItem::regular();
+
+        assert_eq!(
+            player.swap_item_preflight_plan(equipped_src, inventory_dst, true, Some(source), None),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Continue,
+                src_unequip_swap: Some(true),
+                dst_unequip_swap: None,
+            }
+        );
+
+        let mut blocked_source = SwapItemPreflightItem::regular();
+        blocked_source.can_unequip_result = InventoryResult::ClientLockedOut;
+        assert_eq!(
+            player.swap_item_preflight_plan(
+                equipped_src,
+                inventory_dst,
+                true,
+                Some(blocked_source),
+                None
+            ),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::ClientLockedOut),
+                src_unequip_swap: Some(true),
+                dst_unequip_swap: None,
+            }
+        );
+
+        let bag_slot = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START);
+        let inside_same_bag = make_item_pos(INVENTORY_SLOT_BAG_START, 0);
+        assert_eq!(
+            player.swap_item_preflight_plan(
+                bag_slot,
+                inside_same_bag,
+                true,
+                Some(SwapItemPreflightItem::bag(false)),
+                None,
+            ),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::BagInBag),
+                src_unequip_swap: Some(false),
+                dst_unequip_swap: None,
+            }
+        );
+        assert_eq!(
+            player.swap_item_preflight_plan(
+                inside_same_bag,
+                bag_slot,
+                true,
+                Some(SwapItemPreflightItem::regular()),
+                Some(SwapItemPreflightItem::bag(false)),
+            ),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::CantSwap),
+                src_unequip_swap: None,
+                dst_unequip_swap: None,
+            }
+        );
+
+        let mut blocked_dst = SwapItemPreflightItem::bag(true);
+        blocked_dst.can_unequip_result = InventoryResult::CantEquipEver;
+        let other_bag_slot = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START + 1);
+        assert_eq!(
+            player.swap_item_preflight_plan(
+                inventory_dst,
+                other_bag_slot,
+                true,
+                Some(SwapItemPreflightItem::bag(true)),
+                Some(blocked_dst),
+            ),
+            SwapItemPreflightPlan {
+                result: SwapItemPreflightResult::Error(InventoryResult::CantEquipEver),
+                src_unequip_swap: None,
+                dst_unequip_swap: Some(true),
+            }
         );
     }
 }
