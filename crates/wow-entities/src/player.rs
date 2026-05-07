@@ -713,6 +713,17 @@ pub struct SwapItemBagExchangePlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapItemRealSwapExecutionPlan {
+    pub remove_destination_update: bool,
+    pub remove_source_update: bool,
+    pub source_target: SwapItemRealSwapTarget,
+    pub destination_target: SwapItemRealSwapTarget,
+    pub apply_item_dependent_auras: bool,
+    pub release_loot: bool,
+    pub auto_unequip_offhand: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -4112,6 +4123,36 @@ impl Player {
                 empty_bag_is_source,
                 moves,
             },
+        }
+    }
+
+    pub fn swap_item_real_swap_execution_plan(
+        &self,
+        src: u16,
+        dst: u16,
+        source_target: SwapItemRealSwapTarget,
+        destination_target: SwapItemRealSwapTarget,
+        ae_loot_view_not_empty: bool,
+        source_bag_has_looted_item: bool,
+        destination_bag_has_looted_item: bool,
+    ) -> SwapItemRealSwapExecutionPlan {
+        let [src_bag, src_slot] = src.to_be_bytes();
+        let [dst_bag, dst_slot] = dst.to_be_bytes();
+        let apply_item_dependent_auras = (src_bag == INVENTORY_SLOT_BAG_0
+            && src_slot < INVENTORY_SLOT_BAG_END)
+            || (dst_bag == INVENTORY_SLOT_BAG_0 && dst_slot < INVENTORY_SLOT_BAG_END);
+        let release_loot = ae_loot_view_not_empty
+            && ((is_bag_pos(src) && source_bag_has_looted_item)
+                || (is_bag_pos(dst) && destination_bag_has_looted_item));
+
+        SwapItemRealSwapExecutionPlan {
+            remove_destination_update: false,
+            remove_source_update: false,
+            source_target,
+            destination_target,
+            apply_item_dependent_auras,
+            release_loot,
+            auto_unequip_offhand: true,
         }
     }
 
@@ -10845,6 +10886,78 @@ mod tests {
             SwapItemBagExchangePlan {
                 result: SwapItemBagExchangeResult::Error(InventoryResult::CantSwap),
             }
+        );
+    }
+
+    #[test]
+    fn swap_item_real_swap_execution_plan_matches_cpp_final_actions() {
+        let player = Player::new(None, false);
+        let inventory_src = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let equip_dst = make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST);
+
+        assert_eq!(
+            player.swap_item_real_swap_execution_plan(
+                inventory_src,
+                equip_dst,
+                SwapItemRealSwapTarget::Equip { dest: equip_dst },
+                SwapItemRealSwapTarget::Inventory,
+                false,
+                false,
+                false,
+            ),
+            SwapItemRealSwapExecutionPlan {
+                remove_destination_update: false,
+                remove_source_update: false,
+                source_target: SwapItemRealSwapTarget::Equip { dest: equip_dst },
+                destination_target: SwapItemRealSwapTarget::Inventory,
+                apply_item_dependent_auras: true,
+                release_loot: false,
+                auto_unequip_offhand: true,
+            }
+        );
+
+        let bag_src = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START);
+        let bank_dst = make_item_pos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START);
+        assert!(
+            player
+                .swap_item_real_swap_execution_plan(
+                    bag_src,
+                    bank_dst,
+                    SwapItemRealSwapTarget::Bank,
+                    SwapItemRealSwapTarget::Inventory,
+                    true,
+                    true,
+                    false,
+                )
+                .release_loot
+        );
+
+        let bag_dst = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START + 1);
+        assert!(
+            player
+                .swap_item_real_swap_execution_plan(
+                    bank_dst,
+                    bag_dst,
+                    SwapItemRealSwapTarget::Inventory,
+                    SwapItemRealSwapTarget::Bank,
+                    true,
+                    false,
+                    true,
+                )
+                .release_loot
+        );
+        assert!(
+            !player
+                .swap_item_real_swap_execution_plan(
+                    bank_dst,
+                    bag_dst,
+                    SwapItemRealSwapTarget::Inventory,
+                    SwapItemRealSwapTarget::Bank,
+                    false,
+                    false,
+                    true,
+                )
+                .release_loot
         );
     }
 }
