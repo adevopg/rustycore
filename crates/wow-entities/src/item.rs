@@ -291,6 +291,42 @@ impl Item {
         self.set_context(create.context);
     }
 
+    pub fn clone_item_for_store(
+        &self,
+        guid: ObjectGuid,
+        owner: Option<ObjectGuid>,
+        count: u32,
+    ) -> Self {
+        let mut item = Self::new(self.last_played_time_update);
+        item.object.create(guid);
+        item.object.set_entry(self.object.entry());
+        item.object.set_scale(1.0);
+
+        if let Some(owner) = owner {
+            item.set_owner_guid(owner);
+            item.set_contained_in(owner);
+        }
+
+        item.set_count(1);
+        item.set_max_durability(self.data.max_durability);
+        item.set_durability(self.data.max_durability);
+        for (index, charges) in self.data.spell_charges.into_iter().enumerate() {
+            item.set_spell_charges(index, charges);
+        }
+        item.set_expiration(self.data.expiration);
+        item.set_create_played_time(0);
+        item.set_context_value(self.data.context);
+        item.set_count(count);
+        item.set_creator(self.data.creator);
+        item.set_gift_creator(self.data.gift_creator);
+        item.replace_all_item_flags(ItemFieldFlags::from_bits_retain(
+            self.data.dynamic_flags
+                & !(ItemFieldFlags::REFUNDABLE | ItemFieldFlags::BOP_TRADEABLE).bits(),
+        ));
+        item.bonding = self.bonding;
+        item
+    }
+
     pub const fn slot(&self) -> u8 {
         self.slot
     }
@@ -620,6 +656,10 @@ impl Item {
         self.set_i32_field(ITEM_DATA_CONTEXT_BIT, context as i32, |data| {
             &mut data.context
         });
+    }
+
+    pub fn set_context_value(&mut self, context: i32) {
+        self.set_i32_field(ITEM_DATA_CONTEXT_BIT, context, |data| &mut data.context);
     }
 
     pub fn set_create_time(&mut self, create_time: i64) {
@@ -1084,6 +1124,49 @@ mod tests {
             item.item_data_changes_mask()
                 .is_set(ITEM_DATA_SPELL_CHARGES_PARENT_BIT)
         );
+    }
+
+    #[test]
+    fn clone_item_for_store_matches_cpp_cloneitem_field_subset() {
+        let owner = ObjectGuid::create_player(1, 42);
+        let creator = ObjectGuid::create_player(1, 43);
+        let gift_creator = ObjectGuid::create_player(1, 44);
+        let mut source = Item::default();
+        source.initialize_created_state(ItemCreateInfo {
+            guid: ObjectGuid::create_item(1, 100),
+            item_id: 6948,
+            context: ItemContext::QuestReward,
+            owner: Some(owner),
+            max_durability: 17,
+            expiration: 3600,
+            spell_charges: [0, -1, 2, 0, 0],
+        });
+        source.set_creator(creator);
+        source.set_gift_creator(gift_creator);
+        source.set_item_flag(
+            ItemFieldFlags::SOULBOUND | ItemFieldFlags::REFUNDABLE | ItemFieldFlags::BOP_TRADEABLE,
+        );
+        source.set_bonding(ItemBondingType::Quest);
+
+        let clone = source.clone_item_for_store(ObjectGuid::create_item(1, 101), Some(owner), 2);
+
+        assert_eq!(clone.object().guid(), ObjectGuid::create_item(1, 101));
+        assert_eq!(clone.object().entry(), source.object().entry());
+        assert_eq!(clone.owner_guid(), owner);
+        assert_eq!(clone.data().contained_in, owner);
+        assert_eq!(clone.count(), 2);
+        assert_eq!(clone.data().max_durability, source.data().max_durability);
+        assert_eq!(clone.data().durability, source.data().max_durability);
+        assert_eq!(clone.data().expiration, source.data().expiration);
+        assert_eq!(clone.data().context, source.data().context);
+        assert_eq!(clone.data().spell_charges, source.data().spell_charges);
+        assert_eq!(clone.data().creator, creator);
+        assert_eq!(clone.data().gift_creator, gift_creator);
+        assert!(clone.is_soul_bound());
+        assert!(!clone.is_refundable());
+        assert!(!clone.is_bop_tradeable());
+        assert_eq!(clone.bonding(), ItemBondingType::Quest);
+        assert_eq!(clone.update_state(), ItemUpdateState::New);
     }
 
     #[test]

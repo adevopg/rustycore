@@ -654,6 +654,18 @@ impl Player {
         Ok(())
     }
 
+    pub fn store_cloned_item_object(
+        &mut self,
+        slot: u8,
+        source: &Item,
+        new_guid: ObjectGuid,
+        count: u32,
+    ) -> Result<Item, PlayerStorageError> {
+        let mut cloned = source.clone_item_for_store(new_guid, Some(self.guid()), count);
+        self.store_item_object(slot, &mut cloned, count)?;
+        Ok(cloned)
+    }
+
     pub fn merge_top_level_item_stack_object(
         &mut self,
         slot: u8,
@@ -771,6 +783,20 @@ impl Player {
         item.set_state(ItemUpdateState::Changed);
         bag.item_mut().set_state(ItemUpdateState::Changed);
         Ok(())
+    }
+
+    pub fn store_cloned_bag_item_object(
+        &mut self,
+        bag_slot: u8,
+        bag: &mut Bag,
+        item_slot: u8,
+        source: &Item,
+        new_guid: ObjectGuid,
+        count: u32,
+    ) -> Result<Item, PlayerStorageError> {
+        let mut cloned = source.clone_item_for_store(new_guid, Some(self.guid()), count);
+        self.store_bag_item_object(bag_slot, bag, item_slot, &mut cloned, count)?;
+        Ok(cloned)
     }
 
     pub fn merge_bag_item_stack_object(
@@ -1729,6 +1755,46 @@ mod tests {
     }
 
     #[test]
+    fn store_cloned_item_object_keeps_source_and_stores_clone_like_cpp_storeitem_clone() {
+        let owner = ObjectGuid::create_player(1, 42);
+        let source_guid = ObjectGuid::create_item(1, 760);
+        let clone_guid = ObjectGuid::create_item(1, 761);
+        let mut player = Player::new(None, false);
+        let mut source = Item::default();
+
+        player.unit_mut().world_mut().object_mut().create(owner);
+        source.object_mut().create(source_guid);
+        source.object_mut().set_entry(6948);
+        source.set_count(8);
+        source.set_bonding(ItemBondingType::OnAcquire);
+        source.set_item_flag(ItemFieldFlags::REFUNDABLE | ItemFieldFlags::BOP_TRADEABLE);
+        source.force_state(ItemUpdateState::Unchanged);
+
+        let cloned = player
+            .store_cloned_item_object(INVENTORY_SLOT_ITEM_START, &source, clone_guid, 3)
+            .unwrap();
+
+        assert_eq!(source.object().guid(), source_guid);
+        assert_eq!(source.count(), 8);
+        assert!(source.is_refundable());
+        assert!(source.is_bop_tradeable());
+        assert_eq!(source.update_state(), ItemUpdateState::Unchanged);
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START),
+            Some(clone_guid)
+        );
+        assert_eq!(cloned.object().guid(), clone_guid);
+        assert_eq!(cloned.object().entry(), 6948);
+        assert_eq!(cloned.count(), 3);
+        assert_eq!(cloned.owner_guid(), owner);
+        assert!(cloned.is_soul_bound());
+        assert!(!cloned.is_refundable());
+        assert!(!cloned.is_bop_tradeable());
+        assert_eq!(cloned.slot(), INVENTORY_SLOT_ITEM_START);
+        assert_eq!(cloned.update_state(), ItemUpdateState::New);
+    }
+
+    #[test]
     fn store_bag_item_object_mutates_bag_branch_like_cpp_storeitem() {
         let owner = ObjectGuid::create_player(1, 42);
         let bag_guid = ObjectGuid::create_item(1, 800);
@@ -1829,6 +1895,71 @@ mod tests {
         );
         assert_eq!(item.count(), 0);
         assert_eq!(bag.item_by_pos(2), None);
+    }
+
+    #[test]
+    fn store_cloned_bag_item_object_keeps_source_and_stores_clone_like_cpp_storeitem_clone() {
+        let owner = ObjectGuid::create_player(1, 42);
+        let bag_guid = ObjectGuid::create_item(1, 860);
+        let source_guid = ObjectGuid::create_item(1, 861);
+        let clone_guid = ObjectGuid::create_item(1, 862);
+        let mut player = Player::new(None, false);
+        let mut bag = Bag::default();
+        let mut source = Item::default();
+
+        player.unit_mut().world_mut().object_mut().create(owner);
+        bag.try_initialize_created_state(crate::BagCreateInfo {
+            guid: bag_guid,
+            item_id: 100,
+            context: ItemContext::None,
+            owner: Some(owner),
+            max_durability: 0,
+            container_slots: 4,
+        })
+        .unwrap();
+        bag.item_mut().set_slot(INVENTORY_SLOT_BAG_START);
+        source.object_mut().create(source_guid);
+        source.object_mut().set_entry(6948);
+        source.set_count(8);
+        source.set_bonding(ItemBondingType::OnEquip);
+        source.set_item_flag(ItemFieldFlags::REFUNDABLE | ItemFieldFlags::BOP_TRADEABLE);
+        source.force_state(ItemUpdateState::Unchanged);
+
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag_guid, 4)
+            .unwrap();
+        let cloned = player
+            .store_cloned_bag_item_object(
+                INVENTORY_SLOT_BAG_START,
+                &mut bag,
+                2,
+                &source,
+                clone_guid,
+                3,
+            )
+            .unwrap();
+
+        assert_eq!(source.object().guid(), source_guid);
+        assert_eq!(source.count(), 8);
+        assert!(source.is_refundable());
+        assert!(source.is_bop_tradeable());
+        assert_eq!(source.update_state(), ItemUpdateState::Unchanged);
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_START, 2),
+            Some(clone_guid)
+        );
+        assert_eq!(bag.item_by_pos(2), Some(clone_guid));
+        assert_eq!(cloned.object().guid(), clone_guid);
+        assert_eq!(cloned.object().entry(), 6948);
+        assert_eq!(cloned.count(), 3);
+        assert_eq!(cloned.owner_guid(), owner);
+        assert!(!cloned.is_soul_bound());
+        assert!(!cloned.is_refundable());
+        assert!(!cloned.is_bop_tradeable());
+        assert_eq!(cloned.container_guid(), bag_guid);
+        assert_eq!(cloned.bag_slot(), INVENTORY_SLOT_BAG_START);
+        assert_eq!(cloned.slot(), 2);
+        assert_eq!(cloned.update_state(), ItemUpdateState::New);
     }
 
     #[test]
