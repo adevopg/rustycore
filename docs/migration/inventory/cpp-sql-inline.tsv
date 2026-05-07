@@ -1,0 +1,321 @@
+db	kind	api	file	line	owner_doc	sql_preview	notes
+auth_login	inline_literal_sql	Query	bnetserver/REST/LoginRESTService.cpp	573	bnetserver.md	SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = SCHEMA() AND TABLE_NAME = 'battlenet_accounts' AND COLUMN_NAME = 'sha_pass_hash'	sync_api
+auth_login	inline_literal_sql	Query	bnetserver/REST/LoginRESTService.cpp	580	bnetserver.md	SELECT id, sha_pass_hash, IF((salt IS null) OR (verifier IS null), 0, 1) AS shouldWarn FROM battlenet_accounts WHERE sha_pass_hash != DEFAULT(sha_pass_hash) OR salt IS NULL OR verifier IS NULL	sync_api
+auth_login	dynamic_sql_candidate	Execute	bnetserver/REST/LoginRESTService.cpp	805	bnetserver.md	-	no_literal_sql_in_call;sync_api
+auth_login	inline_literal_sql	Query	game/Accounts/AccountMgr.cpp	457	accounts.md	SELECT id, name FROM rbac_permissions	sync_api
+auth_login	inline_literal_sql	Query	game/Accounts/AccountMgr.cpp	474	accounts.md	SELECT id, linkedId FROM rbac_linked_permissions ORDER BY id ASC	sync_api
+auth_login	inline_literal_sql	PQuery	game/Accounts/AccountMgr.cpp	506	accounts.md	SELECT secId, permissionId FROM rbac_default_permissions WHERE (realmId = {} OR realmId = -1) ORDER BY secId ASC	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Achievements/AchievementMgr.cpp	1134	achievements.md	SELECT AchievementId, ScriptName FROM achievement_scripts	sync_api
+characters	inline_literal_sql	Query	game/Achievements/AchievementMgr.cpp	1172	achievements.md	SELECT achievement FROM character_achievement GROUP BY achievement	sync_api
+world	inline_literal_sql	Query	game/Achievements/AchievementMgr.cpp	1212	achievements.md	SELECT ID, TitleA, TitleH, ItemID, Sender, Subject, Body, MailTemplateID FROM achievement_reward	sync_api
+world	inline_literal_sql	Query	game/Achievements/AchievementMgr.cpp	1327	achievements.md	SELECT ID, Locale, Subject, Body FROM achievement_reward_locale	sync_api
+world	inline_literal_sql	Query	game/Achievements/CriteriaHandler.cpp	4205	achievements.md	SELECT criteria_id, type, value1, value2, ScriptName FROM criteria_data	sync_api
+world	inline_literal_sql	PQuery	game/AuctionHouseBot/AuctionHouseBotSeller.cpp	77	auctionhousebot.md	SELECT `item` FROM `creature_loot_template` WHERE `Reference` = 0 UNION SELECT `item` FROM `disenchant_loot_template` WHERE `Reference` = 0 UNION SELECT `item` FROM `fishing_loot_template` WHERE `Reference` = 0 UNION SEL...	formatted_sql;sync_api
+auth_login	inline_literal_sql	Query	game/BattlePets/BattlePetMgr.cpp	98	battlepets.md	SELECT MAX(guid) FROM battle_pets	sync_api
+world	inline_literal_sql	Query	game/BattlePets/BattlePetMgr.cpp	117	battlepets.md	SELECT speciesId, breedId FROM battle_pet_breeds	sync_api
+world	inline_literal_sql	Query	game/BattlePets/BattlePetMgr.cpp	148	battlepets.md	SELECT speciesId, quality FROM battle_pet_quality	sync_api
+world	inline_literal_sql	Query	game/Battlefield/BattlefieldMgr.cpp	53	battlefield.md	SELECT TypeId, ScriptName FROM battlefield_template	sync_api
+characters	inline_literal_sql	DirectExecute	game/Battlegrounds/ArenaTeamMgr.cpp	94	battlegrounds.md	DELETE FROM arena_team_member WHERE arenaTeamId NOT IN (SELECT arenaTeamId FROM arena_team)	sync_api
+characters	inline_literal_sql	Query	game/Battlegrounds/ArenaTeamMgr.cpp	97	battlegrounds.md	SELECT arenaTeamId, name, captainGuid, type, backgroundColor, emblemStyle, emblemColor, borderStyle, borderColor, rating, weekGames, weekWins, seasonGames, seasonWins, `rank` FROM arena_team ORDER BY arenaTeamId ASC	sync_api
+characters	inline_literal_sql	Query	game/Battlegrounds/ArenaTeamMgr.cpp	107	battlegrounds.md	SELECT arenaTeamId, atm.guid, atm.weekGames, atm.weekWins, atm.seasonGames, atm.seasonWins, c.name, class, personalRating, matchMakerRating FROM arena_team_member atm INNER JOIN arena_team ate USING (arenaTeamId) LEFT JO...	sync_api
+world	inline_literal_sql	Query	game/Battlegrounds/BattlegroundMgr.cpp	395	battlegrounds.md	SELECT ID, AllianceStartLoc, HordeStartLoc, StartMaxDist, Weight, ScriptName FROM battleground_template	sync_api
+world	inline_literal_sql	Query	game/Battlegrounds/BattlegroundMgr.cpp	604	battlegrounds.md	SELECT entry, bg_template FROM battlemaster_entry	sync_api
+world	inline_literal_sql	Query	game/BlackMarket/BlackMarketMgr.cpp	70	blackmarket.md	SELECT marketId, sellerNpc, itemEntry, quantity, minBid, duration, chance, bonusListIDs FROM blackmarket_template	sync_api
+characters	inline_literal_sql	Query	game/Cache/CharacterCache.cpp	74	cache.md	SELECT guid, name, account, race, gender, class, level, deleteDate FROM characters	sync_api
+characters	inline_literal_sql	Query	game/Calendar/CalendarMgr.cpp	76	calendar.md	SELECT EventID, Owner, Title, Description, EventType, TextureID, Date, Flags, LockDate FROM calendar_events	sync_api
+characters	inline_literal_sql	Query	game/Calendar/CalendarMgr.cpp	109	calendar.md	SELECT InviteID, EventID, Invitee, Sender, Status, ResponseTime, ModerationRank, Note FROM calendar_invites	sync_api
+characters	inline_literal_sql	Query	game/Chat/Channels/ChannelMgr.cpp	59	chat.md	SELECT name, team, announce, ownership, password, bannedList FROM channels	sync_api
+world	inline_literal_sql	Query	game/Conditions/ConditionMgr.cpp	1270	conditions.md	SELECT SourceTypeOrReferenceId, SourceGroup, SourceEntry, SourceId, ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, ConditionStringValue1, NegativeCondition, Error...	sync_api
+world	inline_literal_sql	Query	game/Conditions/DisableMgr.cpp	67	conditions.md	SELECT sourceType, entry, flags, params_0, params_1 FROM disables	sync_api
+hotfixes	inline_literal_sql	Query	game/DataStores/DB2Stores.cpp	1543	datastores.md	SELECT Id, UniqueId, TableHash, RecordId, Status FROM hotfix_data ORDER BY Id	sync_api
+hotfixes	inline_literal_sql	Query	game/DataStores/DB2Stores.cpp	1613	datastores.md	SELECT TableHash, RecordId, locale, `Blob` FROM hotfix_blob ORDER BY TableHash	sync_api
+hotfixes	inline_literal_sql	Query	game/DataStores/DB2Stores.cpp	1668	datastores.md	SELECT TableHash, RecordId, locale, `Key`, `Data` FROM hotfix_optional_data ORDER BY TableHash	sync_api
+world	inline_literal_sql	Query	game/DungeonFinding/LFGMgr.cpp	128	dungeonfinding.md	SELECT dungeonId, maxLevel, firstQuestId, otherQuestId FROM lfg_dungeon_rewards ORDER BY dungeonId, maxLevel ASC	sync_api
+world	inline_literal_sql	Query	game/DungeonFinding/LFGMgr.cpp	216	dungeonfinding.md	SELECT dungeonId, position_x, position_y, position_z, orientation, requiredItemLevel FROM lfg_dungeon_template	sync_api
+world	inline_literal_sql	Query	game/Entities/Creature/CreatureGroups.cpp	101	entities-creature.md	SELECT leaderGUID, memberGUID, dist, angle, groupAI, point_1, point_2 FROM creature_formations ORDER BY leaderGUID	sync_api
+world	inline_literal_sql	Query	game/Entities/Item/ItemEnchantmentMgr.cpp	42	inventory.md	SELECT Id, EnchantmentId, Chance FROM item_random_enchantment_template	sync_api
+world	inline_literal_sql	Query	game/Entities/Player/CollectionMgr.cpp	40	entities-player.md	SELECT spellId, otherFactionSpellId FROM mount_definitions	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	220	events.md	SELECT eventEntry, UNIX_TIMESTAMP(start_time), UNIX_TIMESTAMP(end_time), occurence, length, holiday, holidayStage, description, world_event, announce FROM game_event	sync_api
+characters	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	292	events.md	SELECT eventEntry, state, next_start FROM game_event_save	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	336	events.md	SELECT eventEntry, prerequisite_event FROM game_event_prerequisite	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	384	events.md	SELECT guid, eventEntry FROM game_event_creature	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	434	events.md	SELECT guid, eventEntry FROM game_event_gameobject	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	483	events.md	SELECT creature.guid, creature.id, game_event_model_equip.eventEntry, game_event_model_equip.modelid, game_event_model_equip.equipment_id FROM creature JOIN game_event_model_equip ON creature.guid = game_event_model_equi...	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	538	events.md	SELECT id, quest, eventEntry FROM game_event_creature_quest	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	575	events.md	SELECT id, quest, eventEntry FROM game_event_gameobject_quest	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	612	events.md	SELECT quest, eventEntry, condition_id, num FROM game_event_quest_condition	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	651	events.md	SELECT eventEntry, condition_id, req_num, max_world_state_field, done_world_state_field FROM game_event_condition	sync_api
+characters	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	689	events.md	SELECT eventEntry, condition_id, done FROM game_event_condition_save	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	733	events.md	SELECT guid, eventEntry, npcflag FROM game_event_npcflag	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	769	events.md	SELECT questId, eventEntry FROM game_event_seasonal_questrelation	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	810	events.md	SELECT eventEntry, guid, item, maxcount, incrtime, ExtendedCost, type, BonusListIDs, PlayerConditionId, IgnoreFiltering FROM game_event_npc_vendor ORDER BY guid, slot ASC	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	879	events.md	SELECT pool_template.entry, game_event_pool.eventEntry FROM pool_template JOIN game_event_pool ON pool_template.entry = game_event_pool.pool_entry	sync_api
+world	inline_literal_sql	Query	game/Events/GameEventMgr.cpp	939	events.md	SELECT MAX(eventEntry) FROM game_event	sync_api
+world	inline_literal_sql	PQuery	game/Events/GameEventMgr.cpp	972	events.md	SELECT eventEntry FROM game_event_arena_seasons WHERE season = '{}'	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	63	globals.md	SELECT AreaTriggerId, IsCustom, ActionType, ActionParam, TargetType FROM `areatrigger_template_actions`	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	112	globals.md	SELECT AreaTriggerCreatePropertiesId, IsCustom, Idx, VerticeX, VerticeY, VerticeTargetX, VerticeTargetY FROM `areatrigger_create_properties_polygon_vertex` ORDER BY `AreaTriggerCreatePropertiesId`, `IsCustom`, `Idx`	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	135	globals.md	SELECT AreaTriggerCreatePropertiesId, IsCustom, X, Y, Z FROM `areatrigger_create_properties_spline_point` ORDER BY `AreaTriggerCreatePropertiesId`, `IsCustom`, `Idx`	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	151	globals.md	SELECT Id, IsCustom, Flags FROM `areatrigger_template`	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	169	globals.md	SELECT Id, IsCustom, AreaTriggerId, IsAreatriggerCustom, Flags, MoveCurveId, ScaleCurveId, MorphCurveId, FacingCurveId, AnimId, AnimKitId, DecalPropertiesId, TimeToTarget, TimeToTargetScale, Shape, ShapeData0, ShapeData1...	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	265	globals.md	SELECT AreaTriggerCreatePropertiesId, IsCustom, StartDelay, CircleRadius, BlendFromRadius, InitialAngle, ZOffset, CounterClockwise, CanLoop FROM `areatrigger_create_properties_orbit`	sync_api
+world	inline_literal_sql	Query	game/Globals/AreaTriggerDataStore.cpp	321	globals.md	SELECT SpawnId, AreaTriggerCreatePropertiesId, IsCustom, MapId, SpawnDifficulties, PosX, PosY, PosZ, Orientation, PhaseUseFlags, PhaseId, PhaseGroup, SpellForVisuals, ScriptName FROM `areatrigger`	sync_api
+world	inline_literal_sql	Query	game/Globals/CharacterTemplateDataStore.cpp	36	globals.md	SELECT TemplateId, FactionGroup, Class FROM character_template_class	sync_api
+world	inline_literal_sql	Query	game/Globals/CharacterTemplateDataStore.cpp	69	globals.md	SELECT Id, Name, Description, Level FROM character_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ConversationDataStore.cpp	39	globals.md	SELECT Id, UiCameraID, ActorIdx, Flags, ChatType FROM conversation_line_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ConversationDataStore.cpp	71	globals.md	SELECT ConversationId, ConversationActorId, ConversationActorGuid, Idx, CreatureId, CreatureDisplayInfoId, NoActorObject, ActivePlayerObject FROM conversation_actors	sync_api
+world	inline_literal_sql	Query	game/Globals/ConversationDataStore.cpp	215	globals.md	SELECT Id, FirstLineId, TextureKitId, Flags, ScriptName FROM conversation_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	262	globals.md	SELECT entry, locale, Name, NameAlt, Title, TitleAlt FROM creature_template_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	295	globals.md	SELECT MenuID, OptionID, Locale, OptionText, BoxText FROM gossip_menu_option_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	327	globals.md	SELECT ID, locale, Name FROM points_of_interest_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	489	globals.md	SELECT CreatureID, MenuID FROM creature_template_gossip	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	535	globals.md	SELECT CreatureID, School, Resistance FROM creature_template_resistance	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	580	globals.md	SELECT CreatureID, `Index`, Spell FROM creature_template_spell	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	625	globals.md	SELECT CreatureID, CreatureDisplayID, DisplayScale, Probability FROM creature_template_model ORDER BY Idx ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	678	globals.md	SELECT CreatureID, CreatureIDVisibleToSummoner, GroundMountDisplayID, FlyingMountDisplayID, DespawnOnQuestsRemoved FROM creature_summoned_data	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	766	globals.md	SELECT entry, PathId, mount, StandState, AnimTier, VisFlags, SheathState, PvPFlags, emote, aiAnimKit, movementAnimKit, meleeAnimKit, visibilityDistanceType, auras FROM creature_template_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	904	globals.md	SELECT Entry, NoNPCDamageBelowHealthPct FROM creature_template_sparring	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	945	globals.md	SELECT Entry, DifficultyID, MinLevel, MaxLevel, HealthScalingExpansion, HealthModifier, ManaModifier, ArmorModifier, DamageModifier, CreatureDifficultyID, TypeFlags, TypeFlags2, LootID, PickPocketLootID, SkinLootID, Gold...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1229	globals.md	SELECT guid, PathId, mount, StandState, AnimTier, VisFlags, SheathState, PvPFlags, emote, aiAnimKit, movementAnimKit, meleeAnimKit, visibilityDistanceType, auras FROM creature_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1374	globals.md	SELECT guid, parent_rotation0, parent_rotation1, parent_rotation2, parent_rotation3, invisibilityType, invisibilityValue, WorldEffectID, AIAnimKitID FROM gameobject_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1509	globals.md	SELECT CreatureID, ID, ItemID1, AppearanceModID1, ItemVisual1, ItemID2, AppearanceModID2, ItemVisual2, ItemID3, AppearanceModID3, ItemVisual3 FROM creature_equip_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1603	globals.md	SELECT cmo.SpawnId, COALESCE(cmo.Ground, ctm.Ground), COALESCE(cmo.Swim, ctm.Swim), COALESCE(cmo.Flight, ctm.Flight), COALESCE(cmo.Rooted, ctm.Rooted), COALESCE(cmo.Chase, ctm.Chase), COALESCE(cmo.Random, ctm.Random), CO...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1738	globals.md	SELECT DisplayID, BoundingRadius, CombatReach, DisplayID_Other_Gender FROM creature_model_info	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	1817	globals.md	SELECT guid, linkedGuid, linkType FROM linked_respawn ORDER BY guid ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2057	globals.md	SELECT summonerId, summonerType, groupId, entry, position_x, position_y, position_z, orientation, summonType, summonTime FROM creature_summon_groups	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2172	globals.md	SELECT creature.guid, id, map, position_x, position_y, position_z, orientation, modelid, equipment_id, spawntimesecs, wander_distance, currentwaypoint, curhealth, curmana, MovementType, spawnDifficulties, eventEntry, poo...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2497	globals.md	SELECT gameobject.guid, id, map, position_x, position_y, position_z, orientation, rotation0, rotation1, rotation2, rotation3, spawntimesecs, animprogress, state, spawnDifficulties, eventEntry, poolSpawnId, phaseUseFlags,...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2744	globals.md	SELECT groupId, groupName, groupFlags FROM spawn_group_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2803	globals.md	SELECT groupId, spawnType, spawnId FROM spawn_group	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	2869	globals.md	SELECT instanceMapId, bossStateId, bossStates, spawnGroupId, flags FROM instance_spawn_groups	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3344	globals.md	SELECT Id, FlagsCu, FoodType, MinMoneyLoot, MaxMoneyLoot, SpellPPMChance, QuestLogItemId FROM item_template_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3382	globals.md	SELECT Id, ScriptName FROM item_script_names	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3418	globals.md	SELECT `entry`, `accessory_entry`, `seat_id`, `minion`, `summontype`, `summontimer` FROM `vehicle_template_accessory`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3471	globals.md	SELECT creatureId, despawnDelayMs FROM vehicle_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3508	globals.md	SELECT `guid`, `accessory_entry`, `seat_id`, `minion`, `summontype`, `summontimer` FROM `vehicle_accessory`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3551	globals.md	SELECT `SeatEntry`, `SeatOrientation`, `ExitParamX`, `ExitParamY`, `ExitParamZ`, `ExitParamO`, `ExitParamValue` FROM `vehicle_seat_addon`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3603	globals.md	SELECT creature_entry, level, hp, mana, str, agi, sta, inte, spi, armor FROM pet_levelstats	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3730	globals.md	SELECT race, class, map, position_x, position_y, position_z, orientation, npe_map, npe_position_x, npe_position_y, npe_position_z, npe_orientation, npe_transport_guid, intro_movie_id, intro_scene_id, npe_intro_scene_id F...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	3917	globals.md	SELECT race, class, itemid, amount FROM playercreateinfo_item	sync_api
+world	inline_literal_sql	PQuery	game/Globals/ObjectMgr.cpp	4004	globals.md	SELECT racemask, classmask, Spell FROM playercreateinfo_spell_custom	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	game/Globals/ObjectMgr.cpp	4066	globals.md	SELECT raceMask, classMask, spell, createMode FROM playercreateinfo_cast_spell	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4129	globals.md	SELECT race, class, button, action, type FROM playercreateinfo_action	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4181	globals.md	SELECT race, str, agi, sta, inte, spi FROM player_racestats	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4206	globals.md	SELECT class, level, str, agi, sta, inte, spi FROM player_classlevelstats	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4325	globals.md	SELECT Level, Experience FROM player_xp_for_level	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4536	globals.md	SELECT ID, QuestType, QuestLevel, QuestScalingFactionGroup, QuestMaxScalingLevel, QuestPackageID, MinLevel, QuestSortID, QuestInfoID, SuggestedGroupNum, RewardNextQuest, RewardXPDifficulty, RewardXPMultiplier, RewardMone...	sync_api
+world	inline_literal_sql	PQuery	game/Globals/ObjectMgr.cpp	4650	globals.md	SELECT {} FROM {} {}	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	4672	globals.md	SELECT v.ID, o.ID, o.QuestID, v.Index, v.VisualEffect FROM quest_visual_effect AS v LEFT JOIN quest_objectives AS o ON v.ID = o.ID ORDER BY v.Index DESC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5381	globals.md	SELECT Id, locale, LogTitle, LogDescription, QuestDescription, AreaDescription, PortraitGiverText, PortraitGiverName, PortraitTurnInText, PortraitTurnInName, QuestCompletionLog FROM quest_template_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5420	globals.md	SELECT Id, locale, Description FROM quest_objectives_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5451	globals.md	SELECT Id, type, locale, Greeting FROM quest_greeting_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5503	globals.md	SELECT Id, locale, RewardText FROM quest_offer_reward_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5531	globals.md	SELECT Id, locale, CompletionText FROM quest_request_items_locale	sync_api
+world	inline_literal_sql	PQuery	game/Globals/ObjectMgr.cpp	5574	globals.md	SELECT id, delay, command, datalong, datalong2, dataint, x, y, z, o{} FROM {} , effIndex	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	5983	globals.md	SELECT Id, ScriptName FROM event_script_names	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6015	globals.md	SELECT spell_id, ScriptName FROM spell_script_names	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6148	globals.md	SELECT ID, `Text`, NextPageID, PlayerConditionID, Flags FROM page_text	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6196	globals.md	SELECT ID, locale, `Text` FROM page_text_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6223	globals.md	SELECT map, parent, script FROM instance_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6279	globals.md	SELECT ID, Probability0, Probability1, Probability2, Probability3, Probability4, Probability5, Probability6, Probability7, BroadcastTextID0, BroadcastTextID1, BroadcastTextID2, BroadcastTextID3, BroadcastTextID4, Broadca...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6476	globals.md	SELECT id, quest FROM areatrigger_involvedrelation	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6564	globals.md	SELECT ID, type, GreetEmoteType, GreetEmoteDelay, Greeting FROM quest_greeting	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6616	globals.md	SELECT id FROM areatrigger_tavern	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6653	globals.md	SELECT entry, ScriptName FROM areatrigger_scripts	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	6788	globals.md	SELECT ID, GhostZone FROM graveyard_zone	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7026	globals.md	SELECT ID, MapID, LocX, LocY, LocZ, Facing FROM world_safe_locs	sync_api
+world	dynamic_sql_candidate	Execute	game/Globals/ObjectMgr.cpp	7115	globals.md	-	no_literal_sql_in_call;sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7133	globals.md	SELECT ID, PortLocID FROM areatrigger_teleport	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7187	globals.md	SELECT mapid, difficulty, level_min, level_max, item, item2, quest_done_A, quest_done_H, completed_achievement, quest_failed_text FROM access_requirement	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7326	globals.md	SELECT MAX(guid) FROM characters	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7330	globals.md	SELECT MAX(guid) FROM item_instance	sync_api
+characters	inline_literal_sql	PExecute	game/Globals/ObjectMgr.cpp	7335	globals.md	DELETE FROM character_inventory WHERE item >= '{}'	formatted_sql;sync_api
+characters	inline_literal_sql	PExecute	game/Globals/ObjectMgr.cpp	7336	globals.md	DELETE FROM mail_items WHERE item_guid >= '{}'	formatted_sql;sync_api
+characters	inline_literal_sql	PExecute	game/Globals/ObjectMgr.cpp	7337	globals.md	DELETE a, ab, ai FROM auctionhouse a LEFT JOIN auction_bidders ab ON ab.auctionId = a.id LEFT JOIN auction_items ai ON ai.auctionId = a.id WHERE ai.itemGuid >= '{}'	formatted_sql;sync_api
+characters	inline_literal_sql	PExecute	game/Globals/ObjectMgr.cpp	7339	globals.md	DELETE FROM guild_bank_item WHERE item_guid >= '{}'	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7341	globals.md	SELECT MAX(guid) FROM transports	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7345	globals.md	SELECT MAX(id) FROM auctionhouse	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7349	globals.md	SELECT MAX(id) FROM mail	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7353	globals.md	SELECT MAX(arenateamid) FROM arena_team	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7357	globals.md	SELECT MAX(maxguid) FROM ((SELECT MAX(setguid) AS maxguid FROM character_equipmentsets) UNION (SELECT MAX(setguid) AS maxguid FROM character_transmog_outfits)) allsets	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7361	globals.md	SELECT MAX(guildId) FROM guild	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7365	globals.md	SELECT MAX(guid) FROM `groups`	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7369	globals.md	SELECT MAX(itemId) from character_void_storage	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7373	globals.md	SELECT MAX(guid) FROM creature	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7377	globals.md	SELECT MAX(guid) FROM gameobject	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7468	globals.md	SELECT entry, locale, name, castBarCaption, unk1 FROM gameobject_template_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7571	globals.md	SELECT entry, type, displayId, name, IconName, castBarCaption, unk1, size, Data0, Data1, Data2, Data3, Data4, Data5, Data6, Data7, Data8, Data9, Data10, Data11, Data12, Data13, Data14, Data15, Data16, Data17, Data18, Dat...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7775	globals.md	SELECT entry, faction, flags, mingold, maxgold, artkit0, artkit1, artkit2, artkit3, artkit4, WorldEffectID, AIAnimKitID FROM gameobject_template_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7861	globals.md	SELECT spawnId, faction, flags FROM gameobject_overrides	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7898	globals.md	SELECT level, basexp FROM exploration_basexp	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	7973	globals.md	SELECT word, entry, half FROM pet_name_generation	sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8004	globals.md	SELECT MAX(id) FROM character_pet	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8042	globals.md	SELECT faction, quest_rate, quest_daily_rate, quest_weekly_rate, quest_monthly_rate, quest_repeatable_rate, creature_rate, spell_rate FROM reputation_reward_rate	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8133	globals.md	SELECT creature_id, RewOnKillRepFaction1, RewOnKillRepFaction2, IsTeamAward1, MaxStanding1, RewOnKillRepValue1, IsTeamAward2, MaxStanding2, RewOnKillRepValue2, TeamDependent FROM creature_onkill_reputation	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8202	globals.md	SELECT faction, faction1, rate_1, rank_1, faction2, rate_2, rank_2, faction3, rate_3, rank_3, faction4, rate_4, rank_4, faction5, rate_5, rank_5 FROM reputation_spillover_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8299	globals.md	SELECT ID, PositionX, PositionY, PositionZ, Icon, Flags, Importance, Name, WMOGroupID FROM points_of_interest	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8344	globals.md	SELECT QuestID, BlobIndex, Idx1, ObjectiveIndex, QuestObjectiveID, QuestObjectID, MapID, UiMapID, Priority, Flags, WorldEffectID, PlayerConditionID, NavigationPlayerConditionID, SpawnTrackingID, AlwaysAllowMergingBlobs F...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8352	globals.md	SELECT QuestID, Idx1, X, Y, Z FROM quest_poi_points ORDER BY QuestID DESC, Idx1, Idx2	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8420	globals.md	SELECT npc_entry, spell_id, cast_flags, user_type FROM npc_spellclick_spells	sync_api
+world	inline_literal_sql	PQuery	game/Globals/ObjectMgr.cpp	8513	globals.md	SELECT id, quest FROM {}	formatted_sql;sync_api
+characters	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8614	globals.md	SELECT name FROM reserved_name	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8839	globals.md	SELECT entry, content_default, content_loc1, content_loc2, content_loc3, content_loc4, content_loc5, content_loc6, content_loc7, content_loc8 FROM trinity_string	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8884	globals.md	SELECT entry, skill FROM skill_fishing_base_level	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	8919	globals.md	SELECT ID, Value1, Value2, Value3, Value4, Value5, Value6, Value7, Value8, Value9, Value10, Value11, Value12, Value13, Value14, Value15, Value16 FROM skill_tiers	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9036	globals.md	SELECT id, position_x, position_y, position_z, orientation, map, name FROM game_tele	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9194	globals.md	SELECT level, raceMask, mailTemplateId, senderEntry FROM mail_level_reward	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9254	globals.md	SELECT TrainerId, SpellId, MoneyCost, ReqSkillLine, ReqSkillRank, ReqAbility1, ReqAbility2, ReqAbility3, ReqLevel FROM trainer_spell	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9305	globals.md	SELECT Id, Type, Greeting FROM trainer	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9334	globals.md	SELECT Id, locale, Greeting_lang FROM trainer_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9364	globals.md	SELECT CreatureID, TrainerID, MenuID, OptionID FROM creature_trainer	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9467	globals.md	SELECT entry, item, maxcount, incrtime, ExtendedCost, type, BonusListIDs, PlayerConditionID, IgnoreFiltering FROM npc_vendor ORDER BY entry, slot ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9521	globals.md	SELECT MenuID, TextID FROM gossip_menu	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9556	globals.md	SELECT MenuID, GossipOptionID, OptionID, OptionNpc, OptionText, OptionBroadcastTextID, Language, Flags, ActionMenuID, ActionPoiID, GossipNpcOptionID, BoxCoded, BoxMoney, BoxText, BoxBroadcastTextID, SpellID, OverrideIcon...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	9687	globals.md	SELECT MenuID, FriendshipFactionID FROM gossip_menu_addon	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10000	globals.md	SELECT level, class, basehp0, basehp1, basehp2, basemana, basearmor, attackpower, rangedattackpower, damage_base, damage_exp1, damage_exp2 FROM creature_classlevelstats	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10068	globals.md	SELECT alliance_id, horde_id FROM player_factionchange_achievement	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10125	globals.md	SELECT alliance_id, horde_id FROM player_factionchange_quests	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10160	globals.md	SELECT alliance_id, horde_id FROM player_factionchange_reputations	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10195	globals.md	SELECT alliance_id, horde_id FROM player_factionchange_spells	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10230	globals.md	SELECT alliance_id, horde_id FROM player_factionchange_titles	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10292	globals.md	SELECT TerrainSwapMap, UiMapPhaseId FROM `terrain_worldmap`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10335	globals.md	SELECT MapId, TerrainSwapMap FROM `terrain_swap_defaults`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10379	globals.md	SELECT AreaId, PhaseId FROM `phase_area`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10538	globals.md	SELECT raceID, expansion, achievementId FROM `race_unlock_requirement`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10583	globals.md	SELECT ClassID, RaceID, ActiveExpansionLevel, AccountExpansionLevel FROM `class_expansion_requirement`	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10704	globals.md	SELECT GameObjectEntry, ItemId, Idx FROM gameobject_questitem ORDER BY Idx ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10749	globals.md	SELECT CreatureEntry, DifficultyID, ItemId, Idx FROM creature_questitem ORDER BY Idx ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10839	globals.md	SELECT SceneId, Flags, ScriptPackageID, Encrypted, ScriptName FROM scene_template	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10872	globals.md	SELECT ChoiceId, UiTextureKitId, SoundKitId, CloseSoundKitId, Duration, Question, PendingChoiceText, HideWarboardHeader, KeepOpenAfterChoice FROM playerchoice	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10908	globals.md	SELECT ChoiceId, ResponseId, ResponseIdentifier, ChoiceArtFileId, Flags, WidgetSetID, UiTextureAtlasElementID, SoundKitID, GroupID, UiTextureKitID, Answer, Header, SubHeader, ButtonTooltip, Description, Confirmation, Rew...	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	10953	globals.md	SELECT ChoiceId, ResponseId, TitleId, PackageId, SkillLineId, SkillPointCount, ArenaPointCount, HonorPointCount, Money, Xp FROM playerchoice_response_reward	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11013	globals.md	SELECT ChoiceId, ResponseId, ItemId, BonusListIDs, Quantity FROM playerchoice_response_reward_item ORDER BY `Index` ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11063	globals.md	SELECT ChoiceId, ResponseId, CurrencyId, Quantity FROM playerchoice_response_reward_currency ORDER BY `Index` ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11109	globals.md	SELECT ChoiceId, ResponseId, FactionId, Quantity FROM playerchoice_response_reward_faction ORDER BY `Index` ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11155	globals.md	SELECT ChoiceId, ResponseId, ItemId, BonusListIDs, Quantity FROM playerchoice_response_reward_item_choice ORDER BY `Index` ASC	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11205	globals.md	SELECT ChoiceId, ResponseId, TypeArtFileID, Rarity, RarityColor, SpellID, MaxStacks FROM playerchoice_response_maw_power	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11257	globals.md	SELECT ChoiceId, locale, Question FROM playerchoice_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11286	globals.md	SELECT ChoiceID, ResponseID, locale, Answer, Header, SubHeader, ButtonTooltip, Description, Confirmation FROM playerchoice_response_locale	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11339	globals.md	SELECT id, speed, treatSpeedAsMoveTimeSeconds, jumpGravity, spellVisualId, progressCurveId, parabolicCurveId FROM jump_charge_params	sync_api
+world	inline_literal_sql	Query	game/Globals/ObjectMgr.cpp	11417	globals.md	SELECT `ID`, `Name` FROM `phase_name`	sync_api
+characters	inline_literal_sql	DirectExecute	game/Groups/GroupMgr.cpp	133	groups.md	DELETE FROM group_member WHERE memberGuid NOT IN (SELECT guid FROM characters)	sync_api
+characters	inline_literal_sql	DirectExecute	game/Groups/GroupMgr.cpp	135	groups.md	DELETE FROM `groups` WHERE leaderGuid NOT IN (SELECT guid FROM characters)	sync_api
+characters	inline_literal_sql	DirectExecute	game/Groups/GroupMgr.cpp	137	groups.md	DELETE FROM `groups` WHERE guid NOT IN (SELECT guid FROM group_member GROUP BY guid HAVING COUNT(guid) > 1)	sync_api
+characters	inline_literal_sql	DirectExecute	game/Groups/GroupMgr.cpp	139	groups.md	DELETE FROM group_member WHERE guid NOT IN (SELECT guid FROM `groups`)	sync_api
+characters	inline_literal_sql	Query	game/Groups/GroupMgr.cpp	142	groups.md	SELECT g.leaderGuid, g.lootMethod, g.looterGuid, g.lootThreshold, g.icon1, g.icon2, g.icon3, g.icon4, g.icon5, g.icon6 , g.icon7, g.icon8, g.groupType, g.difficulty, g.raiddifficulty, g.legacyRaidDifficulty, g.masterLoot...	sync_api
+characters	inline_literal_sql	Query	game/Groups/GroupMgr.cpp	180	groups.md	SELECT guid, memberGuid, memberFlags, subgroup, roles FROM group_member ORDER BY guid	sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	125	guilds.md	SELECT g.guildid, g.name, g.leaderguid, g.EmblemStyle, g.EmblemColor, g.BorderStyle, g.BorderColor, g.BackgroundColor, g.info, g.motd, g.createdate, g.BankMoney, COUNT(gbt.guildid) FROM guild g LEFT JOIN guild_bank_tab g...	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	165	guilds.md	DELETE gr FROM guild_rank gr LEFT JOIN guild g ON gr.guildId = g.guildId WHERE g.guildId IS NULL	sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	168	guilds.md	SELECT guildid, rid, RankOrder, rname, rights, BankMoneyPerDay FROM guild_rank ORDER BY guildid ASC, rid ASC	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	199	guilds.md	DELETE gm FROM guild_member gm LEFT JOIN guild g ON gm.guildId = g.guildId WHERE g.guildId IS NULL	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	200	guilds.md	DELETE gm FROM guild_member_withdraw gm LEFT JOIN guild_member g ON gm.guid = g.guid WHERE g.guid IS NULL	sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	203	guilds.md	SELECT gm.guildid, gm.guid, `rank`, pnote, offnote, w.tab0, w.tab1, w.tab2, w.tab3, w.tab4, w.tab5, w.tab6, w.tab7, w.money, c.name, c.level, c.race, c.class, c.gender, c.zone, c.account, c.logout_time FROM guild_member ...	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	238	guilds.md	DELETE gbr FROM guild_bank_right gbr LEFT JOIN guild g ON gbr.guildId = g.guildId WHERE g.guildId IS NULL	sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	241	guilds.md	SELECT guildid, TabId, rid, gbright, SlotPerDay FROM guild_bank_right ORDER BY guildid ASC, TabId ASC	sync_api
+characters	inline_literal_sql	DirectPExecute	game/Guilds/GuildMgr.cpp	271	guilds.md	DELETE FROM guild_eventlog WHERE LogGuid > {}	formatted_sql;sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	274	guilds.md	SELECT guildid, LogGuid, EventType, PlayerGuid1, PlayerGuid2, NewRank, TimeStamp FROM guild_eventlog ORDER BY TimeStamp DESC, LogGuid DESC	sync_api
+characters	inline_literal_sql	DirectPExecute	game/Guilds/GuildMgr.cpp	305	guilds.md	DELETE FROM guild_bank_eventlog WHERE LogGuid > {}	formatted_sql;sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	308	guilds.md	SELECT guildid, TabId, LogGuid, EventType, PlayerGuid, ItemOrMoney, ItemStackCount, DestTabId, TimeStamp FROM guild_bank_eventlog ORDER BY TimeStamp DESC, LogGuid DESC	sync_api
+characters	inline_literal_sql	DirectPExecute	game/Guilds/GuildMgr.cpp	338	guilds.md	DELETE FROM guild_newslog WHERE LogGuid > {}	formatted_sql;sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	341	guilds.md	SELECT guildid, LogGuid, EventType, PlayerGuid, Flags, Value, Timestamp FROM guild_newslog ORDER BY TimeStamp DESC, LogGuid DESC	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	370	guilds.md	DELETE gbt FROM guild_bank_tab gbt LEFT JOIN guild g ON gbt.guildId = g.guildId WHERE g.guildId IS NULL	sync_api
+characters	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	373	guilds.md	SELECT guildid, TabId, TabName, TabIcon, TabText FROM guild_bank_tab ORDER BY guildid ASC, TabId ASC	sync_api
+characters	inline_literal_sql	DirectExecute	game/Guilds/GuildMgr.cpp	404	guilds.md	DELETE gbi FROM guild_bank_item gbi LEFT JOIN guild g ON gbi.guildId = g.guildId WHERE g.guildId IS NULL	sync_api
+world	inline_literal_sql	Query	game/Guilds/GuildMgr.cpp	499	guilds.md	SELECT ItemID, MinGuildRep, RaceMask, Cost FROM guild_rewards	sync_api
+characters	inline_literal_sql	AsyncQuery	game/Handlers/CalendarHandler.cpp	383	handlers.md	SELECT 1 FROM character_social cs INNER JOIN characters friend_character ON cs.friend = friend_character.guid WHERE cs.guid = {} AND friend_character.account = {} AND (cs.flags & {}) <> 0	formatted_sql;async_api
+characters	dynamic_sql_candidate	Execute	game/Handlers/CharacterHandler.cpp	1264	handlers.md	-	no_literal_sql_in_call;sync_api
+characters	dynamic_sql_candidate	Execute	game/Handlers/CharacterHandler.cpp	1269	handlers.md	-	no_literal_sql_in_call;sync_api
+characters	inline_literal_sql	Query	game/Instances/InstanceLockMgr.cpp	119	instances.md	SELECT instanceId, data, completedEncountersMask FROM instance	sync_api
+characters	inline_literal_sql	Query	game/Instances/InstanceLockMgr.cpp	138	instances.md	SELECT guid, mapId, lockId, instanceId, difficulty, data, completedEncountersMask, expiryTime, extended FROM character_instance_lock ORDER BY instanceId	sync_api
+characters	inline_literal_sql	PExecute	game/Instances/InstanceLockMgr.cpp	161	instances.md	DELETE FROM character_instance_lock WHERE instanceId = {}	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	game/Loot/LootMgr.cpp	137	loot.md	SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount FROM {}	formatted_sql;sync_api
+characters	inline_literal_sql	Query	game/Maps/MapManager.cpp	385	maps.md	SELECT IFNULL(MAX(instanceId), 0) FROM instance	sync_api
+characters	inline_literal_sql	Query	game/Maps/MapManager.cpp	388	maps.md	SELECT IFNULL(MAX(instanceId), 0) FROM character_instance_lock	sync_api
+world	inline_literal_sql	Query	game/Maps/TransportMgr.cpp	196	maps.md	SELECT entry FROM gameobject_template WHERE type = 15 ORDER BY entry ASC	sync_api
+world	inline_literal_sql	Query	game/Maps/TransportMgr.cpp	276	maps.md	SELECT guid, entry, phaseUseFlags, phaseid, phasegroup FROM transports	sync_api
+world	inline_literal_sql	Query	game/Movement/Waypoints/WaypointManager.cpp	42	movement-generators.md	SELECT PathId, MoveType, Flags FROM waypoint_path	sync_api
+world	inline_literal_sql	Query	game/Movement/Waypoints/WaypointManager.cpp	65	movement-generators.md	SELECT PathId, NodeId, PositionX, PositionY, PositionZ, Orientation, Delay FROM waypoint_path_node ORDER BY PathId, NodeId	sync_api
+world	inline_literal_sql	Query	game/OutdoorPvP/OutdoorPvPMgr.cpp	56	outdoorpvp.md	SELECT TypeId, ScriptName FROM outdoorpvp_template	sync_api
+characters	inline_literal_sql	Query	game/Petitions/PetitionMgr.cpp	43	petitions.md	SELECT petitionguid, ownerguid, name FROM petition	sync_api
+characters	inline_literal_sql	Query	game/Petitions/PetitionMgr.cpp	65	petitions.md	SELECT petitionguid, player_account, playerguid FROM petition_sign	sync_api
+world	inline_literal_sql	Query	game/Pools/PoolMgr.cpp	448	pools.md	SELECT entry, max_limit FROM pool_template	sync_api
+world	inline_literal_sql	Query	game/Pools/PoolMgr.cpp	481	pools.md	SELECT spawnId, poolSpawnId, chance FROM pool_members WHERE type = 0	sync_api
+world	inline_literal_sql	Query	game/Pools/PoolMgr.cpp	547	pools.md	SELECT spawnId, poolSpawnId, chance FROM pool_members WHERE type = 1	sync_api
+world	inline_literal_sql	Query	game/Pools/PoolMgr.cpp	616	pools.md	SELECT spawnId, poolSpawnId, chance FROM pool_members WHERE type = 2	sync_api
+world	inline_literal_sql	Query	game/Pools/PoolMgr.cpp	730	pools.md	SELECT DISTINCT pool_template.entry, pool_members.spawnId, pool_members.poolSpawnId FROM pool_template LEFT JOIN game_event_pool ON pool_template.entry = game_event_pool.pool_entry LEFT JOIN pool_members ON pool_members....	sync_api
+world	inline_literal_sql	Query	game/Pools/QuestPools.cpp	77	pools.md	SELECT qpm.questId, qpm.poolId, qpm.poolIndex, qpt.numActive FROM quest_pool_members qpm LEFT JOIN quest_pool_template qpt ON qpm.poolId = qpt.poolId	sync_api
+characters	inline_literal_sql	Query	game/Pools/QuestPools.cpp	130	pools.md	SELECT pool_id, quest_id FROM pool_quest_save	sync_api
+world	inline_literal_sql	Query	game/Scenarios/ScenarioMgr.cpp	69	scenarios.md	SELECT map, difficulty, scenario_A, scenario_H FROM scenarios	sync_api
+world	inline_literal_sql	Query	game/Scenarios/ScenarioMgr.cpp	152	scenarios.md	SELECT CriteriaTreeID, BlobIndex, Idx1, MapID, UiMapID, Priority, Flags, WorldEffectID, PlayerConditionID, NavigationPlayerConditionID FROM scenario_poi ORDER BY CriteriaTreeID, Idx1	sync_api
+world	inline_literal_sql	Query	game/Scenarios/ScenarioMgr.cpp	160	scenarios.md	SELECT CriteriaTreeID, Idx1, X, Y, Z FROM scenario_poi_points ORDER BY CriteriaTreeID DESC, Idx1, Idx2	sync_api
+world	inline_literal_sql	Query	game/Scripting/ScriptSystem.cpp	42	scripting.md	SELECT entry, chainId, splineId, expectedDuration, msUntilNext, velocity FROM script_spline_chain_meta ORDER BY entry asc, chainId asc, splineId asc	sync_api
+world	inline_literal_sql	Query	game/Scripting/ScriptSystem.cpp	44	scripting.md	SELECT entry, chainId, splineId, wpId, x, y, z FROM script_spline_chain_waypoints ORDER BY entry asc, chainId asc, splineId asc, wpId asc	sync_api
+auth_login	inline_literal_sql	PExecute	game/Server/WorldSession.cpp	155	server.md	UPDATE account SET online = 1 WHERE id = {};	formatted_sql;sync_api
+auth_login	inline_literal_sql	PExecute	game/Server/WorldSession.cpp	186	server.md	UPDATE account SET online = 0 WHERE id = {};	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Skills/SkillDiscovery.cpp	55	skills.md	SELECT spellId, reqSpell, reqSkillValue, chance FROM skill_discovery_template	sync_api
+world	inline_literal_sql	Query	game/Skills/SkillExtraItems.cpp	58	skills.md	SELECT spellId, requiredSpecialization, perfectCreateChance, perfectItemType FROM skill_perfect_item_template	sync_api
+world	inline_literal_sql	Query	game/Skills/SkillExtraItems.cpp	145	skills.md	SELECT spellId, requiredSpecialization, additionalCreateChance, additionalMaxNum FROM skill_extra_item_template	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	894	spells-mgr.md	SELECT spell_id, req_spell from spell_required	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	997	spells-mgr.md	SELECT entry, SpellID, Active FROM spell_learn_spell	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1148	spells-mgr.md	SELECT ID, EffectIndex, MapID, PositionX, PositionY, PositionZ, Orientation FROM spell_target_position	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1261	spells-mgr.md	SELECT id, spell_id FROM spell_group	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1342	spells-mgr.md	SELECT group_id, stack_rule FROM spell_group_stack_rules	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1491	spells-mgr.md	SELECT SpellId, SchoolMask, SpellFamilyName, SpellFamilyMask0, SpellFamilyMask1, SpellFamilyMask2, SpellFamilyMask3, ProcFlags, ProcFlags2, SpellTypeMask, SpellPhaseMask, HitMask, AttributesMask, DisableEffectsMask, Proc...	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1903	spells-mgr.md	SELECT entry, flatMod, pctMod, apPctMod FROM spell_threat	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	1963	spells-mgr.md	SELECT spell, effectId, pet, aura FROM spell_pet_auras	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2029	spells-mgr.md	SELECT EnchantID, Chance, ProcsPerMinute, HitMask, AttributesMask FROM spell_enchant_proc_data	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2072	spells-mgr.md	SELECT spell_trigger, spell_effect, type FROM spell_linked_spell	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2298	spells-mgr.md	SELECT spell, area, quest_start, quest_start_status, quest_end_status, quest_end, aura_spell, racemask, gender, flags FROM spell_area	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2715	spells-mgr.md	SELECT SpellID, EffectIndex, DifficultyID, Effect, EffectAura, EffectAmplitude, EffectAttributes, EffectAuraPeriod, EffectBonusCoefficient, EffectChainAmplitude, EffectChainTargets, EffectItemType, EffectMechanic, Effect...	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2832	spells-mgr.md	SELECT Id, DifficultyID, CategoryId, Dispel, Mechanic, Attributes, AttributesEx, AttributesEx2, AttributesEx3, AttributesEx4, AttributesEx5, AttributesEx6, AttributesEx7, AttributesEx8, AttributesEx9, AttributesEx10, Att...	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	2957	spells-mgr.md	SELECT entry, attributes FROM spell_custom_attr	sync_api
+world	inline_literal_sql	Query	game/Spells/SpellMgr.cpp	4974	spells-mgr.md	SELECT SpellID, RaceID, DisplayID from spell_totem_model	sync_api
+characters	dynamic_sql_candidate	Query	game/Support/SupportMgr.cpp	556	support.md	-	no_literal_sql_in_call;sync_api
+world	inline_literal_sql	Query	game/Texts/CreatureTextMgr.cpp	148	texts.md	SELECT CreatureId, GroupId, ID, Locale, Text FROM creature_text_locale	sync_api
+characters	inline_literal_sql	PQuery	game/Tools/CharacterDatabaseCleaner.cpp	69	tools.md	SELECT DISTINCT {} FROM {}	formatted_sql;sync_api
+characters	dynamic_sql_candidate	Execute	game/Tools/CharacterDatabaseCleaner.cpp	102	tools.md	-	no_literal_sql_in_call;sync_api
+characters	inline_literal_sql	DirectPExecute	game/Tools/CharacterDatabaseCleaner.cpp	148	tools.md	DELETE FROM character_talent WHERE talentGroup > {}	formatted_sql;sync_api
+characters	inline_literal_sql	DirectExecute	game/Tools/CharacterDatabaseCleaner.cpp	154	tools.md	DELETE FROM character_queststatus WHERE status = 0	sync_api
+characters	inline_literal_sql	PQuery	game/Tools/PlayerDump.cpp	281	tools.md	DESC {}	formatted_sql;sync_api
+characters	inline_literal_sql	PQuery	game/Tools/PlayerDump.cpp	694	tools.md	SELECT {} FROM {} WHERE {}	formatted_sql;sync_api
+characters	inline_literal_sql	PQuery	game/Tools/PlayerDump.cpp	763	tools.md	SELECT * FROM {} WHERE {}	formatted_sql;sync_api
+world	inline_literal_sql	Query	game/Warden/WardenCheckMgr.cpp	42	warden.md	SELECT MAX(id) FROM warden_checks	sync_api
+world	inline_literal_sql	Query	game/Warden/WardenCheckMgr.cpp	57	warden.md	SELECT id, type, data, result, address, length, str, comment FROM warden_checks ORDER BY id ASC	sync_api
+characters	inline_literal_sql	Query	game/Warden/WardenCheckMgr.cpp	140	warden.md	SELECT wardenId, action FROM warden_action	sync_api
+world	inline_literal_sql	Query	game/Weather/WeatherMgr.cpp	49	weather.md	SELECT zone, spring_rain_chance, spring_snow_chance, spring_storm_chance, summer_rain_chance, summer_snow_chance, summer_storm_chance, fall_rain_chance, fall_snow_chance, fall_storm_chance, winter_rain_chance, winter_sno...	sync_api
+auth_login	inline_literal_sql	PExecute	game/World/World.cpp	1792	world.md	UPDATE realmlist SET icon = {}, timezone = {} WHERE id = '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	PExecute	game/World/World.cpp	2393	world.md	INSERT INTO uptime (realmid, starttime, uptime, revision) VALUES({}, {}, 0, '{}')	formatted_sql;sync_api
+auth_login	inline_literal_sql	Execute	game/World/World.cpp	2482	world.md	DELETE FROM ip_banned WHERE unbandate <= UNIX_TIMESTAMP() AND unbandate<>bandate	sync_api
+characters	inline_literal_sql	Execute	game/World/World.cpp	3737	world.md	UPDATE `character_currency` SET `WeeklyQuantity` = 0	sync_api
+world	inline_literal_sql	Query	game/World/World.cpp	3805	world.md	SELECT db_version, cache_id FROM version LIMIT 1	sync_api
+characters	inline_literal_sql	Query	game/World/World.cpp	3870	world.md	SELECT ID, Value FROM world_variable	sync_api
+world	inline_literal_sql	Query	game/World/WorldStates/WorldStateMgr.cpp	44	world.md	SELECT ID, DefaultValue, MapIDs, AreaIDs, ScriptName FROM world_state	sync_api
+characters	inline_literal_sql	Query	game/World/WorldStates/WorldStateMgr.cpp	145	world.md	SELECT Id, Value FROM world_state_value	sync_api
+auth_login	inline_literal_sql	PQuery	scripts/Commands/cs_ban.cpp	281	commands.md	SELECT FROM_UNIXTIME(bandate), unbandate-bandate, active, unbandate, banreason, bannedby FROM account_banned WHERE id = '{}' ORDER BY bandate ASC	formatted_sql;sync_api
+auth_login	inline_literal_sql	PQuery	scripts/Commands/cs_ban.cpp	378	commands.md	SELECT ip, FROM_UNIXTIME(bandate), FROM_UNIXTIME(unbandate), unbandate-UNIX_TIMESTAMP(), banreason, bannedby, unbandate-bandate FROM ip_banned WHERE ip = '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	PQuery	scripts/Commands/cs_ban.cpp	439	commands.md	SELECT account.username FROM account, account_banned WHERE account_banned.id='{}' AND account_banned.id = account.id	formatted_sql;sync_api
+auth_login	inline_literal_sql	PQuery	scripts/Commands/cs_ban.cpp	470	commands.md	SELECT bandate, unbandate, bannedby, banreason FROM account_banned WHERE id = {} ORDER BY unbandate	formatted_sql;sync_api
+characters	dynamic_sql_candidate	Query	scripts/Commands/cs_ban.cpp	537	commands.md	-	no_literal_sql_in_call;sync_api
+characters	dynamic_sql_candidate	Query	scripts/Commands/cs_ban.cpp	559	commands.md	-	no_literal_sql_in_call;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_gobject.cpp	190	commands.md	SELECT guid, id, position_x, position_y, position_z, orientation, map, PhaseId, PhaseGroup, (POW(position_x - '{}', 2) + POW(position_y - '{}', 2) + POW(position_z - '{}', 2)) AS order_ FROM gameobject WHERE map = '{}' A...	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_gobject.cpp	197	commands.md	SELECT guid, id, position_x, position_y, position_z, orientation, map, PhaseId, PhaseGroup, (POW(position_x - {}, 2) + POW(position_y - {}, 2) + POW(position_z - {}, 2)) AS order_ FROM gameobject LEFT JOIN gameobject_tem...	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_gobject.cpp	225	commands.md	SELECT gameobject.guid, id, position_x, position_y, position_z, orientation, map, PhaseId, PhaseGroup, (POW(position_x - {}, 2) + POW(position_y - {}, 2) + POW(position_z - {}, 2)) AS order_ FROM gameobject LEFT OUTER JO...	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	96	commands.md	SELECT COUNT(guid) FROM creature WHERE id='{}'	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	103	commands.md	SELECT guid, position_x, position_y, position_z, map, (POW(position_x - '{}', 2) + POW(position_y - '{}', 2) + POW(position_z - '{}', 2)) AS order_ FROM creature WHERE id = '{}' ORDER BY order_ ASC LIMIT {}	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	107	commands.md	SELECT guid, position_x, position_y, position_z, map FROM creature WHERE id = '{}' LIMIT {}	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	364	commands.md	SELECT COUNT(guid) FROM gameobject WHERE id='{}'	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	371	commands.md	SELECT guid, position_x, position_y, position_z, map, id, (POW(position_x - '{}', 2) + POW(position_y - '{}', 2) + POW(position_z - '{}', 2)) AS order_ FROM gameobject WHERE id = '{}' ORDER BY order_ ASC LIMIT {}	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	375	commands.md	SELECT guid, position_x, position_y, position_z, map, id FROM gameobject WHERE id = '{}' LIMIT {}	formatted_sql;sync_api
+characters	inline_literal_sql	PQuery	scripts/Commands/cs_list.cpp	565	commands.md	SELECT item_guid FROM mail_items WHERE mail_id = '{}'	formatted_sql;sync_api
+auth_login	dynamic_sql_candidate	Query	scripts/Commands/cs_misc.cpp	1769	commands.md	-	no_literal_sql_in_call;sync_api
+auth_login	dynamic_sql_candidate	Query	scripts/Commands/cs_misc.cpp	1814	commands.md	-	no_literal_sql_in_call;sync_api
+auth_login	inline_literal_sql	PQuery	scripts/Commands/cs_server.cpp	127	commands.md	SELECT port FROM realmlist WHERE id = {}	formatted_sql;sync_api
+world	inline_literal_sql	PQuery	scripts/Commands/cs_tele.cpp	371	commands.md	SELECT c.position_x, c.position_y, c.position_z, c.orientation, c.map, ct.name FROM creature c INNER JOIN creature_template ct ON c.id = ct.entry WHERE ct.name LIKE '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	Query	shared/Realm/RealmList.cpp	67	shared-realm.md	SELECT majorVersion, minorVersion, bugfixVersion, hotfixVersion, build, win64AuthSeed, mac64AuthSeed FROM build_info ORDER BY build ASC	sync_api
+auth_login	inline_literal_sql	Query	shared/Secrets/SecretMgr.cpp	179	shared-secrets.md	SELECT id, totp_secret FROM account	sync_api
+auth_login	inline_literal_sql	DirectPExecute	worldserver/Main.cpp	304	worldserver.md	UPDATE realmlist SET flag = flag \| {} WHERE id = '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	DirectPExecute	worldserver/Main.cpp	400	worldserver.md	UPDATE realmlist SET flag = flag & ~{}, population = 0 WHERE id = '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	DirectPExecute	worldserver/Main.cpp	443	worldserver.md	UPDATE realmlist SET flag = flag \| {} WHERE id = '{}'	formatted_sql;sync_api
+world	inline_literal_sql	PExecute	worldserver/Main.cpp	668	worldserver.md	UPDATE version SET core_version = '{}', core_revision = '{}'	formatted_sql;sync_api
+auth_login	inline_literal_sql	DirectPExecute	worldserver/Main.cpp	690	worldserver.md	UPDATE account SET online = 0 WHERE online > 0 AND id IN (SELECT acctid FROM realmcharacters WHERE realmid = {})	formatted_sql;sync_api
+characters	inline_literal_sql	DirectExecute	worldserver/Main.cpp	693	worldserver.md	UPDATE characters SET online = 0 WHERE online <> 0	sync_api
+characters	inline_literal_sql	DirectExecute	worldserver/Main.cpp	696	worldserver.md	UPDATE character_battleground_data SET instanceId = 0	sync_api
