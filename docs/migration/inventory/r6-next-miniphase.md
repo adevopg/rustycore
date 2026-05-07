@@ -73,7 +73,24 @@ These references must be open beside the Rust patch when implementation starts:
 
 - No Maps, entities, packet, database schema, or gameplay changes are allowed in `#NEXT.L0.CONFIG.001`.
 - The legacy Rust split DB keys (`LoginDatabaseInfo.Host`, etc.) were removed in `#NEXT.L0.CONFIG.REMOVE_LEGACY_DB_SUBKEYS`; Rust now follows C++ `name + "DatabaseInfo"` only.
-- Full `WorldBoolConfigs`/`WorldFloatConfigs`/`WorldIntConfigs`/`WorldInt64Configs` parity is not silently skipped: it is the explicit follow-up `#NEXT.L0.CONFIG.002`, backed by `docs/migration/inventory/cpp-world-config-registry.tsv`.
+- Full `WorldBoolConfigs`/`WorldFloatConfigs`/`WorldIntConfigs`/`WorldInt64Configs` parity is not silently skipped: `#NEXT.L0.CONFIG.002.a` ports the 325-row registry/default surface from `docs/migration/inventory/cpp-world-config-registry.tsv`; `#NEXT.L0.CONFIG.002.b` remains the explicit validation pass for the range/cross-field rules in `World.cpp`.
+
+## Next L0 Follow-Up
+
+- [x] **#NEXT.L0.CONFIG.002.a** Port registry/default surface for all C++ `World*Configs`.
+  C++ refs: `docs/migration/inventory/cpp-world-config-registry.tsv`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:102`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:553`.
+  Rust target: `crates/wow-config/src/lib.rs`.
+  Acceptance: tests cover 325 entries, group counts 97/22/205/1, symbolic defaults, configured overrides, and rows without literal C++ load.
+
+- [ ] **#NEXT.L0.CONFIG.002.b** Port C++ validation/correction rules from `World::LoadConfigSettings`.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:764`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:774`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:799`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:922`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:952`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:993`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:1478`.
+  Rust target: `crates/wow-config/src/lib.rs`.
+  Acceptance: every range/cross-field correction discovered in `World.cpp` has a Rust rule or an explicit product exclusion with C++ line.
+
+- [ ] **#NEXT.L0.CONFIG.002.c** Wire resolved world config values into world runtime consumers.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:682`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:689`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:695`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:708`.
+  Rust target: `crates/world-server/src/main.rs`, `crates/wow-world`.
+  Acceptance: consumers stop reading ad-hoc keys when the equivalent `World*Configs` value exists.
 
 ## R6 Closure
 

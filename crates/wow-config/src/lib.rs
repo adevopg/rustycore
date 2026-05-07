@@ -21,6 +21,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+const WORLD_CONFIG_REGISTRY_TSV: &str =
+    include_str!("../../../docs/migration/inventory/cpp-world-config-registry.tsv");
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -261,6 +264,7 @@ fn collect_conf_files(dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
 // ---------------------------------------------------------------------------
 
 static CONFIG: Lazy<RwLock<ConfigStore>> = Lazy::new(|| RwLock::new(ConfigStore::default()));
+static WORLD_CONFIG_REGISTRY: Lazy<Vec<WorldConfigEntry>> = Lazy::new(parse_world_config_registry);
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -421,6 +425,223 @@ pub fn parse_database_info(key: &str, value: &str) -> Result<DatabaseInfo, Confi
 pub fn get_database_info_default(name: &str, default: DatabaseInfo) -> DatabaseInfo {
     let store = CONFIG.read();
     store.database_info_default(name, default)
+}
+
+/// TrinityCore `World*Configs` value group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorldConfigKind {
+    Bool,
+    Float,
+    Int,
+    Int64,
+}
+
+/// Typed value for one `World*Configs` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorldConfigValue {
+    Bool(bool),
+    Float(f32),
+    Int(u32),
+    Int64(u64),
+}
+
+/// One row from the C++ `World*Configs` registry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorldConfigEntry {
+    pub kind: WorldConfigKind,
+    pub enum_name: String,
+    pub key: Option<String>,
+    pub cxx_ref: Option<String>,
+    pub default_expr: Option<String>,
+    pub default_value: Option<WorldConfigValue>,
+}
+
+/// Loaded `World*Configs` values, indexed by C++ enum name.
+#[derive(Debug, Clone, Default)]
+pub struct WorldConfigSet {
+    values: HashMap<String, WorldConfigValue>,
+}
+
+impl WorldConfigSet {
+    pub fn get(&self, enum_name: &str) -> Option<&WorldConfigValue> {
+        self.values.get(enum_name)
+    }
+
+    pub fn get_bool(&self, enum_name: &str) -> Option<bool> {
+        match self.get(enum_name) {
+            Some(WorldConfigValue::Bool(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn get_float(&self, enum_name: &str) -> Option<f32> {
+        match self.get(enum_name) {
+            Some(WorldConfigValue::Float(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn get_int(&self, enum_name: &str) -> Option<u32> {
+        match self.get(enum_name) {
+            Some(WorldConfigValue::Int(value)) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn get_int64(&self, enum_name: &str) -> Option<u64> {
+        match self.get(enum_name) {
+            Some(WorldConfigValue::Int64(value)) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
+/// Canonical registry rows for C++ `WorldBoolConfigs`,
+/// `WorldFloatConfigs`, `WorldIntConfigs`, and `WorldInt64Configs`.
+pub fn world_config_registry() -> &'static [WorldConfigEntry] {
+    &WORLD_CONFIG_REGISTRY
+}
+
+/// Resolve all world config values from the loaded config store.
+///
+/// Missing config keys use the C++ default expression from
+/// `cpp-world-config-registry.tsv`. Rows without a literal C++ load remain
+/// absent until their C++ initialization is ported explicitly.
+pub fn load_world_config_values() -> WorldConfigSet {
+    let store = CONFIG.read();
+    let mut values = HashMap::new();
+
+    for entry in world_config_registry() {
+        let Some(value) = resolve_world_config_entry(entry, &store) else {
+            continue;
+        };
+
+        values.insert(entry.enum_name.clone(), value);
+    }
+
+    WorldConfigSet { values }
+}
+
+fn resolve_world_config_entry(
+    entry: &WorldConfigEntry,
+    store: &ConfigStore,
+) -> Option<WorldConfigValue> {
+    let configured = entry
+        .key
+        .as_deref()
+        .and_then(|key| store.get(key))
+        .and_then(|raw| parse_world_config_value(entry.kind, raw));
+
+    configured.or_else(|| entry.default_value.clone())
+}
+
+fn parse_world_config_registry() -> Vec<WorldConfigEntry> {
+    WORLD_CONFIG_REGISTRY_TSV
+        .lines()
+        .skip(1)
+        .filter_map(parse_world_config_registry_row)
+        .collect()
+}
+
+fn parse_world_config_registry_row(row: &str) -> Option<WorldConfigEntry> {
+    let columns: Vec<&str> = row.split('\t').collect();
+    if columns.len() < 9 {
+        return None;
+    }
+
+    let kind = match columns[0] {
+        "Bool" => WorldConfigKind::Bool,
+        "Float" => WorldConfigKind::Float,
+        "Int" => WorldConfigKind::Int,
+        "Int64" => WorldConfigKind::Int64,
+        _ => return None,
+    };
+
+    let key = non_empty(columns[3]).map(ToOwned::to_owned);
+    let cxx_ref = non_empty(columns[5]).map(ToOwned::to_owned);
+    let default_expr = non_empty(columns[6]).map(ToOwned::to_owned);
+    let default_value = default_expr
+        .as_deref()
+        .and_then(|expr| parse_world_default_expr(kind, expr));
+
+    Some(WorldConfigEntry {
+        kind,
+        enum_name: columns[1].to_string(),
+        key,
+        cxx_ref,
+        default_expr,
+        default_value,
+    })
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn parse_world_config_value(kind: WorldConfigKind, raw: &str) -> Option<WorldConfigValue> {
+    match kind {
+        WorldConfigKind::Bool => parse_config_bool(raw).map(WorldConfigValue::Bool),
+        WorldConfigKind::Float => raw.parse::<f32>().ok().map(WorldConfigValue::Float),
+        WorldConfigKind::Int => raw.parse::<u32>().ok().map(WorldConfigValue::Int),
+        WorldConfigKind::Int64 => raw.parse::<u64>().ok().map(WorldConfigValue::Int64),
+    }
+}
+
+fn parse_config_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn parse_world_default_expr(kind: WorldConfigKind, expr: &str) -> Option<WorldConfigValue> {
+    match kind {
+        WorldConfigKind::Bool => parse_config_bool(expr).map(WorldConfigValue::Bool),
+        WorldConfigKind::Float => parse_world_float_expr(expr).map(WorldConfigValue::Float),
+        WorldConfigKind::Int => {
+            eval_world_int_expr(expr).map(|value| WorldConfigValue::Int(value as u32))
+        }
+        WorldConfigKind::Int64 => {
+            eval_world_int_expr(expr).map(|value| WorldConfigValue::Int64(value as u64))
+        }
+    }
+}
+
+fn parse_world_float_expr(expr: &str) -> Option<f32> {
+    expr.trim().trim_end_matches('f').parse::<f32>().ok()
+}
+
+fn eval_world_int_expr(expr: &str) -> Option<i64> {
+    let normalized = expr
+        .replace("(uint32)", "")
+        .replace('(', "")
+        .replace(')', "");
+
+    normalized
+        .split('*')
+        .map(|part| eval_world_int_atom(part.trim()))
+        .try_fold(1_i64, |acc, value| value.map(|value| acc * value))
+}
+
+fn eval_world_int_atom(atom: &str) -> Option<i64> {
+    match atom {
+        "MINUTE" => Some(60),
+        "IN_MILLISECONDS" => Some(1000),
+        "HOUR" => Some(3600),
+        "DEFAULT_MAX_LEVEL" => Some(80),
+        "CURRENT_EXPANSION" => Some(2),
+        "HARDCODED_DEVELOPMENT_REALM_CATEGORY_ID" => Some(1),
+        "SEC_ADMINISTRATOR" => Some(3),
+        "SEC_CONSOLE" => Some(4),
+        "GUILD_BANKLOG_MAX_RECORDS" => Some(25),
+        "GUILD_EVENTLOG_MAX_RECORDS" => Some(100),
+        "GUILD_NEWSLOG_MAX_RECORDS" => Some(250),
+        "WorldSession::DosProtection::POLICY_KICK" => Some(1),
+        "BAN_ACCOUNT" => Some(0),
+        _ => atom.parse::<i64>().ok(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -817,6 +1038,121 @@ LoginDatabaseInfo = "127.0.0.1;3306;trinity;trinity;auth"
         assert_eq!(get_value::<u16>("BattlenetPort"), Some(1119));
 
         fs::remove_dir_all(root).expect("cleanup failed");
+    }
+
+    #[test]
+    fn test_world_config_registry_covers_cpp_inventory() {
+        let registry = world_config_registry();
+        assert_eq!(registry.len(), 325);
+        assert_eq!(
+            registry
+                .iter()
+                .filter(|entry| entry.kind == WorldConfigKind::Bool)
+                .count(),
+            97
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .filter(|entry| entry.kind == WorldConfigKind::Float)
+                .count(),
+            22
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .filter(|entry| entry.kind == WorldConfigKind::Int)
+                .count(),
+            205
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .filter(|entry| entry.kind == WorldConfigKind::Int64)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_world_config_registry_resolves_cpp_symbolic_defaults() {
+        let registry = world_config_registry();
+
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.enum_name == "CONFIG_INTERVAL_SAVE")
+                .and_then(|entry| entry.default_value.as_ref()),
+            Some(&WorldConfigValue::Int(900_000))
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.enum_name == "CONFIG_EXPANSION")
+                .and_then(|entry| entry.default_value.as_ref()),
+            Some(&WorldConfigValue::Int(2))
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.enum_name == "CONFIG_PACKET_SPOOF_POLICY")
+                .and_then(|entry| entry.default_value.as_ref()),
+            Some(&WorldConfigValue::Int(1))
+        );
+        assert_eq!(
+            registry
+                .iter()
+                .find(|entry| entry.enum_name == "CONFIG_GUILD_NEWS_LOG_COUNT")
+                .and_then(|entry| entry.default_value.as_ref()),
+            Some(&WorldConfigValue::Int(250))
+        );
+    }
+
+    #[test]
+    fn test_world_config_registry_tracks_rows_without_literal_cpp_load() {
+        let registry = world_config_registry();
+        let missing_defaults: Vec<_> = registry
+            .iter()
+            .filter(|entry| entry.default_value.is_none())
+            .map(|entry| entry.enum_name.as_str())
+            .collect();
+
+        assert_eq!(
+            missing_defaults,
+            vec![
+                "CONFIG_CURRENCY_START_APEXIS_CRYSTALS",
+                "CONFIG_CURRENCY_MAX_APEXIS_CRYSTALS",
+                "CONFIG_CURRENCY_START_JUSTICE_POINTS",
+                "CONFIG_CURRENCY_MAX_JUSTICE_POINTS",
+                "CONFIG_INSTANT_LOGOUT",
+                "CONFIG_PLAYER_ALLOW_COMMANDS",
+                "CONFIG_CLIENTCACHE_VERSION",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_load_world_config_values_uses_config_and_defaults() {
+        let _guard = global_config_lock();
+        load_config_from_str(
+            r#"
+AddonChannel = 0
+MaxGroupXPDistance = 120.5
+WorldServerPort = 8088
+CharacterCreating.Disabled.RaceMask = 12
+"#,
+        )
+        .expect("load failed");
+
+        let values = load_world_config_values();
+        assert_eq!(values.get_bool("CONFIG_ADDON_CHANNEL"), Some(false));
+        assert_eq!(values.get_float("CONFIG_GROUP_XP_DISTANCE"), Some(120.5));
+        assert_eq!(values.get_int("CONFIG_PORT_WORLD"), Some(8088));
+        assert_eq!(
+            values.get_int64("CONFIG_CHARACTER_CREATING_DISABLED_RACEMASK"),
+            Some(12)
+        );
+        assert_eq!(values.get_int("CONFIG_INTERVAL_SAVE"), Some(900_000));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
