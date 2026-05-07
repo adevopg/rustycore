@@ -807,6 +807,14 @@ impl SoulboundTradeableItemRef {
             trade_expired,
         }
     }
+
+    pub fn from_item(item: &Item, owner_total_played_time: u32) -> Self {
+        Self {
+            guid: item.object().guid(),
+            owner_guid: item.owner_guid(),
+            trade_expired: item.is_soulbound_trade_expired(owner_total_played_time),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12238,6 +12246,7 @@ mod tests {
         keep.set_owner_guid(player.guid());
         let mut expired = item_with_guid_entry(1201, 7001);
         expired.set_owner_guid(player.guid());
+        expired.set_create_played_time(10);
         let mut wrong_owner = item_with_guid_entry(1202, 7002);
         wrong_owner.set_owner_guid(ObjectGuid::create_player(1, 99));
         let missing = item_with_guid_entry(1203, 7003);
@@ -12262,8 +12271,8 @@ mod tests {
         );
 
         let removed = player.update_soulbound_trade_items(&[
-            SoulboundTradeableItemRef::new(keep.object().guid(), keep.owner_guid(), false),
-            SoulboundTradeableItemRef::new(expired.object().guid(), expired.owner_guid(), true),
+            SoulboundTradeableItemRef::from_item(&keep, 7_200),
+            SoulboundTradeableItemRef::from_item(&expired, 7_211),
             SoulboundTradeableItemRef::new(
                 wrong_owner.object().guid(),
                 wrong_owner.owner_guid(),

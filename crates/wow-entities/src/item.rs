@@ -15,6 +15,7 @@ pub const MAX_ENCHANTMENT_SLOT: usize = 13;
 pub const MAX_INSPECTED_ENCHANTMENT_SLOT: usize = 8;
 pub const MAX_SPECIALIZATIONS: usize = 5;
 pub const ITEM_MODIFIER_COUNT: usize = 58;
+pub const BOP_TRADEABLE_DURATION_SECS: u32 = 2 * 60 * 60;
 pub const INVENTORY_SLOT_BAG_0: u8 = 255;
 pub const EQUIPMENT_SLOT_HEAD: u8 = 0;
 pub const EQUIPMENT_SLOT_NECK: u8 = 1;
@@ -777,6 +778,25 @@ impl Item {
         self.remove_item_flag(ItemFieldFlags::BOP_TRADEABLE);
     }
 
+    pub fn played_time(&self, now_secs: i64) -> u32 {
+        let elapsed = now_secs
+            .saturating_sub(self.last_played_time_update)
+            .try_into()
+            .unwrap_or(u32::MAX);
+        self.data.create_played_time.saturating_add(elapsed)
+    }
+
+    pub fn is_refund_expired_at(&self, now_secs: i64) -> bool {
+        self.played_time(now_secs) > BOP_TRADEABLE_DURATION_SECS
+    }
+
+    pub fn is_soulbound_trade_expired(&self, owner_total_played_time: u32) -> bool {
+        self.data
+            .create_played_time
+            .saturating_add(BOP_TRADEABLE_DURATION_SECS)
+            < owner_total_played_time
+    }
+
     pub fn is_wrapped(&self) -> bool {
         self.has_item_flag(ItemFieldFlags::WRAPPED)
     }
@@ -1374,6 +1394,19 @@ mod tests {
             item.item_data_changes_mask()
                 .is_set(ITEM_DATA_DYNAMIC_FLAGS2_BIT)
         );
+    }
+
+    #[test]
+    fn played_time_and_bop_trade_expiry_match_cpp_thresholds() {
+        let mut item = Item::new(1_000);
+        item.set_create_played_time(100);
+
+        assert_eq!(item.played_time(1_030), 130);
+        assert!(!item.is_refund_expired_at(1_000 + 7_100));
+        assert!(item.is_refund_expired_at(1_000 + 7_101));
+
+        assert!(!item.is_soulbound_trade_expired(100 + BOP_TRADEABLE_DURATION_SECS));
+        assert!(item.is_soulbound_trade_expired(101 + BOP_TRADEABLE_DURATION_SECS));
     }
 
     #[test]
