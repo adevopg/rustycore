@@ -3137,6 +3137,28 @@ impl Player {
         Ok(removed)
     }
 
+    pub fn finalize_move_item_to_inventory_object(
+        &self,
+        original_item_guid: ObjectGuid,
+        last_item: &mut Item,
+        in_character_inventory_db: bool,
+    ) -> bool {
+        if original_item_guid != last_item.object().guid() {
+            return false;
+        }
+
+        if last_item.owner_guid() != self.guid() {
+            last_item.set_owner_guid(self.guid());
+        }
+
+        last_item.set_state(if in_character_inventory_db {
+            ItemUpdateState::Changed
+        } else {
+            ItemUpdateState::New
+        });
+        true
+    }
+
     pub fn store_bag_item(
         &mut self,
         bag: u8,
@@ -7388,6 +7410,53 @@ mod tests {
         assert_eq!(item.refund_recipient(), ObjectGuid::EMPTY);
         assert_eq!(item.paid_money(), 0);
         assert_eq!(item.paid_extended_cost(), 0);
+    }
+
+    #[test]
+    fn finalize_move_item_to_inventory_object_marks_original_like_cpp() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 517);
+        let other_owner = ObjectGuid::create_player(1, 77);
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+        item.object_mut().create(item_guid);
+        item.set_owner_guid(other_owner);
+        item.force_state(ItemUpdateState::Unchanged);
+
+        assert!(player.finalize_move_item_to_inventory_object(item_guid, &mut item, false));
+        assert_eq!(item.owner_guid(), player_guid);
+        assert_eq!(item.update_state(), ItemUpdateState::New);
+
+        item.force_state(ItemUpdateState::Unchanged);
+        assert!(player.finalize_move_item_to_inventory_object(item_guid, &mut item, true));
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
+    }
+
+    #[test]
+    fn finalize_move_item_to_inventory_object_skips_merged_stack_like_cpp() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let original_guid = ObjectGuid::create_item(1, 518);
+        let merged_guid = ObjectGuid::create_item(1, 519);
+        let mut player = Player::new(None, false);
+        let mut merged = Item::default();
+
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+        merged.object_mut().create(merged_guid);
+        merged.force_state(ItemUpdateState::Unchanged);
+
+        assert!(!player.finalize_move_item_to_inventory_object(original_guid, &mut merged, false));
+        assert_eq!(merged.owner_guid(), ObjectGuid::EMPTY);
+        assert_eq!(merged.update_state(), ItemUpdateState::Unchanged);
     }
 
     #[test]
