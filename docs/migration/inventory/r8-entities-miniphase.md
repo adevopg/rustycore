@@ -75,6 +75,11 @@
   Rust targets: `crates/wow-entities/src/totem.rs`, `crates/wow-entities/src/creature.rs`, `crates/wow-entities/src/lib.rs`.
   Acceptance: base `Totem` remains a `Creature`/`Unit` shape with `UNIT_MASK_SUMMON|UNIT_MASK_MINION|UNIT_MASK_TOTEM`; owner/summoner bridge, properties slot, totem type and duration defaults match C++; inherited spell slots back `GetSpell(slot)`; passive/active init-summon rules, update duration/owner-alive unsummon shape, delayed unsummon bridge, totem-created packet slot offset and positive/aura immunity special cases are represented.
 
+- [x] **#NEXT.R8.ENTITIES.034** Port `Pet` base state, spell map and stable slot helpers.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h`, `Pet.cpp`, `PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/TemporarySummon.h`, `TemporarySummon.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/UnitDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h`.
+  Rust targets: `crates/wow-entities/src/pet.rs`, `crates/wow-entities/src/totem.rs`, `crates/wow-entities/src/lib.rs`.
+  Acceptance: base `Pet` constructor matches C++ `Guardian(nullptr, owner, true)` shape with `UNIT_MASK_SUMMON|MINION|GUARDIAN|PET|CONTROLABLE_GUARDIAN` and hunter-pet mask branch; name, pet type, duration, loading, removed, focus regen timer, group update mask and specialization defaults match C++; pet spell map/autospells and autocast toggles follow `PetSpell` field shape; `PetSaveMode` active/stable ranges and `GetLoadPetInfo` priority order are represented; pet XP factor is recorded.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
@@ -96,3 +101,4 @@
 - [ ] **#NEXT.R8.ENTITIES.029** Complete `SceneObject` create/map/update runtime: SceneTemplate lookup, GUID creation, private object owner, phase inheritance, random seed time source, map insertion, creator/aura lookup and removal scheduling.
 - [ ] **#NEXT.R8.ENTITIES.031** Complete `Conversation` create/start/update runtime: ConversationDataStore templates, conditions, actor fill visitor, line locale timings, private owner locale, script hooks, map insertion, actor unit/creature lookup and removal scheduling.
 - [ ] **#NEXT.R8.ENTITIES.033** Complete `TempSummon`/`Minion`/`Totem` runtime: SummonProperties, owner slots, usable totem slot selection, model lookup by spell/race, `SMSG_TOTEM_CREATED`, spell casting, CombatStop, aura removal from owner/group, cooldown event and map removal scheduling.
+- [ ] **#NEXT.R8.ENTITIES.035** Complete `Pet` create/load/save/update runtime: pet GUID/create from DB/tamed creature, stable persistence, action bar, XP/level sync, stats, auras/cooldowns/charges, specialization/talents/passives, PetAI/charm info, group updates and map/object-store insertion.

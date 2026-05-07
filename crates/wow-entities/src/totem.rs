@@ -4,7 +4,11 @@ use crate::Creature;
 
 pub const UNIT_MASK_SUMMON: u32 = 0x0000_0001;
 pub const UNIT_MASK_MINION: u32 = 0x0000_0002;
+pub const UNIT_MASK_GUARDIAN: u32 = 0x0000_0004;
 pub const UNIT_MASK_TOTEM: u32 = 0x0000_0008;
+pub const UNIT_MASK_PET: u32 = 0x0000_0010;
+pub const UNIT_MASK_HUNTER_PET: u32 = 0x0000_0080;
+pub const UNIT_MASK_CONTROLABLE_GUARDIAN: u32 = 0x0000_0100;
 
 pub const SUMMON_SLOT_ANY_TOTEM: i32 = -1;
 pub const SUMMON_SLOT_TOTEM: i32 = 1;

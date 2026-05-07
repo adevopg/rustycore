@@ -13,6 +13,7 @@ mod dynamic_object;
 mod game_object;
 mod object;
 mod object_accessor;
+mod pet;
 mod player;
 mod scene_object;
 mod totem;
@@ -75,6 +76,11 @@ pub use object_accessor::{
     AccessorObjectKind, AccessorPlayer, MapObjectRecord, ObjectAccessor, ObjectAccessorError,
     normalize_player_name,
 };
+pub use pet::{
+    ActiveState, HAPPINESS_LEVEL_SIZE, MAX_ACTIVE_PETS, MAX_PET_STABLES,
+    PET_FOCUS_REGEN_INTERVAL_MS, PET_XP_FACTOR, Pet, PetLoadSelection, PetSaveMode, PetSpell,
+    PetSpellState, PetSpellType, PetStable, PetStableInfo, PetType,
+};
 pub use player::{
     ACTIVE_PLAYER_DATA_CHARACTER_POINTS_BIT, ACTIVE_PLAYER_DATA_COINAGE_BIT,
     ACTIVE_PLAYER_DATA_INV_SLOTS_FIRST_BIT, ACTIVE_PLAYER_DATA_INV_SLOTS_PARENT_BIT,
@@ -94,7 +100,8 @@ pub use scene_object::{
 pub use totem::{
     MAX_TOTEM_SLOT, SUMMON_SLOT_ANY_TOTEM, SUMMON_SLOT_TOTEM, SUMMON_SLOT_TOTEM_2,
     SUMMON_SLOT_TOTEM_3, SUMMON_SLOT_TOTEM_4, SpellAuraKind, SpellEffectKind, Totem,
-    TotemCreatedPacket, TotemType, TotemUpdateOutcome, UNIT_MASK_MINION, UNIT_MASK_SUMMON,
+    TotemCreatedPacket, TotemType, TotemUpdateOutcome, UNIT_MASK_CONTROLABLE_GUARDIAN,
+    UNIT_MASK_GUARDIAN, UNIT_MASK_HUNTER_PET, UNIT_MASK_MINION, UNIT_MASK_PET, UNIT_MASK_SUMMON,
     UNIT_MASK_TOTEM,
 };
 pub use unit::{
