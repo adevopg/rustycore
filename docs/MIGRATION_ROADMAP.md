@@ -1,6 +1,6 @@
 # Migration Roadmap — TrinityCore (wotlk_classic) → RustyCore (Rust)
 
-> Plan operativo para migrar **todo** TrinityCore C++ a Rust. Este documento es la fuente de verdad: prioridad, orden, estado actual y TODO list. Se actualiza al cierre de cada fase.
+> Plan operativo para migrar **todo** TrinityCore C++ a Rust. Este documento es la fuente de verdad para prioridad, orden y TODO list. El inventario de estado por módulo vive en `docs/migration/_INDEX.md`. Se actualiza al cierre de cada fase.
 
 **Repos de referencia:**
 - C++ origen: `/home/server/woltk-trinity-legacy` (TrinityCore branch `wotlk_classic`)
@@ -11,6 +11,18 @@
 
 1. **Antes de implementar** cualquier sistema, leer su contraparte C++ en TrinityCore. Nunca improvisar a oído. Lecciones del bridge MapManager fallido (`_attic/`) costaron 176 errores de compilación.
 2. **Antes de extender** cualquier sistema ya migrado, **auditarlo contra C++**. Lo que está marcado ✅/⚠️ en este documento puede tener bugs, divergencias o piezas que faltan respecto al C++. **Nada se da por bueno hasta auditoría**. Un sistema "implementado" sin auditar es un riesgo, no una ventaja.
+3. Los docs creados por agentes anteriores son útiles como índice, pero no son prueba de corrección. Cada task se valida contra C++ en el momento de ejecutarla.
+
+### Revisión del plan 2026-05-07
+
+Contraste realizado contra el árbol C++ real en `/home/server/woltk-trinity-legacy/src/server/`:
+
+- Inventario top-level correcto: C++ contiene `bnetserver`, `worldserver`, `database`, `proto`, `shared`, `game` y `scripts`.
+- `game/` contiene 50 subdirectorios reales si se ignora `PrecompiledHeaders`; el plan cubre todos por módulo o como parte de `Entities`/`Scripts`.
+- `shared/` contiene 7 módulos reales si se ignora `PrecompiledHeaders`: `DataStores`, `Dynamic`, `JSON`, `Networking`, `Packets`, `Realm`, `Secrets`.
+- `scripts/` no es un bloque genérico solamente: tiene `Commands`, `Spells`, `Battlefield`, `Events`, `OutdoorPvP`, `World` y scripts por continente/expansión. La fase de contenido debe mantener esa subdivisión cuando llegue.
+- La matriz histórica de este roadmap estaba más optimista que `_INDEX.md`. Desde esta revisión, `_INDEX.md` manda para status/audit; este roadmap manda para orden de ejecución.
+- La Fase 0 necesitaba afinarse: en C++ `ObjectGridLoader` no consulta directamente cada tabla por celda. Carga GUIDs preclasificados por `ObjectMgr`/`AreaTriggerDataStore` (`GetCellObjectGuids`, `GetAreaTriggersForMapAndCell`) a partir de `SpawnData`, difficulty, personal phases y respawn state. La cola inmediata se ajusta para no implementar un loader Rust incorrecto.
 
 ---
 
@@ -18,9 +30,9 @@
 
 ### 1.1 Topología C++ que hay que migrar
 
-TrinityCore expone tres binarios y ~58 módulos en `src/server/`:
+TrinityCore expone dos binarios ejecutables principales, una librería de scripts linkada al worldserver y 64 módulos documentados en `docs/migration/_INDEX.md`:
 
-**Binarios:**
+**Binarios / librerías:**
 - `bnetserver` — autenticación Battle.net (BNet protobuf, SRP6, REST)
 - `worldserver` — servidor de juego (sockets WoW, dispatch, todos los sistemas)
 - (`scripts` se compila como librería linkada al worldserver)
@@ -28,10 +40,10 @@ TrinityCore expone tres binarios y ~58 módulos en `src/server/`:
 **Capas (`src/server/`):**
 ```
 shared/      Networking, Packets, Realm, Secrets, DataStores, Dynamic, JSON
-game/        50 subdirectorios — todo el contenido del juego
+game/        50 subdirectorios reales (ignorando PrecompiledHeaders)
 proto/       definiciones protobuf BNet
 database/    capa SQL común a todos los servidores
-scripts/     contenido scripteado (bosses, instancias, NPCs)
+scripts/     contenido scripteado (commands, spells, continentes, world, events, PvP)
 ```
 
 **game/** se subdivide en (alfabético, sin agrupar):
@@ -70,48 +82,14 @@ crates/
 
 ### 1.3 Métrica de avance
 
-Basado en la auditoría cruzada de los Explore agents (commits `c65858b` y previo). **Importante**: la columna `% migrado` es **estimación de superficie**; mientras la columna `Auditado vs C++` no esté ✅, el % es solo orientativo y puede esconder bugs/divergencias significativas.
+La métrica de estado por módulo se mantiene en `docs/migration/_INDEX.md`. No duplicar porcentajes antiguos aquí: ya demostraron quedarse obsoletos y optimistas.
 
-Leyenda **Auditado vs C++**: ❌ no auditado / ⚠️ auditoría parcial / ✅ contrastado completo.
+Estado operativo tras el primer barrido de auditoría:
 
-| Capa | % migrado | Auditado vs C++ | Nota |
-|---|---|---|---|
-| **Foundation** (core/constants/config/logging/math/collections) | ~95% | ❌ | Estable, pocas adiciones |
-| **Crypto** (SRP6, AES-GCM, HMAC, BNet keys) | ~90% | ❌ | Falta limpieza menor |
-| **Database** (SQLx + statements) | ~70% | ❌ | Updater básico, faltan muchos statements |
-| **DBC/DB2** (Wdc4, hotfix cache) | ~85% | ❌ | Lectura OK, falta granularidad de algunos stores |
-| **Network** (BNet TCP+TLS, WorldSocket, encryption) | ~85% | ❌ | Estable |
-| **Packets** (serialización, dispatch) | ~75% | ❌ | ~150 packets cubiertos, faltan muchos |
-| **Maps & Grids** | **🔧 15%** | ⚠️ (auditado, conclusión: rehacer) | Sandbox aislado; necesita rehacer fiel a TrinityCore |
-| **Entities** (Object/WorldObject/Unit/Player/Creature) | ~30% | ❌ | Player en sesión, no como entidad jerárquica |
-| **Movement** (parsing CMSG_MOVE_*, server pos update) | ~40% | ❌ | Sin pathfinding, sin spline real |
-| **Combat** (auto-attack server-authoritative) | ~25% | ❌ | Sin spells, sin school resistances, sin threat real |
-| **Spells & Auras** | ~20% | ❌ | Cast basic + cooldown, sin scripting de efectos |
-| **AI** (CreatureAI states) | ~15% | ❌ | Idle/Walk/Combat; sin SmartAI, sin ScriptedAI |
-| **Quests** (Phase 1+2 done) | ~50% | ❌ | Kill objectives + accept/abandon/complete |
-| **Inventory** (equipped + bags partial) | ~35% | ❌ | Falta bank, mail, durability, transmog |
-| **Loot** (templates + drop) | ~40% | ❌ | Falta loot rules en grupo |
-| **Social** (friends/ignore/inspect/who) | ~50% | ❌ | Falta canales globales |
-| **Group/Raid** (party invite/leave) | ~40% | ❌ | Sin loot rules, sin ready check, sin marker |
-| **Chat** (say/yell/whisper/emote) | ~60% | ❌ | Falta canales y BG/guild advanced |
-| **Trainer/Vendor/Gossip** | ~50% | ❌ | Vendor real, trainer parcial, gossip stub |
-| **Instances/Dungeons** | 0% | n/a | Sin instance lock, sin difficulty, sin script |
-| **Battlegrounds/Arenas** | 0% | n/a | Solo stubs handler |
-| **Achievements** | 0% | n/a | Crate scaffold vacío |
-| **Auctions/Mail/Calendar** | 0% | n/a | Solo stubs handler |
-| **Scripts** (bosses, NPCs, gossip) | 0% | n/a | Crate scaffold vacío |
-| **PvP** (rated, conquest, honor, OutdoorPvP) | 0% | n/a | Sin honor, sin honor PvP zones |
-| **GM/Commands** (.tele, .level, etc.) | 0% | n/a | No empezado |
-| **Phases** (PhaseMgr, group/personal phasing) | 0% | n/a | Solo SMSG_PHASE_SHIFT_CHANGE estático |
-| **Conditions** (drop conditions, gossip cond) | 0% | n/a | No empezado |
-| **Talents/Glyphs** | 0% | n/a | Solo SMSG_UPDATE_TALENT_DATA estático |
-| **LFG / DungeonFinding** | 0% | n/a | Solo DF_GET_SYSTEM_INFO stub |
-| **Transports / Vehicles** | 0% | n/a | Sin MOTransport, sin Vehicle |
-| **Pathfinding (Recast/Detour)** | 5% | ❌ | Crate `wow-recastdetour` scaffold FFI, no usado |
-| **Warden / Anticheat** | 0% | n/a | No empezado |
-| **Pet system (hunter)** | 0% | n/a | No empezado |
-
-**Total ponderado**: ~25% migrado **sin auditar**. Solo Maps tiene auditoría parcial (la que hicimos hoy con los Explore agents). El resto puede tener desde "perfecto" hasta "muy roto" — no lo sabemos hasta auditarlo.
+- Total módulos enumerados en `_INDEX.md`: 64.
+- Docs por módulo: 64/64.
+- Ningún módulo se considera `done` de forma plena contra C++; las marcas `✅` en docs antiguos deben tratarse como sospechosas si no tienen contraste de líneas C++ y tests.
+- Estimación global útil para planificación: servidor funcional de forma muy parcial; no usar porcentajes altos heredados como criterio de prioridad.
 
 ---
 
@@ -172,7 +150,9 @@ Grafo de dependencias (← lee como "X depende de Y"):
 
 ---
 
-## 3. Estado por módulo (matriz completa)
+## 3. Estado por módulo (snapshot heredado)
+
+> **No usar esta tabla para decidir si algo está correcto o terminado.** Se conserva como mapa visual de módulos, pero el estado operativo/auditado vive en `docs/migration/_INDEX.md`. Las marcas `✅` de esta sección son heredadas y no equivalen a "port completo contra C++".
 
 Leyenda:
 - ✅ done — implementado y tests verdes, cubre el 90%+ de la superficie C++
@@ -215,12 +195,12 @@ Leyenda:
 |---|---|---|---|
 | `Maps/Map` | wow-world/map_manager.rs | 🔧 | sin Cell anidado, sin máquina de estados, sin lifecycle |
 | `Maps/MapManager` | wow-world/map_manager.rs | 🔧 | singleton OK pero sin update loop, sin DoForAllMaps con lock |
-| `Grids/Grid` + `NGrid` | (no existe) | ❌ | falta separación NGrid (8×8 cells) vs Cell |
-| `Grids/Cell` (8×8 dentro de NGrid) | (no existe) | ❌ | sin esto la visibilidad es 8× más gruesa |
+| `Grids/Grid` + `NGrid` | wow-map (parcial) | ❌ | falta NGrid/GridInfo/GridState; `Cell` base ya existe |
+| `Grids/Cell` (8×8 dentro de NGrid) | wow-map::cell | ⚠️ | Cell base y GUID containers; falta visitante/entidades reales |
 | `Grids/GridStates` (Active/Idle/Removal) | (no existe) | ❌ | sin máquina de estados, grids no se descargan |
 | `Grids/ObjectGridLoader` | (no existe) | ❌ | sin lazy load DB → grid |
 | `Maps/MapUpdater` (thread pool por map) | (no existe) | ❌ | actualmente todo serializa por RwLock global |
-| `Maps/TerrainMgr` + `GridMap` | wow-map (vacío) | ❌ | no hay carga de mapas .map de cliente |
+| `Maps/TerrainMgr` + `GridMap` | wow-map (coords/cell parcial) | ❌ | no hay carga de mapas .map/vmap/mmaps de cliente |
 | `Maps/MapReference` / `MapRefManager` | (no existe) | ❌ | iteración de jugadores en map |
 | `Phasing/PhaseMgr` | (no existe) | ❌ | personal/group phases |
 | `Maps/SpawnData` | (no existe) | ❌ | unified spawn descriptors |
@@ -363,7 +343,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 **Cómo auditar (proceso por módulo):**
 
 1. Localizar archivos C++ de referencia (`/home/server/woltk-trinity-legacy/src/server/`).
-2. Spawn de Explore agent con prompt estructurado: "lee X.cpp y resume invariantes runtime; cita líneas".
+2. Leer directamente los `.h/.cpp` relevantes y citar símbolos/archivos concretos. Si se usa cualquier agente auxiliar, su salida solo sirve como pista y se verifica manualmente contra C++.
 3. Leer el código Rust correspondiente.
 4. Producir tabla de divergencias.
 5. Para cada divergencia: clasificar como **bug** (Rust diverge mal) / **missing** (Rust no implementa) / **extra** (Rust hace de más) / **OK** (divergencia aceptable, ej. idiom Rust).
@@ -374,24 +354,23 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 
 > El bloqueante de TODO lo demás. Sin Map/Grid/Cell correctos, ni entidades, ni AI, ni multi-player escalable.
 
-- **0.1** `wow-map`: constantes (`SIZE_OF_GRIDS=533.3333`, `MAX_NUMBER_OF_GRIDS=64`, `MAX_NUMBER_OF_CELLS=8`), tipos `GridCoord`, `CellCoord`, `MapKey`, conversión `compute_grid_coord(x,y)` / `compute_cell_coord(x,y)`. Tests unitarios contra valores de TrinityCore.
-- **0.2** `wow-map`: estructura `Map` (id, instance, matriz 64×64 NGrid), `NGrid` (8×8 Cell + GridInfo + estado), `Cell` (containers tipados).
-- **0.3** `wow-map`: máquina de estados `GridState` (`Invalid`/`Active`/`Idle`/`Removal`) con transiciones temporizadas (referencia: `GridStates.cpp`).
-- **0.4** `wow-map`: `ObjectGridLoader` — carga lazy de criaturas/GO/AreaTrigger desde DB cuando una cell pasa a Active. Necesita statement nuevo `SEL_CREATURE_BY_MAP_GRID`.
-- **0.5** `wow-map`: `MapManager` singleton con `i_maps: HashMap<MapKey, Map>`, `create_map`, `find_map`, `do_for_all_maps` con `RwLock` (read = lookups, write = create/destroy). Update loop single-threaded por map.
-- **0.6** `wow-map`: `MapUpdater` — pool de threads para distribuir updates de Maps (opcional pero recomendado).
-- **0.7** Migrar `crates/wow-world/src/map_manager.rs` actual: tirar a la basura, retener solo los 12 tests como regresión (re-adaptados).
-- **0.8** `world-server/main.rs`: integrar el nuevo `MapManager`, arrancar update loop.
-- **0.9** Migrar handlers que tocan `self.creatures` (43 sitios): orden loot → combat → trainer → misc → session ticks → character.rs. Cada handler en su commit.
-- **0.10** Quitar campos legacy `creatures`/`visible_creatures` de `WorldSession`.
+- **0.1** `wow-map`: constantes (`SIZE_OF_GRIDS=533.3333`, `MAX_NUMBER_OF_GRIDS=64`, `MAX_NUMBER_OF_CELLS=8`), tipos `GridCoord`, `CellCoord`, `MapKey`, conversión `compute_grid_coord(x,y)` / `compute_cell_coord(x,y)`. Tests unitarios contra `GridDefines.h`. **Cerrado #001-#003.**
+- **0.2** `wow-map`: `GridInfo`, `GridStateKind` y `NGrid` 8×8 `Cell`, siguiendo `NGrid.h` y `GridStates.cpp`.
+- **0.3** `wow-map`: `Map` skeleton con `EnsureGridCreated`, `EnsureGridLoaded`, `LoadGridObjects`, `ResetGridExpiry`, `CanUnload`, `Update`, sin handlers todavía.
+- **0.4** Spawn stores previos al loader: `SpawnData`, creature/gameobject/areatrigger spawn stores por `(map, difficulty, cell_id)` como C++ `ObjectMgr::AddSpawnDataToGrid` y `AreaTriggerDataStore`.
+- **0.5** `ObjectGridLoader`: carga lazy desde esos stores, no desde queries ad hoc por celda; incluir corpses, respawn state y personal phase hooks como pendientes explícitos.
+- **0.6** `MapManager` + `MapUpdater`: `i_maps`, `create_map`, `find_map`, `update`, `destroy_map`, delayed update y pool opcional según `MapManager.cpp`.
+- **0.7** Integración worldserver: arrancar update loop global, reemplazar `crates/wow-world/src/map_manager.rs` legacy y migrar handlers que tocan `self.creatures`.
+- **0.8** Quitar campos legacy `creatures`/`visible_creatures` de `WorldSession`.
 
 ### Fase 1 — Entidades canónicas (L4)
 
-- **1.1** `wow-entities` (crate nuevo): trait `Object` (base) → `WorldObject` → `Unit` → `Player` / `Creature`. Polimorfismo con enum o trait objects (decidir basado en perf).
-- **1.2** Mover IA pura de `wow-ai` a la struct `Creature` (state, timers, target). Limpiar duplicación con `WorldCreature`.
-- **1.3** Refactor `WorldSession` para que `player` sea `Player` referencia entidad, no datos sueltos en la sesión.
-- **1.4** `GameObject`, `Corpse`, `DynamicObject`, `AreaTrigger`, `Pet` como entidades.
-- **1.5** Update fields (TrinityCore `UpdateFields.h`): unified delta updates por tipo de entidad.
+- **1.1** `wow-entities`: base `Object` / `WorldObject` con map/cell/phase/current cell y GUID typing contrastado contra `Entities/Object/`.
+- **1.2** `ObjectAccessor`/map stored object registry equivalente a `Globals/ObjectAccessor.*` y `MapStoredObjectTypesContainer`; sin esto los handlers acabarán reintroduciendo lookups por sesión.
+- **1.3** Update fields temprano (`Entities/Object/Updates/` + `UpdateFields.h`): masks/deltas por tipo antes de expandir Player/Unit, para no seguir generando full re-create.
+- **1.4** `Unit`, `Player`, `Creature`, `GameObject`, `Corpse`, `DynamicObject`, `AreaTrigger`, `Pet`, `Transport`, `Vehicle`, `SceneObject`, `Conversation`, `Totem`; `Taxi` se trata como soporte de Player/Transport, no como sistema suelto.
+- **1.5** Mover IA pura de `wow-ai` a `Creature`/AI refs sin mezclar comportamiento con sesión.
+- **1.6** Refactor `WorldSession` para que `player` sea una referencia/controlador de entidad, no la entidad completa.
 
 ### Fase 2 — Movement & Pathfinding (L5)
 
@@ -453,8 +432,8 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 ### Fase 8 — Content & Service (L8)
 
 - **8.1** ScriptMgr API: registro de scripts, hooks (boss, gossip, instance, npc, item, spell, area).
-- **8.2** Migrar el grueso de `scripts/` (~3000 archivos C++ → idioms Rust) — esto es el 50%+ del trabajo total. Probablemente automatizado con un transpilador semi-asistido.
-- **8.3** Chat commands GM (.tele, .gm, .level, .item, .additem, .lookup...).
+- **8.2** Migrar `scripts/Commands` primero para GM tooling mínimo (`.tele`, `.gm`, `.level`, `.item`, `.additem`, `.lookup...`), porque acelera la validación runtime de todo lo anterior.
+- **8.3** Migrar `scripts/Spells`, `scripts/World`, `scripts/Events`, `scripts/Battlefield`, `scripts/OutdoorPvP` y scripts por zona/continente en bloques separados. No tratar `scripts/` como una masa única.
 - **8.4** Warden (opcional, anticheat client-side).
 - **8.5** Weather, GameEvents, Tickets, AccountMgr GM.
 
@@ -489,38 +468,40 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#001** `wow-map`: módulo `coords.rs` con constantes y `compute_grid_coord` / `compute_cell_coord`. Tests vs `GridDefines.h`. Cerrado en `crates/wow-map/src/coords.rs` contra `GridDefines.h`.
 - [x] **#002** `wow-map`: `MapKey { map_id: u32, instance_id: u32 }`, matching C++ `std::pair<uint32, uint32>`.
 - [x] **#003** `wow-map`: `Cell` struct con containers tipados por GUID para world/grid objects; referencias reales quedan para NGrid/entities.
-- [ ] **#004** `wow-map`: `NGrid` (8×8 `Cell` + `GridInfo` con timer).
-- [ ] **#005** `wow-map`: `GridState` enum + `update(state, &mut NGrid, &Map, diff)` para cada estado (referenciar `GridStates.cpp` línea por línea).
-- [ ] **#006** `wow-map`: `Map` con `i_grids: [[Option<Box<NGrid>>; 64]; 64]`, `add_player`, `remove_player`, `update(diff)`, `load_grid`, `unload_grid`, `ensure_grid_loaded`.
-- [ ] **#007** `wow-map`: `MapManager` singleton con `RwLock`, `create_map`, `find_map`, `do_for_all_maps`, `update`.
-- [ ] **#008** `wow-database`: nuevo statement `SEL_CREATURE_BY_MAP_CELL` (params: map, grid_x, grid_y, cell_x, cell_y) o por grid completo.
-- [ ] **#009** `wow-map`: `ObjectGridLoader::load_n(grid)` — carga creatures/GO/AT desde DB para todas las cells del grid. Replicar `ObjectGridLoader.cpp::LoadN`.
-- [ ] **#010** `wow-map`: integrar terreno/`GridMap` (carga de archivos .map del cliente) — quizá diferir si WoLK Classic no requiere LoS exacto al inicio.
-- [ ] **#011** `wow-map`: tests integration: spawnea criatura, mueve player, verifica visibilidad por cells correcta (NO por grid).
-- [ ] **#012** Limpiar `crates/wow-world/src/map_manager.rs`: tirar implementación, retener `WorldCreature`-equivalente como tipo en wow-map (rename `Creature`).
-- [ ] **#013** `world-server/main.rs`: arrancar `MapManager` global + spawn task `update_loop()` (interval 100ms).
-- [ ] **#014** Migrar `handlers/loot.rs` a usar `MapManager::find_creature(guid)` en vez de `self.creatures`.
-- [ ] **#015** Migrar `handlers/combat.rs` (3 sitios).
-- [ ] **#016** Migrar `handlers/trainer.rs` (1 sitio).
-- [ ] **#017** Migrar `handlers/misc.rs` (2 sitios).
-- [ ] **#018** Migrar `session.rs::tick_creatures_sync` a iterar criaturas via Map del player.
-- [ ] **#019** Migrar `session.rs::tick_combat_sync`.
-- [ ] **#020** Migrar `session.rs::send_nearby_creatures` → desaparece, sustituida por load on-demand del MapManager.
-- [ ] **#021** Migrar `handlers/character.rs::update_creature_visibility` a usar visitor pattern del MapManager (15+ sitios).
-- [ ] **#022** Quitar campos `creatures`/`visible_creatures` de `WorldSession`. Borrar el `_attic/` (ya no aporta).
+- [ ] **#004** `wow-map`: `GridInfo` + `GridStateKind` from `NGrid.h`: time tracker, relocation timer period, unload active lock, explicit unload lock, loaded flag semantics. Tests for lock/timer behavior.
+- [ ] **#005** `wow-map`: `NGrid` (8×8 `Cell`) from `NGrid.h`: grid id `x * MAX_NUMBER_OF_GRIDS + y`, x/y, state, `is_grid_object_data_loaded`, `get_grid_type`, `visit_grid`, `visit_all_grids`, world-object count by type.
+- [ ] **#006** `wow-map`: `GridState` update functions from `GridStates.cpp`: Invalid no-op, Active → Idle when no players/active objects, Idle → Removal, Removal → unload if no lock. Use a small `MapGridHost` trait so this remains testable before full `Map`.
+- [ ] **#007** `wow-map`: `Map` skeleton from `Map.cpp`: `i_grids[64][64]`, `ensure_grid_created`, `ensure_grid_loaded`, `ensure_grid_loaded_for_active_object`, `load_grid_objects`, `reset_grid_expiry`, `active_objects_near_grid`, `unload_grid`.
+- [ ] **#008** `wow-map`/`wow-data`: `SpawnData` and spawn-store model from `Maps/SpawnData.h` + `ObjectMgr::AddSpawnDataToGrid`: creature/gameobject/areatrigger spawn ids indexed by `(map_id, difficulty, cell_id)` and personal phase variant `(map_id, difficulty, phase_id, cell_id)`.
+- [ ] **#009** `wow-database`: prepared statements/loaders for creature, gameobject and areatrigger spawn data. Do not implement a per-cell loader query as the canonical model; C++ preloads stores and `ObjectGridLoader` consumes GUID sets.
+- [ ] **#010** `wow-map`: `ObjectGridLoader::load_n(grid)` from `ObjectGridLoader.cpp`: iterate all 8×8 cells, load creature/gameobject/areatrigger GUIDs from stores, load corpses from map corpse store, set current cell, add to world/grid containers.
+- [ ] **#011** `wow-map`: grid unload helpers from `ObjectGridLoader.cpp`: `ObjectGridStoper`, `ObjectGridEvacuator`, `ObjectGridUnloader` semantics for combat stop, dynobject/areatrigger cleanup, respawn relocation and deletion.
+- [ ] **#012** `wow-map`: terrain hooks from `Map::EnsureGridCreated`: grid coordinate flip `(63 - x, 63 - y)` and `TerrainMgr::LoadMapAndVMap`; keep actual vmap/mmaps loading behind a trait if assets are not ready.
+- [ ] **#013** `wow-map`: tests integration: spawn store → `EnsureGridLoaded` → `ObjectGridLoader::load_n`; verify cell-level placement, grid state transitions and no grid-size regression.
+- [ ] **#014** `wow-map`: `MapManager` from `MapManager.h/.cpp`: `i_maps`, `create_map`, `find_map`, `do_for_all_maps`, `do_for_all_maps_with_map_id`, `update`, `destroy_map`, instance id allocation/free.
+- [ ] **#015** `wow-map`: `MapUpdater` worker pool from `MapUpdater.cpp`, or explicit single-thread fallback matching C++ behavior when updater inactive.
+- [ ] **#016** `world-server/main.rs`: arrancar `MapManager` global + update loop; no session-local world tick as source of truth.
+- [ ] **#017** Limpiar `crates/wow-world/src/map_manager.rs`: reemplazar implementación legacy por el nuevo `wow-map`; retener tests útiles solo si siguen contrastados contra C++.
+- [ ] **#018** Migrar `handlers/loot.rs` a lookups de criatura/GO vía Map/ObjectAccessor equivalente, no `self.creatures`.
+- [ ] **#019** Migrar `handlers/combat.rs` y `session.rs::tick_combat_sync` al Map/Entity model.
+- [ ] **#020** Migrar `handlers/trainer.rs`, `handlers/misc.rs` y query/use GO al Map/Entity model.
+- [ ] **#021** Migrar `session.rs::tick_creatures_sync`, `send_nearby_creatures` y `handlers/character.rs::update_creature_visibility` a visitors/cell queries del Map.
+- [ ] **#022** Quitar campos legacy `creatures`/`visible_creatures` de `WorldSession`; borrar `_attic/` solo cuando sus tests/avisos útiles estén integrados o descartados explícitamente.
 
 ### Inmediato siguiente (Fase 1 — Entidades canónicas)
 
-- [ ] **#023** `wow-entities` (crate nuevo): trait `Object` con métodos comunes (guid, type, position, map).
-- [ ] **#024** `wow-entities`: `WorldObject` extiende `Object` (orientation, facing, distance_to).
-- [ ] **#025** `wow-entities`: `Unit` extiende `WorldObject` (health, power, stats, faction, auras).
-- [ ] **#026** `wow-entities`: `Player` extiende `Unit` (account, char data, inventory, quests, skills).
-- [ ] **#027** `wow-entities`: `Creature` extiende `Unit` (template, AI ref, spawn point, respawn timer).
-- [ ] **#028** Mover `wow-ai::CreatureAI` a `wow-entities::Creature` (eliminar duplicación con `wow-map::Creature`).
-- [ ] **#029** Refactor `WorldSession` para tener `player: Option<Player>` en vez de campos sueltos.
-- [ ] **#030** Update fields delta (TrinityCore `UpdateFields.h`): generador de paquete UpdateObject por entidad.
+- [ ] **#023** `wow-entities`: crate/module boundary and base `Object` from `Entities/Object/Object.*`: guid, type id, map id, entry, update flags, in-world/grid state.
+- [ ] **#024** `wow-entities`: `WorldObject` from `Entities/Object/WorldObject.*`: position/orientation, current cell, map pointer/key, phase shift, distance/facing helpers.
+- [ ] **#025** `wow-world`/`wow-entities`: `ObjectAccessor` equivalent from `Globals/ObjectAccessor.*`: global player lookup plus map-local object lookup APIs for Creature/GO/Corpse/DynamicObject/AreaTrigger/SceneObject/Conversation/Pet.
+- [ ] **#026** `wow-packet`/`wow-entities`: Update fields delta from `Entities/Object/Updates/` and `UpdateFields.h`; stop relying on full re-create as normal update path.
+- [ ] **#027** `wow-entities`: `Unit` from `Entities/Unit/`: health, power, faction, flags, aura hooks, threat hooks.
+- [ ] **#028** `wow-entities`: `Player` from `Entities/Player/`: account/session link, inventory refs, quests, skills, taxi state.
+- [ ] **#029** `wow-entities`: `Creature` + `GameObject` from their C++ dirs: template refs, spawn data, respawn timer, AI ref, GO state.
+- [ ] **#030** `wow-entities`: remaining map-stored object types: `Corpse`, `DynamicObject`, `AreaTrigger`, `Pet`, `Transport`, `Vehicle`, `SceneObject`, `Conversation`, `Totem`; mark post-WoLK-only behavior explicitly when C++ has stubs.
+- [ ] **#031** Mover `wow-ai::CreatureAI` a AI refs owned by `Creature`/Map update; eliminar duplicación con `WorldCreature`.
+- [ ] **#032** Refactor `WorldSession` para tener player entity handle/controlador en vez de campos sueltos.
 
-> Tras cerrar #030, el roadmap continúa con Fase 2 (Movement) y siguientes según la sección 4.
+> Tras cerrar #032, el roadmap continúa con Fase 2 (Movement) y siguientes según la sección 4.
 
 ---
 
@@ -543,6 +524,7 @@ Una fase se considera cerrada cuando:
 | Riesgo | Probabilidad | Impacto | Mitigación |
 |---|---|---|---|
 | Re-introducir el bug del bridge fallido (improvisar contra structs imaginarios) | Media | Alto | Memory `feedback_always_read_cpp.md`. Antes de cada implementación, leer el `.cpp` correspondiente. Citar línea en commit. |
+| Confiar en docs/agentes previos como si fueran C++ | Alta | Alto | Los docs son índice, no oracle. Cada task requiere contraste directo con C++ y, si toca wire/runtime, test específico. |
 | **Lo "✅ done" actual tiene bugs/divergencias vs C++ que no hemos detectado** | Alta | Alto | Fase A (auditoría obligatoria por módulo) antes de extender. Tabla de divergencias en `docs/audits/<modulo>.md`. Hasta que un módulo no esté auditado, su columna "Auditado vs C++" sigue ❌ y se trata con sospecha. |
 | Auditar todo costaría tanto como reescribirlo | Media | Medio | Las auditorías se priorizan: módulos críticos (network, crypto, packets, maps) primero; los de menor superficie y baja prioridad pueden auditarse "just-in-time" antes de extender. |
 | Scope creep entre fases (querer hacer L5 antes de L3 estable) | Alta | Alto | Esta hoja de ruta es vinculante. No se salta orden sin acuerdo explícito. |
@@ -551,6 +533,7 @@ Una fase se considera cerrada cuando:
 | Pathfinding (Detour) incompleto bloquea AI | Media | Medio | Hacer movement waypoint sin pathfinding primero; Detour es Fase 2.2. |
 | `scripts/` (3000 archivos) bloquea cualquier contenido scripteado | Alta | Alto | Aceptar que la mayoría de bosses/instancias no funcionan hasta Fase 8. Priorizar SmartAI (data-driven) que cubre ~50% sin scripting. |
 | Performance: `Arc<RwLock<MapManager>>` global serializa todo | Alta | Alto | Resolver en Fase 0.6 (MapUpdater pool). Si no resuelve, considerar one-Arc-per-Map en lugar de un Arc global. |
+| Implementar spawn loading con SQL directo por celda y saltarse `ObjectMgr`/`SpawnData` | Media | Alto | Fase 0 ahora separa spawn stores (#008-#009) de `ObjectGridLoader` (#010), igual que C++ preclasifica GUIDs por map/difficulty/cell. |
 | Tests de regresión runtime cuestan tiempo | Media | Bajo | Aceptar y planificar — son los que de verdad demuestran "done". |
 | El cliente WoLK 3.4.3 hace cosas no documentadas | Media | Medio | El C++ TrinityCore es la fuente de verdad. Si no aclara, capturar paquetes con `wow-data/pcap` (pendiente). |
 
@@ -607,6 +590,7 @@ Las auditorías son commits `docs(audit): ...` separados; no se mezclan con cód
 |---|---|---|
 | 2026-05-01 | Creación inicial del documento | (este commit) |
 | 2026-05-01 | Añadido Fase A (auditoría obligatoria), columna "Auditado vs C++" en matriz, ADR-007, riesgo "lo existente puede tener bugs" | (este commit) |
+| 2026-05-07 | Revisión manual del plan contra el árbol C++: `_INDEX.md` pasa a ser inventario de estado, Fase 0 se ajusta a `NGrid.h`/`GridStates.cpp`/`ObjectGridLoader.cpp`/`SpawnData.h`, Fase 1 adelanta `ObjectAccessor` y UpdateFields, Fase 8 separa `scripts/Commands` del contenido masivo. | pendiente |
 
 ---
 

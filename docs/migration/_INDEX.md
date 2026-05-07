@@ -11,6 +11,7 @@
 **Reglas:**
 - No modificar código del módulo X sin leer su `<modulo X>.md` § 13 primero (ADR-007 del ROADMAP).
 - Si encuentras divergencia C++ vs Rust no documentada: añadirla al doc en sección 8 ("Suspicious") + abrir issue/TODO en sección 9.
+- La auditoría 2026-05-01 fue un primer barrido hecho por agentes y sirve como triage, no como prueba final. Antes de implementar o cerrar un punto, contrastar de nuevo contra C++.
 
 ---
 
@@ -57,7 +58,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | Layer | Module | C++ path | Doc | Status | Audit |
 |---|---|---|---|---|---|
 | L3 | Maps | `src/server/game/Maps/` | [maps.md](maps.md) | 🔧 (no Map::Update) | ⚠️ |
-| L3 | Grids | `src/server/game/Grids/` | [grids.md](grids.md) | 🔧 (GRID_SIZE 8.33× wrong) | ⚠️ |
+| L3 | Grids | `src/server/game/Grids/` | [grids.md](grids.md) | 🔧 (coords/cell base ported; NGrid/GridState missing) | ⚠️ |
 | L3 | World | `src/server/game/World/` | [world.md](world.md) | ❌ (no `struct World`) | ⚠️ |
 | L3 | Phasing | `src/server/game/Phasing/` | [phasing.md](phasing.md) | ❌ (always Unphased=0x08) | ⚠️ |
 
