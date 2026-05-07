@@ -81,6 +81,10 @@ pub enum PlayerStorageError {
     InvalidBagItemSlot(u8),
     UnknownBag(u8),
     EmptyPlayerSlot(u8),
+    EmptyBagItemSlot {
+        bag: u8,
+        slot: u8,
+    },
     OccupiedPlayerSlot(u8),
     OccupiedBagItemSlot {
         bag: u8,
@@ -92,6 +96,12 @@ pub enum PlayerStorageError {
         actual: ObjectGuid,
     },
     MismatchedItemGuid {
+        slot: u8,
+        expected: ObjectGuid,
+        actual: ObjectGuid,
+    },
+    MismatchedBagItemGuid {
+        bag: u8,
         slot: u8,
         expected: ObjectGuid,
         actual: ObjectGuid,
@@ -760,6 +770,74 @@ impl Player {
         self.store_bag_item(bag_slot, item_slot, item.object().guid())?;
         item.set_state(ItemUpdateState::Changed);
         bag.item_mut().set_state(ItemUpdateState::Changed);
+        Ok(())
+    }
+
+    pub fn merge_bag_item_stack_object(
+        &mut self,
+        bag_slot: u8,
+        bag: &Bag,
+        item_slot: u8,
+        existing: &mut Item,
+        incoming: &mut Item,
+        count: u32,
+    ) -> Result<(), PlayerStorageError> {
+        let bag_guid = bag.item().object().guid();
+        let bag_storage = self
+            .inventory
+            .bags
+            .get(bag_slot as usize)
+            .and_then(Option::as_ref)
+            .ok_or(PlayerStorageError::UnknownBag(bag_slot))?;
+
+        if bag_storage.bag_guid != bag_guid {
+            return Err(PlayerStorageError::MismatchedBagGuid {
+                bag: bag_slot,
+                expected: bag_storage.bag_guid,
+                actual: bag_guid,
+            });
+        }
+
+        if item_slot as usize >= MAX_BAG_SIZE || item_slot >= bag_storage.bag_size {
+            return Err(PlayerStorageError::InvalidBagItemSlot(item_slot));
+        }
+
+        let Some(expected_guid) = bag_storage.item_by_pos(item_slot) else {
+            return Err(PlayerStorageError::EmptyBagItemSlot {
+                bag: bag_slot,
+                slot: item_slot,
+            });
+        };
+
+        let bag_slot_guid = bag.item_by_pos(item_slot).unwrap_or(ObjectGuid::EMPTY);
+        if bag_slot_guid != expected_guid {
+            return Err(PlayerStorageError::MismatchedBagItemGuid {
+                bag: bag_slot,
+                slot: item_slot,
+                expected: expected_guid,
+                actual: bag_slot_guid,
+            });
+        }
+
+        let actual_guid = existing.object().guid();
+        if expected_guid != actual_guid {
+            return Err(PlayerStorageError::MismatchedBagItemGuid {
+                bag: bag_slot,
+                slot: item_slot,
+                expected: expected_guid,
+                actual: actual_guid,
+            });
+        }
+
+        existing.bind_if_stored(false);
+        existing.set_count(existing.count() + count);
+        existing.set_state(ItemUpdateState::Changed);
+
+        let owner_guid = self.guid();
+        incoming.set_owner_guid(owner_guid);
+        incoming.set_not_refundable();
+        incoming.clear_soulbound_tradeable();
+        incoming.set_state(ItemUpdateState::Removed);
         Ok(())
     }
 
@@ -1831,6 +1909,155 @@ mod tests {
             ),
             Err(PlayerStorageError::MismatchedItemGuid {
                 slot: INVENTORY_SLOT_ITEM_START,
+                expected,
+                actual,
+            })
+        );
+    }
+
+    #[test]
+    fn merge_bag_item_stack_object_matches_cpp_existing_stack_branch() {
+        let owner = ObjectGuid::create_player(1, 42);
+        let bag_guid = ObjectGuid::create_item(1, 840);
+        let existing_guid = ObjectGuid::create_item(1, 841);
+        let incoming_guid = ObjectGuid::create_item(1, 842);
+        let mut player = Player::new(None, false);
+        let mut bag = Bag::default();
+        let mut existing = Item::default();
+        let mut incoming = Item::default();
+
+        player.unit_mut().world_mut().object_mut().create(owner);
+        bag.try_initialize_created_state(crate::BagCreateInfo {
+            guid: bag_guid,
+            item_id: 100,
+            context: ItemContext::None,
+            owner: Some(owner),
+            max_durability: 0,
+            container_slots: 4,
+        })
+        .unwrap();
+        bag.item_mut().set_slot(INVENTORY_SLOT_BAG_START);
+        bag.item_mut().force_state(ItemUpdateState::Unchanged);
+        existing.object_mut().create(existing_guid);
+        existing.set_bonding(ItemBondingType::OnEquip);
+        existing.set_count(5);
+        existing.force_state(ItemUpdateState::Unchanged);
+        incoming.object_mut().create(incoming_guid);
+        incoming.set_item_flag(ItemFieldFlags::REFUNDABLE | ItemFieldFlags::BOP_TRADEABLE);
+        incoming.set_refund_recipient(ObjectGuid::create_player(1, 99));
+        incoming.set_paid_money(10);
+        incoming.set_paid_extended_cost(20);
+        incoming.force_state(ItemUpdateState::Unchanged);
+        bag.store_item(2, &mut existing);
+
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag_guid, 4)
+            .unwrap();
+        player
+            .store_bag_item(INVENTORY_SLOT_BAG_START, 2, existing_guid)
+            .unwrap();
+        player
+            .merge_bag_item_stack_object(
+                INVENTORY_SLOT_BAG_START,
+                &bag,
+                2,
+                &mut existing,
+                &mut incoming,
+                3,
+            )
+            .unwrap();
+
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_START, 2),
+            Some(existing_guid)
+        );
+        assert_eq!(bag.item_by_pos(2), Some(existing_guid));
+        assert_eq!(existing.count(), 8);
+        assert!(!existing.is_soul_bound());
+        assert_eq!(existing.update_state(), ItemUpdateState::Changed);
+        assert_eq!(bag.item().update_state(), ItemUpdateState::Unchanged);
+        assert_eq!(incoming.owner_guid(), owner);
+        assert!(!incoming.is_refundable());
+        assert!(!incoming.is_bop_tradeable());
+        assert_eq!(incoming.refund_recipient(), ObjectGuid::EMPTY);
+        assert_eq!(incoming.paid_money(), 0);
+        assert_eq!(incoming.paid_extended_cost(), 0);
+        assert_eq!(incoming.update_state(), ItemUpdateState::Removed);
+    }
+
+    #[test]
+    fn merge_bag_item_stack_object_rejects_empty_or_mismatched_slot() {
+        let owner = ObjectGuid::create_player(1, 42);
+        let bag_guid = ObjectGuid::create_item(1, 850);
+        let expected = ObjectGuid::create_item(1, 851);
+        let actual = ObjectGuid::create_item(1, 852);
+        let mut player = Player::new(None, false);
+        let mut bag = Bag::default();
+        let mut existing = Item::default();
+        let mut incoming = Item::default();
+
+        bag.try_initialize_created_state(crate::BagCreateInfo {
+            guid: bag_guid,
+            item_id: 100,
+            context: ItemContext::None,
+            owner: Some(owner),
+            max_durability: 0,
+            container_slots: 4,
+        })
+        .unwrap();
+        existing.object_mut().create(actual);
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag_guid, 4)
+            .unwrap();
+
+        assert_eq!(
+            player.merge_bag_item_stack_object(
+                INVENTORY_SLOT_BAG_START,
+                &bag,
+                2,
+                &mut existing,
+                &mut incoming,
+                1,
+            ),
+            Err(PlayerStorageError::EmptyBagItemSlot {
+                bag: INVENTORY_SLOT_BAG_START,
+                slot: 2,
+            })
+        );
+
+        player
+            .store_bag_item(INVENTORY_SLOT_BAG_START, 2, expected)
+            .unwrap();
+        assert_eq!(
+            player.merge_bag_item_stack_object(
+                INVENTORY_SLOT_BAG_START,
+                &bag,
+                2,
+                &mut existing,
+                &mut incoming,
+                1,
+            ),
+            Err(PlayerStorageError::MismatchedBagItemGuid {
+                bag: INVENTORY_SLOT_BAG_START,
+                slot: 2,
+                expected,
+                actual: ObjectGuid::EMPTY,
+            })
+        );
+
+        bag.store_item(2, &mut existing);
+        assert_eq!(
+            player.merge_bag_item_stack_object(
+                INVENTORY_SLOT_BAG_START,
+                &bag,
+                2,
+                &mut existing,
+                &mut incoming,
+                1,
+            ),
+            Err(PlayerStorageError::MismatchedBagItemGuid {
+                bag: INVENTORY_SLOT_BAG_START,
+                slot: 2,
                 expected,
                 actual,
             })
