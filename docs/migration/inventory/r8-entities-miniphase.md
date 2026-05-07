@@ -120,6 +120,11 @@
   Rust targets: `crates/wow-entities/src/player.rs`, `crates/wow-entities/src/lib.rs`.
   Acceptance: `UF::VisibleItem` value shape (`ItemID`, `ItemAppearanceModID`, `ItemVisual`), `PlayerData::VisibleItems[19]` array bits (`61`, `62..80`), `SetVisibleItemSlot` clear/set semantics and the equipment-slot branch of `VisualizeItem` are represented and tested. C++ template-dependent `Item::GetVisibleEntry/GetVisibleAppearanceModId/GetVisibleItemVisual`, BoE/BoA binding, real `Item*` ownership side effects and final nested update-field packet serializers remain pending under #NEXT.R8.ENTITIES.013/#008.
 
+- [x] **#NEXT.R8.ENTITIES.046** Fix `InventoryType` bridge against C++ signed DB2 field and bag slots.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/ItemTemplate.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.h`.
+  Rust targets: `crates/wow-data/src/item.rs`, `crates/wow-packet/src/packets/item.rs`, `crates/wow-world/src/handlers/character.rs`.
+  Acceptance: `ItemEntry::InventoryType` is treated as signed at the DB2 boundary, negative and zero values do not map to equipment slots, `-1` no longer wraps to `INVENTORY_SLOT_BAG_0=255`, and `INVTYPE_BAG=18` maps to C++ equipped bag slots `30..33` instead of an equipment display slot. Existing flat `wow-world` inventory remains a temporary bridge until canonical `Player`/`Item` ownership replaces it under #NEXT.R8.ENTITIES.013.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

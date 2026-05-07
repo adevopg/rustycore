@@ -3667,10 +3667,10 @@ impl WorldSession {
                     return;
                 }
             };
-            // Build occupied map from currently equipped slots (0-18)
+            // Build occupied map from currently equipped gear and bag slots.
             let occupied: std::collections::HashMap<u8, ()> = self.inventory_items
                 .keys()
-                .filter(|&&s| s < 19)
+                .filter(|&&s| s < 19 || (30..34).contains(&s))
                 .map(|&s| (s, ()))
                 .collect();
             match equip_slot_for_inventory_type(inv_type, &occupied) {

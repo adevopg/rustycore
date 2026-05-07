@@ -216,15 +216,24 @@ impl InventoryChangeFailure {
 
 // ── InventoryType → equipment slot mapping ──────────────────────────
 
-/// Map an item's InventoryType to the target equipment slot.
+/// Map an item's InventoryType to the target player slot.
 ///
 /// Returns `None` for non-equippable types.
 /// For dual-slot items (ring, trinket, 1H weapon), picks the first empty
-/// slot or defaults to the primary slot.
+/// slot or defaults to the primary slot. Bags use the equipped bag slots
+/// (`INVENTORY_SLOT_BAG_START..END`, 30..34 in C++ Player.h).
 pub fn equip_slot_for_inventory_type(
     inv_type: u8,
     occupied: &std::collections::HashMap<u8, ()>,
 ) -> Option<u8> {
+    fn first_empty(occupied: &std::collections::HashMap<u8, ()>, slots: &[u8], fallback: u8) -> u8 {
+        slots
+            .iter()
+            .copied()
+            .find(|slot| !occupied.contains_key(slot))
+            .unwrap_or(fallback)
+    }
+
     match inv_type {
         1 => Some(0),        // Head
         2 => Some(1),        // Neck
@@ -236,29 +245,14 @@ pub fn equip_slot_for_inventory_type(
         8 => Some(7),        // Feet
         9 => Some(8),        // Wrists
         10 => Some(9),       // Hands
-        11 => {
-            // Finger → slot 10 or 11
-            if !occupied.contains_key(&10) { Some(10) }
-            else if !occupied.contains_key(&11) { Some(11) }
-            else { Some(10) }
-        }
-        12 => {
-            // Trinket → slot 12 or 13
-            if !occupied.contains_key(&12) { Some(12) }
-            else if !occupied.contains_key(&13) { Some(13) }
-            else { Some(12) }
-        }
-        13 => {
-            // 1H Weapon → mainhand 15 or offhand 16
-            if !occupied.contains_key(&15) { Some(15) }
-            else if !occupied.contains_key(&16) { Some(16) }
-            else { Some(15) }
-        }
+        11 => Some(first_empty(occupied, &[10, 11], 10)), // Finger
+        12 => Some(first_empty(occupied, &[12, 13], 12)), // Trinket
+        13 => Some(first_empty(occupied, &[15, 16], 15)), // 1H Weapon
         14 => Some(16),      // Shield → OffHand
         15 | 25 | 26 | 28 => Some(17), // Ranged / Thrown / RangedRight (Wand) / Relic
         16 => Some(14),      // Cloak
         17 | 21 => Some(15), // 2H Weapon / WeaponMainHand
-        18 => Some(3),       // Bag → shirt slot? Actually bags go in 19-22
+        18 => Some(first_empty(occupied, &[30, 31, 32, 33], 30)), // Bag
         19 => Some(18),      // Tabard
         22 => Some(16),      // WeaponOffHand
         23 => Some(16),      // Holdable → OffHand
@@ -390,6 +384,14 @@ mod tests {
         assert_eq!(equip_slot_for_inventory_type(5, &empty), Some(4));  // Chest
         assert_eq!(equip_slot_for_inventory_type(16, &empty), Some(14)); // Cloak
         assert_eq!(equip_slot_for_inventory_type(17, &empty), Some(15)); // 2H Weapon
+        assert_eq!(equip_slot_for_inventory_type(18, &empty), Some(30)); // Bag
         assert_eq!(equip_slot_for_inventory_type(0, &empty), None);     // Non-equippable
+    }
+
+    #[test]
+    fn equip_slot_for_bag_uses_cpp_bag_slot_range() {
+        let occupied = std::collections::HashMap::from([(30, ()), (31, ()), (32, ())]);
+
+        assert_eq!(equip_slot_for_inventory_type(18, &occupied), Some(33));
     }
 }

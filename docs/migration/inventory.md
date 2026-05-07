@@ -3,9 +3,9 @@
 > **C++ canonical path:** `src/server/game/Entities/Item/`, `src/server/game/Entities/Player/PlayerStorage.cpp` (logical split of `Player.cpp`), `src/server/game/Handlers/ItemHandler.cpp` + `BankHandler.cpp` + `VoidStorageHandler.cpp`, `src/server/game/Server/Packets/ItemPackets*.cpp`/`BankPackets.cpp`/`VoidStoragePackets.cpp`
 > **Rust target crate(s):** `crates/wow-data/` (Item.db2, ItemTemplate, ItemStats), `crates/wow-world/` (handlers, session inventory state), `crates/wow-database/` (item_instance + character_inventory + character_void_storage + character_transmog_outfits + character_equipmentsets prepared statements), `crates/wow-packet/` (item/bank/void packets)
 > **Layer:** L4 (item entity) + L6 (player storage logic + handlers) — straddles layers; primary index entry is L6.
-> **Status:** ⚠️ partial (flat `HashMap<u8 slot, InventoryItem>` of equipped + backpack only; no `Item` entity, no `Bag` containers, no bank, no void, no transmog, no durability, no wrap, no repair, no buyback queue, no enchant slots)
+> **Status:** ⚠️ partial (base `wow-entities` Item/Bag/Player storage exists and legacy flat `wow-world` inventory bridge remains; no canonical ownership/runtime/DB persistence yet)
 > **Audited vs C++:** ✅ complete (re-audit 2026-05-01)
-> **Last updated:** 2026-05-01
+> **Last updated:** 2026-05-07
 
 ---
 
@@ -641,7 +641,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - **Slot 30..33 dual meaning**: positions 30-33 are themselves **equipment slots** holding `Bag` items, and at the same time they identify "which equipped bag" when used as the `bag` field for sub-items. The `_LoadInventory` query `ORDER BY (ii.flags & 0x80000) ASC, bag ASC, slot ASC` ensures bags are loaded BEFORE their contents — preserve this.
 - **`item_instance.flags` bit 0x80000** is `ITEM_FIELD_FLAG_CHILD` (or similar) used to gate the load order. Don't rename without updating the SELECT.
 - **`MAX_BAG_SIZE = 36`** is theoretical — WoLK bags max at 22 slots (Embersilk Bag). Keep 36 to match TC array sizing for forward-compat.
-- **`InventoryType` value -1** in `Item.db2` means non-equippable. The Rust reader currently casts `i8` → `u8` which would produce 255 (a valid sentinel for `INVENTORY_SLOT_BAG_0`!). FIX: keep as `i8`, return `Option<InventoryType>` from `inventory_type()`.
+- **`InventoryType` value -1** in `Item.db2` means non-equippable. Fixed in `#NEXT.R8.ENTITIES.046`: Rust keeps the signed DB2 boundary and returns no equip slot for negative/zero values, so `-1` cannot wrap to `INVENTORY_SLOT_BAG_0=255`.
 - **`character_inventory.bag` column is `BIGINT UNSIGNED`** and stores the GUID of the parent bag (not the slot index). For items in the player's main inventory, `bag = 0` (or NULL on some shards). Match TrinityCore exactly.
 - **Stack count** is `u32` in TC (`StackCount` update field) but most items stack to ≤200; mind upper-bound.
 - **Refund 2-hour window**: uses `CreatePlayedTime` (in seconds of /played at creation) compared to current /played. Persists across logout — DO NOT use wall-clock.
@@ -706,7 +706,7 @@ Cross-checked C++ canonical sources at `/home/server/woltk-trinity-legacy/src/se
 
 ### What actually exists
 
-- `crates/wow-data/src/item.rs:21 ItemRecord` (123 lines total) reads only 6 fields from `Item.db2`: id, class, subclass, material, inventory_type, sheathe. `inventory_type` is loaded as `i8` and exposed as such — but downstream callers cast to `u8`, so a value of `-1` (non-equippable) becomes `255` which collides with the `INVENTORY_SLOT_BAG_0=255` sentinel. **Latent equip-slot resolution bug confirmed.**
+- `crates/wow-data/src/item.rs:21 ItemRecord` reads only 6 fields from `Item.db2`: id, class, subclass, material, inventory_type, sheathe. `inventory_type` remains loaded as C++ `int8`; as of `#NEXT.R8.ENTITIES.046`, negative/zero values return `None` for equip mapping and no longer wrap to the `INVENTORY_SLOT_BAG_0=255` sentinel.
 - `crates/wow-data/src/item_stats.rs` (424 lines) holds ItemSparse-derived stat allocation logic (not deeply audited here, but doc claims it exists and grep confirms a `PlayerStatsStore` is wired into `WorldSession.player_stats`).
 - `crates/wow-packet/src/packets/item.rs:19 InventoryResult` enum exposes **14 codes** (Ok, CantEquipLevelI, WrongSlot, BagFull, NotEquippable, CantSwap, SlotEmpty, ItemNotFound, DropBoundItem, NotABag, NotOwner, PlayerDead, InvFull, InternalBagError) vs **118 codes** in C++ `ItemDefines.h::InventoryResult`. ~88% of reject paths are unrepresentable.
 - `crates/wow-world/src/session.rs:197` carries `inventory_items: HashMap<u8, InventoryItem>` keyed by slot byte. The `InventoryItem` struct (`session.rs:321`) is just `{ guid: ObjectGuid, entry_id: u32, db_guid: u64, inventory_type: Option<u8> }` — **no stack count, no durability, no enchantments, no charges, no soulbound flag, no creator GUID, no gems, no transmog, no random property, no expiration, no bonus list IDs.** Compared to C++ `Item` which has all of those plus the `UF::ItemData` update fields blob. The Rust struct is the bare minimum to remember "slot N has item X".

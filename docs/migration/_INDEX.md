@@ -70,7 +70,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 |---|---|---|---|---|---|
 | L4 | Entities | `src/server/game/Entities/` | [entities.md](entities.md) | 🔧 ~5% (no UpdateMask) | ⚠️ |
 | L4 | Entities/Pet | `src/server/game/Entities/Pet/` | [pets.md](pets.md) | ❌ (16 opcodes + 1 stub) | ✅ |
-| L4 | Entities/Item (Inventory) | `src/server/game/Entities/Item/` + Player inventory | [inventory.md](inventory.md) | ⚠️ ~24% (base Item+Bag + Player storage/ObjectAccessor lookup + visible item state; no ownership/runtime/DB) | ⚠️ |
+| L4 | Entities/Item (Inventory) | `src/server/game/Entities/Item/` + Player inventory | [inventory.md](inventory.md) | ⚠️ ~25% (base Item+Bag + Player storage/ObjectAccessor lookup + visible item state; InventoryType bridge fixed; no ownership/runtime/DB) | ⚠️ |
 
 > Nota: Entities es un mega-módulo con ~16 sub-tipos (Object, WorldObject, Unit, Player, Creature, GameObject, Pet, DynamicObject, AreaTrigger, Conversation, Corpse, Vehicle, Transport, SceneObject, Totem, Item). Si su doc supera ~500 líneas, splitear en `entities-<subtipo>.md`.
 
@@ -175,7 +175,7 @@ Layer: L0–L8 según `MIGRATION_ROADMAP.md` § 2.
 | 🟡 P2 | shared-realm | `cfg_timezones_id`/`cfg_categories_id` invertidos vs C++ | Timezone/category mal asignados | `shared-realm.md` §13 |
 | 🟡 P2 | bnetserver | `extract_auth_ticket` usa base64 verbatim (TC base64-decoda + truncate `:`) | Falla con tokens spec-compliant | `bnetserver.md` §13 |
 | 🟡 P2 | shared-packets | `read_float` acepta NaN/Inf (C++ throws) | Hostile client poison | `shared-packets.md` §13 |
-| 🟡 P2 | inventory | Item.db2 `inventory_type i8→u8` cast colisiona con `INVENTORY_SLOT_BAG_0=255` | Items non-equippable mal mapeados | `inventory.md` §13 |
+| 🟢 fixed | inventory | Item.db2 `inventory_type i8→u8` cast colisionaba con `INVENTORY_SLOT_BAG_0=255`; `INVTYPE_BAG=18` también iba a slot 3 | Cerrado en `#NEXT.R8.ENTITIES.046` | `inventory.md` §13 |
 | 🟡 P2 | time | `to_packed` usa 30-day months + wrong year anchor | `SMSG_LOGIN_SET_TIME_SPEED` wrong | `time.md` §13 |
 | 🟡 P2 | groups | race-5 Undead = Alliance; HP/power=1000/500 placeholder | Grupo party display roto | `groups.md` §13 |
 | 🟡 P2 | server | 11 silent log-only no-ops (`Emote`, `SendTextEmote`, `WorldPortResponse`, `TrainerBuySpell`, 7 quest opcodes) | Cliente no obtiene response | `server.md` §13 |

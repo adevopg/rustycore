@@ -72,13 +72,17 @@ impl ItemStore {
         self.items.get(&entry_id)
     }
 
-    /// Get the inventory type for an item (convenience method).
+    /// Get the equip/storage inventory type for an item (convenience method).
     ///
-    /// Returns `None` if the item is not found, `Some(type)` otherwise.
-    /// Note: inventory_type can be negative (-1 = non-equippable), stored as i8
-    /// but returned as u8 for compatibility with equipment slot logic.
+    /// C++ stores `ItemEntry::InventoryType` as `int8` and later exposes it
+    /// through the unsigned `InventoryType` enum where 0 is non-equippable.
+    /// Rust keeps negative and zero values out of equipment-slot mapping so
+    /// `-1` cannot wrap to the `INVENTORY_SLOT_BAG_0=255` sentinel.
     pub fn inventory_type(&self, entry_id: u32) -> Option<u8> {
-        self.items.get(&entry_id).map(|r| r.inventory_type as u8)
+        self.items
+            .get(&entry_id)
+            .and_then(|r| u8::try_from(r.inventory_type).ok())
+            .filter(|&inventory_type| inventory_type != 0)
     }
 
     /// Number of items in the store.
@@ -119,5 +123,50 @@ mod tests {
         if let Some(hs) = store.get(6948) {
             assert_eq!(hs.class_id, 15, "Hearthstone should be class 15 (Misc)");
         }
+    }
+
+    #[test]
+    fn inventory_type_does_not_wrap_non_equippable_values() {
+        let store = ItemStore {
+            items: std::collections::HashMap::from([
+                (
+                    1,
+                    ItemRecord {
+                        id: 1,
+                        class_id: 15,
+                        subclass_id: 0,
+                        material: 0,
+                        inventory_type: -1,
+                        sheathe_type: 0,
+                    },
+                ),
+                (
+                    2,
+                    ItemRecord {
+                        id: 2,
+                        class_id: 15,
+                        subclass_id: 0,
+                        material: 0,
+                        inventory_type: 0,
+                        sheathe_type: 0,
+                    },
+                ),
+                (
+                    3,
+                    ItemRecord {
+                        id: 3,
+                        class_id: 2,
+                        subclass_id: 7,
+                        material: 1,
+                        inventory_type: 13,
+                        sheathe_type: 3,
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(store.inventory_type(1), None);
+        assert_eq!(store.inventory_type(2), None);
+        assert_eq!(store.inventory_type(3), Some(13));
     }
 }
