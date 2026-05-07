@@ -532,6 +532,13 @@ pub struct DestroyFilteredItemAction {
     pub slot: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitanGripPenaltyAction {
+    None,
+    Cast(u32),
+    Remove(u32),
+}
+
 fn item_ref_by_pos<'a>(items: &'a [ItemSlotRef<'a>], bag: u8, slot: u8) -> Option<&'a Item> {
     items
         .iter()
@@ -800,6 +807,8 @@ pub struct Player {
     is_active: bool,
     controlled_by_player: bool,
     accept_whispers: bool,
+    can_titan_grip: bool,
+    titan_grip_penalty_spell_id: u32,
 }
 
 impl Player {
@@ -828,6 +837,8 @@ impl Player {
             is_active: true,
             controlled_by_player: true,
             accept_whispers: !can_filter_whispers,
+            can_titan_grip: false,
+            titan_grip_penalty_spell_id: 0,
         }
     }
 
@@ -3971,6 +3982,77 @@ impl Player {
         }
 
         slot
+    }
+
+    pub const fn can_titan_grip(&self) -> bool {
+        self.can_titan_grip
+    }
+
+    pub const fn titan_grip_penalty_spell_id(&self) -> u32 {
+        self.titan_grip_penalty_spell_id
+    }
+
+    pub fn set_can_titan_grip(&mut self, value: bool, penalty_spell_id: u32) {
+        if value == self.can_titan_grip {
+            return;
+        }
+
+        self.can_titan_grip = value;
+        self.titan_grip_penalty_spell_id = penalty_spell_id;
+    }
+
+    pub const fn is_use_equipped_weapon(
+        mainhand: bool,
+        is_in_feral_form: bool,
+        is_disarmed: bool,
+    ) -> bool {
+        !is_in_feral_form && (!mainhand || !is_disarmed)
+    }
+
+    pub fn is_two_hand_used_template(&self, main_template: Option<&ItemStorageTemplate>) -> bool {
+        let Some(template) = main_template else {
+            return false;
+        };
+
+        (template.inventory_type == InventoryType::Weapon2Hand && !self.can_titan_grip)
+            || template.inventory_type == InventoryType::Ranged
+            || (template.inventory_type == InventoryType::RangedRight
+                && template.class_id == ItemClass::Weapon
+                && template.subclass_id != ItemSubClassWeapon::Wand as u32)
+    }
+
+    pub fn is_using_two_handed_weapon_in_one_hand_template(
+        main_template: Option<&ItemStorageTemplate>,
+        off_template: Option<&ItemStorageTemplate>,
+    ) -> bool {
+        if off_template
+            .is_some_and(|template| template.inventory_type == InventoryType::Weapon2Hand)
+        {
+            return true;
+        }
+
+        main_template.is_some_and(|template| template.inventory_type == InventoryType::Weapon2Hand)
+            && off_template.is_some()
+    }
+
+    pub fn check_titan_grip_penalty_action(
+        &self,
+        using_two_handed_weapon_in_one_hand: bool,
+        has_penalty_aura: bool,
+    ) -> TitanGripPenaltyAction {
+        if !self.can_titan_grip {
+            return TitanGripPenaltyAction::None;
+        }
+
+        if using_two_handed_weapon_in_one_hand {
+            if has_penalty_aura {
+                TitanGripPenaltyAction::None
+            } else {
+                TitanGripPenaltyAction::Cast(self.titan_grip_penalty_spell_id)
+            }
+        } else {
+            TitanGripPenaltyAction::Remove(self.titan_grip_penalty_spell_id)
+        }
     }
 
     pub fn set_power_index(&mut self, power: PowerType, index: Option<usize>) {
@@ -9448,5 +9530,91 @@ mod tests {
         assert_eq!(player.get_item_from_buyback_slot(slot), Some(expected));
         assert_eq!(player.active_data().buyback_price[0], 123);
         assert_eq!(player.active_data().buyback_timestamp[0], 456);
+    }
+
+    #[test]
+    fn titan_grip_and_equipped_weapon_helpers_match_cpp_representable_rules() {
+        let mut player = Player::new(None, false);
+        let two_hand = ItemStorageTemplate {
+            inventory_type: InventoryType::Weapon2Hand,
+            class_id: ItemClass::Weapon,
+            ..ItemStorageTemplate::regular_item(2000, 1)
+        };
+        let one_hand = ItemStorageTemplate {
+            inventory_type: InventoryType::Weapon,
+            class_id: ItemClass::Weapon,
+            ..ItemStorageTemplate::regular_item(2001, 1)
+        };
+        let ranged = ItemStorageTemplate {
+            inventory_type: InventoryType::Ranged,
+            class_id: ItemClass::Weapon,
+            ..ItemStorageTemplate::regular_item(2002, 1)
+        };
+        let ranged_right_non_wand = ItemStorageTemplate {
+            inventory_type: InventoryType::RangedRight,
+            class_id: ItemClass::Weapon,
+            subclass_id: ItemSubClassWeapon::Bow as u32,
+            ..ItemStorageTemplate::regular_item(2003, 1)
+        };
+        let wand = ItemStorageTemplate {
+            inventory_type: InventoryType::RangedRight,
+            class_id: ItemClass::Weapon,
+            subclass_id: ItemSubClassWeapon::Wand as u32,
+            ..ItemStorageTemplate::regular_item(2004, 1)
+        };
+
+        assert!(Player::is_use_equipped_weapon(false, false, true));
+        assert!(!Player::is_use_equipped_weapon(true, false, true));
+        assert!(!Player::is_use_equipped_weapon(false, true, false));
+
+        assert!(!player.can_titan_grip());
+        assert_eq!(player.titan_grip_penalty_spell_id(), 0);
+        assert!(player.is_two_hand_used_template(Some(&two_hand)));
+        assert!(player.is_two_hand_used_template(Some(&ranged)));
+        assert!(player.is_two_hand_used_template(Some(&ranged_right_non_wand)));
+        assert!(!player.is_two_hand_used_template(Some(&wand)));
+        assert!(!player.is_two_hand_used_template(None));
+
+        player.set_can_titan_grip(true, 49152);
+        player.set_can_titan_grip(true, 99999);
+        assert!(player.can_titan_grip());
+        assert_eq!(player.titan_grip_penalty_spell_id(), 49152);
+        assert!(!player.is_two_hand_used_template(Some(&two_hand)));
+
+        assert!(Player::is_using_two_handed_weapon_in_one_hand_template(
+            Some(&one_hand),
+            Some(&two_hand),
+        ));
+        assert!(Player::is_using_two_handed_weapon_in_one_hand_template(
+            Some(&two_hand),
+            Some(&one_hand),
+        ));
+        assert!(!Player::is_using_two_handed_weapon_in_one_hand_template(
+            Some(&two_hand),
+            None,
+        ));
+        assert!(!Player::is_using_two_handed_weapon_in_one_hand_template(
+            Some(&one_hand),
+            Some(&one_hand),
+        ));
+
+        assert_eq!(
+            player.check_titan_grip_penalty_action(true, false),
+            TitanGripPenaltyAction::Cast(49152)
+        );
+        assert_eq!(
+            player.check_titan_grip_penalty_action(true, true),
+            TitanGripPenaltyAction::None
+        );
+        assert_eq!(
+            player.check_titan_grip_penalty_action(false, true),
+            TitanGripPenaltyAction::Remove(49152)
+        );
+
+        player.set_can_titan_grip(false, 0);
+        assert_eq!(
+            player.check_titan_grip_penalty_action(true, false),
+            TitanGripPenaltyAction::None
+        );
     }
 }
