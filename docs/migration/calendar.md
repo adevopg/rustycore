@@ -345,6 +345,18 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#CALENDAR.DIV.001` | _none generated_ | 2 C++ files / 1140 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Calendar/CalendarMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Calendar/CalendarMgr.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Sentinel time `946684800`** (`2000-01-01 00:00:00 UTC`) marks "never responded". Don't replace with `0` — the client checks this exact value to render the "Pending" badge.
 - **Repeat types are decorative.** The 3.3.5 server never auto-recreates events, even when the client sends `WEEKLY`/`BIWEEKLY`/`MONTHLY`. Be careful not to reintroduce a "feature" that breaks parity.
 - **Free-id deques are LIFO** (`std::deque<uint64>` with `push_back` / `pop_back`). Tests for id reuse depend on this ordering.

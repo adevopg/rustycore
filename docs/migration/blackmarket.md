@@ -235,6 +235,19 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#BLACKMARKET.DIV.001` | `crates/wow-world/src/blackmarket` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 682 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#BLACKMARKET.DIV.002` | `crates/wow-blackmarket` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 682 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **MoP content in a WotLK Classic codebase.** The single most important note: this is **5.4 Pandaria** infra ported back into the modern TC main branch and inherited by the Wrath Classic fork. The 3.4.3 client should never originate these CMSGs. If it does, treat as suspect — likely a modded client.
 - **`_secondsRemaining` is `uint32` but compared as signed.** `IsCompleted() return GetSecondsRemaining() <= 0;` returns a `uint32` from `GetSecondsRemaining`, but the `<= 0` triggers signed-int promotion in C++. Underflow wraps to a huge positive value, and `<= 0` becomes false — so a wrapped entry "looks alive forever" until the next `Update` recomputes. Watch for this; in Rust, prefer `i64` end-time math.
 - **`_lastUpdate` anchor is shared.** Every `BlackMarketEntry`'s `GetSecondsRemaining` is computed against the manager's `_lastUpdate`. If you split the manager across threads, treat `_lastUpdate` as the synchronization point.

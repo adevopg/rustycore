@@ -213,6 +213,18 @@ PlayerDumpWriter:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#TOOLS.DIV.001` | `crates/wow-tools` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 1394 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Tools/PlayerDump.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Tools/CharacterDatabaseCleaner.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Tools/PlayerDump.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Cleaner's `IN`-list builder uses raw string concatenation**: `ss << "DELETE FROM " << table << " WHERE " << column << " IN ("` — safe in C++ only because `column` and `table` are compile-time constants and `id` is a `uint32`. **In Rust, use bound parameters** (`sqlx`'s `bind` works for `Vec<u32>` against MariaDB). Don't replicate the C++ pattern.
 - **`SpellCheck` excludes talents**: a spell is considered valid for `character_spell` only if it exists AND lacks `SPELL_ATTR0_CU_IS_TALENT`. Talents live in `character_talent`, not `character_spell`. Don't merge the two.
 - **`CleanCharacterTalent`'s direct delete runs unconditionally** (even if subsequent `CheckUnique` finds no orphans). The two phases are independent — the direct delete is for the multi-spec-removal path on character upgrade.

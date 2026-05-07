@@ -443,6 +443,18 @@ HTTP routes (verb + path):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#BNETSERVER.DIV.001` | `crates/bnet-server/src/rpc/services/{account,authentication,connection,game_utilities}.rs` (`declared_pattern`, 0 Rust lines) | 23 C++ files / 3266 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/bnetserver/Server/Session.cpp`, `/home/server/woltk-trinity-legacy/src/server/bnetserver/REST/LoginRESTService.cpp`, `/home/server/woltk-trinity-legacy/src/server/bnetserver/Main.cpp` | `declared_pattern` | Rust target is a pattern/proposal, not a concrete checked file/module. pattern/proposed path; not resolvable as one file or directory |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two ports, two TLS contexts, one binary.** Don't accidentally share a `ServerConfig` — REST may have ALPN (the WoW launcher has been observed both with and without; TC and the C# fork stay safe by **not** advertising ALPN).
 - **Boost.Asio `io_context.run()` blocks the main thread.** TC achieves multi-threading by spawning N additional threads that all call `run()` on the **same** context. Tokio's analogue is just "be on the multi-thread runtime" — the worldserver's `ThreadPool` config has no exact equivalent and shouldn't be ported literally.
 - **Signal handlers register before `io_context.run()`.** TC uses `boost::asio::signal_set` with `async_wait`, which integrates with the io_context's poll loop. Tokio's `tokio::signal::ctrl_c` and `tokio::signal::unix::signal(SIGTERM)` both work but **only one** can be installed per signal — pick `ctrl_c` for SIGINT, install `signal(SIGTERM)` separately.

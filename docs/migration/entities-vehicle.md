@@ -226,6 +226,18 @@ DBC stores:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_VEHICLE.DIV.001` | _none generated_ | 3 C++ files / 1342 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/VehicleDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - Aura 236 `SPELL_AURA_CONTROL_VEHICLE` is the single drive of mount/dismount — `Vehicle::AddVehiclePassenger` is **always** invoked from aura apply, never directly from a CMSG. Don't write a "mount handler" — write an aura effect.
 - `VehicleJoinEvent` exists because aura apply happens mid-spell-cast and you cannot complete the seat reservation synchronously without re-entering the spell system. Mirror this: defer the actual seat write by one tick.
 - `_status` (NONE/INSTALLED/UNINSTALLING) gates against double-uninstall during script callbacks. Mirror with an enum, not a bool.

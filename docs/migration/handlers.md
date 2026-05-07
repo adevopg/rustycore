@@ -687,6 +687,18 @@ Rust: `attack_swing`, `attack_stop`. Faltan duel-related (5).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#HANDLERS.DIV.001` | `crates/wow-world/tests` (`missing_declared_path`, 0 Rust lines) | 46 C++ files / 21843 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Handlers/CharacterHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Handlers/MiscHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Handlers/BattleGroundHandler.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`WorldSession` stateful:** mantiene `Player*`, cache, pending tx. En Rust `struct Session` con sync. Verificar locks.
 - **Async ops:** `HandlePlayerLogin` hace ~10 queries seq. ¿Rust async? Cuidado executor blocking.
 - **Opcodes vary by expansion:** WoLK 3.4.3 != Cata != MoP. Mantener `wow_constants::ClientOpcodes` sync con cliente target.

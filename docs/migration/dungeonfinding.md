@@ -441,6 +441,18 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#DUNGEONFINDING.DIV.001` | `crates/wow-world/src/lfg` (`missing_declared_path`, 0 Rust lines) | 14 C++ files / 4861 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/DungeonFinding/LFGMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/DungeonFinding/LFGQueue.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/DungeonFinding/LFGMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Opcode naming en este fork**: `CMSG_DF_*` (Dungeon Finder) para LFG automático, `CMSG_LFG_LIST_*` para Premade Group Finder (LFGList). Son **dos sistemas distintos**. No confundir.
 - `LFG_TANKS_NEEDED=1`, `LFG_HEALERS_NEEDED=1`, `LFG_DPS_NEEDED=3`. Hardcoded; no se puede correr LFG con composición distinta sin patch.
 - `LFGDungeonData::Entry()` = `id | (type << 24)`. El cliente espera el **entry packed**, no el id raw. Bug clásico: olvidar el shift.

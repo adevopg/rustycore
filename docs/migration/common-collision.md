@@ -420,6 +420,22 @@ Every test below must be added to `crates/wow-collision/tests/` once the crate e
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#COMMON_COLLISION.DIV.001` | `crates/wow-recastdetour` (`exists_empty`, 0 Rust lines) | 1 C++ files / 34 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DetourMemoryFunctions.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMMON_COLLISION.DIV.002` | `crates/wow-collision` (`missing_declared_path`, 0 Rust lines) | 1 C++ files / 34 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DetourMemoryFunctions.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#COMMON_COLLISION.DIV.003` | `crates/wow-recastdetour/src/lib.rs` (`exists_empty`, 0 Rust lines) | 1 C++ files / 34 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DetourMemoryFunctions.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#COMMON_COLLISION.DIV.004` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 1 C++ files / 34 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DetourMemoryFunctions.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMMON_COLLISION.DIV.005` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 1 C++ files / 34 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DetourMemoryFunctions.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The `unpackTileID` bug is real.** `MapTree.h:82`: `unpackTileID(uint32 ID, …) { tileX = ID >> 16; tileY = ID & 0xFF; }` — note the mask is `& 0xFF`, not `& 0xFFFF`. This means tileY is silently truncated to [0, 255] on unpack, but pack uses no mask. `tileX` and `tileY` are both legitimately in [0, 63], so the bug doesn't fire in practice, but **do not "fix" it on port** — preserve the asymmetry, because if a future map ever produces tileY ≥ 256 the divergence would matter, and we want the Rust port to be byte-identical first, behaviorally-correct second.
 - **`floatToRawIntBits` / `intBitsToFloat`.** BIH packs floats as `uint32` inside its `tree` vector to keep the storage homogeneous. Port via `f32::to_bits` / `f32::from_bits` — but watch out for sign-bit usage in `BIH::intersectRay`: `offsetFront[i] = floatToRawIntBits(dir[i]) >> 31` extracts the sign of the ray direction to pick which child to visit first. Subnormals and `±0.0` must be handled identically to C++ (test against negative zero specifically).
 - **NaN-induces-infinite-loop assertion.** `DynamicMapTree::getObjectHitPos:207`: `ASSERT(maxDist < std::numeric_limits<float>::max())`. Without this guard, BIH ray traversal hangs. The Rust port must either keep the assertion (with `wow-logging` LOG-and-bail) or refuse the call with `Err(NotFinite)`.

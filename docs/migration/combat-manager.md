@@ -303,6 +303,19 @@ Complexity: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#COMBAT_MANAGER.DIV.001` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 2 C++ files / 552 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Combat/CombatManager.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Combat/CombatManager.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMBAT_MANAGER.DIV.002` | `crates/wow-combat/src/lib.rs` (`exists_empty`, 0 Rust lines) | 2 C++ files / 552 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Combat/CombatManager.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Combat/CombatManager.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **PvE vs PvP refs are physically separate maps**: a Unit can hold both `_pveRefs[mob_guid]` and `_pvpRefs[player_guid]` simultaneously. Don't merge them — the eviction rules differ (PvE = leash distance, PvP = 5-second timer).
 - **Suppress flags are dual-sided**: `_suppressFirst` and `_suppressSecond` track each side independently. A vanished rogue is `suppressed` on rogue's side; the opponent is still actively in combat from their side until *their* condition triggers (combat end, target cleared). Implementing as a single `suppressed: bool` is wrong.
 - **Combat ref is heap-allocated and shared**: in C++, a single `CombatReference*` is held by both `_combatManager.pveRefs[other_guid]` and `other._combatManager.pveRefs[self_guid]`. Both pointers point to the same struct. EndCombat purges from both sides via `PurgeReference` × 2. In Rust, use `Box<CombatReference>` owned by *one* side, `&CombatReference` reference held by other (or rebuild lookups as `HashMap<(ObjectGuid, ObjectGuid), CombatReference>` keyed by sorted pair — simpler).

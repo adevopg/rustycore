@@ -347,6 +347,18 @@ Numbering: `#EVENTS.N`. Complexity: **L** (<1h), **M** (1–4h), **H** (4–12h)
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#EVENTS.DIV.001` | `crates/wow-gameevents` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 2070 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventSender.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two separate "events" — keep them separate.** `GameEventMgr` (this doc) is the *holiday/world-event scheduler*. `GameEvents::Trigger` (also this doc, but separate API) is the *runtime event-id sender* used by spell `EFFECT_SEND_EVENT` and `GAMEOBJECT_TYPE_GOOBER`. They share neither code path nor data table — `GameEventMgr` reads `game_event*` tables, `GameEvents::Trigger` reads `event_scripts`. C++ TrinityCore puts them in the same directory because they both involve "events", but they are independent systems. Don't merge them in Rust.
 - **Time storage matters.** `game_event.start_time DATETIME` is read with `UNIX_TIMESTAMP()` and compared to `time(nullptr)`. In Rust, use `i64` UTC seconds (or `chrono::DateTime<Utc>`) — never local time, never `SystemTime` without explicit UTC conversion.
 - The `mGameEventCreatureGuids` / `mGameEventGameobjectGuids` collections are **populated by `ObjectMgr` during creature/gameobject load** (so that creature load can skip event-only spawns "for now") and consumed by `GameEventSpawn`. Two-phase initialization: `ObjectMgr::LoadCreatures` runs first and writes; `GameEventMgr::Initialize` runs second and reads. Preserve this ordering.

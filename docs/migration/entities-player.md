@@ -787,6 +787,20 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_PLAYER.DIV.001` | `crates/wow-entities` (`missing_declared_path`, 0 Rust lines) | 23 C++ files / 36422 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/CollectionMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_PLAYER.DIV.002` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 23 C++ files / 36422 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/CollectionMgr.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#ENTITIES_PLAYER.DIV.003` | `crates/wow-loot` (`exists_empty`, 0 Rust lines) | 23 C++ files / 36422 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/CollectionMgr.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 ### `Player::Update()` is the spinal cord — preserve order
 
 The C++ `Update()` body has subtle ordering invariants. Re-ordering will silently break:

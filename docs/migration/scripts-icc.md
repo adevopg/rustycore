@@ -445,6 +445,21 @@ Tests demonstrating Rust = C++ for invariants the encounters rely on.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SCRIPTS_ICC.DIV.001` | `crates/wow-scripts` (`exists_empty`, 0 Rust lines) | 17 C++ files / 20965 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTS_ICC.DIV.002` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 17 C++ files / 20965 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTS_ICC.DIV.003` | `crates/wow-scripts/src/lib.rs` (`exists_empty`, 0 Rust lines) | 17 C++ files / 20965 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SCRIPTS_ICC.DIV.004` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 17 C++ files / 20965 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two-step dispatch (CLAUDE.md)**: every `boss_*AI` and `npc_*AI` must both have a registered `BossAI` factory **and** a `PacketHandlerEntry`-equivalent inventory submission, or it silently dies. The script registry needs the same discipline as the packet dispatcher.
 - **`Talk()` lookups** read from `creature_text`. Missing rows → silent no-op, encounter is technically beatable but loses RP/timing cues. Build a lint that scans the SAY_/EMOTE_/WHISPER_ enums against the DB on startup in dev mode.
 - **`IsHeroic()` and `Is25ManRaid()`** are read 100s of times per encounter. Cache the difficulty per session, do not re-read `Map::GetDifficulty()` on every event tick.

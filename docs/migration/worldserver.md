@@ -364,6 +364,18 @@ DBUpdater (auto-applies pending `.sql` files) is invoked by `DatabaseLoader::Loa
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#WORLDSERVER.DIV.001` | _none generated_ | 8 C++ files / 1434 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/worldserver/Main.cpp`, `/home/server/woltk-trinity-legacy/src/server/worldserver/RemoteAccess/RASession.cpp`, `/home/server/woltk-trinity-legacy/src/server/worldserver/CommandLine/CliRunnable.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The `World::Update` tick is the single source of truth for game time.** TC's `getMSTime()` is sampled once per loop iteration; everything inside that iteration sees the same `realCurrTime`. Per-session ticks in RustyCore mean each session has its own time. Combat timing, aura tick alignment, AoE radii on moving targets — all have subtle dependencies on a global tick. Plan the migration to a global tick early or expect bugs that "only show up in raids".
 - **`MinWorldUpdateTime` default is 1 ms**, but TC uses `getMSTime` which is *millisecond-resolution*. So the loop effectively runs as fast as the OS scheduler allows. `MaxCoreStuckTime` default is 60 seconds.
 - **`ABORT_MSG` in `FreezeDetector::Handler` is intentional**: TC wants the process to crash and be restarted by the supervisor. This is more reliable than trying to recover. Replicate this verbatim — `std::process::abort()` (which dumps core), not `std::process::exit(1)`.

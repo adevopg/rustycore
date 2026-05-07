@@ -192,6 +192,18 @@ DBC stores (post-WoLK):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_SCENEOBJECT.DIV.001` | _none generated_ | 2 C++ files / 296 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/SceneObject/SceneObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/SceneObject/SceneObject.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WoLK 3.4.3 retail client cannot render scenes or pet battles.** All structural code is dead infrastructure. Spawning a SceneObject on a real 3.4 client will at best be ignored.
 - **Pet battles are explicitly out of scope** for a 3.4 server even with full SceneObject support — they require their own DB tables (`battle_pet_*`), DB2 files, and a 6v6 turn-based combat engine. Do not start that work without explicit user direction.
 - The C# legacy reference at `/home/server/woltk-server-core/Source/` likely **does not** have a SceneObject class.

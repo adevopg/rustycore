@@ -290,6 +290,18 @@ N/A — `WorldSocket` (en `game/Server`) origina opcodes; Networking solo transp
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_NETWORKING.DIV.001` | _none generated_ | 13 C++ files / 1893 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Socket.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Http/HttpService.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Http/BaseHttpSocket.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **ServerCounter quirk:** C# siempre incrementa, incluso para packets sin cifrar. Rust replica. Ver `world_socket.rs` L67-81.
 2. **Nonce reuse = RIP AES-GCM:** Per-direction counter NUNCA puede colisionar entre direcciones. Counter overflow tras 2^64 causa IV reuse. Mitigación: session timeout << 2^64 packets (en práctica imposible alcanzar).
 3. **Boost.ASIO IOCP vs epoll:** C++ multiplexa según OS; Tokio abstrae ambos.

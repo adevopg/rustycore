@@ -208,6 +208,18 @@ Bit-packing: `WriteBits` puede mezclarse con bytes planos en mismo packet; `Flus
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_PACKETS.DIV.001` | `crates/wow-packet/tests` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 873 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Packets/ByteBuffer.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Packets/ByteBuffer.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Bit-packing en WoLK 3.4.3 es delicado:** algunos opcodes mezclan bytes planos + bit-packed. Llamar `FlushBits()` explícito antes de cambiar modo.
 - **Endianness:** little-endian en mayoría; algunos casos especiales (GUIDs comprimidos). Ver `ByteConverter.h` C++.
 - **`MessageBuffer`:** C++ tiene pooling. Rust usa `BytesMut` directamente con capacidad pre-asignada.

@@ -536,6 +536,21 @@ Numerados para referencia desde `MIGRATION_ROADMAP.md`. Complejidad: **L** <1h, 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SPELLS.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 8 C++ files / 15660 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Spell.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SPELLS.DIV.002` | `crates/wow-packet/src/packets/{spell,aura}.rs` (`declared_pattern`, 0 Rust lines) | 8 C++ files / 15660 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Spell.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.cpp` | `declared_pattern` | Rust target is a pattern/proposal, not a concrete checked file/module. pattern/proposed path; not resolvable as one file or directory |
+| `#SPELLS.DIV.003` | `crates/wow-spell/src/lib.rs` (`exists_empty`, 0 Rust lines) | 8 C++ files / 15660 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Spell.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SPELLS.DIV.004` | `crates/wow-data/src/spell_info.rs` (`missing_declared_path`, 0 Rust lines) | 8 C++ files / 15660 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Spell.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellScript.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **GCD per-school no es por-spell:** El GCD agrupa por `SpellSchool` (NORMAL/HOLY/FIRE/...) — un Frost Bolt comparte GCD con Frost Nova pero NO con Holy Light. La implementación actual de RustyCore (single global `last_spell_cast_time`) es trivialmente incorrecta y bloqueará casts legales (Spell.cpp:3475-3520, SpellHistory.cpp:560).
 - **Category cooldown ≠ spell cooldown:** Algunos spells comparten un `Category` (Hunter Aspects, Paladin Seals); poner una de un grupo en cd pone TODA la categoría. Hay 3 ejes: GCD, spell cd, category cd; los 3 conviven (SpellHistory.cpp:HandleCooldowns).
 - **Charges:** Spells con multi-cast (Mind Flay, Avenger's Shield) usan SpellCategoryRecoveryTime + ChargeRecoveryCategory. Cuando consumes la última charge, la categoría entra en cooldown hasta que se regenera (SpellHistory.cpp:ConsumeCharge).

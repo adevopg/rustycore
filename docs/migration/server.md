@@ -1440,6 +1440,18 @@ Server module handles ALL opcode dispatch. Listed by category:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SERVER.DIV.001` | _none generated_ | 164 C++ files / 48144 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Server/Protocol/Opcodes.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Server/Protocol/Opcodes.h`, `/home/server/woltk-trinity-legacy/src/server/game/Server/WorldSession.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **WoLK 3.4.3 auth is challenge-response**, not token-based. The client must compute HMAC-SHA256(session_key, AUTH_CHECK_SEED + challenge_data) and send back the digest. If the digest doesn't match server calculation, connection is rejected. See `WorldSocket::HandleAuthSession()` in C++ for seed constants.
 
 2. **EnterEncryptedMode is signed with Ed25519**. After validation, server sends this packet signed; client verifies signature before enabling AES-GCM. Missing or wrong signature → connection drops before encryption.

@@ -369,6 +369,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#INSTANCES.DIV.001` | `crates/wow-instances` (`missing_declared_path`, 0 Rust lines) | 7 C++ files / 2783 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceScript.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceLockMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceScript.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Instance ID is *not* the same as `mapId`.** `mapId` identifies the dungeon (e.g., 533 = Naxxramas); `instanceId` is a server-allocated global counter that goes into the instance map key alongside `mapId`. The bits encode kind: `INSTANCE_ID_HIGH_MASK = 0x1F440000`, `_LFG_MASK = 0x00000001`, `_NORMAL_MASK = 0x00010000`. Get this wrong and DB rows from prior runs will collide.
 - **Lock owner = group leader if grouped, else self.** Crucial — when a player leaves the group, their lock record persists referencing the *old* group-leader's guid as owner, but their own `character_instance_lock.guid` is themselves. The two-table split (`instance` shared + `character_instance_lock` per-player) exists exactly to handle this.
 - **Two lock states.** A temporary lock exists from instance-creation until first boss kill; it is *not* persisted. Don't write to DB on every player enter — only on first encounter completion.

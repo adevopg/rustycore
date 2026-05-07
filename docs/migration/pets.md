@@ -513,6 +513,21 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#PETS.DIV.001` | `crates/wow-world/src/pets` (`missing_declared_path`, 0 Rust lines) | 3 C++ files / 2307 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#PETS.DIV.002` | `crates/wow-world/src/handlers/pets.rs` (`missing_declared_path`, 0 Rust lines) | 3 C++ files / 2307 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#PETS.DIV.003` | `crates/wow-packet/src/packets/pets.rs` (`missing_declared_path`, 0 Rust lines) | 3 C++ files / 2307 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#PETS.DIV.004` | `crates/wow-world/src/handlers/character.rs:3040–3045` (`missing_declared_path`, 0 Rust lines) | 3 C++ files / 2307 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Pet identity is `pet_number`, not creature `entry`.** Two hunter pets of the same creature template get distinct pet_numbers — that's the primary key in `character_pet.id` and the ObjectGuid low part for the spawned `Pet`. Don't conflate `entry` (the species) with `pet_number` (the individual).
 - **`character_pet.slot` is signed `SMALLINT`** because PET_SAVE_AS_CURRENT=-3 / PET_SAVE_AS_DELETED=-2 / PET_SAVE_NOT_IN_SLOT=-1 are encoded literally. Active slots 0-4, stable slots 5-205.
 - **`PetStable::CurrentPetIndex` uses high-bit mask `0x80000000`** to distinguish unslotted (mask set) from active-slot index (mask clear). Mirror this exactly — TC's `GetCurrentActivePetIndex` returns `nullopt` if the high bit is set; `GetCurrentUnslottedPetIndex` returns `Some(index & ~mask)` if set.

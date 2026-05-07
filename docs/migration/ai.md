@@ -503,6 +503,21 @@ Numerados para referencia desde `MIGRATION_ROADMAP.md`. Complejidad: **L** <1h, 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#AI.DIV.001` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 11 C++ files / 1324 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.h`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAISelector.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#AI.DIV.002` | `crates/wow-scripts` (`exists_empty`, 0 Rust lines) | 11 C++ files / 1324 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.h`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAISelector.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#AI.DIV.003` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 11 C++ files / 1324 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.h`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAISelector.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#AI.DIV.004` | `crates/wow-scripts/src/lib.rs` (`exists_empty`, 0 Rust lines) | 11 C++ files / 1324 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAI.h`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CreatureAISelector.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **SmartScript event/action es enorme:** En 3.4.3 hay ~80 SMART_EVENT_* y ~150 SMART_ACTION_*. La tabla `smart_scripts` tiene ~50k filas. Cada `entryOrGuid` (positivo=template, negativo=spawn) puede tener 50+ filas. La validación per-fila es densa: muchos action.params dependen del action_type concreto, así que SmartScriptMgr tiene un switch gigante de validación por separado del intérprete (SmartScriptMgr.cpp:IsEventValid). **No saltarse esta validación** en RustyCore — cargar inválido = crashes en runtime.
 - **Leashing:** Cuando un mob persigue al player demasiado lejos (más de `leashRange`, default ~50yd del spawn), debe entrar `EnterEvadeMode(Boundary)`. Sin esto, los mobs te siguen al otro lado del mapa. C++ checa esto en `CreatureAI::CheckBoundary` cada tick (CreatureAI.cpp).
 - **Evading vs Despawning:** Evade = vuelve a home con full HP, sigue spawneado. Despawn = se va del mundo, respawn timer empieza. Boss kills → JustDied → loot drop → corpse linger → DespawnOrUnsummon. Mob evade no despawnea. Confundirlos rompe respawns y logs (CreatureAI.cpp:EnterEvadeMode default).

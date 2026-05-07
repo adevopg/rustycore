@@ -307,6 +307,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#CONDITIONS.DIV.001` | `crates/wow-world/src/conditions` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 4800 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/DisableMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - The conditions DB schema is a single denormalized table and reuses the same columns for every type, so `ConditionValue1/2/3` mean different things depending on `ConditionType`. The C++ `StaticConditionTypeData[]` table at the bottom of `ConditionMgr.cpp` is the source of truth for "which slots are used" — port it verbatim.
 - `ElseGroup = 0` is treated as "default group". Two rows with `ElseGroup = 0` and `ElseGroup = 1` form an OR; two rows with both `ElseGroup = 0` form an AND.
 - `ConditionTarget` ∈ {0, 1, 2} selects which entry in `ConditionSourceInfo::mConditionTargets[]` to evaluate against. Most rows use 0 (the primary target). For 2-target source types like `SPELL_CLICK_EVENT`, target 1 is the clicked unit.

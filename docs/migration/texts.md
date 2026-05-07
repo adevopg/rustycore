@@ -240,6 +240,18 @@ This module *only* sends; nothing client-originated routes here.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#TEXTS.DIV.001` | `crates/wow-chat` (`exists_empty`, 0 Rust lines) | 5 C++ files / 955 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgrImpl.h`, `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The `duration` return value drives boss talk pacing**: `BossAI::Talk(group)` schedules its next line based on it. Don't change the return type or hide the field — many scripts implicitly depend on it.
 - **`CreatureTextMgr` drives ALL boss talks, NPC yells, scripted whispers**. Any "talk" in TrinityCore code goes through `Creature::Talk(group)` which delegates here. There is essentially no other path. This is the single most-trafficked text system in the server.
 - **`text_repeat` lives on the `Creature` (per-instance), not on the `CreatureTextMgr` (per-entry)**. Two instances of the same boss in two different copies of the same instance do *not* share repeat memory. Mirror that — put it on `WorldCreature`, not on the mgr.

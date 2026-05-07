@@ -270,6 +270,18 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#OUTDOORPVP.DIV.001` | `crates/wow-pvp` (`exists_empty`, 0 Rust lines) | 4 C++ files / 823 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/OutdoorPvP/OutdoorPvP.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/OutdoorPvP/OutdoorPvP.h`, `/home/server/woltk-trinity-legacy/src/server/game/OutdoorPvP/OutdoorPvPMgr.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **ZONA EP (Eastern Plaguelands) NO EXISTE en este fork legacy.** El template original de TC tiene 7 zonas; este snapshot WoLK sólo registra HP/NA/TF/ZM/SI (`OutdoorPvPTypes::MAX_OUTDOORPVP_TYPES = 6` con índice 0 reservado).
 - **Wintergrasp NO está aquí.** Vive en `Battlefield/` (zona 4197, lake battle 30 min) — documentar en `battlefield.md`. El field `m_OutdoorMapIds[5] = 1` es para Silithus en Kalimdor; `[1..=4] = 530` son los 4 de Outland.
 - World-states en OutdoorPvP usan **scope `Map*`**, NO global. Si Rust hace los worldstates globales, alliance ganando HP en server 1 mostrará buff en server-instance 2 (BUG potencial).

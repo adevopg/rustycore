@@ -537,6 +537,21 @@ Numerados como `#SPELLS-EFFECTS.N` para referencia desde `MIGRATION_ROADMAP.md`.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SPELLS_EFFECTS.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 1 C++ files / 5956 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellEffects.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SPELLS_EFFECTS.DIV.002` | `crates/wow-spell/src/effects/dispatch.rs` (`missing_declared_path`, 0 Rust lines) | 1 C++ files / 5956 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellEffects.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SPELLS_EFFECTS.DIV.003` | `crates/wow-spell/src/lib.rs` (`exists_empty`, 0 Rust lines) | 1 C++ files / 5956 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellEffects.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SPELLS_EFFECTS.DIV.004` | `crates/wow-data/src/spell_info.rs` (`missing_declared_path`, 0 Rust lines) | 1 C++ files / 5956 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellEffects.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`EffectScriptEffect` y `EffectDummy` son catch-all.** Mucha lógica de bosses y abilities específicas vive ahí. El handler en C++ es un giant switch sobre `m_spellInfo->Id` con ~50-100 special cases — al portar, es preferible mover esa lógica a SpellScript registry y dejar el handler genérico delegando a script. Don't replicate the C++ switch literally — usa el DSL.
 - **`EffectSummonType` (28) es un effecto, ~10 tipos distintos.** El discriminator real es `SummonProperties.db2` indexed por `m_spellInfo->GetEffect(eff_idx).MiscValueB`. Los tipos: SUMMON_TYPE_NONE=0, SUMMON_TYPE_PET=1, SUMMON_TYPE_GUARDIAN=2, SUMMON_TYPE_MINION=3, SUMMON_TYPE_TOTEM=4, SUMMON_TYPE_MINIPET=5 (companion), SUMMON_TYPE_VEHICLE_FORCED=6, SUMMON_TYPE_VEHICLE_FACING=7, etc. Cada uno tiene factionMask + control flags + lifetime distinto. Bug clásico: tratarlos uniforme.
 - **LAUNCH vs HIT mode separation.** Damage spells corren `EffectSchoolDMG` en LAUNCH (computar daño con stats actuales del caster, antes del missile travel). Al impact (HIT), el damage ya está pre-computado. Si haces todo en HIT, el caster puede morir y aún así su daño se aplica con stats post-mortem (broken). Algunos efectos específicos (`EffectKnockBack`) corren en HIT porque dependen de la posición final.

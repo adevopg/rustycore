@@ -199,6 +199,18 @@ DBC stores:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_TOTEM.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 2 C++ files / 227 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Totem/Totem.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Totem/Totem.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`MAX_TOTEM_SLOT` is the count, not an index** — slot indices are `SUMMON_SLOT_TOTEM (=1)` through `SUMMON_SLOT_TOTEM+3`. Off-by-one is the canonical bug here.
 - The four-slot bar on the client is **0-indexed** in `SMSG_TOTEM_CREATED` (Slot field is `slot - SUMMON_SLOT_TOTEM`). Do not send the absolute summon-slot index.
 - `m_unitTypeMask |= UNIT_MASK_TOTEM` matters for spell targeting. Don't drop it.

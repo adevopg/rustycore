@@ -418,6 +418,18 @@ Tests demonstrating Rust behavior ≡ C++ behavior for grid lifecycle and loadin
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#GRIDS.DIV.001` | _none generated_ | 19 C++ files / 4592 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Grids/Notifiers/GridNotifiers.h`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/Notifiers/GridNotifiersImpl.h`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/Notifiers/GridNotifiers.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 **C++ historical bugs / design quirks:**
 
 - **Grid state timing asymmetry (GridStates.cpp:28-44):** ActiveState calls `info.UpdateTimeTracker(diff)` and checks expiry; IdleState and RemovalState do not call Update on InvalidState. This timing model must be preserved in Rust.

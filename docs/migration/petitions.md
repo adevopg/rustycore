@@ -313,6 +313,20 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#PETITIONS.DIV.001` | `crates/wow-world/src/petitions` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 317 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#PETITIONS.DIV.002` | `crates/wow-packet/src/packets/petitions.rs` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 317 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#PETITIONS.DIV.003` | `crates/wow-world/src/handlers/petitions.rs` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 317 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - The "PetitionID" in `SMSG_QUERY_PETITION_RESPONSE` is the **low part of the petition GUID** (`uint32(petitionguid.GetCounter())`) — the client treats it as a `u32` even though server-side the canonical key is a 64-bit `ObjectGuid`. Don't be tempted to use the high part.
 - The `PetitionGuid` is the **charter item's** GUID. There is no separate "petition GUID" — when the player loses or destroys the charter item, the petition is orphaned (and `RemovePetition` is the only path to clean it up).
 - C++ uses `ObjectGuid::Create<HighGuid::Item>(uint64)` to deserialize from DB — in Rust, mirror this so `petition.petitionguid` produces an Item-typed ObjectGuid, not Player.

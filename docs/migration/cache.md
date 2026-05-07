@@ -191,6 +191,19 @@ Used to tell clients to drop their client-side name caches and re-query for that
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#CACHE.DIV.001` | `crates/wow-cache` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 393 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#CACHE.DIV.002` | `crates/wow-social` (`exists_empty`, 0 Rust lines) | 2 C++ files / 393 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Name keys**: in C++ the by-name map uses the raw `std::string` from the DB. WoW clients send names with the canonical first-letter-cap spelling but the cache happens to be looked up via exact match. Trinity gets away with it because all writes use the same canonicalization. **For the Rust port, lower-case the key** — it's safer and avoids future foot-guns.
 - **Two-store invariant**: the C++ name-store holds a `CharacterCacheEntry*` into the guid-store. Any `rehash` of the guid-store invalidates those pointers. Trinity is "safe" only because it sizes the cache once and never bulk-inserts after that. **Don't replicate this** — store the GUID in the name map, then chain to the guid map.
 - **`UpdateCharacterInfoDeleted` is the only mutator that takes `name` separately and rewrites the entry's `Name` field**. The reason: undelete sends the new name directly. Don't merge it with `update_data`.

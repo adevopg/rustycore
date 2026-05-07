@@ -598,6 +598,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#INVENTORY.DIV.001` | _none generated_ | 10 C++ files / 5156 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/Item.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/ItemTemplate.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/enuminfo_ItemDefines.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`INVENTORY_SLOT_BAG_0 = 255` sentinel**: when `bag` field is 255, the item is in the player's "main" bag (equipped slots 0-18, profession 19-29, equipped-bag-slots 30-33, backpack 35-58). When `bag` is 30-33 or 87-93, the item is INSIDE that bag (with `slot` 0..bag.size). Confused handling here is the #1 bug source in TC ports.
 - **Slot 30..33 dual meaning**: positions 30-33 are themselves **equipment slots** holding `Bag` items, and at the same time they identify "which equipped bag" when used as the `bag` field for sub-items. The `_LoadInventory` query `ORDER BY (ii.flags & 0x80000) ASC, bag ASC, slot ASC` ensures bags are loaded BEFORE their contents — preserve this.
 - **`item_instance.flags` bit 0x80000** is `ITEM_FIELD_FLAG_CHILD` (or similar) used to gate the load order. Don't rename without updating the SELECT.

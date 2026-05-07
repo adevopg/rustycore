@@ -197,6 +197,18 @@ N/A — módulo enteramente offline/setup.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_SECRETS.DIV.001` | _none generated_ | 2 C++ files / 322 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Secrets/SecretMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/Secrets/SecretMgr.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **`SECRET_FLAG_DEFER_LOAD` es per-owner:** El macro `SECRET_FLAG(DEFER_LOAD, 0x1)` genera `BNETSERVER_DEFER_LOAD = 0x1 << 0` y `WORLDSERVER_DEFER_LOAD = 0x1 << 16`. La columna `_flags` empaqueta dos flags de 16 bits según owner. En la entry actual: `WORLDSERVER_DEFER_LOAD` significa “worldserver carga lazy”, `bnetserver` carga eager.
 2. **AES key-wrap format:** `AEEncryptWithRandomIV<AES>` produce `[random IV][ciphertext][HMAC tag]`. NO es AES-GCM standard — TrinityCore usa AES-CBC + HMAC-SHA256 separado. **Crítico para compat de DB**: si Rust usa AES-GCM aquí los TOTP secrets existentes son ilegibles.
 3. **`BigNumber` en C++ se serializa por `AsHexStr()`** para Argon2 input. En Rust replicar exactamente — strings hex sin prefijo, sin padding, lowercase (verificar).

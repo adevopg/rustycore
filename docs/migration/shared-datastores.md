@@ -282,6 +282,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_DATASTORES.DIV.001` | `crates/wow-data/src/{item,item_stats,player_stats,skill,area_trigger,spell,quest,quest_xp}.rs` (`declared_pattern`, 0 Rust lines) | 5 C++ files / 645 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/DataStores/DB2DatabaseLoader.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/DataStores/DB2Store.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/DataStores/DB2Store.h` | `declared_pattern` | Rust target is a pattern/proposal, not a concrete checked file/module. pattern/proposed path; not resolvable as one file or directory |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WDC4 vs WDC3**: Wrath of the Lich King Classic 3.4.3 ships **WDC4**, not WDC3 (despite the game version being WoLK). Magic is `'WDC4'` LE. The eight extra fields over WDC3 are: `TotalFieldCount`, `PackedDataOffset`, `LookupColumnCount` (renamed `ParentLookupCount`), `ColumnMetaSize` (renamed in headers as `field_storage_info_size`), `CommonDataSize`, `PalletDataSize`, `SectionCount` (multi-section files arrived in WDC4). Older docs referencing WDC3 *will* mislead.
 - **Encrypted sections**: WDC4 supports per-section TACT encryption (`tact_id` field). The retail client gets keys via Battle.net; private servers ship `DUMMY_KNOWN_TACT_ID = 0x5452494E49545900` ("TRINITY\0") and `DB2EncryptedSectionHandling::Process` — meaning the section is passed through verbatim without decryption, which works because the test data on private realms is unencrypted by convention. Don't gate on real TACT decryption — it's not needed.
 - **`HasIndexFieldInData()`**: Some DB2 files store the index/ID field inline with the rest of the record (offset 0 or wherever `IndexField` says); others store it in an out-of-band `id_list` and `record_size` excludes it. The 4-byte-prefix dance in `LoadFromDB`/`WriteRecord` (see `DB2DatabaseLoader.cpp:88-93`) is exactly to harmonize the in-memory layout: when the file *doesn't* store the index inline, the in-memory record gets the ID prepended so `T const*` dereferences are uniform across tables.

@@ -196,6 +196,18 @@ Payload: `WeatherState (uint32)`, `intensity (float, 0..1)`, `bool unk` (transit
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#WEATHER.DIV.001` | `crates/wow-weather` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 554 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Weather/Weather.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Weather/WeatherMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Weather/Weather.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Season trick**: 78 days offset puts spring start at March 20, then 91-day blocks. Don't simplify — the magic constants come from US Naval Observatory data and fans noticed mismatches in earlier rewrites.
 - **`Weather::Update` returning `false`** is the only way Weather objects get freed. The map tick must drop the `Weather` from its map when this happens, otherwise dead zones leak.
 - The 30/30/30/10 in `ReGenerate` is misleading — read it carefully: the first `if (u<30) return false` short-circuits, then the next checks reuse the same `u` so the distributions overlap. The Rust port should preserve the exact branch order, not re-derive a "cleaner" distribution.

@@ -611,6 +611,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md`. Complexity: **L** <1h,
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#AI_BASE.DIV.001` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 33 C++ files / 6592 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/PlayerAI/PlayerAI.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/ScriptedAI/ScriptedCreature.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/CoreAI/PetAI.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`me` semantic.** In TC, every `UnitAI` holds `Unit* const me` (non-owning back-pointer). In Rust this becomes either an `ObjectGuid` look-up through the world state each tick, or a borrowed `&mut Unit` parameter on every method. Storing a raw pointer/`Arc<Unit>` in the AI struct creates ownership cycles with the `Creature` that owns the AI. **Recommended pattern:** AI stores `ObjectGuid` only; `update_ai(&mut self, world: &mut World, diff: u32)` resolves the creature each call.
 - **`EnterEvadeMode` vs despawn.** Evading restores HP/auras and goes home — the creature stays spawned. Despawn removes the entity and starts the respawn timer. Boss kills go `JustDied → loot drop → corpse linger → DespawnOrUnsummon` (despawn). Trash that drops aggro through leashing goes `EnterEvadeMode(Boundary) → Reset → MoveTargetedHome → JustReachedHome` (no despawn). Conflating them breaks respawn timers and loot.
 - **`JustEnteredCombat` vs `JustEngagedWith`.** The first fires the moment any unit threatens us (including healing threat from a healer outside our LOS). The second fires only once a real attacker is established. Boss timers must use `JustEngagedWith` — using `JustEnteredCombat` causes encounters to start from a heal-pull. (CreatureAI.h:108–111.)

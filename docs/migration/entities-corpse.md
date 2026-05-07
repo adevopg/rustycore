@@ -339,6 +339,20 @@ DBC/DB2 stores read by Corpse:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_CORPSE.DIV.001` | `crates/wow-constants/src/object.rs:24,75` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 454 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_CORPSE.DIV.002` | `crates/wow-packet/src/packets/update_stubs.rs` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 454 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_CORPSE.DIV.003` | `crates/wow-world/src/handlers/loot.rs:172,199-218` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 454 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Corpse/Corpse.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two distinct corpses share the name in WoLK 3.4.3:**
   1. **Player Corpse** (this doc): the persisted `Corpse` entity, type 0/1/2, lives in `corpse` table, drives ghost / reclaim / Resurrection Sickness.
   2. **Creature Corpse**: the dead `Creature` itself with `m_corpseRemoveTime` ticking — *not* a `Corpse` instance, no DB row, decays in seconds-to-minutes.

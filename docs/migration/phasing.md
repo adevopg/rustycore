@@ -312,6 +312,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#PHASING.DIV.001` | `crates/wow-phasing` (`missing_declared_path`, 0 Rust lines) | 6 C++ files / 1421 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhasingHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhaseShift.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PersonalPhaseTracker.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - `DEFAULT_PHASE = 169`: special value treated by the client as "no phase". Several scripted areas place objects in phase 169 explicitly — do not collapse it to `None`.
 - The `Unphased` flag on `PhaseShiftFlags` is automatically maintained by `UpdateUnphasedFlag` based on `NonCosmeticReferences == 0`. Setting it manually is a bug source.
 - `PhaseRef::AreaConditions` is a non-owning back-pointer into a `std::vector<Condition>` owned by `ConditionMgr`. In Rust this should be `Weak<Vec<Condition>>` or a stable `ConditionsRef` handle; `ConditionMgr` reload must invalidate them safely.

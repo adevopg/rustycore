@@ -497,6 +497,18 @@ Numbered as `OBJECT.x` for cross-reference from `MIGRATION_ROADMAP.md` §5. Comp
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_OBJECT.DIV.001` | `crates/wow-packet/src/update.rs` (`missing_declared_path`, 0 Rust lines) | 22 C++ files / 14965 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Updates/UpdateFields.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Updates/UpdateField.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`UpdateFields` is the single most expensive port in the project.** `UpdateFields.h` is 943 lines of struct declarations; `UpdateFields.cpp` is 5097 lines of generated descriptor tables. Across all object types there are ~1500 logical fields. A naive hand-port is multi-week. **Strongly consider code-generating from `UpdateFields.h`** rather than hand-writing.
 - **`UpdateMask` is two-level**, not flat. The `_blocksMask` is a bitmask over the 32-bit `_blocks` themselves; serialization writes only blocks whose bit is set in `_blocksMask`. A single-level naive port will produce a packet that is technically correct but ~30% larger and that mis-parses on the client because the count prefix is wrong.
 - **`AddToWorld` / `RemoveFromWorld` chain through the inheritance tree.** `WorldObject::AddToWorld` calls `Object::AddToWorld` then registers with the grid; subclasses override and call parent. In Rust without inheritance, this becomes a sequence of explicit method calls — write a regression test specifically for "every level was visited."

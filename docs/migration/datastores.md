@@ -451,6 +451,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#DATASTORES.DIV.001` | _none generated_ | 13 C++ files / 30200 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Metadata.h`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2LoadInfo.h`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Spell tables are split**: WoLK 3.4.3 (post-MoP DB2 split) replaces a monolithic `Spell.db2` with `SpellName.db2` + `SpellEffect.db2` + `SpellMisc.db2` + `SpellCategories.db2` + `SpellAuraOptions.db2` + `SpellLevels.db2` + `SpellRange.db2` + `SpellCooldowns.db2` + `SpellEquippedItems.db2` + `SpellInterrupts.db2` + `SpellShapeshift.db2` + `SpellTargetRestrictions.db2` + `SpellAuraRestrictions.db2` + `SpellCastingRequirements.db2` + `SpellCastTimes.db2` + `SpellDuration.db2` + `SpellPower.db2` + `SpellReagents.db2` + `SpellTotems.db2` + `SpellClassOptions.db2` + `SpellAdditionalCastTimes.db2` + `SpellRuneCost.db2` + ~10 more. Server "SpellInfo" is composed by joining these by `SpellNameID`/`SpellID`/`DifficultyID`. **The Rust `spell.rs` reader's `SpellInfo` is therefore at most 1/30th of the truth**.
 - **`HotfixId`'s ordering matters**: `(PushID, UniqueID)` lexicographic ordering — `<=>` is defaulted in C++. The Rust `Ord` impl must mirror this exactly because the client expects pushes in this order.
 - **`Status::NotPublic` rows**: loaded server-side, but **not** sent to clients in `SMSG_AVAILABLE_HOTFIXES`. Used for staff-only items and unreleased content. The Rust port should respect this status during the push assembly.

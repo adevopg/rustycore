@@ -562,6 +562,22 @@ Per-boss (~12 each; complexity scales with line count):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SCRIPTS_ULDUAR.DIV.001` | `crates/wow-scripts` (`exists_empty`, 0 Rust lines) | 29 C++ files / 25120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTS_ULDUAR.DIV.002` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 29 C++ files / 25120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTS_ULDUAR.DIV.003` | `crates/wow-scripts/src/lib.rs` (`exists_empty`, 0 Rust lines) | 29 C++ files / 25120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SCRIPTS_ULDUAR.DIV.004` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 29 C++ files / 25120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SCRIPTS_ULDUAR.DIV.005` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 29 C++ files / 25120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_yogg_saron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_mimiron.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/Ulduar/Ulduar/boss_thorim.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Vehicle dependency**: Flame Leviathan, Razorscale (harpoon turrets), Mimiron (4 forms are 4 NPCs swapped in), Algalon (constellation seats), and the Hodir Toasty Fire / Storm Cloud objects all require the `wow-world` Vehicle subsystem. None of Ulduar should be merged before vehicles land. (#ULD.0a is the gate.)
 - **Loot-mode subtlety**: bits get *removed* as conditions degrade in Flame Leviathan; many other bosses *add* bits when conditions improve (Vezax animus, Mimiron self-destruct, Yogg keeper count). Don't conflate the two patterns.
 - **Yogg-Saron Sanity is the most complex aura mechanic in WotLK**. Stack value reaches 100 default and decays. Multiple sources reduce stacks: looking at Crusher, getting hit by Lunatic Gaze, being in tentacle eye-contact range, brain portal mistakes, Insane on 0. Sanity Wells (objects) restore. Aura model in `wow-spell` must support negative stack-mods + per-source attribution.

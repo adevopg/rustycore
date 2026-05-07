@@ -368,6 +368,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#AUCTIONHOUSE.DIV.001` | _none generated_ | 2 C++ files / 2353 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouse/AuctionHouseMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouse/AuctionHouseMgr.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - WotLK 3.4.3 is the "classic" build; **commodities and bucket-search were retrofitted** from retail. The client emits `CMSG_AUCTION_BROWSE_QUERY` regardless, so the server must support it. The legacy opcodes (`AUCTION_LIST_OWNER_ITEMS`, `AUCTION_LIST_BIDDER_ITEMS`, `AUCTION_LIST_PENDING_SALES`, `AUCTION_LIST_ITEMS`) are also still routed in WotLK but receive empty/legacy payloads.
 - Four `AuctionHouseObject`s exist: Alliance(1), Horde(2), Goblin(6, neutral mid-tier), Neutral(7). Goblin is rarely used in WotLK 3.4.x but the slot persists.
 - `MIN_AUCTION_TIME = 12 * HOUR`. Tiers in client are 12/24/48h. The deposit scales linearly by `(time / 12h)` so 48h costs 4× the base.

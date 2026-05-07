@@ -355,6 +355,19 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#POOLS.DIV.001` | `crates/wow-world/src/pools` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 1507 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/QuestPools.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#POOLS.DIV.002` | `crates/wow-pools` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 1507 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/QuestPools.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - The `pool_template.entry` is the pool ID, not a creature/gameobject entry — easy mistake when reading SQL by hand.
 - `MaxLimit` is the number of *currently alive* members the pool keeps, not the bag size. If the pool has 12 members and `MaxLimit = 1`, exactly one is up at any time.
 - `MapId = -1` in `PoolTemplateData` means "not yet determined". After load, every non-empty pool MUST have a non-`-1` mapId or the C++ ASSERTs. In Rust, return a hard error and refuse to start the world.

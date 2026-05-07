@@ -702,6 +702,20 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#BATTLEGROUNDS.DIV.001` | `crates/wow-pvp` (`exists_empty`, 0 Rust lines) | 43 C++ files / 17381 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Battleground.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.h`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#BATTLEGROUNDS.DIV.002` | `crates/wow-pvp/src/lib.rs` (`exists_empty`, 0 Rust lines) | 43 C++ files / 17381 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Battleground.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.h`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#BATTLEGROUNDS.DIV.003` | `crates/wow-maps` (`missing_declared_path`, 0 Rust lines) | 43 C++ files / 17381 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Battleground.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.h`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The C++ `BattlegroundQueueTypeId` is a packed 64-bit struct.** Do NOT serialize/deserialize as struct-by-struct; serialize as the same packed `(BMListId<<x | type<<y | rated<<z | teamSize)` integer wherever it crosses the wire / DB.
 - **Bracket math.** `MAX_BATTLEGROUND_BRACKETS = 9` corresponds to level windows from `PVPDifficulty.dbc`. Different BGs have different bracket counts in 3.4.3; a sub-9 BG must skip allocations for unused brackets — easy to off-by-one.
 - **Invite count vs invited+queued count.** `m_InvitedAlliance` / `m_InvitedHorde` are decremented by `RemovePlayerAtLeave`. If you invite a 2-man group and one accepts, one declines, you must decrement only on actual decline not on invite issuance — bug in early TC.

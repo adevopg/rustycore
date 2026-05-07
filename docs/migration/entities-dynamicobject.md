@@ -173,6 +173,18 @@ DynamicObjects are pushed via the generic `SMSG_UPDATE_OBJECT` path (object type
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_DYNAMICOBJECT.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 2 C++ files / 417 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Aura coupling is the trap.** A periodic AoE spell (e.g. Blizzard) creates a DynamicObject, then attaches an `Aura` to it. The Aura's `Update` ticks; the Aura's removal removes the dynobj. But for the FARSIGHT_FOCUS type there is **no** aura — `_duration` ticks down independently. Both paths must coexist.
 - `m_dynamicObjectData->Caster` is the **caster GUID**, but `_caster` is a raw `Unit*` cached for speed. In Rust use only the GUID and resolve via MapManager — back-pointers cause cleanup bugs.
 - WoLK 3.4 has no Polygon shape on DynamicObjects (that's AreaTrigger territory). Always a sphere of `radius`.

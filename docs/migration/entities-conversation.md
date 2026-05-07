@@ -195,6 +195,18 @@ DBC stores (post-WoLK):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_CONVERSATION.DIV.001` | _none generated_ | 2 C++ files / 501 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Conversation/Conversation.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Conversation/Conversation.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WoLK 3.4.3 retail client cannot render conversations.** The structural code (TYPEID, HighGuid, opcode constant) is in TC's WoLK fork as dead infrastructure. Spawning a Conversation entity on a real 3.4 client will at best be ignored, at worst desync the world state.
 - This module is the strongest "n/a" candidate of the seven entity sub-types in this batch. Recommend documenting and parking, not implementing.
 - The C# legacy reference at `/home/server/woltk-server-core/Source/` likely **does not** have a Conversation class either — confirm before starting any port work.

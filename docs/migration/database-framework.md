@@ -670,6 +670,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md`. Complexity: **L** <1h,
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#DATABASE_FRAMEWORK.DIV.001` | `crates/wow-data/src/hotfix_blob_cache.rs` (`missing_declared_path`, 0 Rust lines) | 44 C++ files / 10590 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/database/Database/Implementation/HotfixDatabase.cpp`, `/home/server/woltk-trinity-legacy/src/server/database/Database/Implementation/HotfixDatabase.h`, `/home/server/woltk-trinity-legacy/src/server/database/Database/Implementation/CharacterDatabase.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **TC ships two pools per logical DB**; merging them into one `sqlx::Pool` is a deliberate simplification, but at high login churn you can saturate the single pool while a transaction is mid-retry. Consider tuning `<Db>DatabaseInfo.PoolSize` higher than TC's `Sync+Async` sum.
 - **`PreparedStatement<T>` in C++ is type-tagged**; in Rust the tagging is at `Database<S>::prepare(stmt)` ingestion time only. Don't try to add `PhantomData<S>` to `PreparedStatement` itself — the existing test design (compile-fail) covers the misuse case at the right place.
 - **sqlx prepared-statement caching**: sqlx caches prepared `MYSQL_STMT` handles per-connection automatically. First call to a statement on a fresh connection prepares; subsequent calls reuse. This is why we don't need TC's `MySQLConnection::PrepareStatements()` warm-up — but it does mean cold pool acquisitions pay one round-trip extra. Don't `pool.close()` and re-`open()` to "reload" prepared statements; just restart the binary.

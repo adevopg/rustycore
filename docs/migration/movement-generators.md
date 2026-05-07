@@ -564,6 +564,20 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MOVEMENT_GENERATORS.DIV.001` | `crates/wow-movement/src/motion_master.rs` (`missing_declared_path`, 0 Rust lines) | 30 C++ files / 4535 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/WaypointMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/FlightPathMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Waypoints/WaypointManager.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#MOVEMENT_GENERATORS.DIV.002` | `crates/wow-movement/src/generators` (`missing_declared_path`, 0 Rust lines) | 30 C++ files / 4535 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/WaypointMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/FlightPathMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Waypoints/WaypointManager.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#MOVEMENT_GENERATORS.DIV.003` | `crates/wow-movement` (`missing_declared_path`, 0 Rust lines) | 30 C++ files / 4535 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/WaypointMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerators/FlightPathMovementGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Waypoints/WaypointManager.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Delayed actions are not optional.** Calling `Add/Remove/Clear` from inside `MovementGenerator::Update` causes iterator invalidation in C++ unless `MOTIONMASTER_FLAG_UPDATE` is set and the call is queued. Rust safety alone will not save us — the same logic must defer mutation to a `VecDeque<DelayedAction>` drained at end of tick.
 - **Slot is not priority.** Slot is *which class of motion* (default/active); priority is a comparator within the same slot. Removing from the wrong slot freezes a creature with no top-of-stack.
 - **`MOTION_SLOT_DEFAULT` always autofills with `IdleMovementGenerator`** when emptied. Forgetting this leaves the unit motionless after every `MoveTargetedHome` arrival.

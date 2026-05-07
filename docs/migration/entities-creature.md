@@ -414,6 +414,18 @@ DBC/DB2 stores read by Creature/Gossip/Trainer code:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_CREATURE.DIV.001` | `crates/wow-database/src/world_ext.rs` (`missing_declared_path`, 0 Rust lines) | 12 C++ files / 7471 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/GossipDef.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - The legacy storage `WorldSession::creatures: HashMap<ObjectGuid, CreatureAI>` plus `WorldSession::visible_creatures` is `#[deprecated]` per CLAUDE.md; `MapManager::WorldCreature` is the destination. Bridge wrappers in `map_helpers.rs` (`get_creature`, `with_creature_mut`, `spawn_creature_global`, `get_visible_creatures`) are the only path that should be added to going forward.
 - `_attic/creature_integration.rs.txt` was written against `CreatureCreateData` fields that **never existed** (`entry_id`, `position`, `current_hp`, `max_hp`). Real names are `entry`, `health`, `max_health`, with position passed separately. Don't re-introduce attic content mechanically — read `_attic/README.md` first.
 - `CreatureClassifications` matters for damage/HP modifiers and is stored on the **template**, not the spawn. Don't put it on `WorldCreature`.

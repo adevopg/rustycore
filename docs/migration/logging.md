@@ -263,6 +263,18 @@ Numbered for cross-reference. Complexity: **L** (<1h), **M** (1-4h), **H** (4-12
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#LOGGING.DIV.001` | _none generated_ | 2 C++ files / 87 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/database/Logging/AppenderDB.cpp`, `/home/server/woltk-trinity-legacy/src/server/database/Logging/AppenderDB.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **`LogFilter` is closed and coarse.** TC uses arbitrary dotted strings (`network.opcode`, `entities.player.skills`, `scripts.ai.escortai`). The Rust enum has 22 buckets. If you need finer subdivision, either add a variant or attach a `subsystem = "..."` field to the macro call. The closed enum is a deliberate ergonomics tradeoff; the cost shows up in operations who can't dial down `network.opcode` separately from `network.kick`.
 2. **`tracing` levels are 5, TC levels are 7.** `trace, debug, info, warn, error` ↔ `Trace, Debug, Info, Warn, Error+Fatal collapsed`. `Disabled` collapses to "filter excludes everything". The DB column expects `0..6`; the translation function in `#LOG.17` is the load-bearing piece.
 3. **`init_logging` is one-shot per process.** It uses `set_global_default`. Tests that need a different subscriber must use `tracing::subscriber::with_default(local)` per test; never call `init_logging` from tests.

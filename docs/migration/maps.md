@@ -470,6 +470,18 @@ Tests that demonstrate Rust behavior ≡ C++ behavior for key invariants.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MAPS.DIV.001` | `crates/wow-world/src/map.rs` (`missing_declared_path`, 0 Rust lines) | 23 C++ files / 10194 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/MapScripts.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 **C++ historical bugs / design quirks:**
 - **Grid state machine timing:** The C++ GridInfo::UpdateTimeTracker(diff) is called only by ActiveState and RemovalState, not InvalidState. RustyCore must preserve this asymmetry (GridStates.cpp:28-43).
 - **GRID_STATE_REMOVAL race condition:** If a player enters a grid during RemovalState, the unload can be deferred. C++ uses explicit unload locks (`getUnloadLock()`) to prevent despawning active entities (GridInfo.cpp:36-39).

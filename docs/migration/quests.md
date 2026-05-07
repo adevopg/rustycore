@@ -438,6 +438,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#QUESTS.DIV.001` | `crates/wow-quest` (`missing_declared_path`, 0 Rust lines) | 5 C++ files / 2194 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestDef.h`, `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestDef.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestObjectiveCriteriaMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`MAX_QUEST_LOG_SIZE = 25`** is wire-protocol-baked — sending more breaks the client UI; never increase without confirming client patch.
 - **DAILY flag is `0x1000`, NOT `0x4000`.** `0x4000 = QUEST_FLAGS_DEPRECATED`. Current Rust check is wrong (#QUESTS.2). WEEKLY = `0x8000`. Repeatable comes from `quest_template_addon.SpecialFlags & 0x001`, not the regular flags.
 - **Quest-objective groups vs sequencing.** TC uses `OrderIndex` + `QUEST_OBJECTIVE_FLAG_SEQUENCED` to gate visibility, plus computed `QUEST_SPECIAL_FLAGS_SEQUENCED_OBJECTIVES` to mark the whole quest as sequenced. Items obtained out-of-order on a sequenced quest must still be queued, not rejected.

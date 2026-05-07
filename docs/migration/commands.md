@@ -698,6 +698,22 @@ Each test should produce a Rust output byte-equal (ignoring locale-dependent tim
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#COMMANDS.DIV.001` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 43 C++ files / 23101 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_misc.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_debug.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_lookup.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMMANDS.DIV.002` | `crates/wow-scripts` (`exists_empty`, 0 Rust lines) | 43 C++ files / 23101 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_misc.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_debug.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_lookup.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMMANDS.DIV.003` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 43 C++ files / 23101 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_misc.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_debug.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_lookup.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#COMMANDS.DIV.004` | `crates/wow-scripts/src/lib.rs` (`exists_empty`, 0 Rust lines) | 43 C++ files / 23101 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_misc.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_debug.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_lookup.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#COMMANDS.DIV.005` | `crates/wow-chat/src/lib.rs` (`exists_empty`, 0 Rust lines) | 43 C++ files / 23101 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_misc.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_debug.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Commands/cs_lookup.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The `.commands` command itself enumerates all commands the caller can execute, filtered by RBAC** — so getting RBAC wrong means GMs see commands they can't run, or worse, can't see commands they can run. Test `.commands` early and often.
 - **RA / SOAP do not bypass RBAC** — they re-authenticate against the same account table. `RBAC_PERM_COMMANDS_USE_REMOTEACCESS` is the gatekeeper. There is also `RBAC_PERM_COMMANDS_PINFO_CHECK_PERSONAL_DATA` (the GDPR-flavoured opt-in for `.pinfo` to expose email/last-IP).
 - **`Console::Yes/No` is the wrong abstraction post-2017** — many commands are *technically* Console-safe (no `WorldSession*` deref) but operationally GM-only because they need a target selection. Don't blindly mirror — cross-check the handler body.

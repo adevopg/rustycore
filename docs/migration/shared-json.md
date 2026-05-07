@@ -182,6 +182,18 @@ N/A directo. Indirectamente: el output JSON va dentro de payloads bnet auth, no 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_JSON.DIV.001` | _none generated_ | 2 C++ files / 495 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/JSON/ProtobufJSON.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/JSON/ProtobufJSON.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **TrinityCore usa proto JSON, RustyCore usa serde:** divergencia consciente. Equivalencia debe **validarse contra payloads reales**, no asumirse.
 2. **Trailing `\0`:** importante. C++ incluye el terminator en `length + 1` para zlib. Rust replica con `format!(..."\0")`. Si se omite, el cliente puede leer mal el final del JSON.
 3. **Default values:** la diferencia más probable de causar bugs. Proto3 → "no campo" === "campo con default"; el cliente WoW puede tratarlos distinto.

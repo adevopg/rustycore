@@ -865,6 +865,18 @@ Concrete sub-tasks (one per service group):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#PROTO.DIV.001` | `crates/wow-proto/proto/bgs/low/pb/client` (`exists_empty`, 0 Rust lines) | 69 C++ files / 115428 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/proto/Client/club_request.pb.h`, `/home/server/woltk-trinity-legacy/src/server/proto/Client/account_types.pb.h`, `/home/server/woltk-trinity-legacy/src/server/proto/Client/club_core.pb.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. directory exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two transports.** Battle.net runs over **two** transports in parallel: (a) JSON-over-HTTPS for the *Login form* leg (uses `Login.proto` types, `proto2` syntax with `optimize_for = CODE_SIZE`), and (b) length-prefixed binary RPC over TLS for everything else (uses the `bgs.low` services). Don't conflate them — `bnet-server` exposes both on different ports (1119 binary RPC, 8081 REST/JSON).
 - **`service_hash` vs `service_id`.** The first frame on a binary connection registers a service via `service_hash` (32-bit FNV-1a of the service name); subsequent frames refer to it by a small `service_id` byte. Both fields are in `Header`. `RESPONSE_SERVICE_ID = 0xFE` is the magic id for response messages.
 - **Token correlation.** Each request has a `token` (uint32) that the response copies back. `bnet-server` must keep a `HashMap<token, oneshot::Sender<...>>` to route replies. Easy to forget when bridging async ↔ sync.

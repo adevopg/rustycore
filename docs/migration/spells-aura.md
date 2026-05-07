@@ -410,6 +410,19 @@ Numerados como `#SPELLS-AURA.N` para referencia desde `MIGRATION_ROADMAP.md`. Co
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SPELLS_AURA.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 5 C++ files / 10549 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraEffects.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuras.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraDefines.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SPELLS_AURA.DIV.002` | `crates/wow-spell/src/lib.rs` (`exists_empty`, 0 Rust lines) | 5 C++ files / 10549 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraEffects.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuras.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraDefines.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Aura vs AuraApplication vs AuraEffect — los 3 niveles son distintos.** `Aura` es la instancia global (1 per cast). `AuraApplication` es per-target (N per Aura si afecta party). `AuraEffect` es per-effect-index (Vec<AuraEffect> dentro de Aura, hasta MAX_SPELL_EFFECTS). Confundir cualquiera = bugs muy serios. Borrar la Aura requiere _Remove de TODAS las AuraApplications + cleanup de los AuraEffect.
 - **`m_modAuras` vs `m_appliedAuras`.** En Unit, `m_appliedAuras: ApplicationMap` lista por target todas las auras aplicadas. `m_modAuras: array<list<AuraEffect*>, TOTAL_AURAS>` indexa por AuraType — esto es lo que `HasAuraType(SPELL_AURA_MOD_ROOT)` consulta (O(1) lookup vs O(N) iter). Al apply/remove hay que actualizar AMBOS — bug clásico: olvidar el modAuras update y `IsRooted()` queda mintiendo.
 - **Stacking rules son no-triviales.** `CanStackWith`: same SpellInfo + same caster → cumulative (stack++); same SpellInfo + different caster → check `SPELL_ATTR3_STACK_FOR_DIFF_CASTERS`; diferente SpellInfo en mismo SpellGroup → consulta `spell_group_stack_rules.group_stack_rule` (DEFAULT, EXCLUSIVE, EXCLUSIVE_SAME_EFFECT, EXCLUSIVE_SAME_CALLER, EXCLUSIVE_HIGHEST). Si rule=EXCLUSIVE, la nueva remueve la vieja.

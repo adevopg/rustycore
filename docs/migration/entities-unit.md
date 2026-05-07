@@ -627,6 +627,19 @@ Numbered as `UNIT.x` for cross-reference from `MIGRATION_ROADMAP.md` §5. Comple
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_UNIT.DIV.001` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 7 C++ files / 18469 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/StatSystem.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#ENTITIES_UNIT.DIV.002` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 7 C++ files / 18469 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/StatSystem.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`Unit.cpp` is 13,620 lines.** Do not migrate in one sitting. The natural slices are: stats/power/health (#UNIT.4-.8), flags/state (.9-.10), death/kill/damage (.11-.15), melee math (.16-.19), spell math (.20-.22), auras (.23-.25), immunities (.26), threat/attackers (.27-.28), charm (.29), vehicle (.30), movement/speed/mount (.31-.33), spell-cast slots (.34), NPC predicates (.35-.36), faction (.37), wire (.38).
 - **`Unit::DealDamage` is a `static` method.** Both attacker and victim are passed in. Do not put it as a method on `Unit` — make it a free function `unit::deal_damage(attacker: &mut Unit, victim: &mut Unit, ...)`. Same for `Kill`, `DealDamageMods`, `DealHeal`, `ProcSkillsAndAuras`, `ApplyResilience`.
 - **HP and power values are 64-bit on 3.4.3 `UnitData`.** The current `WorldCreature::current_hp: u32` will silently wrap on boss encounters. Use `i64` / `u64` consistently.

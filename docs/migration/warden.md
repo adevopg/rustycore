@@ -429,6 +429,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#WARDEN.DIV.001` | _none generated_ | 11 C++ files / 3690 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Warden/Modules/WardenModuleWin.h`, `/home/server/woltk-trinity-legacy/src/server/game/Warden/Modules/WardenModuleMac.h`, `/home/server/woltk-trinity-legacy/src/server/game/Warden/WardenWin.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`WARDEN_CMSG_MEM_CHECKS_RESULT = 3` is essentially never received** — TC marks it `NYI` with a debug log. The mem checks are returned inside `CHEAT_CHECKS_RESULT` (opcode 2). Don't waste time implementing the dedicated mem-checks path.
 - **The 4-int Mac transformation `keyIn[0] ^= 0xDEADBEEFu; keyIn[1] -= 0x35014542u; keyIn[2] += 0x5313F22u; keyIn[3] *= 0x1337F00Du;` operates on `int` (signed 32-bit)** — wrapping arithmetic is required. In Rust use `u32::wrapping_sub`, `wrapping_add`, `wrapping_mul`, or `i32` with the casts. The `keyOut[i]` calc uses the **original** `keyIn[i]` values (saved before mutation), not the post-mutation ones — re-read the C++ carefully.
 - **Per-OS wire-format differences are subtle.** `WardenInitModuleRequest` (Win, 56 bytes) is **not sent** by `WardenMac` — its `InitializeModule` is empty because the Mac client self-initializes. If you copy the Windows codepath wholesale into the Mac variant you'll send a packet the Mac client doesn't expect and crash it.

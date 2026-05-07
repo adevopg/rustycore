@@ -360,6 +360,19 @@ Strategy: build the static catalog (criteria mgr) first, then the per-player run
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ACHIEVEMENTS.DIV.001` | `crates/wow-achievement` (`exists_empty`, 0 Rust lines) | 4 C++ files / 6262 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/AchievementMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#ACHIEVEMENTS.DIV.002` | `crates/wow-achievement/src/lib.rs` (`exists_empty`, 0 Rust lines) | 4 C++ files / 6262 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/AchievementMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`CriteriaTree` is shared between three owners.** A single `CriteriaTreeEntry` row can be claimed by an Achievement, a ScenarioStep, *and* a QuestObjective. Don't model "the achievement owns the tree" — it's the tree that owns pointers to its possible owners. The `FlagsCu` of each `Criteria` records which owner type it's for; this drives `CriteriaMgr::GetCriteriaByType` to return only criteria of the matching ownership.
 - **Two `CriteriaDataType` values are 3.3.5a-only:** `MAP_DIFFICULTY = 12` and `NTH_BIRTHDAY = 22` (header comment says "used on 3.3.5a branch"). The Wrath Classic 3.4.3 file retains both; keep them implemented.
 - **`Achievement.Faction`** is `0=Horde` / `1=Alliance` / `-1=both` (i.e. "no faction filter"). The C++ code uses negative test on the constant `ACHIEVEMENT_FACTION_HORDE/_ALLIANCE` enum values (which are 0/1, not bitfields).

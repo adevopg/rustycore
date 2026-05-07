@@ -317,6 +317,18 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ACCOUNTS.DIV.001` | _none generated_ | 6 C++ files / 2271 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Accounts/RBAC.h`, `/home/server/woltk-trinity-legacy/src/server/game/Accounts/AccountMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Accounts/RBAC.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Username/password/email are always stored uppercased** (Latin-only). This is *load-bearing* for SRP6 — the verifier is computed against the uppercased form. Any normalization mismatch breaks login silently.
 - **BNet SRP username is NOT the email**. It is `bytes_to_hex(SHA256(uppercase(email)))`. This is what's fed into `BnetSRP6v2`. Confusing this with the email is a recurring source of "password rejected" bugs.
 - **SRPv1 vs SRPv2**: `battlenet_accounts.srp_version` column. v1 = SHA256, ≤16 chars, case-insensitive (uppercase). v2 = PBKDF2-SHA512, ≤128 chars, case-sensitive. New accounts always v2; v1 path exists only for reading legacy records.

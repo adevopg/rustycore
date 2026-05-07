@@ -324,6 +324,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SKILLS.DIV.001` | _none generated_ | 4 C++ files / 568 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Skills/SkillDiscovery.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Skills/SkillExtraItems.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Skills/SkillExtraItems.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WoLK 3.4.3 specific**: max profession skill is 450 (Grand Master) for primary professions, 450 cooking, 450 first aid, 450 fishing. Riding skill cap is 300 (epic flying). Weapon skills cap at `5 * level` (so 400 at lvl 80).
 - **Skill update-field slot allocator** is critical: WoLK 3.4.3 reserves up to 256 slots in `PlayerData::SkillInfo` (4 fields per slot: ID/Step/Rank/MaxRank or similar). When a skill is `SKILL_DELETED`, its slot must be zero-cleared but not freed for reuse until `_SaveSkills` runs (allocator must respect "deleted but pending save" entries).
 - **`SkillTiersEntry` in WoLK** has 16 cost/value pairs, only first 6 are used (apprentice/journeyman/expert/artisan/master/grand master). Modern DB2 reserves more.

@@ -240,6 +240,18 @@ Tests a nivel sistémico (no unitarios de este módulo):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_DYNAMIC.DIV.001` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 6 C++ files / 573 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Dynamic/LinkedList.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Dynamic/LinkedReference/Reference.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Dynamic/ObjectRegistry.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **No portar literal:** intentar portar `Reference<TO,FROM>` con punteros raw + `Drop` impl es un footgun de unsafe Rust. Usar `Arc`/`Weak` aunque tenga overhead distinto.
 2. **`LinkedListElement::~LinkedListElement` auto-delink** — equivalente Rust: `Drop` impl en wrapper alrededor de `Vec<...>` + index manual; o simplemente no usar listas intrusivas.
 3. **`ObjectRegistry::InsertItem(force=false)`** — semántica de "no overwrite si existe" → `HashMap::entry().or_insert_with()`.

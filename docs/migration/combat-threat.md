@@ -304,6 +304,19 @@ Complexity: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#COMBAT_THREAT.DIV.001` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 2 C++ files / 1234 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Combat/ThreatManager.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Combat/ThreatManager.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#COMBAT_THREAT.DIV.002` | `crates/wow-combat/src/lib.rs` (`exists_empty`, 0 Rust lines) | 2 C++ files / 1234 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Combat/ThreatManager.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Combat/ThreatManager.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Tie-break order is canonical**: `OnlineState` first (Online > Suppressed > Offline), then `TauntState` (Taunt > None > Detaunt), then `amount` (descending). Reordering breaks taunt — a taunt on a low-threat target would lose to a high-threat target without the aura, which is the opposite of game expectation.
 - **`MatchUnitThreatToHighestThreat` is the taunt's "level up" mechanic**: applying taunt does NOT just set `taunt_state = Taunt` — it also bumps the target's threat amount to match the current top-of-heap so that when the taunt expires, the target stays the tank. Implementing taunt as "set amount = infinity" breaks the post-expire transition.
 - **`ScaleThreat(target, 0.0)` is the standard "reset" recipe**: NOT `RemoveThreat` — the ref stays in the list with amount=0 so that the target still counts as in-combat. `ClearAllThreat` is for evade only.

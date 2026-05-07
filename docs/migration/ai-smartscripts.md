@@ -433,6 +433,20 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md`. Complexity: **L** <1h,
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#AI_SMARTSCRIPTS.DIV.001` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 6 C++ files / 10284 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScript.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#AI_SMARTSCRIPTS.DIV.002` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 6 C++ files / 10284 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScript.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#AI_SMARTSCRIPTS.DIV.003` | `crates/wow-conditions` (`missing_declared_path`, 0 Rust lines) | 6 C++ files / 10284 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScript.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AI/SmartScripts/SmartScriptMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **The validator is not optional.** Stock `smart_scripts` data ships with malformed rows. C++ `IsEventValid` rejects them with logs at startup, and the runtime never sees them. Skipping validation in Rust **will crash mid-encounter** (out-of-bounds `action_param` indices, null target resolution, division-by-zero on chance, …). Validation must come before runtime exposure.
 - **`entry_or_guid` is signed.** Positive = creature_template.entry (script applies to all spawns of that template). Negative = creature.guid (only that specific spawn). The cache map keys on the signed value — do not cast to `u64`.
 - **`SmartScriptType` per-row.** A single creature can have rows of `source_type=Creature` (its main script) **and** rows of `source_type=TimedActionList` referenced via `CALL_TIMED_ACTIONLIST`. The `entry_or_guid` of a TimedActionList row is independent (typically 0xFFFF_FFFF + something). Loader must group by `(source_type, entry_or_guid)` separately, not flatten.

@@ -382,6 +382,19 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MOVEMENT_SPLINE.DIV.001` | `crates/wow-movement/src/spline` (`missing_declared_path`, 0 Rust lines) | 12 C++ files / 2276 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/MoveSpline.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/Spline.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/MoveSplineInit.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#MOVEMENT_SPLINE.DIV.002` | `crates/wow-movement` (`missing_declared_path`, 0 Rust lines) | 12 C++ files / 2276 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/MoveSpline.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/Spline.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/Spline/MoveSplineInit.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`Catmullrom` interpolation requires phantom endpoints.** C++ inserts a duplicate of the first and last point as control points (`InitCatmullRom` extends `points` array by 2). Forgetting this gives wrong tangents at boundaries — visible client snap.
 - **Arc-length integer quantization.** `Spline<int32>::lengths` stores cumulative arc-length as `int32` milliseconds after dividing by velocity. `time_passed` is also `int32`. Mixing `f32` arc-length with `i32` time causes drift across long cyclic patrols.
 - **`steps_per_segment = 3` is canonical.** C++ default. Lower (1) loses precision; higher (20 — client default) costs more CPU. Don't change without spec.

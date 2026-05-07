@@ -303,6 +303,20 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MOVEMENT_PATHGEN.DIV.001` | `crates/wow-recastdetour` (`exists_empty`, 0 Rust lines) | 2 C++ files / 1195 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#MOVEMENT_PATHGEN.DIV.002` | `crates/wow-movement/src/path_generator.rs` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 1195 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#MOVEMENT_PATHGEN.DIV.003` | `crates/wow-recastdetour/src/lib.rs` (`exists_empty`, 0 Rust lines) | 2 C++ files / 1195 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/PathGenerator.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Detour is not thread-safe.** `dtNavMesh` (read-only after load) is shareable, but `dtNavMeshQuery` holds per-search state and **must** be one-per-thread or one-per-map-instance. C++ keys it `(mapId, instanceId)`; the Rust `MapManager` design must match — sharing across threads will crash or silently corrupt paths.
 - **`dtPolyRef` is `uint64`**, NOT `uint32`. Old TC docs sometimes show `uint32`. Use `u64`.
 - **WoW coordinate flip.** Detour internally uses `(x, y_up, z)` with `y` as the up axis. WoW uses `(x, y, z_up)`. C++ `PathGenerator` does the swap inline (`InRangeYZX` is a giveaway — Y/Z/X order). Replicate or all paths are visibly off-axis.

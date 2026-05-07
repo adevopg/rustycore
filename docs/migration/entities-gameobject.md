@@ -367,6 +367,22 @@ DBC/DB2 stores read by GameObject:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_GAMEOBJECT.DIV.001` | `crates/wow-world/src/handlers/character.rs:2109,2454` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6457 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_GAMEOBJECT.DIV.002` | `crates/wow-world/src/session.rs:264,444` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6457 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_GAMEOBJECT.DIV.003` | `crates/wow-world/src/session.rs:996,1196` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6457 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_GAMEOBJECT.DIV.004` | `crates/wow-database/src/statements/world.rs:79,253` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6457 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#ENTITIES_GAMEOBJECT.DIV.005` | `crates/wow-constants/src/object.rs:22,72` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6457 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - The big tagged union in `GameObjectTemplate` (`door {}`, `button {}`, `chest {}`, ...) maps cleanly to a Rust `enum` but be careful: many entries share field names with different semantics across types (e.g. `linkedTrap` in `door`/`button`/`chest`, `cooldown` in `trap`/`goober`, `questID` everywhere). Keep field names exact per the C++ struct so SQL loaders stay translateable.
 - `m_packedRotation` layout is `Z:bits[0..21]`, `Y:bits[21..42]`, `X:bits[42..64]` with sign-baked-into-w (`w_sign = sgn(W)`); `Y` and `Z` use 21 bits (2^20 magnitude), `X` uses 22. The Rust `packed_rotation()` already implements this correctly per a code comment validated against the C# reference. Don't refactor it without re-running the round-trip test.
 - `GO_FLAG_TRANSPORT` is set on both static (type 11) and MO (type 15) transports; check `GetGoType()` to disambiguate.

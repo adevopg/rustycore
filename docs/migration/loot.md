@@ -440,6 +440,19 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#LOOT.DIV.001` | `crates/wow-loot` (`exists_empty`, 0 Rust lines) | 7 C++ files / 3475 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Loot/LootMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#LOOT.DIV.002` | `crates/wow-loot/src/lib.rs` (`exists_empty`, 0 Rust lines) | 7 C++ files / 3475 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Loot/LootMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`LOOT_ROLL_TIMEOUT = 60s`** is wire-implicit; client expects winner before then or it gets confused. Don't extend.
 - **`MAX_NR_LOOT_ITEMS = 18`** — the loot window cannot show more than 18 items + 1 money slot (slot 19 reserved). Excess drops are silently dropped on the server side.
 - **FFA vs group loot.** `LootItem::freeforall` rows go in a `NotNormalLootItem` per-player map, not the shared `items[]`. Each player sees their own copy with its own `is_looted` flag. A common bug is treating FFA items as global → one player loots, others can't see it anymore.

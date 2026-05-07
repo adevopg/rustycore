@@ -297,6 +297,18 @@ World module doesn't directly send packets; instead, it calls methods on session
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#WORLD.DIV.001` | _none generated_ | 5 C++ files / 5277 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h`, `/home/server/woltk-trinity-legacy/src/server/game/World/WorldStates/WorldStateMgr.cpp` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **World is a singleton** (`sWorld` global). C++ uses `World* sWorld = nullptr` declared globally, initialized in `main()`. Rust must use `lazy_static!` or `once_cell::sync::Lazy` for thread-safe access. **Do NOT use `Mutex` around the whole World** — it will serialize all updates and kill performance.
 
 2. **Update order is critical**. C++ `World::Update()` has explicit order:

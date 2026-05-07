@@ -297,6 +297,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#REPUTATION.DIV.001` | _none generated_ | 2 C++ files / 1045 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Reputation/ReputationMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Reputation/ReputationMgr.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Race/class data index** (`GetFactionDataIndexForRaceAndClass`): a faction has 4 alt rep tracks indexed by `Faction.db2` columns. Selection logic: iterate the 4 slots, check if `Race & raceMask` and `Class & classMask` match — first match wins. Returns -1 → faction not applicable to this player → `GetReputation()` returns 0.
 - **WoLK 3.4.3 simplification**: only `MAX_REPUTATION_RANK = 8` ranks (Hated…Exalted) and the standard 8 thresholds matter. Paragon/Renown/FriendshipRep types exist in DB2 but client UI does not render them.
 - **`Reputation_Bottom = -42000`**: the lowest threshold is special — at exactly `-42000` rank is `REP_HATED` (rank 0). Threshold set order matters: iteration goes from `-42000` upward; rank index increments each crossed.

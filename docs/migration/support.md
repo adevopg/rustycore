@@ -236,6 +236,19 @@ The Rust opcode constants for these already exist in `crates/wow-constants/src/o
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SUPPORT.DIV.001` | `crates/wow-support` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 1120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SUPPORT.DIV.002` | `crates/wow-social` (`exists_empty`, 0 Rust lines) | 2 C++ files / 1120 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Master vs per-feature flags**: `GetTicketSystemStatus()` returns `_supportSystemStatus && _ticketSystemStatus`. The master flag has veto. Mirror this; don't naively expose only the per-feature ones.
 - **`ChatLog` is a wire packet struct reused as in-memory storage**: `using ChatLog = WorldPackets::Ticket::SupportTicketChatLog;`. Convenient in C++; in Rust, define one struct in `wow-packet` (Serialize) and reuse via `Clone`.
 - **`Generate*Id` is NOT atomic** in C++ (plain `++_lastBugId`). Trinity assumes `SupportMgr` is only ever called from the world thread. RustyCore is multi-threaded — wrap the counters in `AtomicU32` or take the `RwLock` for the whole "generate id + insert" sequence.

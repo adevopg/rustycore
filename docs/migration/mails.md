@@ -308,6 +308,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MAILS.DIV.001` | _none generated_ | 2 C++ files / 508 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Mails/Mail.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Mails/Mail.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WotLK 3.4.3 vs modern client**: TrinityCore wotlk_classic still includes references to `ITEM_FLAG_IS_BOUND_TO_ACCOUNT`, `IsBattlenetAccountBound`, paragon, renown, battle pet mail types — many of these are stubs/no-ops on the 3.4.3 client. `MAIL_COMMERCE_AUCTION`, `MAIL_BLACKMARKET`, `MAIL_ARTISANS_CONSORTIUM` are unused in 3.4.3 gameplay. Migrate the enum values for parity but only wire the active paths.
 - **Hard-coded postage 30c** (`HandleSendMail`): "price hardcoded in client" comment — the client will not accept any other amount, so do not parameterize.
 - **Hard-coded mail template 123** (`MailDraft::prepareItems`): TBC-era quest "The Good News and The Bad News" hardcodes `m_money = 1000000` (100g). Preserve this exact behavior when porting.

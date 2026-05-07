@@ -212,6 +212,18 @@ DBC stores:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_TRANSPORT.DIV.001` | _none generated_ | 2 C++ files / 869 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Transport/Transport.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Transport/Transport.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - Two distinct entity classes share the name "transport" in WoLK 3.4: **MOTransport** (`GAMEOBJECT_TYPE_MO_TRANSPORT = 15`, this class) vs. static elevator (`GAMEOBJECT_TYPE_TRANSPORT = 11`, plain `GameObject`). Don't conflate; only the former is what `class Transport` represents.
 - `_pathProgress` is in **milliseconds modulo period**; `period = m_gameObjectData->Level` (yes, the level field is reused as period — this is intentional 3.4 wire format).
 - `_eventsToTrigger` is a `boost::dynamic_bitset` over path events; in Rust use a `Vec<bool>` or `BitVec`.

@@ -316,6 +316,19 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MISCELLANEOUS.DIV.001` | `crates/wow-combat` (`exists_empty`, 0 Rust lines) | 8 C++ files / 15408 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/enuminfo_SharedDefines.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/Language.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#MISCELLANEOUS.DIV.002` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 8 C++ files / 15408 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/enuminfo_SharedDefines.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/Language.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`SharedDefines.h` is multi-expansion in the upstream branch.** Many enums extend beyond Wrath (Cataclysm classes, Mists pandaren races, BFA allied races). For 3.4.3 you only need the subset gated by expansion ≤ 2; copying everything is harmless but wasteful and risks introducing bogus race/class ids the client cannot recognise.
 - **`Formulas.h` is `inline` + included from headers.** Don't replicate that pattern in Rust — put functions in regular modules (`wow-combat/src/xp.rs`, etc.) and let LTO handle inlining. The reason TC keeps these inline is C++ ODR / single-translation-unit constraints, not performance.
 - **`enuminfo_SharedDefines.cpp` is generated.** It is 5 199 lines but contains zero hand-written logic — it's the auto-generated `// TITLE` / `// DESCRIPTION` reflection table. Don't port it manually; if you need enum reflection, use `strum` / `num_enum` / `derive_more::Display` macros.

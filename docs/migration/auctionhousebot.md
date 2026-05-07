@@ -277,6 +277,19 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#AUCTIONHOUSEBOT.DIV.001` | `crates/wow-world/src/auctionhousebot` (`missing_declared_path`, 0 Rust lines) | 7 C++ files / 2630 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotSeller.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotBuyer.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#AUCTIONHOUSEBOT.DIV.002` | `crates/wow-ahbot` (`missing_declared_path`, 0 Rust lines) | 7 C++ files / 2630 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotSeller.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotBuyer.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Disabled by default.** TrinityCore ships `AuctionHouseBot.Seller.Enabled = false`, `AuctionHouseBot.Buyer.Enabled = false`. If both are off, `AuctionBotConfig::Initialize()` returns `false` and the bot never instantiates. Most production realms leave it off; treat AHBot as a tier-3 priority for the WoLK Classic relaunch.
 - **Auction house id table mismatch.** `AuctionHouseIds[3] = {1,2,6}` is in *enum-order*: `Neutral=0 → id 1`, `Alliance=1 → id 2`, `Horde=2 → id 6`. The DB2 entry numbers are not sequential. Easy to mis-index in Rust.
 - **Heirloom + quality skip.** `MAX_AUCTION_QUALITY = 7` skips quality 7 (heirloom). The seller drops them. The buyer's chance multipliers stop at yellow/artifact. Don't try to be clever and add an 8th slot.

@@ -370,6 +370,20 @@ Numbered for `MIGRATION_ROADMAP.md` cross-reference. Complexity: **L** <1h, **M*
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SPELLS_MGR.DIV.001` | `crates/wow-spell/src/spell_mgr.rs` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 6694 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/TraitMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SPELLS_MGR.DIV.002` | `crates/wow-spell/src/lib.rs` (`exists_empty`, 0 Rust lines) | 4 C++ files / 6694 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/TraitMgr.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SPELLS_MGR.DIV.003` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 4 C++ files / 6694 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/TraitMgr.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Load order is not the call order — it is the dependency order.** From `World.cpp:1861-2148`: `LoadSpellInfoStore` → `LoadSpellInfoServerside` → `LoadSpellInfoCorrections` → `LoadSkillLineAbilityMap` → `LoadSpellInfoCustomAttributes` → `LoadSpellInfoDiminishing` → `LoadSpellInfoImmunities` → `LoadPetFamilySpellsStore` → `LoadSpellTotemModel` → (later) `LoadSpellRanks` → `LoadSpellRequired` → `LoadSpellGroups` → `LoadSpellLearnSkills` (must be after `LoadSpellRanks`) → `LoadSpellInfoSpellSpecificAndAuraState` (must be after `LoadSpellRanks`) → `LoadSpellLearnSpells` → `LoadSpellProcs` → `LoadSpellThreats` → `LoadSpellGroupStackRules` → `LoadSpellEnchantProcData` → … → `LoadPetLevelupSpellMap` → `LoadPetDefaultSpells` → `LoadSpellAreas` → `LoadSpellPetAuras` → `LoadSpellTargetPositions` → `LoadSpellLinked`. **Never** rearrange — `LoadSpellLearnSkills` reads chain data, `LoadSpellInfoSpellSpecificAndAuraState` reads chains, `LoadSpellProcs` does negative-id chain lookup. The Rust port must replicate this ordering literally.
 - **Difficulty fallback chain (`LoadSpellInfoStore`):** when a `(spellId, difficulty)` slot is missing a sibling DB2 record, the loader walks `DifficultyEntry::FallbackDifficultyID` to fill the gap. The walk continues until the fallback is `DIFFICULTY_NONE`. Each missing field is filled independently — a single record can mix data from multiple difficulty levels. **Visuals do NOT cascade across the full fallback chain** (only fall back to the first difficulty that defines any visual; intentional asymmetry).
 - **`LoadSpellInfoCorrections` is the bug-warehouse.** ~1,500 manual `ApplySpellFix({…ids…}, [](SpellInfo* spellInfo){ /* mutate */ })` lambdas. It is the single longest function in TrinityCore. Rust port should split per-system (per-class, per-instance/raid, per-mechanic) and register via `inventory::submit!` — one file per logical group, each compiled-checked. Do not try to port it as a single function — it would not compile.

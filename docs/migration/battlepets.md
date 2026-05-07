@@ -303,6 +303,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#BATTLEPETS.DIV.001` | _none generated_ | 2 C++ files / 1146 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/BattlePets/BattlePetMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/BattlePets/BattlePetMgr.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`BattlePets` is the right call to skip.** Every minute spent porting this is a minute not spent on hunter pets, which 3.4.3 does need.
 - **`BattlePetJournalLockAcquired` was likely added on a guess.** The current send happens unconditionally during the initial packets; the C++ flow only sends it in response to `CMSG_BATTLE_PET_REQUEST_JOURNAL_LOCK` and only if `IsJournalLockAcquired()`. Sending it proactively to a 3.4.3 client is harmless (the client doesn't render a journal anyway) but **semantically wrong** — the client never asks. If the 3.4.3 client ignores unsolicited 0x25ed, fine; if it doesn't, the right thing is to either (a) remove the proactive send, or (b) switch to `BattlePetJournalLockDenied` (0x25ee). Verify against a packet log from a vanilla 3.4.3.54261 client.
 - **Account-wide vs character-wide.** BattlePets persist to the **login** database (account-wide), unlike hunter pets which are character-wide in `character_pet`. This is by design — Blizzard wanted players to share pets across alts on the same account.

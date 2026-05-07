@@ -537,6 +537,19 @@ Each `LoadXxx` is a sub-task. Ordered by typical TC startup order (which is itse
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#GLOBALS.DIV.001` | `crates/wow-database/src/statements/{world.rs,character.rs,login.rs,hotfix.rs}` (`declared_pattern`, 0 Rust lines) | 10 C++ files / 14883 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/AreaTriggerDataStore.cpp` | `declared_pattern` | Rust target is a pattern/proposal, not a concrete checked file/module. pattern/proposed path; not resolvable as one file or directory |
+| `#GLOBALS.DIV.002` | `crates/wow-data/src/{quest,item,player_stats}.rs` (`declared_pattern`, 0 Rust lines) | 10 C++ files / 14883 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/AreaTriggerDataStore.cpp` | `declared_pattern` | Rust target is a pattern/proposal, not a concrete checked file/module. pattern/proposed path; not resolvable as one file or directory |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`ObjectMgr.cpp` is 11 444 lines.** Do not attempt a big-bang port. Migrate one loader at a time, each behind a feature flag, with the C# reference output kept available for diff. Each loader has its own validation rules; stripping them silently breaks downstream code.
 - **Loader ordering matters.** Many loaders read from previous loaders' stores (e.g. `LoadCreatures` references `_creatureTemplateStore`, `LoadVendors` references `_creatureTemplateStore` AND `_itemTemplateStore`). The canonical order is in `World::SetInitialWorldSettings()` in TC (`src/server/game/World/World.cpp`). Replicate that order exactly.
 - **DB2 stores must be loaded before ObjectMgr starts.** Map.db2, ChrRaces.db2, ChrClasses.db2, Faction.db2, FactionTemplate.db2, etc. ObjectMgr loaders cross-reference them and will warn-and-skip rows otherwise.

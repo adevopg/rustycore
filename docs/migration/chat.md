@@ -457,6 +457,19 @@ DBC/DB2 stores read:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#CHAT.DIV.001` | `crates/wow-chat` (`exists_empty`, 0 Rust lines) | 21 C++ files / 7293 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Chat/Channels/Channel.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Chat/Chat.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Chat/Hyperlinks.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#CHAT.DIV.002` | `crates/wow-chat/src/lib.rs` (`exists_empty`, 0 Rust lines) | 21 C++ files / 7293 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Chat/Channels/Channel.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Chat/Chat.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Chat/Hyperlinks.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`CHAT_MSG_ADDON = -1`** — signed int32, NOT a normal `uint8` like the others. Must remain signed in protocol struct or comparisons against `MAX_CHAT_MSG_TYPE` break.
 - **`GM_SILENCE_AURA = 1852`** — special spell aura that mutes a player; chat handlers must check `Player::HasAura(1852)` before sending.
 - **Addon language IDs** — `LANG_ADDON = 183`, `LANG_ADDON_LOGGED = 184`. The "logged" variant is intentionally captured for moderation; clients send it via `CMSG_CHAT_ADDON_MESSAGE` with `isLogged=true`.

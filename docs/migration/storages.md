@@ -189,6 +189,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#STORAGES.DIV.001` | `crates/wow-social` (`exists_empty`, 0 Rust lines) | 2 C++ files / 154 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Storages/WhoListStorage.h`, `/home/server/woltk-trinity-legacy/src/server/game/Storages/WhoListStorage.cpp` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`Update()` is intentionally non-incremental**: the cost of detecting per-player deltas would dwarf the cost of a full rebuild. Don't try to make this incremental — it's 5-second-stale-by-design.
 - **Lower-case both the player name and the guild name as wide-strings**. The C++ converts UTF-8 → UTF-16 → lower → keeps the wide form. The `/who` filter compares wide-string to wide-string. If you simplify to UTF-8 lower in Rust, document that searches for non-ASCII names may differ by a handful of codepoints from C++.
 - **`_widePlayerName` is wide and lower; `_playerName` is UTF-8 and display-case** (used for the response packet). Same dual representation for guild. The Rust port should preserve the dual form to avoid converting per-`/who` query.

@@ -246,6 +246,18 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SCENARIOS.DIV.001` | `crates/wow-world/src/scenarios` (`missing_declared_path`, 0 Rust lines) | 6 C++ files / 973 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/Scenario.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/ScenarioMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/ScenarioMgr.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Decisión arquitectónica:** Scenarios son **post-WoLK**. El cliente 3.4.3 no tiene UI para ellos, no envía opcodes, no parsea SMSG. Implementarlos sería trabajo muerto.
 - TrinityCore master rama mainline tiene Scenarios completos para Shadowlands+. Este fork legacy heredó el código pero NUNCA lo activó (no hay registros en tablas SQL ni DBC del cliente).
 - `enum LfgQueueType { ..., LFG_QUEUE_SCENARIO=3 }` existe en `LFG.h` pero ningún path de matchmaking lo usa para 3.4.x.

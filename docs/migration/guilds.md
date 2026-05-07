@@ -476,6 +476,20 @@ DBC/DB2 stores read:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#GUILDS.DIV.001` | `crates/wow-guild` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 5248 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.h`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/GuildMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#GUILDS.DIV.002` | `crates/wow-world/src/handlers/guild.rs` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 5248 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.h`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/GuildMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#GUILDS.DIV.003` | `crates/wow-packet/src/packets/guild.rs` (`missing_declared_path`, 0 Rust lines) | 4 C++ files / 5248 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/Guild.h`, `/home/server/woltk-trinity-legacy/src/server/game/Guilds/GuildMgr.cpp` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`Guild` has `HighGuid::Guild`** in 3.4.3 — when sending GUIDs over wire, build via `ObjectGuid::Create<HighGuid::Guild>(m_id)`. Wrong HighGuid silently breaks client UI.
 - **Rank 0 IS ALWAYS the Guild Master.** Rank id and rank order are SEPARATE concepts: rankId is the stable database key, rankOrder is the display position. Reordering ranks changes order, NOT id. Bank rights are keyed by `(rankId, tabId)` so reorder is cheap.
 - **`GUILD_RANK_NONE = 0xFF`** is the "not in guild" sentinel; do not store in DB.

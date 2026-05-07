@@ -237,6 +237,18 @@ DBC stores:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#ENTITIES_AREATRIGGER.DIV.001` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 4 C++ files / 2073 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/AreaTrigger/AreaTrigger.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/AreaTrigger/AreaTriggerTemplate.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/AreaTrigger/AreaTrigger.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **WoLK 3.4 footprint is small.** The spell-spawned entity AT is a Cataclysm/MoP-era expansion of a 3.4 stub. Many fields (`AreaTriggerOrbitInfo`, scale curves, spline movement) exist in TC trunk but are **rarely used** in 3.4 spell data. Prioritize sphere + polygon + the three action types (Cast/AddAura/Teleport).
 - Don't conflate this with `wow-data::AreaTriggerData` (legacy DBC table). The legacy module handles CMSG_AREA_TRIGGER coordinate triggers. Different lifecycle, different storage.
 - `_insideUnits` diff is the source of truth for enter/exit. Mirror with `HashSet<ObjectGuid>` and recompute against fresh search each tick — don't try to incrementally maintain.

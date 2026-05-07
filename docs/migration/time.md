@@ -245,6 +245,18 @@ The `ByteBuffer << WowTime` overload is the canonical encoder for all of these.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#TIME.DIV.001` | _none generated_ | 6 C++ files / 561 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Time/WowTime.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Time/GameTime.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Time/WowTime.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **C++ uses three `time_t`s and two `chrono::*::time_point`s in lockstep**. Don't model this with `SystemTime::now()` everywhere — even microsecond skew across the codebase would make race tests non-deterministic.
 - **`WowTime` packs into a single `uint32`** — bit layout is documented in `WowTime.cpp`. Year anchor is **year-2000** in the packed encoding (the field stores "years since 2000"). Confirm against `WowTime.cpp` before committing the constant.
 - **DST**: `Trinity::Timezone::GetSystemZoneOffsetAt(SystemTimePoint)` returns the offset *at a specific point* (handles DST). The Rust port must do the same — naively cached offset breaks twice a year for European/American servers.

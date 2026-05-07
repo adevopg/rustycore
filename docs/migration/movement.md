@@ -477,6 +477,20 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h, splitear).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#MOVEMENT.DIV.001` | `crates/wow-recastdetour` (`exists_empty`, 0 Rust lines) | 9 C++ files / 2209 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.h`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerator.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#MOVEMENT.DIV.002` | `crates/wow-movement` (`missing_declared_path`, 0 Rust lines) | 9 C++ files / 2209 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.h`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerator.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#MOVEMENT.DIV.003` | `crates/wow-recastdetour/src/lib.rs` (`exists_empty`, 0 Rust lines) | 9 C++ files / 2209 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.h`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerator.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Anti-cheat es crítico**: clientes hackeados envían CMSG_MOVE_* con velocidades infladas o teleports. C++ tiene `MovementAnticheat` que valida cada packet contra el *último* recibido (delta-time vs delta-position). En Rust hoy no existe — implementar antes de exponer servidor a Internet.
 - **Spline interpolation tiene 3 modos**: linear (default), catmullrom (smooth), bezier (raro, casi sólo cinematics). C++ marca el modo en `MoveSplineFlag::CatmullRom`. La diferencia entre linear y catmullrom es visible: clientes verán "snapping" si el server reporta linear pero el AI script esperaba smooth.
 - **Jump validation**: `CMSG_MOVE_JUMP` lleva `z_speed` (vertical) y opcional `xy_speed + sin_angle + cos_angle` (horizontal direction). Fall damage se calcula desde `CMSG_MOVE_FALL_LAND.fall_time`; un cliente puede mentir el fall_time para evitar daño — C++ lo verifica contra apex calculado desde el jump z_speed previo.

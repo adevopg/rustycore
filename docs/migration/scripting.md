@@ -374,6 +374,21 @@ Each line below is one trait. Bodies will fill in as game-side hookpoints land.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SCRIPTING.DIV.001` | `crates/wow-script` (`exists_empty`, 0 Rust lines) | 6 C++ files / 6578 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptReloadMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTING.DIV.002` | `crates/wow-scripts` (`exists_empty`, 0 Rust lines) | 6 C++ files / 6578 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptReloadMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+| `#SCRIPTING.DIV.003` | `crates/wow-script/src/lib.rs` (`exists_empty`, 0 Rust lines) | 6 C++ files / 6578 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptReloadMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SCRIPTING.DIV.004` | `crates/wow-scripts/src/lib.rs` (`exists_empty`, 0 Rust lines) | 6 C++ files / 6578 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptReloadMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **Two-step dispatch is mandatory** in this codebase. Even after a hook trait exists, every callsite in the rest of the workspace needs a literal `script_mgr.on_x(...)` line — the same trap as the packet handlers' `match arm + inventory::submit!` rule (see `CLAUDE.md`). Forgetting either silently does nothing.
 - The C++ pattern of `new boss_lord_marrowgar()` inside `AddSC_boss_lord_marrowgar()` performs the registration as a side effect of object construction. The Rust analog is `inventory::submit! { MyAi { } as &dyn CreatureScript }` at module scope; both are *fully static* and run once.
 - C++ `ScriptObject` ctor takes `char const*` and stores `std::string` — names are interned per script. Rust will use `&'static str`; do **not** allow runtime-generated names.

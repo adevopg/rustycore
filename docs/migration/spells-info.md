@@ -444,6 +444,22 @@ Numbered for `MIGRATION_ROADMAP.md` cross-reference. Complexity: **L** <1h, **M*
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SPELLS_INFO.DIV.001` | `crates/wow-spell/src/spell_info.rs` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 5647 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SPELLS_INFO.DIV.002` | `crates/wow-spell/src/lib.rs` (`exists_empty`, 0 Rust lines) | 2 C++ files / 5647 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. file exists but has 0 lines |
+| `#SPELLS_INFO.DIV.003` | `crates/wow-spell/src/diminish` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 5647 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SPELLS_INFO.DIV.004` | `crates/wow-spell/src/immunity` (`missing_declared_path`, 0 Rust lines) | 2 C++ files / 5647 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `missing_declared_path` | Declared/proposed Rust target is absent while C++ coverage exists. declared/proposed target does not exist |
+| `#SPELLS_INFO.DIV.005` | `crates/wow-spell` (`exists_empty`, 0 Rust lines) | 2 C++ files / 5647 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `exists_empty` | Rust target exists but has no active Rust source lines for a module with canonical C++ coverage. crate exists; no active Rust source lines |
+
+<!-- REFINE.023:END known-divergences -->
+
 - **`SpellInfo` is composed, not stored.** No single DB2 file holds a full SpellInfo. `Spell.db2` (the misleadingly-named `SpellNameStore`) only holds id + localized name. Every other field comes from a sibling DB2 joined on `(SpellID[, DifficultyID])`. Beginners often look at `Spell.db2` and conclude RustyCore "has SpellInfo" because it parses that file — it does not. The composition step (`LoadSpellInfoStore`) is what makes a `SpellInfo`. Without the cross-table join + difficulty fallback, the parsed `Spell.db2` rows are nearly useless on their own.
 - **15 attribute bitmasks (not 14, not 8).** WoLK 3.4.3.54261 has `Attributes` + `AttributesEx` + `AttributesEx2` … through `AttributesEx14`, totaling **15** 32-bit fields = 480 individual attribute bits. `SpellMisc.db2` provides them as a `int32 Attributes[15]` array. Plus `AttributesCu` (server-derived). The user-task brief mentions "8 32-bit attribute bitmasks" — that's a Vanilla/TBC-era count; **WoLK is 15** for `AttributesEx` series and modern TrinityCore Wrath Classic uses 15. Verify against `SpellMisc.db2` schema in `DB2Structure.h` before settling field count.
 - **Per-effect array max in WoLK 3.4.3 is 3, not 32.** `MAX_SPELL_EFFECTS` was raised to 32 in modern DF builds; in WoLK 3.4.3 only 3 effect slots are ever populated. C++ pre-allocates `_effects.reserve(32)` defensively, but in practice `_effects.size() <= 3`. Use `SmallVec<[SpellEffectInfo; 3]>` or fixed `[Option<SpellEffectInfo>; 3]` in Rust to skip heap allocs.

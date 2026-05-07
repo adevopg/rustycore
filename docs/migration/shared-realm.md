@@ -234,6 +234,18 @@ Y para realm list updates:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.023:BEGIN known-divergences -->
+
+### R2 Known divergences / bugs (generated)
+
+> Fuente: C++ asignado en `cpp-files-by-module.md` + target Rust verificado en `r2-rust-targets.tsv`. Esto enumera divergencias estructurales conocidas; no sustituye la auditoria funcional contra C++ antes de cerrar tareas.
+
+| ID | Rust evidence | C++ evidence | Status | Notes |
+|---|---|---|---|---|
+| `#SHARED_REALM.DIV.001` | _none generated_ | 4 C++ files / 695 lines assigned; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Realm/RealmList.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/Realm/Realm.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Realm/RealmList.h` | `no_generated_divergence` | No structural divergence found by target-existence scan; this is not a functional audit. |
+
+<!-- REFINE.023:END known-divergences -->
+
 1. **Region/Site/Realm packing:** WoW client transmite `wowRealmAddress` como `u32` packed. RustyCore actualmente lo trata como ID lineal — funciona para single-region/single-battlegroup pero rompe en multi-region.
 2. **Envelope strings con `\0` final:** El C++ usa `json.length() + 1` para incluir el null terminator en la longitud comprimida. Rust replica con `format!("...:{}\0", json)`.
 3. **`JamJSONRealmEntry` vs `JSONRealmListUpdates`:** dos serializaciones distintas para el mismo `RealmEntry` proto — el primero es single-shot (refresh de uno), el segundo plural updates.
