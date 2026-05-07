@@ -1,6 +1,7 @@
 pub mod cell;
 pub mod coords;
 pub mod grid;
+pub mod grid_unload;
 pub mod map;
 pub mod object_grid_loader;
 pub mod personal_phase;
@@ -18,6 +19,10 @@ pub use coords::{
 pub use grid::{
     DEFAULT_VISIBILITY_NOTIFY_PERIOD, GridInfo, GridStateKind, MapGridHost, NGrid, PeriodicTimer,
     TimeTracker, update_grid_state,
+};
+pub use grid_unload::{
+    GridObjectKind, GridUnloadAction, GuidGridUnloadLifecycle, object_grid_cleaner,
+    object_grid_evacuator, object_grid_stoper, object_grid_unloader,
 };
 pub use map::{
     ActiveObjectKind, GridLifecycle, Map, NoopGridLifecycle, NoopTerrainGridLoader,

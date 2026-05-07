@@ -250,6 +250,17 @@ impl NGrid {
         }
     }
 
+    pub fn visit_all_grids_mut<F>(&mut self, mut visitor: F)
+    where
+        F: FnMut(&mut Cell),
+    {
+        for x in 0..MAX_NUMBER_OF_CELLS as usize {
+            for y in 0..MAX_NUMBER_OF_CELLS as usize {
+                visitor(&mut self.cells[x][y]);
+            }
+        }
+    }
+
     pub fn player_count_in_ngrid(&self) -> usize {
         let mut count = 0usize;
         self.visit_all_grids(|cell| {

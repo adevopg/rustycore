@@ -25,7 +25,12 @@
   Rust targets: `crates/wow-map/src/personal_phase.rs`, `crates/wow-map/src/object_grid_loader.rs`, `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`.
   Acceptance: player phase shifts load personal creature/gameobject spawns only for personal phases with matching spawn sets; grids are not reloaded for the same owner/phase/grid; unload removes grid tracking; phase changes and explicit deletion use the C++ one-minute delete timer.
 
+- [x] **#NEXT.L3.MAPS.005** Port grid unload helper traversal/order as GUID actions.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.h`, `ObjectGridLoader.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp::UnloadGrid`.
+  Rust targets: `crates/wow-map/src/grid_unload.rs`, `crates/wow-map/src/grid.rs`, `crates/wow-map/src/lib.rs`.
+  Acceptance: `ObjectGridStoper` emits creature-only dynobject/areatrigger/combat-stop actions; `ObjectGridEvacuator` emits creature/GO respawn-relocation actions; `ObjectGridCleaner` emits destroyed+cleanup actions for grid object containers; `ObjectGridUnloader` deletes non-corpse grid objects and clears grid object sets in C++ order.
+
 ## Follow-Up Work Items
 
-- [ ] **#NEXT.L3.MAPS.005** Port grid unload helpers (`ObjectGridStoper`, `ObjectGridEvacuator`, `ObjectGridCleaner`, `ObjectGridUnloader`) against real entity lifecycle once entities exist.
-- [ ] **#NEXT.L3.MAPS.006** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.
+- [ ] **#NEXT.L3.MAPS.006** Bind grid unload actions to real entity lifecycle once canonical entities exist.
+- [ ] **#NEXT.L3.MAPS.007** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.
