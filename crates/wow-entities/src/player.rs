@@ -1126,6 +1126,39 @@ impl ApplyEnchantmentEffectRef {
     }
 }
 
+pub const APPLY_ENCHANTMENT_RANDOM_SUFFIX_EFFECTS: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyEnchantmentRandomSuffixRef {
+    pub id: u32,
+    pub enchantments: [u16; APPLY_ENCHANTMENT_RANDOM_SUFFIX_EFFECTS],
+    pub allocation_pct: [u16; APPLY_ENCHANTMENT_RANDOM_SUFFIX_EFFECTS],
+}
+
+impl ApplyEnchantmentRandomSuffixRef {
+    pub const fn new(
+        id: u32,
+        enchantments: [u16; APPLY_ENCHANTMENT_RANDOM_SUFFIX_EFFECTS],
+        allocation_pct: [u16; APPLY_ENCHANTMENT_RANDOM_SUFFIX_EFFECTS],
+    ) -> Self {
+        Self {
+            id,
+            enchantments,
+            allocation_pct,
+        }
+    }
+
+    pub fn amount_for(&self, enchantment_id: i32, property_seed: i32) -> Option<u32> {
+        self.enchantments
+            .iter()
+            .position(|enchantment| i32::from(*enchantment) == enchantment_id)
+            .map(|index| {
+                ((f64::from(self.allocation_pct[index]) * f64::from(property_seed)) / 10_000.0)
+                    as u32
+            })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyEnchantmentEffectAction {
     Noop,
@@ -1292,6 +1325,8 @@ fn apply_enchantment_effect_action(
     item: &Item,
     item_template: Option<&ItemStorageTemplate>,
     enchantment_slot: EnchantmentSlot,
+    enchantment_id: i32,
+    random_suffix: Option<ApplyEnchantmentRandomSuffixRef>,
     apply: bool,
     effect: ApplyEnchantmentEffectRef,
 ) -> Vec<ApplyEnchantmentEffectAction> {
@@ -1336,15 +1371,19 @@ fn apply_enchantment_effect_action(
             }
         }
         ApplyEnchantmentEffectKind::Known(ItemEnchantmentType::Resistance) => {
+            let amount =
+                resolve_enchantment_effect_amount(item, enchantment_id, random_suffix, effect);
             vec![ApplyEnchantmentEffectAction::UnitModifier {
                 unit_mod: ApplyEnchantmentUnitMod::Resistance(effect.arg),
                 modifier: ApplyEnchantmentUnitModifier::TotalValue,
-                amount: effect.amount,
+                amount,
                 apply,
             }]
         }
         ApplyEnchantmentEffectKind::Known(ItemEnchantmentType::Stat) => {
-            apply_enchantment_stat_actions(item_mod_type_from_u32(effect.arg), effect.amount, apply)
+            let amount =
+                resolve_enchantment_effect_amount(item, enchantment_id, random_suffix, effect);
+            apply_enchantment_stat_actions(item_mod_type_from_u32(effect.arg), amount, apply)
         }
         ApplyEnchantmentEffectKind::Known(ItemEnchantmentType::UseSpell) => {
             vec![ApplyEnchantmentEffectAction::DeferredUseSpell]
@@ -1361,6 +1400,35 @@ fn apply_enchantment_effect_action(
             vec![ApplyEnchantmentEffectAction::Unknown { effect_type }]
         }
     }
+}
+
+fn resolve_enchantment_effect_amount(
+    item: &Item,
+    enchantment_id: i32,
+    random_suffix: Option<ApplyEnchantmentRandomSuffixRef>,
+    effect: ApplyEnchantmentEffectRef,
+) -> u32 {
+    if effect.amount != 0
+        || !matches!(
+            effect.effect_kind,
+            ApplyEnchantmentEffectKind::Known(
+                ItemEnchantmentType::Resistance | ItemEnchantmentType::Stat
+            )
+        )
+    {
+        return effect.amount;
+    }
+
+    let Some(random_suffix) = random_suffix else {
+        return effect.amount;
+    };
+    if item.data().random_properties_id.unsigned_abs() != random_suffix.id {
+        return effect.amount;
+    }
+
+    random_suffix
+        .amount_for(enchantment_id, item.data().property_seed)
+        .unwrap_or(effect.amount)
 }
 
 fn apply_enchantment_stat_actions(
@@ -6117,6 +6185,27 @@ impl Player {
         apply: bool,
         effects: &[ApplyEnchantmentEffectRef],
     ) -> Vec<ApplyEnchantmentEffectAction> {
+        self.apply_enchantment_effect_actions_for_enchantment(
+            item,
+            item_template,
+            enchantment_slot,
+            0,
+            None,
+            apply,
+            effects,
+        )
+    }
+
+    pub fn apply_enchantment_effect_actions_for_enchantment(
+        &self,
+        item: &Item,
+        item_template: Option<&ItemStorageTemplate>,
+        enchantment_slot: EnchantmentSlot,
+        enchantment_id: i32,
+        random_suffix: Option<ApplyEnchantmentRandomSuffixRef>,
+        apply: bool,
+        effects: &[ApplyEnchantmentEffectRef],
+    ) -> Vec<ApplyEnchantmentEffectAction> {
         if item.is_broken() {
             return Vec::new();
         }
@@ -6128,6 +6217,8 @@ impl Player {
                     item,
                     item_template,
                     enchantment_slot,
+                    enchantment_id,
+                    random_suffix,
                     apply,
                     *effect,
                 )
@@ -12715,6 +12806,81 @@ mod tests {
                     amount: 22,
                     apply: false,
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_enchantment_effect_actions_resolve_cpp_random_suffix_amounts() {
+        let player = Player::new(None, false);
+        let mut item = item_with_guid_entry(12495, 7469);
+        item.set_slot(EQUIPMENT_SLOT_CHEST);
+        item.set_random_properties_id(-77);
+        item.set_property_seed(12_345);
+
+        let random_suffix = ApplyEnchantmentRandomSuffixRef::new(
+            77,
+            [901, 900, 902, 0, 0],
+            [1_000, 2_000, 3_000, 0, 0],
+        );
+
+        assert_eq!(
+            player.apply_enchantment_effect_actions_for_enchantment(
+                &item,
+                None,
+                EnchantmentSlot::EnhancementTemporary,
+                900,
+                Some(random_suffix),
+                true,
+                &[
+                    ApplyEnchantmentEffectRef::known(ItemEnchantmentType::Resistance, 0, 2),
+                    ApplyEnchantmentEffectRef::known(
+                        ItemEnchantmentType::Stat,
+                        0,
+                        ItemModType::Strength as u32,
+                    ),
+                ],
+            ),
+            vec![
+                ApplyEnchantmentEffectAction::UnitModifier {
+                    unit_mod: ApplyEnchantmentUnitMod::Resistance(2),
+                    modifier: ApplyEnchantmentUnitModifier::TotalValue,
+                    amount: 2_469,
+                    apply: true,
+                },
+                ApplyEnchantmentEffectAction::UnitModifier {
+                    unit_mod: ApplyEnchantmentUnitMod::StatStrength,
+                    modifier: ApplyEnchantmentUnitModifier::TotalValue,
+                    amount: 2_469,
+                    apply: true,
+                },
+                ApplyEnchantmentEffectAction::UpdateStatBuffMod(Stats::Strength),
+            ]
+        );
+
+        item.set_random_properties_id(-78);
+        assert_eq!(
+            player.apply_enchantment_effect_actions_for_enchantment(
+                &item,
+                None,
+                EnchantmentSlot::EnhancementTemporary,
+                900,
+                Some(random_suffix),
+                true,
+                &[ApplyEnchantmentEffectRef::known(
+                    ItemEnchantmentType::Stat,
+                    0,
+                    ItemModType::Strength as u32,
+                )],
+            ),
+            vec![
+                ApplyEnchantmentEffectAction::UnitModifier {
+                    unit_mod: ApplyEnchantmentUnitMod::StatStrength,
+                    modifier: ApplyEnchantmentUnitModifier::TotalValue,
+                    amount: 0,
+                    apply: true,
+                },
+                ApplyEnchantmentEffectAction::UpdateStatBuffMod(Stats::Strength),
             ]
         );
     }
