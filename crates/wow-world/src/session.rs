@@ -15,8 +15,8 @@ use tracing::{debug, info, trace, warn};
 use wow_constants::{ClientOpcodes, InventoryResult, ItemEnchantmentType};
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
-    AreaTriggerStore, HotfixBlobCache, ItemRandomSuffixStore, ItemStatsStore, ItemStore,
-    PlayerStatsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    AreaTriggerStore, HotfixBlobCache, ItemModifiedAppearanceStore, ItemRandomSuffixStore,
+    ItemStatsStore, ItemStore, PlayerStatsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
 };
 use wow_database::{CharacterDatabase, LoginDatabase, WorldDatabase};
 use wow_entities::{
@@ -109,6 +109,9 @@ pub struct WorldSession {
 
     // Item store (Item.db2 data — inventory types, class/subclass)
     item_store: Option<Arc<ItemStore>>,
+
+    // Item modified appearance store (ItemModifiedAppearance.db2 data)
+    item_modified_appearance_store: Option<Arc<ItemModifiedAppearanceStore>>,
 
     // Player level stats store (race/class/level → base stats)
     player_stats: Option<Arc<PlayerStatsStore>>,
@@ -427,6 +430,7 @@ impl WorldSession {
             login_db: None,
             world_db: None,
             item_store: None,
+            item_modified_appearance_store: None,
             player_stats: None,
             item_stats_store: None,
             item_random_suffix_store: None,
@@ -564,6 +568,45 @@ impl WorldSession {
     /// Get the item store reference.
     pub fn item_store(&self) -> Option<&Arc<ItemStore>> {
         self.item_store.as_ref()
+    }
+
+    /// Set the item modified appearance store for this session.
+    pub fn set_item_modified_appearance_store(
+        &mut self,
+        store: Arc<ItemModifiedAppearanceStore>,
+    ) {
+        self.item_modified_appearance_store = Some(store);
+    }
+
+    /// Get the item modified appearance store reference.
+    pub fn item_modified_appearance_store(&self) -> Option<&Arc<ItemModifiedAppearanceStore>> {
+        self.item_modified_appearance_store.as_ref()
+    }
+
+    /// Build the closure result expected by `Item::visible_entry` and
+    /// `Item::visible_appearance_mod_id` from `ItemModifiedAppearance.db2`.
+    pub fn item_modified_appearance_ref(&self, id: u32) -> Option<(u32, u16)> {
+        self.item_modified_appearance_store
+            .as_ref()
+            .and_then(|store| store.get(id))
+            .and_then(|entry| {
+                Some((
+                    u32::try_from(entry.item_id).ok()?,
+                    u16::try_from(entry.item_appearance_modifier_id).ok()?,
+                ))
+            })
+    }
+
+    /// C++ `DB2Manager::GetItemModifiedAppearance`.
+    pub fn item_modified_appearance_for_item(
+        &self,
+        item_id: u32,
+        appearance_mod_id: u32,
+    ) -> Option<u32> {
+        self.item_modified_appearance_store
+            .as_ref()
+            .and_then(|store| store.get_for_item(item_id, appearance_mod_id))
+            .map(|entry| entry.id)
     }
 
     /// Set the player stats store for this session.
@@ -3283,8 +3326,8 @@ mod tests {
     use wow_constants::{EnchantmentSlot, SpellItemEnchantmentFlags};
     use wow_core::Position;
     use wow_data::{
-        ItemRandomSuffixEntry, ItemRandomSuffixStore, SpellItemEnchantmentEntry,
-        SpellItemEnchantmentStore,
+        ItemModifiedAppearanceEntry, ItemModifiedAppearanceStore, ItemRandomSuffixEntry,
+        ItemRandomSuffixStore, SpellItemEnchantmentEntry, SpellItemEnchantmentStore,
     };
     use wow_entities::{SendNewItemInstancePlan, SendNewItemModifier};
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
@@ -3476,6 +3519,36 @@ mod tests {
         assert_eq!(suffix.allocation_pct, [1_000, 2_000, 3_000, 0, 0]);
         assert!(session.apply_enchantment_random_suffix_ref(0).is_none());
         assert!(session.apply_enchantment_random_suffix_ref(-78).is_none());
+    }
+
+    #[test]
+    fn item_modified_appearance_helpers_use_cpp_lookup_shapes() {
+        let (mut session, _, _) = make_session();
+        session.set_item_modified_appearance_store(Arc::new(
+            ItemModifiedAppearanceStore::from_entries([
+                ItemModifiedAppearanceEntry {
+                    id: 10,
+                    item_id: 100,
+                    item_appearance_modifier_id: 0,
+                    item_appearance_id: 1000,
+                    order_index: 0,
+                    transmog_source_type_enum: 0,
+                },
+                ItemModifiedAppearanceEntry {
+                    id: 11,
+                    item_id: 100,
+                    item_appearance_modifier_id: 2,
+                    item_appearance_id: 1001,
+                    order_index: 0,
+                    transmog_source_type_enum: 0,
+                },
+            ]),
+        ));
+
+        assert_eq!(session.item_modified_appearance_ref(11), Some((100, 2)));
+        assert_eq!(session.item_modified_appearance_for_item(100, 2), Some(11));
+        assert_eq!(session.item_modified_appearance_for_item(100, 9), Some(10));
+        assert_eq!(session.item_modified_appearance_for_item(101, 0), None);
     }
 
     #[test]

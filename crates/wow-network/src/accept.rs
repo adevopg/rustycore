@@ -34,6 +34,7 @@ pub struct SessionResources {
     pub world_db: Option<Arc<wow_database::WorldDatabase>>,
     pub guid_generator: Option<Arc<wow_core::ObjectGuidGenerator>>,
     pub item_store: Option<Arc<wow_data::ItemStore>>,
+    pub item_modified_appearance_store: Option<Arc<wow_data::ItemModifiedAppearanceStore>>,
     pub player_stats: Option<Arc<wow_data::PlayerStatsStore>>,
     pub item_stats_store: Option<Arc<wow_data::ItemStatsStore>>,
     pub item_random_suffix_store: Option<Arc<wow_data::ItemRandomSuffixStore>>,
