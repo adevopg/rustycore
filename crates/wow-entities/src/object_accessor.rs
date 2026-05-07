@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
-use wow_constants::TypeMask;
+use wow_constants::{TypeId, TypeMask};
 use wow_core::ObjectGuid;
 use wow_core::guid::HighGuid;
 
-use crate::WorldObject;
+use crate::{PlayerInventoryStorage, WorldObject};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessorObjectKind {
@@ -55,10 +55,19 @@ impl AccessorObjectKind {
 pub struct AccessorPlayer {
     normalized_name: String,
     object: WorldObject,
+    inventory: PlayerInventoryStorage,
 }
 
 impl AccessorPlayer {
     pub fn new(name: impl AsRef<str>, object: WorldObject) -> Result<Self, ObjectAccessorError> {
+        Self::new_with_inventory(name, object, PlayerInventoryStorage::default())
+    }
+
+    pub fn new_with_inventory(
+        name: impl AsRef<str>,
+        object: WorldObject,
+        inventory: PlayerInventoryStorage,
+    ) -> Result<Self, ObjectAccessorError> {
         if !object.guid().is_player() {
             return Err(ObjectAccessorError::WrongGuidKind {
                 guid: object.guid(),
@@ -72,6 +81,7 @@ impl AccessorPlayer {
         Ok(Self {
             normalized_name,
             object,
+            inventory,
         })
     }
 
@@ -82,6 +92,20 @@ impl AccessorPlayer {
     pub const fn object(&self) -> &WorldObject {
         &self.object
     }
+
+    pub const fn inventory(&self) -> &PlayerInventoryStorage {
+        &self.inventory
+    }
+
+    pub fn inventory_mut(&mut self) -> &mut PlayerInventoryStorage {
+        &mut self.inventory
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AccessorObjectRef<'a> {
+    WorldObject(&'a WorldObject),
+    Item(ObjectGuid),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,7 +159,16 @@ impl ObjectAccessor {
         name: impl AsRef<str>,
         object: WorldObject,
     ) -> Result<(), ObjectAccessorError> {
-        let player = AccessorPlayer::new(name, object)?;
+        self.add_player_with_inventory(name, object, PlayerInventoryStorage::default())
+    }
+
+    pub fn add_player_with_inventory(
+        &mut self,
+        name: impl AsRef<str>,
+        object: WorldObject,
+        inventory: PlayerInventoryStorage,
+    ) -> Result<(), ObjectAccessorError> {
+        let player = AccessorPlayer::new_with_inventory(name, object, inventory)?;
         let guid = player.object.guid();
 
         if let Some(previous) = self.players.insert(guid, player.clone()) {
@@ -145,6 +178,15 @@ impl ObjectAccessor {
             .insert(player.normalized_name.clone(), guid);
 
         Ok(())
+    }
+
+    pub fn player_inventory_mut(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> Option<&mut PlayerInventoryStorage> {
+        self.players
+            .get_mut(&guid)
+            .map(AccessorPlayer::inventory_mut)
     }
 
     pub fn remove_player(&mut self, guid: ObjectGuid) -> Option<AccessorPlayer> {
@@ -243,32 +285,59 @@ impl ObjectAccessor {
         guid: ObjectGuid,
         type_mask: TypeMask,
     ) -> Option<&WorldObject> {
+        match self.get_object_ref_by_type_mask(context, guid, type_mask)? {
+            AccessorObjectRef::WorldObject(object) => Some(object),
+            AccessorObjectRef::Item(_) => None,
+        }
+    }
+
+    pub fn get_object_ref_by_type_mask(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+        type_mask: TypeMask,
+    ) -> Option<AccessorObjectRef<'_>> {
+        if guid.high_type() == HighGuid::Item {
+            return (type_mask.contains(TypeMask::ITEM)
+                && context.object().type_id() == TypeId::Player)
+                .then(|| {
+                    self.players
+                        .get(&context.guid())?
+                        .inventory()
+                        .get_item_by_guid_everywhere(guid)
+                })?
+                .map(AccessorObjectRef::Item);
+        }
+
         match AccessorObjectKind::from_guid(guid)? {
-            AccessorObjectKind::Player if type_mask.contains(TypeMask::PLAYER) => {
-                self.get_player(context, guid)
-            }
+            AccessorObjectKind::Player if type_mask.contains(TypeMask::PLAYER) => self
+                .get_player(context, guid)
+                .map(AccessorObjectRef::WorldObject),
             AccessorObjectKind::GameObject | AccessorObjectKind::Transport
                 if type_mask.contains(TypeMask::GAME_OBJECT) =>
             {
                 self.get_game_object(context, guid)
+                    .map(AccessorObjectRef::WorldObject)
             }
             AccessorObjectKind::Creature | AccessorObjectKind::Pet
                 if type_mask.contains(TypeMask::UNIT) =>
             {
                 self.get_unit(context, guid)
+                    .map(AccessorObjectRef::WorldObject)
             }
             AccessorObjectKind::DynamicObject if type_mask.contains(TypeMask::DYNAMIC_OBJECT) => {
                 self.get_dynamic_object(context, guid)
+                    .map(AccessorObjectRef::WorldObject)
             }
-            AccessorObjectKind::AreaTrigger if type_mask.contains(TypeMask::AREA_TRIGGER) => {
-                self.get_area_trigger(context, guid)
-            }
-            AccessorObjectKind::SceneObject if type_mask.contains(TypeMask::SCENE_OBJECT) => {
-                self.get_scene_object(context, guid)
-            }
-            AccessorObjectKind::Conversation if type_mask.contains(TypeMask::CONVERSATION) => {
-                self.get_conversation(context, guid)
-            }
+            AccessorObjectKind::AreaTrigger if type_mask.contains(TypeMask::AREA_TRIGGER) => self
+                .get_area_trigger(context, guid)
+                .map(AccessorObjectRef::WorldObject),
+            AccessorObjectKind::SceneObject if type_mask.contains(TypeMask::SCENE_OBJECT) => self
+                .get_scene_object(context, guid)
+                .map(AccessorObjectRef::WorldObject),
+            AccessorObjectKind::Conversation if type_mask.contains(TypeMask::CONVERSATION) => self
+                .get_conversation(context, guid)
+                .map(AccessorObjectRef::WorldObject),
             AccessorObjectKind::Corpse => None,
             _ => None,
         }
@@ -592,6 +661,43 @@ mod tests {
                 .get_object_by_type_mask(&context, creature_guid, TypeMask::PLAYER)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn type_mask_item_uses_player_inventory_like_cpp_branch() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Player, 530, 1, true);
+        let player_guid = context.guid();
+        let item_guid = ObjectGuid::create_item(1, 77);
+        let mut inventory = PlayerInventoryStorage::default();
+        inventory.items[0] = Some(item_guid);
+
+        accessor
+            .add_player_with_inventory("valeera", context.clone(), inventory)
+            .unwrap();
+
+        assert_eq!(
+            accessor.get_object_ref_by_type_mask(&context, item_guid, TypeMask::ITEM),
+            Some(AccessorObjectRef::Item(item_guid))
+        );
+        assert!(
+            accessor
+                .get_object_by_type_mask(&context, item_guid, TypeMask::ITEM)
+                .is_none()
+        );
+        assert!(
+            accessor
+                .get_object_ref_by_type_mask(&context, item_guid, TypeMask::UNIT)
+                .is_none()
+        );
+
+        let non_player_context = world_object(HighGuid::Creature, 530, 1, true);
+        assert!(
+            accessor
+                .get_object_ref_by_type_mask(&non_player_context, item_guid, TypeMask::ITEM)
+                .is_none()
+        );
+        assert!(accessor.player_inventory_mut(player_guid).is_some());
     }
 
     #[test]

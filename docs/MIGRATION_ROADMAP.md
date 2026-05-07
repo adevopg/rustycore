@@ -225,7 +225,7 @@ Leyenda:
 | `Entities/Transport` (MO) | wow-entities | ⚠️ | base transport iniciado; TransportMgr/path/runtime pendiente |
 | `Entities/SceneObject` | wow-entities | ⚠️ | base entidad iniciado; create/map/aura removal pendiente |
 | `Entities/Totem` | wow-entities | ⚠️ | base entidad iniciado; TempSummon/Minion runtime pendiente |
-| `Entities/Item` | wow-entities | ⚠️ | base Item+Bag+Player storage lookup iniciado; ownership/DB/runtime pendiente |
+| `Entities/Item` | wow-entities | ⚠️ | base Item+Bag+Player storage/ObjectAccessor lookup iniciado; ownership/DB/runtime pendiente |
 
 ### L5 Engines: Movement, Combat, Spells, AI
 
@@ -562,6 +562,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#028b** `wow-entities`: base `Item` state from `Item.*`, `ItemTemplate.h`, `ItemDefines.h`, `UF::ItemData` and `ItemPacketsCommon::ItemBonusKey`: constructor type id/mask, Object-only shape, create-state bridge, owner/contained/creator fields, slot/container/update/refund/text/trade state, dynamic item flags/flags2, stack/durability/expiration/context/appearance, spell charges, enchantments, item bonus key and ItemData masks.
 - [x] **#028c** `wow-entities`: base `Bag` state from `Item/Container/Bag.*` and `UF::ContainerData`: `Item` retag to `TYPEID_CONTAINER`/`TYPEMASK_CONTAINER`, `MAX_BAG_SIZE`, bag slot GUID bridge, `NumSlots`, `Slots[36]`, template slot-count guard, StoreItem/RemoveItem child state updates and ContainerData masks.
 - [x] **#028d** `wow-entities`: `Player` storage lookup bridge from `Player.h` and `Player.cpp`: `m_items[141]`, slot constants, `ForEachItem` locations, `GetItemByPos`, packed-pos lookup, `GetBagByPos`, `GetItemByGuid`, buyback slot rotation and `ActivePlayerData` InvSlots/Buyback masks; `PlayerStorage.cpp` is not present in this C++ checkout, storage lives in `Player.cpp`.
+- [x] **#028e** `wow-entities`: `ObjectAccessor::GetObjectByTypeMask` item branch from `ObjectAccessor.cpp`: `TYPEMASK_ITEM` only resolves for player context and delegates to player inventory lookup; Rust exposes `AccessorObjectRef::Item` because `Item` is not a `WorldObject`.
 - [ ] **#029** `wow-entities`: `Creature` + `GameObject` from their C++ dirs: template refs, spawn data, respawn timer, AI ref, GO state. Refinado: base `Creature` state cerrado en `#029a` y base `GameObject` state cerrado en `#029b`; siguen pendientes `Creature::Create/LoadFromDB`, template/difficulty refs, AI ownership, loot, corpse/respawn lifecycle and GameObject create/template/model/use lifecycle.
 - [x] **#029a** `wow-entities`: base `Creature` state from `Creature.*`, `CreatureData.h`, `UnitDefines.h`, `MovementDefines.h`, `SharedDefines.h`, `World.cpp` config defaults and `StatSystem.cpp::Creature::GetPowerIndex`: constructor defaults, respawn/corpse timers, react state, movement type, spells, loot mode, monster sight default, display/model dimension bridge, faction setter and creature power-index semantics.
 - [x] **#029b** `wow-entities`: base `GameObject` state from `GameObject.*`, `SharedDefines.h` and `UF::GameObjectData`: constructor type id/mask, stationary/rotation create flags, respawn/despawn/restock/cooldown state, loot state/unit guid, spawned-by-default, spell/spawn ids, packed rotation, loot mode, stationary position, respawn compatibility flag and GameObjectData setters/masks.

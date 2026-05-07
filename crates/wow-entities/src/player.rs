@@ -119,6 +119,23 @@ pub struct PlayerInventoryStorage {
     pub current_buyback_slot: u8,
 }
 
+impl PlayerInventoryStorage {
+    pub fn get_item_by_guid_everywhere(&self, guid: ObjectGuid) -> Option<ObjectGuid> {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(slot, _)| !is_buyback_slot(*slot as u8))
+            .find_map(|(_, item_guid)| (*item_guid == Some(guid)).then_some(guid))
+            .or_else(|| {
+                self.bags
+                    .iter()
+                    .filter_map(|bag| *bag)
+                    .flat_map(|bag| bag.slots.into_iter().take(bag.bag_size as usize))
+                    .find_map(|item_guid| (item_guid == Some(guid)).then_some(guid))
+            })
+    }
+}
+
 impl Default for PlayerInventoryStorage {
     fn default() -> Self {
         Self {

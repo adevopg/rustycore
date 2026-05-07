@@ -110,6 +110,11 @@
   Rust targets: `crates/wow-entities/src/player.rs`, `crates/wow-entities/src/lib.rs`.
   Acceptance: `m_items[PLAYER_SLOT_END=141]`, `m_currentBuybackSlot`, storage slot constants, `ForEachItem` search locations, top-level/bag/reagent/bank GUID storage, `GetItemByPos`, packed-pos lookup, `GetBagByPos`, `GetItemByGuid`, buyback slots and `ActivePlayerData::{InvSlots,BuybackPrice,BuybackTimestamp}` masks are represented and tested against C++ lookup rules. Actual `Item*` ownership, item mutation side effects, equip spell/aura/stat application, visible item data, DB persistence and packet serializers remain pending under #NEXT.R8.ENTITIES.013/#008.
 
+- [x] **#NEXT.R8.ENTITIES.044** Wire `ObjectAccessor` `TYPEMASK_ITEM` lookup branch.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectAccessor.cpp`, `ObjectAccessor.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp`.
+  Rust targets: `crates/wow-entities/src/object_accessor.rs`, `crates/wow-entities/src/player.rs`, `crates/wow-entities/src/lib.rs`.
+  Acceptance: `GetObjectByTypeMask` item semantics are represented: item GUID lookup only works when `typemask` contains `TYPEMASK_ITEM` and the context object is a player; the branch delegates to Player inventory storage. Because C++ returns `Object*` and Rust `Item` is not a `WorldObject`, a new `AccessorObjectRef::{WorldObject,Item}` API carries item hits while the legacy `get_object_by_type_mask` remains world-object-only. Real `Player` ownership storage, item object registry and packet serializers remain #NEXT.R8.ENTITIES.013/#008.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
@@ -118,7 +123,7 @@
 - [ ] **#NEXT.R8.ENTITIES.008** Complete generated update-field sections beyond `ObjectData`: `UnitData`, `PlayerData`, `ActivePlayerData`, `GameObjectData`, `ItemData`, `CorpseData`, `DynamicObjectData`, `AreaTriggerData`, `SceneObjectData`, `ConversationData`, including visibility flag filters and dynamic/optional fields.
 - [ ] **#NEXT.R8.ENTITIES.010** Complete `Unit` subsystems beyond base fields: aura hooks, threat/combat manager, SpellHistory, MotionMaster/move spline, charm/minion ownership, vehicle hooks, AI references and runtime power-index implementations for Player/Creature/Pet.
 - [ ] **#NEXT.R8.ENTITIES.012** Complete `Player` create/load/login lifecycle: `Player::Create`, `LoadFromDB`, login packet sequencing, world insertion, visibility bootstrap, stats initialization and DB2-backed `GetPowerIndexByClass`.
-- [ ] **#NEXT.R8.ENTITIES.013** Complete `Player` inventory/equipment bridge: build on base `Item`/#NEXT.R8.ENTITIES.041, `Bag`/#NEXT.R8.ENTITIES.042 and Player storage lookup/#NEXT.R8.ENTITIES.043 to port real ownership, equipment side effects, visible items, `ObjectAccessor` `TYPEMASK_ITEM`, and save/load persistence.
+- [ ] **#NEXT.R8.ENTITIES.013** Complete `Player` inventory/equipment bridge: build on base `Item`/#NEXT.R8.ENTITIES.041, `Bag`/#NEXT.R8.ENTITIES.042, Player storage lookup/#NEXT.R8.ENTITIES.043 and `ObjectAccessor` item branch/#NEXT.R8.ENTITIES.044 to port real ownership, equipment side effects, visible items and save/load persistence.
 - [ ] **#NEXT.R8.ENTITIES.014** Complete `Player` gameplay state: quests, skills, spells/actions, taxi, social, mail, group/guild, battleground/arena queues, reputation, achievements, cooldowns and rest state.
 - [ ] **#NEXT.R8.ENTITIES.016** Complete `Creature` create/load/template lifecycle: `Creature::Create`, `CreateCreatureFromDB`, `LoadFromDB`, creature template/difficulty/model refs, spawn data, equipment, level/stat selection and map insertion.
 - [ ] **#NEXT.R8.ENTITIES.017** Complete `Creature` runtime lifecycle: update loop, death/corpse/respawn transitions, forced despawn, evade/combat cleanup, loot owner/tap list, reputation, pickpocket and grid unload bindings.
