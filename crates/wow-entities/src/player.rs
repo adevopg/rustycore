@@ -652,6 +652,66 @@ impl Player {
         );
     }
 
+    pub fn is_valid_pos(&self, bag: u8, slot: u8, explicit_pos: bool) -> bool {
+        if bag == NULL_BAG && !explicit_pos {
+            return true;
+        }
+
+        if bag == INVENTORY_SLOT_BAG_0 {
+            if slot == NULL_SLOT && !explicit_pos {
+                return true;
+            }
+            if slot < EQUIPMENT_SLOT_END {
+                return true;
+            }
+            if (PROFESSION_SLOT_START..PROFESSION_SLOT_END).contains(&slot) {
+                return true;
+            }
+            if (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot) {
+                return true;
+            }
+            if (REAGENT_BAG_SLOT_START..REAGENT_BAG_SLOT_END).contains(&slot) {
+                return true;
+            }
+            let backpack_end = INVENTORY_SLOT_ITEM_START
+                .saturating_add(self.active_data.num_backpack_slots)
+                .min(INVENTORY_SLOT_ITEM_END);
+            if (INVENTORY_SLOT_ITEM_START..backpack_end).contains(&slot) {
+                return true;
+            }
+            if (BANK_SLOT_ITEM_START..BANK_SLOT_ITEM_END).contains(&slot) {
+                return true;
+            }
+            if (BANK_SLOT_BAG_START..BANK_SLOT_BAG_END).contains(&slot) {
+                return true;
+            }
+            if (KEYRING_SLOT_START..KEYRING_SLOT_END).contains(&slot) {
+                return true;
+            }
+            return false;
+        }
+
+        let Some(bag_storage) = self
+            .inventory
+            .bags
+            .get(bag as usize)
+            .and_then(Option::as_ref)
+        else {
+            return false;
+        };
+
+        if slot == NULL_SLOT && !explicit_pos {
+            return true;
+        }
+
+        slot < bag_storage.bag_size
+    }
+
+    pub fn is_valid_packed_pos(&self, pos: u16, explicit_pos: bool) -> bool {
+        let [bag, slot] = pos.to_be_bytes();
+        self.is_valid_pos(bag, slot, explicit_pos)
+    }
+
     pub fn top_level_item_guid(&self, slot: u8) -> Option<ObjectGuid> {
         self.inventory.items.get(slot as usize).copied().flatten()
     }
@@ -1540,6 +1600,38 @@ mod tests {
             INVENTORY_SLOT_BAG_START,
             CHILD_EQUIPMENT_SLOT_START
         ));
+    }
+
+    #[test]
+    fn player_is_valid_pos_matches_cpp_top_level_and_bag_rules() {
+        let bag_guid = ObjectGuid::create_item(1, 300);
+        let mut player = Player::new(None, false);
+        player.set_inventory_slot_count(16);
+
+        assert!(player.is_valid_pos(NULL_BAG, NULL_SLOT, false));
+        assert!(!player.is_valid_pos(NULL_BAG, NULL_SLOT, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, NULL_SLOT, false));
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_0, NULL_SLOT, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, 0, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, PROFESSION_SLOT_START, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, REAGENT_BAG_SLOT_START, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START + 15, true));
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START + 16, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, BANK_SLOT_BAG_START, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_0, KEYRING_SLOT_START, true));
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_0, CHILD_EQUIPMENT_SLOT_START, true));
+
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_START, 0, true));
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag_guid, 4)
+            .unwrap();
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_START, NULL_SLOT, false));
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_START, NULL_SLOT, true));
+        assert!(player.is_valid_pos(INVENTORY_SLOT_BAG_START, 3, true));
+        assert!(!player.is_valid_pos(INVENTORY_SLOT_BAG_START, 4, true));
+        assert!(player.is_valid_packed_pos(make_item_pos(INVENTORY_SLOT_BAG_START, 3), true));
     }
 
     #[test]
