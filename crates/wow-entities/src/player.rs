@@ -3229,6 +3229,30 @@ impl Player {
         Ok(removed)
     }
 
+    pub fn destroy_item_count_for_item_object(
+        &mut self,
+        item: Option<&mut Item>,
+        count: &mut u32,
+        bag_object: Option<&mut Bag>,
+    ) -> Result<(), PlayerStorageError> {
+        let Some(item) = item else {
+            return Ok(());
+        };
+
+        if item.count() <= *count {
+            *count -= item.count();
+            let bag = item.bag_slot();
+            let slot = item.slot();
+            self.destroy_item_object(bag, slot, Some(item), bag_object)?;
+        } else {
+            item.set_count(item.count() - *count);
+            *count = 0;
+            item.set_state(ItemUpdateState::Changed);
+        }
+
+        Ok(())
+    }
+
     pub fn store_bag_item(
         &mut self,
         bag: u8,
@@ -7630,6 +7654,60 @@ mod tests {
         assert_eq!(item.slot(), NULL_SLOT);
         assert!(!item.has_item_flag(ItemFieldFlags::REFUNDABLE));
         assert!(!item.has_item_flag(ItemFieldFlags::BOP_TRADEABLE));
+        assert_eq!(item.update_state(), ItemUpdateState::Removed);
+    }
+
+    #[test]
+    fn destroy_item_count_for_item_object_decrements_partial_stack_like_cpp() {
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+        let mut count = 3;
+
+        item.set_count(8);
+        item.force_state(ItemUpdateState::Unchanged);
+
+        player
+            .destroy_item_count_for_item_object(Some(&mut item), &mut count, None)
+            .unwrap();
+
+        assert_eq!(item.count(), 5);
+        assert_eq!(count, 0);
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
+    }
+
+    #[test]
+    fn destroy_item_count_for_item_object_destroys_full_stack_like_cpp() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 522);
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+        let mut count = 7;
+
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+        item.object_mut().create(item_guid);
+        item.set_owner_guid(player_guid);
+        item.set_contained_in(player_guid);
+        item.set_slot(INVENTORY_SLOT_ITEM_START);
+        item.set_count(5);
+        item.force_state(ItemUpdateState::Unchanged);
+        player
+            .store_top_level_item(INVENTORY_SLOT_ITEM_START, item_guid)
+            .unwrap();
+
+        player
+            .destroy_item_count_for_item_object(Some(&mut item), &mut count, None)
+            .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START),
+            None
+        );
+        assert_eq!(item.slot(), NULL_SLOT);
         assert_eq!(item.update_state(), ItemUpdateState::Removed);
     }
 
