@@ -183,7 +183,9 @@ impl ValuesUpdate {
 
 pub const NUM_CLIENT_OBJECT_TYPES: usize = 14;
 pub const OBJECT_DATA_BITS: usize = 4;
+pub const UNIT_DATA_BITS: usize = 227;
 pub const TYPEID_OBJECT: usize = 0;
+pub const TYPEID_UNIT: usize = 5;
 pub const OBJECT_DATA_PARENT_BIT: usize = 0;
 pub const OBJECT_DATA_ENTRY_ID_BIT: usize = 1;
 pub const OBJECT_DATA_DYNAMIC_FLAGS_BIT: usize = 2;
@@ -211,9 +213,9 @@ mod tests {
         assert_eq!(client_types.block_count(), 1);
         assert_eq!(client_types.blocks_mask_count(), 1);
 
-        let active_player_like = UpdateMask::new(606);
-        assert_eq!(active_player_like.block_count(), 19);
-        assert_eq!(active_player_like.blocks_mask_count(), 1);
+        let unit_data = UpdateMask::new(UNIT_DATA_BITS);
+        assert_eq!(unit_data.block_count(), 8);
+        assert_eq!(unit_data.blocks_mask_count(), 1);
     }
 
     #[test]
