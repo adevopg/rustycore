@@ -660,6 +660,59 @@ pub struct SwapItemRealSwapValidationPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapBagItemRef {
+    pub slot: u8,
+    pub can_go_into_empty_bag: bool,
+}
+
+impl SwapBagItemRef {
+    pub const fn new(slot: u8, can_go_into_empty_bag: bool) -> Self {
+        Self {
+            slot,
+            can_go_into_empty_bag,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapBagRef<'a> {
+    pub is_empty: bool,
+    pub bag_size: u8,
+    pub items: &'a [SwapBagItemRef],
+}
+
+impl<'a> SwapBagRef<'a> {
+    pub const fn new(is_empty: bool, bag_size: u8, items: &'a [SwapBagItemRef]) -> Self {
+        Self {
+            is_empty,
+            bag_size,
+            items,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SwapBagItemMove {
+    pub from_slot: u8,
+    pub to_slot: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SwapItemBagExchangeResult {
+    Continue,
+    Error(InventoryResult),
+    Exchange {
+        empty_bag_is_source: bool,
+        moves: Vec<SwapBagItemMove>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwapItemBagExchangePlan {
+    pub result: SwapItemBagExchangeResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitanGripPenaltyAction {
     None,
     Cast(u32),
@@ -3993,6 +4046,71 @@ impl Player {
             result: SwapItemRealSwapValidationResult::Continue {
                 source_target,
                 destination_target,
+            },
+        }
+    }
+
+    pub fn swap_item_bag_exchange_plan(
+        &self,
+        src: u16,
+        dst: u16,
+        source_bag: Option<SwapBagRef<'_>>,
+        destination_bag: Option<SwapBagRef<'_>>,
+    ) -> SwapItemBagExchangePlan {
+        let (Some(source_bag), Some(destination_bag)) = (source_bag, destination_bag) else {
+            return SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Continue,
+            };
+        };
+
+        let Some((empty_bag_is_source, empty_bag, full_bag)) =
+            (if source_bag.is_empty && !is_bag_pos(src) {
+                Some((true, source_bag, destination_bag))
+            } else if destination_bag.is_empty && !is_bag_pos(dst) {
+                Some((false, destination_bag, source_bag))
+            } else {
+                None
+            })
+        else {
+            return SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Continue,
+            };
+        };
+
+        let mut count = 0u8;
+        for slot in 0..full_bag.bag_size {
+            if let Some(item_ref) = full_bag.items.iter().find(|item| item.slot == slot) {
+                if !item_ref.can_go_into_empty_bag {
+                    return SwapItemBagExchangePlan {
+                        result: SwapItemBagExchangeResult::Error(InventoryResult::BagInBag),
+                    };
+                }
+                count = count.saturating_add(1);
+            }
+        }
+
+        if count > empty_bag.bag_size {
+            return SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Error(InventoryResult::CantSwap),
+            };
+        }
+
+        let mut moves = Vec::new();
+        let mut to_slot = 0u8;
+        for slot in 0..full_bag.bag_size {
+            if full_bag.items.iter().any(|item| item.slot == slot) {
+                moves.push(SwapBagItemMove {
+                    from_slot: slot,
+                    to_slot,
+                });
+                to_slot = to_slot.saturating_add(1);
+            }
+        }
+
+        SwapItemBagExchangePlan {
+            result: SwapItemBagExchangeResult::Exchange {
+                empty_bag_is_source,
+                moves,
             },
         }
     }
@@ -10609,6 +10727,123 @@ mod tests {
                     source_target: SwapItemRealSwapTarget::None,
                     destination_target: SwapItemRealSwapTarget::None,
                 },
+            }
+        );
+    }
+
+    #[test]
+    fn swap_item_bag_exchange_plan_matches_cpp_empty_bag_exchange() {
+        let player = Player::new(None, false);
+        let inventory_src = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START);
+        let inventory_dst = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START + 1);
+        let bag_slot_src = make_item_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_START);
+        let full_items = [
+            SwapBagItemRef::new(0, true),
+            SwapBagItemRef::new(2, true),
+            SwapBagItemRef::new(4, true),
+        ];
+        let full_bag = SwapBagRef::new(false, 5, &full_items);
+        let empty_bag = SwapBagRef::new(true, 4, &[]);
+
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(inventory_src, inventory_dst, None, Some(full_bag)),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Continue,
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(
+                inventory_src,
+                inventory_dst,
+                Some(empty_bag),
+                Some(full_bag),
+            ),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Exchange {
+                    empty_bag_is_source: true,
+                    moves: vec![
+                        SwapBagItemMove {
+                            from_slot: 0,
+                            to_slot: 0,
+                        },
+                        SwapBagItemMove {
+                            from_slot: 2,
+                            to_slot: 1,
+                        },
+                        SwapBagItemMove {
+                            from_slot: 4,
+                            to_slot: 2,
+                        },
+                    ],
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(
+                inventory_src,
+                inventory_dst,
+                Some(full_bag),
+                Some(empty_bag),
+            ),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Exchange {
+                    empty_bag_is_source: false,
+                    moves: vec![
+                        SwapBagItemMove {
+                            from_slot: 0,
+                            to_slot: 0,
+                        },
+                        SwapBagItemMove {
+                            from_slot: 2,
+                            to_slot: 1,
+                        },
+                        SwapBagItemMove {
+                            from_slot: 4,
+                            to_slot: 2,
+                        },
+                    ],
+                },
+            }
+        );
+
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(
+                bag_slot_src,
+                inventory_dst,
+                Some(empty_bag),
+                Some(full_bag),
+            ),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Continue,
+            }
+        );
+
+        let blocked_items = [SwapBagItemRef::new(0, true), SwapBagItemRef::new(1, false)];
+        let blocked_bag = SwapBagRef::new(false, 2, &blocked_items);
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(
+                inventory_src,
+                inventory_dst,
+                Some(empty_bag),
+                Some(blocked_bag),
+            ),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Error(InventoryResult::BagInBag),
+            }
+        );
+
+        let small_empty_bag = SwapBagRef::new(true, 2, &[]);
+        assert_eq!(
+            player.swap_item_bag_exchange_plan(
+                inventory_src,
+                inventory_dst,
+                Some(small_empty_bag),
+                Some(full_bag),
+            ),
+            SwapItemBagExchangePlan {
+                result: SwapItemBagExchangeResult::Error(InventoryResult::CantSwap),
             }
         );
     }
