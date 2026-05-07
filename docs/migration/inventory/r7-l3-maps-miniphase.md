@@ -10,8 +10,13 @@
   Rust targets: `crates/wow-map/src/grid.rs`, `crates/wow-map/src/lib.rs`.
   Acceptance: `GridStateKind` numeric values match C++; `GridInfo` `TimeTracker`/relocation timer/unload-lock semantics are covered by tests; `NGrid` owns 8x8 cells, grid id, x/y, loaded flag and state; Active/Idle/Removal transitions are represented behind a small `MapGridHost` trait so full `Map` can consume them without reimplementing state logic.
 
+- [x] **#NEXT.L3.MAPS.002** Port `Map` grid lifecycle skeleton.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h`, `Map.cpp`.
+  Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`.
+  Acceptance: `Map` owns a 64x64 pointer-equivalent grid table; constructor starts with empty grid slots; `EnsureGridCreated` creates an idle `NGrid` and calls terrain load with reversed coords; `EnsureGridLoaded` marks data loaded before invoking the loader hook; active-object loading sets `GRID_STATE_ACTIVE` and 0.1 expiry; `UnloadGrid` refuses world creatures/near active objects unless forced and invokes object/terrain unload hooks.
+
 ## Follow-Up Work Items
 
-- [ ] **#NEXT.L3.MAPS.002** Port `Map` skeleton: `i_grids[64][64]`, create/load/unload hooks, expiry reset and terrain hook boundary.
 - [ ] **#NEXT.L3.MAPS.003** Port `ObjectGridLoader::LoadN` on top of `SpawnStore` + `NGrid`.
-- [ ] **#NEXT.L3.MAPS.004** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.
+- [ ] **#NEXT.L3.MAPS.004** Port `MultiPersonalPhaseTracker` grid hooks used by player-triggered loading.
+- [ ] **#NEXT.L3.MAPS.005** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.

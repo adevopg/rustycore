@@ -257,6 +257,14 @@ impl NGrid {
         });
         count
     }
+
+    pub fn world_creature_count_in_ngrid(&self) -> usize {
+        let mut count = 0usize;
+        self.visit_all_grids(|cell| {
+            count += cell.world_objects.creatures.len();
+        });
+        count
+    }
 }
 
 pub trait MapGridHost {

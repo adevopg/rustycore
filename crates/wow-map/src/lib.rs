@@ -1,6 +1,7 @@
 pub mod cell;
 pub mod coords;
 pub mod grid;
+pub mod map;
 pub mod spawn;
 
 use std::fmt;
@@ -15,6 +16,10 @@ pub use coords::{
 pub use grid::{
     DEFAULT_VISIBILITY_NOTIFY_PERIOD, GridInfo, GridStateKind, MapGridHost, NGrid, PeriodicTimer,
     TimeTracker, update_grid_state,
+};
+pub use map::{
+    ActiveObjectKind, GridLifecycle, Map, NoopGridLifecycle, NoopTerrainGridLoader,
+    TerrainGridLoader, cell_from_grid_center, cell_from_world, is_grid_id_loaded,
 };
 pub use spawn::{
     CellSpawnGuids, Difficulty, PersonalSpawnMapKey, SpawnData, SpawnGroupFlags,
