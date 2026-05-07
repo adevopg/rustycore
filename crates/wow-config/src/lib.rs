@@ -494,6 +494,24 @@ impl WorldConfigSet {
             _ => None,
         }
     }
+
+    fn set_bool(&mut self, enum_name: &str, value: bool) {
+        if let Some(slot @ WorldConfigValue::Bool(_)) = self.values.get_mut(enum_name) {
+            *slot = WorldConfigValue::Bool(value);
+        }
+    }
+
+    fn set_float(&mut self, enum_name: &str, value: f32) {
+        if let Some(slot @ WorldConfigValue::Float(_)) = self.values.get_mut(enum_name) {
+            *slot = WorldConfigValue::Float(value);
+        }
+    }
+
+    fn set_int(&mut self, enum_name: &str, value: u32) {
+        if let Some(slot @ WorldConfigValue::Int(_)) = self.values.get_mut(enum_name) {
+            *slot = WorldConfigValue::Int(value);
+        }
+    }
 }
 
 /// Canonical registry rows for C++ `WorldBoolConfigs`,
@@ -519,13 +537,27 @@ pub fn load_world_config_values() -> WorldConfigSet {
         values.insert(entry.enum_name.clone(), value);
     }
 
-    WorldConfigSet { values }
+    let mut set = WorldConfigSet { values };
+    apply_world_config_validations(&mut set);
+    set
 }
 
 fn resolve_world_config_entry(
     entry: &WorldConfigEntry,
     store: &ConfigStore,
 ) -> Option<WorldConfigValue> {
+    if entry.enum_name == "CONFIG_CLIENTCACHE_VERSION" {
+        return store
+            .get("ClientCacheVersion")
+            .and_then(|raw| parse_world_config_value(WorldConfigKind::Int, raw))
+            .and_then(|value| match value {
+                WorldConfigValue::Int(value) if signed_i32(value) > 0 => {
+                    Some(WorldConfigValue::Int(value))
+                }
+                _ => None,
+            });
+    }
+
     let configured = entry
         .key
         .as_deref()
@@ -583,8 +615,329 @@ fn parse_world_config_value(kind: WorldConfigKind, raw: &str) -> Option<WorldCon
     match kind {
         WorldConfigKind::Bool => parse_config_bool(raw).map(WorldConfigValue::Bool),
         WorldConfigKind::Float => raw.parse::<f32>().ok().map(WorldConfigValue::Float),
-        WorldConfigKind::Int => raw.parse::<u32>().ok().map(WorldConfigValue::Int),
+        WorldConfigKind::Int => raw
+            .parse::<i32>()
+            .ok()
+            .map(|value| WorldConfigValue::Int(value as u32)),
         WorldConfigKind::Int64 => raw.parse::<u64>().ok().map(WorldConfigValue::Int64),
+    }
+}
+
+fn apply_world_config_validations(values: &mut WorldConfigSet) {
+    const MAX_LEVEL: u32 = 123;
+    const MAX_PLAYER_NAME: u32 = 12;
+    const MAX_PET_NAME: u32 = 12;
+    const MAX_CHARTER_NAME: u32 = 24;
+    const MAX_CHARACTERS_PER_REALM: u32 = 200;
+    const MIN_GRID_DELAY: u32 = 60_000;
+    const MIN_MAP_UPDATE_DELAY: u32 = 1;
+    const MAX_START_MONEY: u32 = 0x7fff_ffff - 1;
+    const GUILD_NEWSLOG_MAX_RECORDS: u32 = 250;
+    const GUILD_EVENTLOG_MAX_RECORDS: u32 = 100;
+    const GUILD_BANKLOG_MAX_RECORDS: u32 = 25;
+    const BAN_CHARACTER: u32 = 1;
+    const BAN_IP: u32 = 2;
+    const BAN_ACCOUNT: u32 = 0;
+
+    int_outside_to(values, "CONFIG_COMPRESSION", 1, 9, 1);
+    int_outside_to(values, "CONFIG_AUCTION_SEARCH_DELAY", 100, 10_000, 300);
+    int_outside_to(
+        values,
+        "CONFIG_AUCTION_TAINTED_SEARCH_DELAY",
+        100,
+        10_000,
+        3_000,
+    );
+
+    if values
+        .get_bool("CONFIG_GRID_UNLOAD")
+        .zip(values.get_bool("CONFIG_BASEMAP_LOAD_GRIDS"))
+        .is_some_and(|(grid_unload, load_grids)| grid_unload && load_grids)
+    {
+        values.set_bool("CONFIG_BASEMAP_LOAD_GRIDS", false);
+    }
+
+    if values
+        .get_bool("CONFIG_GRID_UNLOAD")
+        .zip(values.get_bool("CONFIG_INSTANCEMAP_LOAD_GRIDS"))
+        .is_some_and(|(grid_unload, load_grids)| grid_unload && load_grids)
+    {
+        values.set_bool("CONFIG_INSTANCEMAP_LOAD_GRIDS", false);
+    }
+
+    int_above_to(values, "CONFIG_MIN_LEVEL_STAT_SAVE", MAX_LEVEL, 0);
+    int_below_to(
+        values,
+        "CONFIG_INTERVAL_GRIDCLEAN",
+        MIN_GRID_DELAY,
+        MIN_GRID_DELAY,
+    );
+    int_below_to(
+        values,
+        "CONFIG_INTERVAL_MAPUPDATE",
+        MIN_MAP_UPDATE_DELAY,
+        MIN_MAP_UPDATE_DELAY,
+    );
+    int_divide_by(values, "CONFIG_SOCKET_TIMEOUTTIME", 1_000);
+    int_divide_by(values, "CONFIG_SOCKET_TIMEOUTTIME_ACTIVE", 1_000);
+
+    for name in [
+        "CONFIG_MIN_QUEST_SCALED_XP_RATIO",
+        "CONFIG_MIN_CREATURE_SCALED_XP_RATIO",
+        "CONFIG_MIN_DISCOVERED_SCALED_XP_RATIO",
+    ] {
+        int_above_to(values, name, 100, 0);
+    }
+
+    int_outside_to(values, "CONFIG_MIN_PLAYER_NAME", 1, MAX_PLAYER_NAME, 2);
+    int_outside_to(values, "CONFIG_MIN_CHARTER_NAME", 1, MAX_CHARTER_NAME, 2);
+    int_outside_to(values, "CONFIG_MIN_PET_NAME", 1, MAX_PET_NAME, 2);
+    int_outside_to(
+        values,
+        "CONFIG_CHARACTERS_PER_REALM",
+        1,
+        MAX_CHARACTERS_PER_REALM,
+        MAX_CHARACTERS_PER_REALM,
+    );
+
+    if let (Some(account), Some(realm)) = (
+        values.get_int("CONFIG_CHARACTERS_PER_ACCOUNT"),
+        values.get_int("CONFIG_CHARACTERS_PER_REALM"),
+    ) {
+        if account < realm {
+            values.set_int("CONFIG_CHARACTERS_PER_ACCOUNT", realm);
+        }
+    }
+
+    if let Some(value) = values.get_int("CONFIG_CHARACTER_CREATING_EVOKERS_PER_REALM") {
+        if signed_i32(value) < 0 || value > 10 {
+            values.set_int("CONFIG_CHARACTER_CREATING_EVOKERS_PER_REALM", 1);
+        }
+    }
+
+    if let Some(value) = values.get_int("CONFIG_SKIP_CINEMATICS") {
+        if signed_i32(value) < 0 || value > 2 {
+            values.set_int("CONFIG_SKIP_CINEMATICS", 0);
+        }
+    }
+
+    int_above_to(values, "CONFIG_MAX_PLAYER_LEVEL", MAX_LEVEL, MAX_LEVEL);
+    for name in [
+        "CONFIG_START_PLAYER_LEVEL",
+        "CONFIG_START_DEATH_KNIGHT_PLAYER_LEVEL",
+        "CONFIG_START_DEMON_HUNTER_PLAYER_LEVEL",
+        "CONFIG_START_EVOKER_PLAYER_LEVEL",
+        "CONFIG_START_ALLIED_RACE_LEVEL",
+    ] {
+        clamp_start_level(values, name);
+    }
+
+    if let Some(value) = values.get_int("CONFIG_START_PLAYER_MONEY") {
+        if signed_i32(value) < 0 {
+            values.set_int("CONFIG_START_PLAYER_MONEY", 0);
+        } else if value > MAX_START_MONEY {
+            values.set_int("CONFIG_START_PLAYER_MONEY", MAX_START_MONEY);
+        }
+    }
+
+    int_above_to(values, "CONFIG_CURRENCY_RESET_HOUR", 23, 3);
+    int_above_to(values, "CONFIG_CURRENCY_RESET_DAY", 6, 3);
+    if let Some(value) = values.get_int("CONFIG_CURRENCY_RESET_INTERVAL") {
+        if signed_i32(value) <= 0 {
+            values.set_int("CONFIG_CURRENCY_RESET_INTERVAL", 7);
+        }
+    }
+
+    if let (Some(raf_level), Some(max_level)) = (
+        values.get_int("CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL"),
+        values.get_int("CONFIG_MAX_PLAYER_LEVEL"),
+    ) {
+        if raf_level > max_level {
+            values.set_int("CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL", 85);
+        }
+    }
+
+    int_above_to(values, "CONFIG_DAILY_QUEST_RESET_TIME_HOUR", 23, 3);
+    int_above_to(values, "CONFIG_WEEKLY_QUEST_RESET_TIME_WDAY", 6, 3);
+    int_above_to(values, "CONFIG_MIN_PETITION_SIGNS", 4, 4);
+
+    if let (Some(gm_level), Some(start_level)) = (
+        values.get_int("CONFIG_START_GM_LEVEL"),
+        values.get_int("CONFIG_START_PLAYER_LEVEL"),
+    ) {
+        if gm_level < start_level {
+            values.set_int("CONFIG_START_GM_LEVEL", start_level);
+        } else if gm_level > MAX_LEVEL {
+            values.set_int("CONFIG_START_GM_LEVEL", MAX_LEVEL);
+        }
+    }
+
+    int_above_to(values, "CONFIG_CLEAN_OLD_MAIL_TIME", 23, 4);
+    int_signed_below_or_equal_to(values, "CONFIG_UPTIME_UPDATE", 0, 10);
+    int_signed_below_or_equal_to(values, "CONFIG_LOGDB_CLEARINTERVAL", 0, 10);
+
+    if let Some(value) = values.get_int("CONFIG_MAX_OVERSPEED_PINGS") {
+        if value != 0 && value < 2 {
+            values.set_int("CONFIG_MAX_OVERSPEED_PINGS", 2);
+        }
+    }
+
+    int_above_to(
+        values,
+        "CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF",
+        MAX_LEVEL,
+        MAX_LEVEL,
+    );
+    int_above_to(
+        values,
+        "CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF",
+        MAX_LEVEL,
+        MAX_LEVEL,
+    );
+    int_above_to(values, "CONFIG_RANDOM_BG_RESET_HOUR", 23, 6);
+    int_above_to(values, "CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR", 23, 6);
+    int_above_to(values, "CONFIG_GUILD_RESET_HOUR", 23, 6);
+    int_outside_to(values, "CONFIG_BATTLEGROUND_REPORT_AFK", 1, 9, 3);
+    int_above_to(
+        values,
+        "CONFIG_GUILD_NEWS_LOG_COUNT",
+        GUILD_NEWSLOG_MAX_RECORDS,
+        GUILD_NEWSLOG_MAX_RECORDS,
+    );
+    int_above_to(
+        values,
+        "CONFIG_GUILD_EVENT_LOG_COUNT",
+        GUILD_EVENTLOG_MAX_RECORDS,
+        GUILD_EVENTLOG_MAX_RECORDS,
+    );
+    int_above_to(
+        values,
+        "CONFIG_GUILD_BANK_EVENT_LOG_COUNT",
+        GUILD_BANKLOG_MAX_RECORDS,
+        GUILD_BANKLOG_MAX_RECORDS,
+    );
+
+    if let (Some(above), Some(max_level)) = (
+        values.get_int("CONFIG_NO_GRAY_AGGRO_ABOVE"),
+        values.get_int("CONFIG_MAX_PLAYER_LEVEL"),
+    ) {
+        if above > max_level {
+            values.set_int("CONFIG_NO_GRAY_AGGRO_ABOVE", max_level);
+        }
+    }
+
+    if let (Some(below), Some(max_level)) = (
+        values.get_int("CONFIG_NO_GRAY_AGGRO_BELOW"),
+        values.get_int("CONFIG_MAX_PLAYER_LEVEL"),
+    ) {
+        if below > max_level {
+            values.set_int("CONFIG_NO_GRAY_AGGRO_BELOW", max_level);
+        }
+    }
+
+    if let (Some(above), Some(below)) = (
+        values.get_int("CONFIG_NO_GRAY_AGGRO_ABOVE"),
+        values.get_int("CONFIG_NO_GRAY_AGGRO_BELOW"),
+    ) {
+        if above > 0 && above < below {
+            values.set_int("CONFIG_NO_GRAY_AGGRO_BELOW", above);
+        }
+    }
+
+    int_above_to(values, "CONFIG_RESPAWN_DYNAMICMODE", 1, 0);
+    int_above_to(
+        values,
+        "CONFIG_RESPAWN_GUIDWARNLEVEL",
+        16_777_215,
+        12_000_000,
+    );
+    int_above_to(
+        values,
+        "CONFIG_RESPAWN_GUIDALERTLEVEL",
+        16_777_215,
+        16_000_000,
+    );
+    int_above_to(values, "CONFIG_RESPAWN_RESTARTQUIETTIME", 23, 3);
+    float_below_to(values, "CONFIG_RESPAWN_DYNAMICRATE_CREATURE", 0.0, 10.0);
+    float_below_to(values, "CONFIG_RESPAWN_DYNAMICRATE_GAMEOBJECT", 0.0, 10.0);
+    int_below_to(values, "CONFIG_PVP_TOKEN_COUNT", 1, 1);
+
+    if let Some(value) = values.get_int("CONFIG_PACKET_SPOOF_BANMODE") {
+        if value == BAN_CHARACTER || value > BAN_IP {
+            values.set_int("CONFIG_PACKET_SPOOF_BANMODE", BAN_ACCOUNT);
+        }
+    }
+}
+
+fn signed_i32(value: u32) -> i32 {
+    value as i32
+}
+
+fn int_above_to(values: &mut WorldConfigSet, enum_name: &str, max: u32, replacement: u32) {
+    if values.get_int(enum_name).is_some_and(|value| value > max) {
+        values.set_int(enum_name, replacement);
+    }
+}
+
+fn int_below_to(values: &mut WorldConfigSet, enum_name: &str, min: u32, replacement: u32) {
+    if values.get_int(enum_name).is_some_and(|value| value < min) {
+        values.set_int(enum_name, replacement);
+    }
+}
+
+fn int_outside_to(
+    values: &mut WorldConfigSet,
+    enum_name: &str,
+    min: u32,
+    max: u32,
+    replacement: u32,
+) {
+    if values
+        .get_int(enum_name)
+        .is_some_and(|value| value < min || value > max)
+    {
+        values.set_int(enum_name, replacement);
+    }
+}
+
+fn int_signed_below_or_equal_to(
+    values: &mut WorldConfigSet,
+    enum_name: &str,
+    threshold: i32,
+    replacement: u32,
+) {
+    if values
+        .get_int(enum_name)
+        .is_some_and(|value| signed_i32(value) <= threshold)
+    {
+        values.set_int(enum_name, replacement);
+    }
+}
+
+fn int_divide_by(values: &mut WorldConfigSet, enum_name: &str, divisor: u32) {
+    if let Some(value) = values.get_int(enum_name) {
+        values.set_int(enum_name, value / divisor);
+    }
+}
+
+fn float_below_to(values: &mut WorldConfigSet, enum_name: &str, min: f32, replacement: f32) {
+    if values.get_float(enum_name).is_some_and(|value| value < min) {
+        values.set_float(enum_name, replacement);
+    }
+}
+
+fn clamp_start_level(values: &mut WorldConfigSet, enum_name: &str) {
+    let Some(value) = values.get_int(enum_name) else {
+        return;
+    };
+    let Some(max_level) = values.get_int("CONFIG_MAX_PLAYER_LEVEL") else {
+        return;
+    };
+
+    if value < 1 {
+        values.set_int(enum_name, 1);
+    } else if value > max_level {
+        values.set_int(enum_name, max_level);
     }
 }
 
@@ -1153,6 +1506,215 @@ CharacterCreating.Disabled.RaceMask = 12
             Some(12)
         );
         assert_eq!(values.get_int("CONFIG_INTERVAL_SAVE"), Some(900_000));
+    }
+
+    #[test]
+    fn test_load_world_config_values_applies_cpp_validations() {
+        let _guard = global_config_lock();
+        load_config_from_str(
+            r#"
+Compression = 99
+Auction.SearchDelay = 50
+Auction.TaintedSearchDelay = 20000
+GridUnload = 1
+BaseMapLoadAllGrids = 1
+InstanceMapLoadAllGrids = 1
+PlayerSave.Stats.MinLevel = 124
+GridCleanUpDelay = 1
+MapUpdateInterval = 0
+SocketTimeOutTime = 900000
+SocketTimeOutTimeActive = 60000
+MinQuestScaledXPRatio = 101
+MinCreatureScaledXPRatio = 101
+MinDiscoveredScaledXPRatio = 101
+MinPlayerName = 13
+MinCharterName = 25
+MinPetName = 0
+CharactersPerRealm = 0
+CharactersPerAccount = 60
+CharacterCreating.EvokersPerRealm = 11
+SkipCinematics = 3
+MaxPlayerLevel = 90
+StartPlayerLevel = 0
+StartDeathKnightPlayerLevel = 200
+StartDemonHunterPlayerLevel = 200
+StartEvokerPlayerLevel = 200
+StartAlliedRacePlayerLevel = 200
+StartPlayerMoney = 2147483647
+Currency.ResetHour = 24
+Currency.ResetDay = 7
+Currency.ResetInterval = 0
+RecruitAFriend.MaxLevel = 91
+Quests.DailyResetTime = 24
+Quests.WeeklyResetWDay = 7
+MinPetitionSigns = 5
+GM.StartLevel = 0
+CleanOldMailTime = 24
+UpdateUptimeInterval = 0
+LogDB.Opt.ClearInterval = 0
+MaxOverspeedPings = 1
+Quests.LowLevelHideDiff = 124
+Quests.HighLevelHideDiff = 124
+Battleground.Random.ResetHour = 24
+Calendar.DeleteOldEventsHour = 24
+Guild.ResetHour = 24
+Battleground.ReportAFK = 10
+Guild.NewsLogRecordsCount = 251
+Guild.EventLogRecordsCount = 101
+Guild.BankEventLogRecordsCount = 26
+NoGrayAggro.Above = 80
+NoGrayAggro.Below = 90
+Respawn.DynamicMode = 2
+Respawn.GuidWarnLevel = 16777216
+Respawn.GuidAlertLevel = 16777216
+Respawn.RestartQuietTime = 24
+Respawn.DynamicRateCreature = -1.0
+Respawn.DynamicRateGameObject = -1.0
+PvPToken.ItemCount = 0
+PacketSpoof.BanMode = 1
+"#,
+        )
+        .expect("load failed");
+
+        let values = load_world_config_values();
+        assert_eq!(values.get_int("CONFIG_COMPRESSION"), Some(1));
+        assert_eq!(values.get_int("CONFIG_AUCTION_SEARCH_DELAY"), Some(300));
+        assert_eq!(
+            values.get_int("CONFIG_AUCTION_TAINTED_SEARCH_DELAY"),
+            Some(3_000)
+        );
+        assert_eq!(values.get_bool("CONFIG_BASEMAP_LOAD_GRIDS"), Some(false));
+        assert_eq!(
+            values.get_bool("CONFIG_INSTANCEMAP_LOAD_GRIDS"),
+            Some(false)
+        );
+        assert_eq!(values.get_int("CONFIG_MIN_LEVEL_STAT_SAVE"), Some(0));
+        assert_eq!(values.get_int("CONFIG_INTERVAL_GRIDCLEAN"), Some(60_000));
+        assert_eq!(values.get_int("CONFIG_INTERVAL_MAPUPDATE"), Some(1));
+        assert_eq!(values.get_int("CONFIG_SOCKET_TIMEOUTTIME"), Some(900));
+        assert_eq!(values.get_int("CONFIG_SOCKET_TIMEOUTTIME_ACTIVE"), Some(60));
+        assert_eq!(values.get_int("CONFIG_MIN_QUEST_SCALED_XP_RATIO"), Some(0));
+        assert_eq!(
+            values.get_int("CONFIG_MIN_CREATURE_SCALED_XP_RATIO"),
+            Some(0)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_MIN_DISCOVERED_SCALED_XP_RATIO"),
+            Some(0)
+        );
+        assert_eq!(values.get_int("CONFIG_MIN_PLAYER_NAME"), Some(2));
+        assert_eq!(values.get_int("CONFIG_MIN_CHARTER_NAME"), Some(2));
+        assert_eq!(values.get_int("CONFIG_MIN_PET_NAME"), Some(2));
+        assert_eq!(values.get_int("CONFIG_CHARACTERS_PER_REALM"), Some(200));
+        assert_eq!(values.get_int("CONFIG_CHARACTERS_PER_ACCOUNT"), Some(200));
+        assert_eq!(
+            values.get_int("CONFIG_CHARACTER_CREATING_EVOKERS_PER_REALM"),
+            Some(1)
+        );
+        assert_eq!(values.get_int("CONFIG_SKIP_CINEMATICS"), Some(0));
+        assert_eq!(values.get_int("CONFIG_MAX_PLAYER_LEVEL"), Some(90));
+        assert_eq!(values.get_int("CONFIG_START_PLAYER_LEVEL"), Some(1));
+        assert_eq!(
+            values.get_int("CONFIG_START_DEATH_KNIGHT_PLAYER_LEVEL"),
+            Some(90)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_START_DEMON_HUNTER_PLAYER_LEVEL"),
+            Some(90)
+        );
+        assert_eq!(values.get_int("CONFIG_START_EVOKER_PLAYER_LEVEL"), Some(90));
+        assert_eq!(values.get_int("CONFIG_START_ALLIED_RACE_LEVEL"), Some(90));
+        assert_eq!(
+            values.get_int("CONFIG_START_PLAYER_MONEY"),
+            Some(2_147_483_646)
+        );
+        assert_eq!(values.get_int("CONFIG_CURRENCY_RESET_HOUR"), Some(3));
+        assert_eq!(values.get_int("CONFIG_CURRENCY_RESET_DAY"), Some(3));
+        assert_eq!(values.get_int("CONFIG_CURRENCY_RESET_INTERVAL"), Some(7));
+        assert_eq!(
+            values.get_int("CONFIG_MAX_RECRUIT_A_FRIEND_BONUS_PLAYER_LEVEL"),
+            Some(85)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_DAILY_QUEST_RESET_TIME_HOUR"),
+            Some(3)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_WEEKLY_QUEST_RESET_TIME_WDAY"),
+            Some(3)
+        );
+        assert_eq!(values.get_int("CONFIG_MIN_PETITION_SIGNS"), Some(4));
+        assert_eq!(values.get_int("CONFIG_START_GM_LEVEL"), Some(1));
+        assert_eq!(values.get_int("CONFIG_CLEAN_OLD_MAIL_TIME"), Some(4));
+        assert_eq!(values.get_int("CONFIG_UPTIME_UPDATE"), Some(10));
+        assert_eq!(values.get_int("CONFIG_LOGDB_CLEARINTERVAL"), Some(10));
+        assert_eq!(values.get_int("CONFIG_MAX_OVERSPEED_PINGS"), Some(2));
+        assert_eq!(
+            values.get_int("CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF"),
+            Some(123)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF"),
+            Some(123)
+        );
+        assert_eq!(values.get_int("CONFIG_RANDOM_BG_RESET_HOUR"), Some(6));
+        assert_eq!(
+            values.get_int("CONFIG_CALENDAR_DELETE_OLD_EVENTS_HOUR"),
+            Some(6)
+        );
+        assert_eq!(values.get_int("CONFIG_GUILD_RESET_HOUR"), Some(6));
+        assert_eq!(values.get_int("CONFIG_BATTLEGROUND_REPORT_AFK"), Some(3));
+        assert_eq!(values.get_int("CONFIG_GUILD_NEWS_LOG_COUNT"), Some(250));
+        assert_eq!(values.get_int("CONFIG_GUILD_EVENT_LOG_COUNT"), Some(100));
+        assert_eq!(
+            values.get_int("CONFIG_GUILD_BANK_EVENT_LOG_COUNT"),
+            Some(25)
+        );
+        assert_eq!(values.get_int("CONFIG_NO_GRAY_AGGRO_ABOVE"), Some(80));
+        assert_eq!(values.get_int("CONFIG_NO_GRAY_AGGRO_BELOW"), Some(80));
+        assert_eq!(values.get_int("CONFIG_RESPAWN_DYNAMICMODE"), Some(0));
+        assert_eq!(
+            values.get_int("CONFIG_RESPAWN_GUIDWARNLEVEL"),
+            Some(12_000_000)
+        );
+        assert_eq!(
+            values.get_int("CONFIG_RESPAWN_GUIDALERTLEVEL"),
+            Some(16_000_000)
+        );
+        assert_eq!(values.get_int("CONFIG_RESPAWN_RESTARTQUIETTIME"), Some(3));
+        assert_eq!(
+            values.get_float("CONFIG_RESPAWN_DYNAMICRATE_CREATURE"),
+            Some(10.0)
+        );
+        assert_eq!(
+            values.get_float("CONFIG_RESPAWN_DYNAMICRATE_GAMEOBJECT"),
+            Some(10.0)
+        );
+        assert_eq!(values.get_int("CONFIG_PVP_TOKEN_COUNT"), Some(1));
+        assert_eq!(values.get_int("CONFIG_PACKET_SPOOF_BANMODE"), Some(0));
+    }
+
+    #[test]
+    fn test_load_world_config_values_handles_cpp_signed_int_edges() {
+        let _guard = global_config_lock();
+        load_config_from_str(
+            r#"
+Quests.LowLevelHideDiff = -1
+ClientCacheVersion = 77
+"#,
+        )
+        .expect("load failed");
+
+        let values = load_world_config_values();
+        assert_eq!(
+            values.get_int("CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF"),
+            Some(123)
+        );
+        assert_eq!(values.get_int("CONFIG_CLIENTCACHE_VERSION"), Some(77));
+
+        load_config_from_str("ClientCacheVersion = -1").expect("load failed");
+        let values = load_world_config_values();
+        assert_eq!(values.get_int("CONFIG_CLIENTCACHE_VERSION"), None);
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
