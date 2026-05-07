@@ -501,8 +501,8 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 ### Inmediato (R6 — L0 config parity)
 
 - [x] **#NEXT.L0.CONFIG.001** Ejecutar `docs/migration/inventory/r6-next-miniphase.md`: nombres canonicos `worldserver.conf`/`bnetserver.conf`, parsing semicolonado `*DatabaseInfo`, overlays `.conf.d`, override `TC_*`, y consumo de startup world/bnet contra C++. Cerrado en código, incluido `#NEXT.L0.CONFIG.REMOVE_LEGACY_DB_SUBKEYS`.
-- [ ] **#NEXT.L0.CONFIG.002** Portar `WorldBoolConfigs`/`WorldFloatConfigs`/`WorldIntConfigs`/`WorldInt64Configs` contra `World.cpp`.
-  Estado: `#NEXT.L0.CONFIG.002.a` y `#NEXT.L0.CONFIG.002.b` cerrados en `wow-config`; sigue `#NEXT.L0.CONFIG.002.c` wiring runtime.
+- [x] **#NEXT.L0.CONFIG.002** Portar `WorldBoolConfigs`/`WorldFloatConfigs`/`WorldIntConfigs`/`WorldInt64Configs` contra `World.cpp`.
+  Estado: cerrado con `#NEXT.L0.CONFIG.002.a` registry/defaults, `#NEXT.L0.CONFIG.002.b` validaciones C++ y `#NEXT.L0.CONFIG.002.c` wiring runtime.
 
 ### Inmediato (Fase 0 — Maps rewrite)
 

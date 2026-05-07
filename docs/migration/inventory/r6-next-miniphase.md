@@ -87,10 +87,10 @@ These references must be open beside the Rust patch when implementation starts:
   Rust target: `crates/wow-config/src/lib.rs`.
   Acceptance: every range/cross-field correction discovered in `World.cpp` has a Rust rule or an explicit product exclusion with C++ line. Closed with tests for clamps, cross-field corrections, socket timeout ms-to-seconds conversion, signed int edge handling, and `ClientCacheVersion` override semantics.
 
-- [ ] **#NEXT.L0.CONFIG.002.c** Wire resolved world config values into world runtime consumers.
+- [x] **#NEXT.L0.CONFIG.002.c** Wire resolved world config values into world runtime consumers.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:682`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:689`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:695`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.h:708`.
-  Rust target: `crates/world-server/src/main.rs`, `crates/wow-world`.
-  Acceptance: consumers stop reading ad-hoc keys when the equivalent `World*Configs` value exists.
+  Rust target: `crates/world-server/src/main.rs`.
+  Acceptance: consumers stop reading ad-hoc keys when the equivalent `World*Configs` value exists. Closed for current Rust consumers of `CONFIG_PORT_WORLD`, `CONFIG_PORT_INSTANCE`, and `CONFIG_EXPANSION`, preserving C++ cast behavior.
 
 ## R6 Closure
 

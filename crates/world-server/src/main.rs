@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tracing::info;
-use wow_config::{DatabaseInfo, LoadReport};
+use wow_config::{DatabaseInfo, LoadReport, WorldConfigSet};
 use wow_core::{ObjectGuidGenerator, guid::HighGuid};
 use wow_database::{
     CharStatements, CharacterDatabase, HotfixDatabase, LoginDatabase, LoginStatements,
@@ -172,6 +172,7 @@ async fn main() -> Result<()> {
     info!("RustyCore World Server starting...");
 
     load_world_config()?;
+    let world_configs = wow_config::load_world_config_values();
 
     // Connect to login database (needed for session key validation)
     let login_info = wow_config::get_database_info_default(
@@ -514,8 +515,9 @@ async fn main() -> Result<()> {
 
     // Network configuration
     let bind_ip = wow_config::get_string_default("BindIP", "0.0.0.0");
-    let world_port: u16 = wow_config::get_value("WorldServerPort").unwrap_or(8085);
-    let instance_port: u16 = wow_config::get_value("InstanceServerPort").unwrap_or(world_port + 1);
+    let world_port = world_config_u16(&world_configs, "CONFIG_PORT_WORLD", 8085);
+    let instance_port = world_config_u16(&world_configs, "CONFIG_PORT_INSTANCE", 8086);
+    let max_expansion = world_config_u8(&world_configs, "CONFIG_EXPANSION", 2);
 
     let realm_addr: SocketAddr = format!("{bind_ip}:{world_port}")
         .parse()
@@ -542,7 +544,16 @@ async fn main() -> Result<()> {
                 move |account, pkt_rx, send_tx, res| {
                     let mgr = Arc::clone(&mgr);
                     let smap = Arc::clone(&smap);
-                    create_session(account, pkt_rx, send_tx, res, mgr, smap, port)
+                    create_session(
+                        account,
+                        pkt_rx,
+                        send_tx,
+                        res,
+                        mgr,
+                        smap,
+                        port,
+                        max_expansion,
+                    )
                 },
             )
             .await
@@ -599,6 +610,20 @@ fn load_world_config_from(config_candidates: &[&str], config_dir: &str) -> Resul
     }
 
     Ok(loaded_config)
+}
+
+fn world_config_u16(configs: &WorldConfigSet, enum_name: &str, default: u16) -> u16 {
+    configs
+        .get_int(enum_name)
+        .map(|value| value as u16)
+        .unwrap_or(default)
+}
+
+fn world_config_u8(configs: &WorldConfigSet, enum_name: &str, default: u8) -> u8 {
+    configs
+        .get_int(enum_name)
+        .map(|value| value as u8)
+        .unwrap_or(default)
 }
 
 /// Load the realm's gamebuild from `realmlist` and the corresponding
@@ -668,6 +693,7 @@ async fn create_session(
     session_mgr: Arc<SessionManager>,
     shared_map: SharedMapManager,
     instance_port: u16,
+    max_expansion: u8,
 ) {
     info!(
         "Creating session for account {} (bnet_id={})",
@@ -681,10 +707,9 @@ async fn create_session(
     // HMAC-SHA256 derived key used for AuthContinuedSession validation.
     let session_key_raw = account.derived_session_key.clone();
 
-    // C# caps only ActiveExpansionLevel to the server's max expansion (WotLK=2),
+    // C# caps only ActiveExpansionLevel to the server's max expansion,
     // but sends AccountExpansionLevel as the raw DB value (e.g. 9=Dragonflight).
     // The client uses AccountExpansionLevel to unlock classes in the char list.
-    let max_expansion: u8 = 2; // WotLK — server config "Expansion"
     let active_expansion = account.expansion.min(max_expansion);
     let account_expansion = account.expansion; // raw from DB, NOT capped
 
@@ -892,13 +917,17 @@ fn locale_id_to_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::load_world_config_from;
+    use super::{load_world_config_from, world_config_u8, world_config_u16};
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn world_config_resolution_prefers_lowercase_cpp_name() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
         let root = unique_temp_dir("world_config_resolution");
         let lower = root.join("worldserver.conf");
         let legacy = root.join("WorldServer.conf");
@@ -919,6 +948,27 @@ mod tests {
         assert_eq!(wow_config::get_value::<u16>("WorldServerPort"), Some(8085));
 
         fs::remove_dir_all(root).expect("cleanup failed");
+    }
+
+    #[test]
+    fn world_network_config_uses_resolved_world_configs() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str(
+            r#"
+WorldServerPort = 70000
+InstanceServerPort = 70001
+Expansion = 9
+"#,
+        )
+        .expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        assert_eq!(world_config_u16(&configs, "CONFIG_PORT_WORLD", 8085), 4464);
+        assert_eq!(
+            world_config_u16(&configs, "CONFIG_PORT_INSTANCE", 8086),
+            4465
+        );
+        assert_eq!(world_config_u8(&configs, "CONFIG_EXPANSION", 2), 9);
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
