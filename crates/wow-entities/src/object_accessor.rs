@@ -1,0 +1,642 @@
+use std::collections::{BTreeMap, HashMap};
+
+use wow_constants::TypeMask;
+use wow_core::ObjectGuid;
+use wow_core::guid::HighGuid;
+
+use crate::WorldObject;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessorObjectKind {
+    Player,
+    Creature,
+    Pet,
+    GameObject,
+    Transport,
+    DynamicObject,
+    AreaTrigger,
+    Corpse,
+    SceneObject,
+    Conversation,
+}
+
+impl AccessorObjectKind {
+    pub fn from_guid(guid: ObjectGuid) -> Option<Self> {
+        match guid.high_type() {
+            HighGuid::Player => Some(Self::Player),
+            HighGuid::Creature | HighGuid::Vehicle => Some(Self::Creature),
+            HighGuid::Pet => Some(Self::Pet),
+            HighGuid::GameObject => Some(Self::GameObject),
+            HighGuid::Transport => Some(Self::Transport),
+            HighGuid::DynamicObject => Some(Self::DynamicObject),
+            HighGuid::AreaTrigger => Some(Self::AreaTrigger),
+            HighGuid::Corpse => Some(Self::Corpse),
+            HighGuid::SceneObject => Some(Self::SceneObject),
+            HighGuid::Conversation => Some(Self::Conversation),
+            _ => None,
+        }
+    }
+
+    pub const fn type_mask(self) -> TypeMask {
+        match self {
+            Self::Player => TypeMask::PLAYER,
+            Self::Creature | Self::Pet => TypeMask::UNIT,
+            Self::GameObject | Self::Transport => TypeMask::GAME_OBJECT,
+            Self::DynamicObject => TypeMask::DYNAMIC_OBJECT,
+            Self::AreaTrigger => TypeMask::AREA_TRIGGER,
+            Self::Corpse => TypeMask::CORPSE,
+            Self::SceneObject => TypeMask::SCENE_OBJECT,
+            Self::Conversation => TypeMask::CONVERSATION,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessorPlayer {
+    normalized_name: String,
+    object: WorldObject,
+}
+
+impl AccessorPlayer {
+    pub fn new(name: impl AsRef<str>, object: WorldObject) -> Result<Self, ObjectAccessorError> {
+        if !object.guid().is_player() {
+            return Err(ObjectAccessorError::WrongGuidKind {
+                guid: object.guid(),
+                expected: AccessorObjectKind::Player,
+            });
+        }
+
+        let normalized_name =
+            normalize_player_name(name.as_ref()).ok_or(ObjectAccessorError::InvalidPlayerName)?;
+
+        Ok(Self {
+            normalized_name,
+            object,
+        })
+    }
+
+    pub fn normalized_name(&self) -> &str {
+        &self.normalized_name
+    }
+
+    pub const fn object(&self) -> &WorldObject {
+        &self.object
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapObjectRecord {
+    kind: AccessorObjectKind,
+    object: WorldObject,
+}
+
+impl MapObjectRecord {
+    pub fn new(kind: AccessorObjectKind, object: WorldObject) -> Result<Self, ObjectAccessorError> {
+        if !object.has_current_map() {
+            return Err(ObjectAccessorError::ObjectHasNoMap {
+                guid: object.guid(),
+            });
+        }
+
+        let guid_kind = AccessorObjectKind::from_guid(object.guid()).ok_or(
+            ObjectAccessorError::UnsupportedGuidKind {
+                guid: object.guid(),
+            },
+        )?;
+        if !kind_accepts_guid(kind, guid_kind) {
+            return Err(ObjectAccessorError::WrongGuidKind {
+                guid: object.guid(),
+                expected: kind,
+            });
+        }
+
+        Ok(Self { kind, object })
+    }
+
+    pub const fn kind(&self) -> AccessorObjectKind {
+        self.kind
+    }
+
+    pub const fn object(&self) -> &WorldObject {
+        &self.object
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ObjectAccessor {
+    players: HashMap<ObjectGuid, AccessorPlayer>,
+    player_names: HashMap<String, ObjectGuid>,
+    map_objects: BTreeMap<MapKey, HashMap<ObjectGuid, MapObjectRecord>>,
+}
+
+impl ObjectAccessor {
+    pub fn add_player(
+        &mut self,
+        name: impl AsRef<str>,
+        object: WorldObject,
+    ) -> Result<(), ObjectAccessorError> {
+        let player = AccessorPlayer::new(name, object)?;
+        let guid = player.object.guid();
+
+        if let Some(previous) = self.players.insert(guid, player.clone()) {
+            self.player_names.remove(previous.normalized_name());
+        }
+        self.player_names
+            .insert(player.normalized_name.clone(), guid);
+
+        Ok(())
+    }
+
+    pub fn remove_player(&mut self, guid: ObjectGuid) -> Option<AccessorPlayer> {
+        let removed = self.players.remove(&guid)?;
+        self.player_names.remove(removed.normalized_name());
+        Some(removed)
+    }
+
+    pub fn find_connected_player(&self, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.players.get(&guid).map(AccessorPlayer::object)
+    }
+
+    pub fn find_connected_player_by_name(&self, name: &str) -> Option<&WorldObject> {
+        let normalized = normalize_player_name(name)?;
+        let guid = self.player_names.get(&normalized)?;
+        self.find_connected_player(*guid)
+    }
+
+    pub fn find_player(&self, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.find_connected_player(guid)
+            .filter(|player| player.object().is_in_world())
+    }
+
+    pub fn find_player_by_name(&self, name: &str) -> Option<&WorldObject> {
+        self.find_connected_player_by_name(name)
+            .filter(|player| player.object().is_in_world())
+    }
+
+    pub fn find_player_by_low_guid(&self, low_guid: i64) -> Option<&WorldObject> {
+        self.players
+            .values()
+            .find(|player| player.object.guid().counter() == low_guid)
+            .map(AccessorPlayer::object)
+            .filter(|player| player.object().is_in_world())
+    }
+
+    pub fn players(&self) -> impl Iterator<Item = (&ObjectGuid, &AccessorPlayer)> {
+        self.players.iter()
+    }
+
+    pub fn save_all_players_count(&self) -> usize {
+        self.players.len()
+    }
+
+    pub fn insert_map_object(
+        &mut self,
+        kind: AccessorObjectKind,
+        object: WorldObject,
+    ) -> Result<(), ObjectAccessorError> {
+        let record = MapObjectRecord::new(kind, object)?;
+        let key = MapKey::from_world_object(record.object());
+        self.map_objects
+            .entry(key)
+            .or_default()
+            .insert(record.object.guid(), record);
+        Ok(())
+    }
+
+    pub fn remove_map_object(
+        &mut self,
+        guid: ObjectGuid,
+        map_id: u32,
+        instance_id: u32,
+    ) -> Option<MapObjectRecord> {
+        self.map_objects
+            .get_mut(&MapKey {
+                map_id,
+                instance_id,
+            })?
+            .remove(&guid)
+    }
+
+    pub fn get_world_object(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        match AccessorObjectKind::from_guid(guid)? {
+            AccessorObjectKind::Player => self.get_player(context, guid),
+            AccessorObjectKind::Creature => self.get_creature(context, guid),
+            AccessorObjectKind::Pet => self.get_pet(context, guid),
+            AccessorObjectKind::GameObject | AccessorObjectKind::Transport => {
+                self.get_game_object(context, guid)
+            }
+            AccessorObjectKind::DynamicObject => self.get_dynamic_object(context, guid),
+            AccessorObjectKind::AreaTrigger => self.get_area_trigger(context, guid),
+            AccessorObjectKind::Corpse => self.get_corpse(context, guid),
+            AccessorObjectKind::SceneObject => self.get_scene_object(context, guid),
+            AccessorObjectKind::Conversation => self.get_conversation(context, guid),
+        }
+    }
+
+    pub fn get_object_by_type_mask(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+        type_mask: TypeMask,
+    ) -> Option<&WorldObject> {
+        match AccessorObjectKind::from_guid(guid)? {
+            AccessorObjectKind::Player if type_mask.contains(TypeMask::PLAYER) => {
+                self.get_player(context, guid)
+            }
+            AccessorObjectKind::GameObject | AccessorObjectKind::Transport
+                if type_mask.contains(TypeMask::GAME_OBJECT) =>
+            {
+                self.get_game_object(context, guid)
+            }
+            AccessorObjectKind::Creature | AccessorObjectKind::Pet
+                if type_mask.contains(TypeMask::UNIT) =>
+            {
+                self.get_unit(context, guid)
+            }
+            AccessorObjectKind::DynamicObject if type_mask.contains(TypeMask::DYNAMIC_OBJECT) => {
+                self.get_dynamic_object(context, guid)
+            }
+            AccessorObjectKind::AreaTrigger if type_mask.contains(TypeMask::AREA_TRIGGER) => {
+                self.get_area_trigger(context, guid)
+            }
+            AccessorObjectKind::SceneObject if type_mask.contains(TypeMask::SCENE_OBJECT) => {
+                self.get_scene_object(context, guid)
+            }
+            AccessorObjectKind::Conversation if type_mask.contains(TypeMask::CONVERSATION) => {
+                self.get_conversation(context, guid)
+            }
+            AccessorObjectKind::Corpse => None,
+            _ => None,
+        }
+    }
+
+    pub fn get_player(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        let player = self.find_connected_player(guid)?;
+        player
+            .object()
+            .is_in_world()
+            .then_some(player)
+            .filter(|player| same_map(context, player))
+    }
+
+    pub fn get_unit(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        if guid.is_player() {
+            return self.get_player(context, guid);
+        }
+        if guid.is_pet() {
+            return self.get_pet(context, guid);
+        }
+        self.get_creature(context, guid)
+    }
+
+    pub fn get_creature(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::Creature])
+    }
+
+    pub fn get_pet(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::Pet])
+    }
+
+    pub fn get_creature_or_pet_or_vehicle(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        if guid.is_pet() {
+            return self.get_pet(context, guid);
+        }
+        if guid.is_creature_or_vehicle() {
+            return self.get_creature(context, guid);
+        }
+        None
+    }
+
+    pub fn get_game_object(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.get_map_object(
+            context,
+            guid,
+            &[
+                AccessorObjectKind::GameObject,
+                AccessorObjectKind::Transport,
+            ],
+        )
+    }
+
+    pub fn get_transport(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::Transport])
+    }
+
+    pub fn get_dynamic_object(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::DynamicObject])
+    }
+
+    pub fn get_area_trigger(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::AreaTrigger])
+    }
+
+    pub fn get_corpse(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::Corpse])
+    }
+
+    pub fn get_scene_object(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::SceneObject])
+    }
+
+    pub fn get_conversation(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+    ) -> Option<&WorldObject> {
+        self.get_map_object(context, guid, &[AccessorObjectKind::Conversation])
+    }
+
+    fn get_map_object(
+        &self,
+        context: &WorldObject,
+        guid: ObjectGuid,
+        allowed: &[AccessorObjectKind],
+    ) -> Option<&WorldObject> {
+        let record = self
+            .map_objects
+            .get(&MapKey::from_world_object(context))?
+            .get(&guid)?;
+        allowed.contains(&record.kind).then_some(record.object())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectAccessorError {
+    InvalidPlayerName,
+    UnsupportedGuidKind {
+        guid: ObjectGuid,
+    },
+    WrongGuidKind {
+        guid: ObjectGuid,
+        expected: AccessorObjectKind,
+    },
+    ObjectHasNoMap {
+        guid: ObjectGuid,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct MapKey {
+    map_id: u32,
+    instance_id: u32,
+}
+
+impl MapKey {
+    const fn from_world_object(object: &WorldObject) -> Self {
+        Self {
+            map_id: object.map_id(),
+            instance_id: object.instance_id(),
+        }
+    }
+}
+
+pub fn normalize_player_name(name: &str) -> Option<String> {
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    let mut normalized = String::new();
+    normalized.extend(first.to_uppercase());
+    for ch in chars {
+        normalized.extend(ch.to_lowercase());
+    }
+    Some(normalized)
+}
+
+fn same_map(left: &WorldObject, right: &WorldObject) -> bool {
+    left.has_current_map()
+        && right.has_current_map()
+        && left.map_id() == right.map_id()
+        && left.instance_id() == right.instance_id()
+}
+
+fn kind_accepts_guid(kind: AccessorObjectKind, guid_kind: AccessorObjectKind) -> bool {
+    kind == guid_kind
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_constants::{TypeId, TypeMask};
+    use wow_core::Position;
+
+    fn guid(high: HighGuid, counter: i64) -> ObjectGuid {
+        if high == HighGuid::Player {
+            ObjectGuid::create_global(high, 0, counter)
+        } else if high == HighGuid::Transport {
+            ObjectGuid::create_transport(high, counter)
+        } else {
+            ObjectGuid::create_world_object(high, 0, 1, 530, 1, 100, counter)
+        }
+    }
+
+    fn world_object(high: HighGuid, map_id: u32, instance_id: u32, in_world: bool) -> WorldObject {
+        let type_id = guid(high, 1).type_id();
+        let type_mask = match type_id {
+            wow_core::guid::TypeId::Player => TypeMask::PLAYER,
+            wow_core::guid::TypeId::Unit => TypeMask::UNIT,
+            wow_core::guid::TypeId::GameObject => TypeMask::GAME_OBJECT,
+            wow_core::guid::TypeId::DynamicObject => TypeMask::DYNAMIC_OBJECT,
+            wow_core::guid::TypeId::Corpse => TypeMask::CORPSE,
+            wow_core::guid::TypeId::AreaTrigger => TypeMask::AREA_TRIGGER,
+            wow_core::guid::TypeId::SceneObject => TypeMask::SCENE_OBJECT,
+            wow_core::guid::TypeId::Conversation => TypeMask::CONVERSATION,
+            _ => TypeMask::OBJECT,
+        };
+        let mut object = WorldObject::new(false, convert_type_id(type_id), type_mask);
+        object.object_mut().create(guid(high, 1));
+        object.set_map(map_id, instance_id).unwrap();
+        object.relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            object.object_mut().add_to_world();
+        }
+        object
+    }
+
+    fn convert_type_id(type_id: wow_core::guid::TypeId) -> TypeId {
+        match type_id {
+            wow_core::guid::TypeId::Object => TypeId::Object,
+            wow_core::guid::TypeId::Item => TypeId::Item,
+            wow_core::guid::TypeId::Container => TypeId::Container,
+            wow_core::guid::TypeId::AzeriteEmpoweredItem => TypeId::AzeriteEmpoweredItem,
+            wow_core::guid::TypeId::AzeriteItem => TypeId::AzeriteItem,
+            wow_core::guid::TypeId::Unit => TypeId::Unit,
+            wow_core::guid::TypeId::Player => TypeId::Player,
+            wow_core::guid::TypeId::ActivePlayer => TypeId::ActivePlayer,
+            wow_core::guid::TypeId::GameObject => TypeId::GameObject,
+            wow_core::guid::TypeId::DynamicObject => TypeId::DynamicObject,
+            wow_core::guid::TypeId::Corpse => TypeId::Corpse,
+            wow_core::guid::TypeId::AreaTrigger => TypeId::AreaTrigger,
+            wow_core::guid::TypeId::SceneObject => TypeId::SceneObject,
+            wow_core::guid::TypeId::Conversation => TypeId::Conversation,
+        }
+    }
+
+    #[test]
+    fn player_name_normalization_matches_cpp_shape() {
+        assert_eq!(normalize_player_name("thrall"), Some("Thrall".to_string()));
+        assert_eq!(normalize_player_name("THRALL"), Some("Thrall".to_string()));
+        assert_eq!(normalize_player_name(""), None);
+    }
+
+    #[test]
+    fn global_player_lookup_distinguishes_connected_and_in_world() {
+        let mut accessor = ObjectAccessor::default();
+        let player = world_object(HighGuid::Player, 1, 0, false);
+        let player_guid = player.guid();
+
+        accessor.add_player("jaina", player).unwrap();
+        assert!(accessor.find_connected_player(player_guid).is_some());
+        assert!(accessor.find_connected_player_by_name("JAINA").is_some());
+        assert!(accessor.find_player(player_guid).is_none());
+        assert!(accessor.find_player_by_name("jaina").is_none());
+
+        let mut in_world = world_object(HighGuid::Player, 1, 0, true);
+        in_world.object_mut().create(player_guid);
+        accessor.add_player("jaina", in_world).unwrap();
+        assert!(accessor.find_player(player_guid).is_some());
+        assert_eq!(accessor.save_all_players_count(), 1);
+    }
+
+    #[test]
+    fn get_player_requires_same_map_like_cpp_get_player_map() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Creature, 1, 0, true);
+        let same_map_player = world_object(HighGuid::Player, 1, 0, true);
+        let same_guid = same_map_player.guid();
+        let mut other_map_player = world_object(HighGuid::Player, 2, 0, true);
+        other_map_player
+            .object_mut()
+            .create(ObjectGuid::create_global(HighGuid::Player, 0, 2));
+        let other_guid = other_map_player.guid();
+
+        accessor.add_player("anduin", same_map_player).unwrap();
+        accessor.add_player("baine", other_map_player).unwrap();
+
+        assert!(accessor.get_player(&context, same_guid).is_some());
+        assert!(accessor.get_player(&context, other_guid).is_none());
+    }
+
+    #[test]
+    fn world_object_dispatches_by_high_guid_to_map_store() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Player, 530, 1, true);
+        let creature = world_object(HighGuid::Creature, 530, 1, true);
+        let gameobject = world_object(HighGuid::GameObject, 530, 1, true);
+        let creature_guid = creature.guid();
+        let gameobject_guid = gameobject.guid();
+
+        accessor
+            .insert_map_object(AccessorObjectKind::Creature, creature)
+            .unwrap();
+        accessor
+            .insert_map_object(AccessorObjectKind::GameObject, gameobject)
+            .unwrap();
+
+        assert_eq!(
+            accessor
+                .get_world_object(&context, creature_guid)
+                .unwrap()
+                .guid(),
+            creature_guid
+        );
+        assert_eq!(
+            accessor
+                .get_world_object(&context, gameobject_guid)
+                .unwrap()
+                .guid(),
+            gameobject_guid
+        );
+    }
+
+    #[test]
+    fn object_by_type_mask_matches_cpp_dispatch_rules() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Player, 530, 1, true);
+        let creature = world_object(HighGuid::Creature, 530, 1, true);
+        let creature_guid = creature.guid();
+        accessor
+            .insert_map_object(AccessorObjectKind::Creature, creature)
+            .unwrap();
+
+        assert!(
+            accessor
+                .get_object_by_type_mask(&context, creature_guid, TypeMask::UNIT)
+                .is_some()
+        );
+        assert!(
+            accessor
+                .get_object_by_type_mask(&context, creature_guid, TypeMask::GAME_OBJECT)
+                .is_none()
+        );
+        assert!(
+            accessor
+                .get_object_by_type_mask(&context, creature_guid, TypeMask::PLAYER)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn corpse_is_directly_accessible_but_not_returned_by_type_mask_like_cpp() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Player, 530, 1, true);
+        let corpse = world_object(HighGuid::Corpse, 530, 1, true);
+        let corpse_guid = corpse.guid();
+
+        accessor
+            .insert_map_object(AccessorObjectKind::Corpse, corpse)
+            .unwrap();
+
+        assert_eq!(
+            accessor.get_corpse(&context, corpse_guid).unwrap().guid(),
+            corpse_guid
+        );
+        assert!(accessor.get_world_object(&context, corpse_guid).is_some());
+        assert!(
+            accessor
+                .get_object_by_type_mask(&context, corpse_guid, TypeMask::CORPSE)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unit_and_creature_or_pet_or_vehicle_helpers_match_cpp() {
+        let mut accessor = ObjectAccessor::default();
+        let context = world_object(HighGuid::Player, 530, 1, true);
+        let pet = world_object(HighGuid::Pet, 530, 1, true);
+        let pet_guid = pet.guid();
+        accessor
+            .insert_map_object(AccessorObjectKind::Pet, pet)
+            .unwrap();
+
+        assert_eq!(
+            accessor.get_unit(&context, pet_guid).unwrap().guid(),
+            pet_guid
+        );
+        assert_eq!(
+            accessor
+                .get_creature_or_pet_or_vehicle(&context, pet_guid)
+                .unwrap()
+                .guid(),
+            pet_guid
+        );
+    }
+}

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::f32::consts::TAU;
 
 use wow_constants::{TypeId, TypeMask};
-use wow_core::Position;
+use wow_core::{ObjectGuid, Position};
 
 use crate::EntityObject;
 
@@ -119,6 +119,10 @@ impl WorldObject {
 
     pub fn object_mut(&mut self) -> &mut EntityObject {
         &mut self.object
+    }
+
+    pub const fn guid(&self) -> ObjectGuid {
+        self.object.guid()
     }
 
     pub const fn map_id(&self) -> u32 {
