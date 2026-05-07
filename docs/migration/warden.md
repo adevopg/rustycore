@@ -444,6 +444,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 11 files / 3690 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Warden/Modules/WardenModuleWin.h`, `/home/server/woltk-trinity-legacy/src/server/game/Warden/Modules/WardenModuleMac.h`, `/home/server/woltk-trinity-legacy/src/server/game/Warden/WardenWin.cpp` | **No crate exists.** The opcodes `Warden3Data` (CMSG 0x35ed, SMSG 0x2577), `Warden3Disabled` (SMSG 0x2823), `Warden3Enabled` (SMSG 0x2822) are present in `crates/wow-constants/src/opcodes.rs` (lines 671, 1619-1621); nothing else exists. No handler arm in `crates/wow-world/src/session.rs`. No `Warden` struct, no `WardenCheckMgr`, no module binary, no DB schema, no SQL loader, no SmartEnum scaffolding, no per-OS variant. **0 lines of Warden code.** \| ❌ not started — only opcode constants exist (3 of them). All ~3690 lines of C++ Warden code have no Rust counterpart. The Trinity Warden module binaries (`WardenModuleWin.h` / `WardenModuleMac.h` — large embedded RC4-encrypted blobs) are not vendored in the Rust repo either. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

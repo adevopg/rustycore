@@ -802,6 +802,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 23 files / 36422 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/CollectionMgr.cpp` | `crates/wow-world/` (currently flat fields on `WorldSession`), proposed `crates/wow-entities/` (does not exist), partials in `crates/wow-database/`, `crates/wow-data/`, `crates/wow-spell/`, `crates/wow-loot/` \| 🔧 broken (rewrite needed) — `Player` as a class **does not exist** in RustyCore. Per-character state is exploded into ~70+ flat fields on `WorldSession` (`crates/wow-world/src/session.rs:65-309`). There is no `Player::Update()` aggregation, no `LoadFromDB`/`SaveToDB`, no equip/store/inventory pipeline beyond a `HashMap<u8, InventoryItem>`, no talent/spec/glyph state, no skill state object, no rest manager, no taxi, no trade data, no scene manager, no cinematic manager, no kill rewarder, no equipment sets. The C# legacy port had `Player` split across many partial files; the Rust rewrite has not begun the entity model. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

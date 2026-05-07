@@ -305,6 +305,18 @@ N/A — `WorldSocket` (en `game/Server`) origina opcodes; Networking solo transp
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 13 files / 1893 lines; refs: `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Socket.h`, `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Http/HttpService.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/Networking/Http/BaseHttpSocket.h` | `crates/wow-network/` \| ⚠️ done (~75%) — wire-protocol parity for the happy path verified; error-path parity is partial |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

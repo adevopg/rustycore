@@ -227,6 +227,18 @@ DBC stores:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 869 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Transport/Transport.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Transport/Transport.h` | `crates/wow-world/`, `crates/wow-map/`, `crates/wow-data/`, `crates/wow-constants/` \| ❌ not started |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

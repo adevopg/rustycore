@@ -492,6 +492,18 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h, splitear).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 9 files / 2209 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.h`, `/home/server/woltk-trinity-legacy/src/server/game/Movement/MovementGenerator.h` | `crates/wow-packet/` (packets), `crates/wow-world/` (handlers + per-session state), `crates/wow-recastdetour/` (Detour FFI scaffold), future `crates/wow-movement/` \| ⚠️ partial — solo parsing CMSG_MOVE_*, broadcast SMSG_MOVE_UPDATE y posición server-side. Sin spline real, sin pathfinding, sin generators. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

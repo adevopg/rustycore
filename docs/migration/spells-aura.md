@@ -425,6 +425,18 @@ Numerados como `#SPELLS-AURA.N` para referencia desde `MIGRATION_ROADMAP.md`. Co
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 5 files / 10549 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraEffects.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuras.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/Auras/SpellAuraDefines.h` | `crates/wow-spell/` (módulo `aura`), `crates/wow-packet/src/packets/aura.rs` \| ❌ not started — `wow-spell` está en 0 líneas; sólo existe `AuraData` POD para wire en `wow-packet/src/packets/aura.rs` sin estado server-side |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

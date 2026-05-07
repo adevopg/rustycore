@@ -389,6 +389,18 @@ Each line below is one trait. Bodies will fill in as game-side hookpoints land.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 6 files / 6578 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptReloadMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.h` | `crates/wow-script/` (the framework: `ScriptMgr` equivalent + every `*Script` trait + dispatch tables); content scripts live in `crates/wow-scripts/` (covered by `scripts.md`). \| ❌ not started — `crates/wow-script/src/lib.rs` is **0 bytes**. There is no `ScriptMgr`, no script trait, no dispatch table, no registration macro, no reload manager. **Every** `sScriptMgr->OnX(...)` callsite in C++ has no Rust counterpart yet, which means none of the ~160 script hooks fire. Boss AI, instance scripts, spell scripts, command scripts, item-use scripts, area triggers, gossip, and PlayerScript hooks (login/logout/zone change/level up/etc.) are all silent. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

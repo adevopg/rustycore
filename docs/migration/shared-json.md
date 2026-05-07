@@ -197,6 +197,18 @@ N/A directo. Indirectamente: el output JSON va dentro de payloads bnet auth, no 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `idiom_replacement_scope` | No one-to-one Rust port required, but every C++ responsibility must be mapped to the Rust idiom or explicitly marked not used. | 2 files / 495 lines; refs: `/home/server/woltk-trinity-legacy/src/server/shared/JSON/ProtobufJSON.cpp`, `/home/server/woltk-trinity-legacy/src/server/shared/JSON/ProtobufJSON.h` | n/a (idiom replacement: `serde` + `serde_json`) \| ✅ done (sustituido por `serde_json` + structs `#[derive(Serialize)]`; no port directo) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

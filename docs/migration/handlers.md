@@ -702,6 +702,18 @@ Rust: `attack_swing`, `attack_stop`. Faltan duel-related (5).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 46 files / 21843 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Handlers/CharacterHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Handlers/MiscHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Handlers/BattleGroundHandler.cpp` | `crates/wow-world/src/handlers/` + `crates/wow-handler/` \| ⚠️ partial (~22% coverage by handler count, ~23% by registered opcodes) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

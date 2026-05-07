@@ -332,6 +332,18 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 6 files / 2271 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Accounts/RBAC.h`, `/home/server/woltk-trinity-legacy/src/server/game/Accounts/AccountMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Accounts/RBAC.cpp` | `crates/wow-database/`, `crates/wow-network/`, `crates/bnet-server/`, `crates/wow-world/` (consumer) \| ❌ not started — confirmed via audit 2026-05-01 (only DB statement strings; no AccountMgr / RBACData logic; no `Utf8ToUpperOnlyLatin`; ~440 RBAC perms unrepresented) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

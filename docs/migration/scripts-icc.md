@@ -460,6 +460,18 @@ Tests demonstrating Rust = C++ for invariants the encounters rely on.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 17 files / 20965 lines; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_the_lich_king.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/boss_icecrown_gunship_battle.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Northrend/IcecrownCitadel/icecrown_citadel.cpp` | `crates/wow-scripts/` (content layer; the `wow-script` engine crate hosts the runtime) \| ❌ not started |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

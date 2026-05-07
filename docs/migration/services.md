@@ -242,6 +242,18 @@ Inside each envelope: `(service_hash: u32, method_id: u32, token: u32, payload_l
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `product_out_of_scope_or_post_wolk` | Keep C++ coverage assigned; implementation may be stubbed/disabled only with explicit client behavior and tests/n/a recorded. | 5 files / 359 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Services/WorldserverGameUtilitiesService.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Services/WorldserverServiceDispatcher.h`, `/home/server/woltk-trinity-legacy/src/server/game/Services/WorldserverGameUtilitiesService.h` | `crates/wow-network/`, `crates/wow-world/`, `crates/wow-proto/` — *(out of scope for the WotLK 3.4.3 path; see notes)* \| ⚠️ partial (stub) — confirmed via audit 2026-05-01: `CMSG_BATTLENET_REQUEST` handler EXISTS in `crates/wow-world/src/handlers/battlenet.rs` and replies `RpcNotImplemented` for every service hash. The §1 hypothesis "the client never asks" was wrong — the client does send it, we just don't service it. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

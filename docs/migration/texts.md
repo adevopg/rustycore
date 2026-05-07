@@ -255,6 +255,18 @@ This module *only* sends; nothing client-originated routes here.
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 5 files / 955 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgrImpl.h`, `/home/server/woltk-trinity-legacy/src/server/game/Texts/CreatureTextMgr.h` | `crates/wow-chat/` for the senders/builders, `crates/wow-database/` for the loader, `crates/wow-world/` for the per-creature repeat-tracking glue \| ❌ not started |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

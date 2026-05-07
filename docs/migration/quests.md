@@ -453,6 +453,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 5 files / 2194 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestDef.h`, `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestDef.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Quests/QuestObjectiveCriteriaMgr.cpp` | `crates/wow-data/` (templates + XP), `crates/wow-packet/src/packets/quest.rs` (wire), `crates/wow-world/src/handlers/quest.rs` (session handlers). No dedicated `wow-quest` crate yet. \| ⚠️ partial — Phase 1 + 2 complete (template loading, accept/complete/abandon, kill credit, XP via QuestXP.db2). No quest pool, no daily/weekly/monthly rotation, no escort/timed quests, no area-trigger objectives, no objective groups, no item collection objective, no repeatable cooldown logic, no quest condition checks, no faction/reputation rewards, no spell rewards, no QuestRequestItems flow. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

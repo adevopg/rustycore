@@ -880,6 +880,18 @@ Concrete sub-tasks (one per service group):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 69 files / 115428 lines; refs: `/home/server/woltk-trinity-legacy/src/server/proto/Client/club_request.pb.h`, `/home/server/woltk-trinity-legacy/src/server/proto/Client/account_types.pb.h`, `/home/server/woltk-trinity-legacy/src/server/proto/Client/club_core.pb.h` | `crates/wow-proto/` \| ⚠️ partial — 5 services implemented, 2 unported `.proto` sources (Login, RealmList) hand-rolled in handlers, club services + 8 declared services are 0% covered |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

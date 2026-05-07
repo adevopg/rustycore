@@ -455,6 +455,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 7 files / 3475 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Loot/LootMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.h` | `crates/wow-loot/` (currently EMPTY — `lib.rs` is 0 bytes; cargo manifest exists but module is unbuilt), `crates/wow-packet/src/packets/loot.rs` (wire), `crates/wow-world/src/handlers/loot.rs` (session handlers) \| 🔧 broken (rewrite needed) — only basic FFA copper drop hard-coded by creature level. No loot template tables loaded, no LootStore, no group loot rolls, no master loot, no loot threshold, no quest items, no fishing/skinning/pickpocketing/disenchant/milling/prospecting/mail/spell/gameobject/reference loot, no loot conditions, no `loot_template` reference resolution, no random suffix/property rolls. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

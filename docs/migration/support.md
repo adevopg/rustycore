@@ -251,6 +251,18 @@ The Rust opcode constants for these already exist in `crates/wow-constants/src/o
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 1120 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Support/SupportMgr.h` | would live in a new `crates/wow-support/` (or fold into `wow-social`); GM-command surface eventually in `wow-handler` \| ❌ not started — confirmed via audit 2026-05-01 (one decoded opcode routed to a no-op `{}`; `ComplaintsEnabled = false` hardcoded; zero DB statements; zero ticket schema) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

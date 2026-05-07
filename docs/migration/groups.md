@@ -458,6 +458,18 @@ DBC/DB2 stores read:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 10 files / 2815 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Groups/Group.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Groups/Group.h`, `/home/server/woltk-trinity-legacy/src/server/game/Groups/GroupMgr.cpp` | `crates/wow-network/src/group_registry.rs`, `crates/wow-world/src/handlers/group.rs`, `crates/wow-packet/src/packets/party.rs` \| ⚠️ partial (~15% — invite, accept, decline, leave only; no roles, no loot rules, no ready check, no markers, no DB persistence, no raid conversion) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

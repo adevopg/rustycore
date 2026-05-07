@@ -459,6 +459,18 @@ Numbered for `MIGRATION_ROADMAP.md` cross-reference. Complexity: **L** <1h, **M*
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 5647 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellInfo.h` | `crates/wow-spell/src/spell_info.rs` (planned), `crates/wow-data/src/spell.rs` (DB2 readers — partial) \| ❌ not started — type does not exist; only a tiny stub `wow_data::SpellInfo` (cast_time + cooldown) is in use. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

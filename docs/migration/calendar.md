@@ -360,6 +360,18 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 1140 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Calendar/CalendarMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Calendar/CalendarMgr.h` | `crates/wow-world/` (handlers, CalendarMgr global), `crates/wow-database/` (calendar prepared statements), `crates/wow-packet/` (CalendarPackets), `crates/wow-core/` (calendar enums) \| ⚠️ stub-only (2 noop handlers, audit confirmed) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

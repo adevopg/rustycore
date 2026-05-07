@@ -429,6 +429,18 @@ DBC/DB2 stores read by Creature/Gossip/Trainer code:
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 12 files / 7471 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/GossipDef.cpp` | `crates/wow-world/` (`map_manager.rs::WorldCreature`, `handlers/`), `crates/wow-ai/`, `crates/wow-data/`, `crates/wow-database/` (`world_ext`) \| ⚠️ minimal — `WorldCreature` flat struct exists with HP/aggro/wander; everything template-driven (vendor/trainer/gossip/taxi/summons/static-flags/levelscaling) is absent or stubbed |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

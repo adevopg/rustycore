@@ -210,6 +210,18 @@ DBC stores (post-WoLK):
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `product_out_of_scope_or_post_wolk` | Keep C++ coverage assigned; implementation may be stubbed/disabled only with explicit client behavior and tests/n/a recorded. | 2 files / 501 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Conversation/Conversation.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Conversation/Conversation.h` | `crates/wow-world/`, `crates/wow-data/`, `crates/wow-constants/` \| ❌ not started — **n/a for WoLK 3.4** (post-WoLK feature; carry stub only if needed) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

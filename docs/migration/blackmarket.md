@@ -250,6 +250,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `product_out_of_scope_or_post_wolk` | Keep C++ coverage assigned; implementation may be stubbed/disabled only with explicit client behavior and tests/n/a recorded. | 2 files / 682 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/BlackMarket/BlackMarketMgr.h` | *none yet* — would live as `crates/wow-world/src/blackmarket/` or new `wow-blackmarket` crate. Depends on Mail (`wow-world` mail handlers), `wow-database` (4 prepared statements + 2 tables), `wow-packet` (4 SMSG + 2 CMSG opcodes already enumerated). \| ❌ not started — **intentionally unported** (post-MoP content); audit confirms 0 lines + dead enum variants |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

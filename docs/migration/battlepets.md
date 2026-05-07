@@ -318,6 +318,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `product_out_of_scope_or_post_wolk` | Keep C++ coverage assigned; implementation may be stubbed/disabled only with explicit client behavior and tests/n/a recorded. | 2 files / 1146 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/BattlePets/BattlePetMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/BattlePets/BattlePetMgr.h` | No target crate intended for 3.4.3 client. Today only one packet stub exists: `crates/wow-packet/src/packets/misc.rs:1005` defines `BattlePetJournalLockAcquired` (zero-byte ServerPacket), used by `crates/wow-world/src/handlers/character.rs:4255` during the post-login packet pipeline (defensive ack so a 3.4.3 client that hasn't been told the journal is unavailable doesn't sit waiting). The single CMSG handler stub is `handle_battle_pet_request_journal` at `crates/wow-world/src/handlers/misc.rs:606` (empty body, registered at `:266`). \| ⚠️ **N/A for WoLK 3.4.3.** The opcodes exist in the WoLK Trinity-Legacy codebase because that fork tracks a forward-ported feature surface, but a 3.4.3.54261 client has no Pet Battle UI, no companion summoning that resolves to a `BattlePet` species entry, and no journal screen. The only thing the Rust port needs to do is **not break the login flow** by sending a token `BattlePetJournalLockAcquired` (already done) and silently accept any of the 9 CMSG_BATTLEPET_* opcodes if a modded client ever sends them. **Do not implement the system.** |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

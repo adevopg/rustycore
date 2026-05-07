@@ -328,6 +328,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 317 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Petitions/PetitionMgr.h` | `crates/wow-world/src/petitions/` (the in-memory store + lifecycle), `crates/wow-database/` (CHAR_INS/UPD/DEL_PETITION* prepared statements + `petition`/`petition_sign` schema migrations), `crates/wow-packet/src/packets/petitions.rs` (currently absent — opcodes are in `wow-constants` but no struct/parsers), `crates/wow-world/src/handlers/petitions.rs` (also absent — no `WorldSession::Handle*Petition` equivalents). \| ❌ not started — opcodes are listed in `crates/wow-constants/src/opcodes.rs` (CMSG_PETITION_BUY 0x34c8, CMSG_PETITION_SHOW_LIST 0x34c7, CMSG_PETITION_SHOW_SIGNATURES 0x34c9, CMSG_QUERY_PETITION 0x3277, CMSG_SIGN_PETITION 0x3533, CMSG_DECLINE_PETITION 0x3534, CMSG_TURN_IN_PETITION 0x3535, CMSG_PETITION_RENAME_GUILD 0x36d1, CMSG_OFFER_PETITION 0x32fd; SMSG_PETITION_SHOW_LIST 0x26bf, SMSG_PETITION_SHOW_SIGNATURES 0x26c0, SMSG_QUERY_PETITION_RESPONSE 0x291b, SMSG_PETITION_SIGN_RESULTS 0x274c, SMSG_PETITION_RENAME_GUILD_RESPONSE 0x29fa, SMSG_TURN_IN_PETITION_RESULT 0x274e, SMSG_PETITION_ALREADY_SIGNED 0x259f, SMSG_OFFER_PETITION_ERROR 0x26b6) but no handlers, no `Petition` struct, no in-memory store, no SQL loader, no charter-item integration. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

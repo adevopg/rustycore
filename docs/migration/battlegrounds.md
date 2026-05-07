@@ -717,6 +717,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 43 files / 17381 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Battleground.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.h`, `/home/server/woltk-trinity-legacy/src/server/game/Battlegrounds/Zones/BattlegroundAV.cpp` | `crates/wow-pvp/` (currently empty scaffold — `Cargo.toml` only, no `lib.rs` content) \| ❌ not started |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

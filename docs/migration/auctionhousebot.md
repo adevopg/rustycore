@@ -292,6 +292,18 @@ Tests que demuestren que el comportamiento Rust = comportamiento C++ para invari
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 7 files / 2630 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotSeller.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBot.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/AuctionHouseBot/AuctionHouseBotBuyer.cpp` | *none yet* — would live under `crates/wow-world/src/auctionhousebot/` (alongside the future auction crate) or a new `wow-ahbot` crate. Depends on a working `AuctionHouseMgr` (see `auctionhouse.md`), which is also not yet ported. \| ❌ not started (audit confirmed 2026-05-01) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

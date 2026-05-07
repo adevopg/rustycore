@@ -261,6 +261,18 @@ Complejidad: **L** (<1h), **M** (1-4h), **H** (4-12h).
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `product_out_of_scope_or_post_wolk` | Keep C++ coverage assigned; implementation may be stubbed/disabled only with explicit client behavior and tests/n/a recorded. | 6 files / 973 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/Scenario.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/ScenarioMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Scenarios/ScenarioMgr.h` | *N/A para WoLK 3.4.x* — placeholder en `crates/wow-world/src/scenarios/` (skeleton only) \| ❌ not started — **N/A para 3.4.x classic** |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

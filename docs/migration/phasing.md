@@ -327,6 +327,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 6 files / 1421 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhasingHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhaseShift.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PersonalPhaseTracker.cpp` | `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load `phase_definitions`/`phase_area`/`terrain_swap_defaults`/`terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet. \| 🔧 broken — only a 1-shot SMSG_PHASE_SHIFT_CHANGE stub that always sends `PhaseShiftFlags::Unphased` with empty phase/visible-map/UI-map lists. No PhaseShift state on objects, no `PhasingHandler::OnAreaChange`, no condition-driven phase suppression, no personal phases, no terrain-swap evaluation, no controlled-unit propagation, no SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

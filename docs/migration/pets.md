@@ -528,6 +528,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 3 files / 2307 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/PetDefines.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Pet/Pet.h` | `crates/wow-world/src/pets/` (does not exist — no `Pet` entity, no `PetStable`, no spell book, no auras), `crates/wow-world/src/handlers/pets.rs` (does not exist — only the `handle_request_stabled_pets` info-stub at `handlers/character.rs:3042`), `crates/wow-packet/src/packets/pets.rs` (does not exist — none of the 16+ packet structs are defined), `crates/wow-database/` (no `character_pet`, `character_pet_declinedname`, `pet_aura`, `pet_aura_effect`, `pet_spell`, `pet_spell_cooldown`, `pet_spell_charges` schema or prepared statements). `crates/wow-constants/src/opcodes.rs` carries the opcode constants (~16 of them, see §7). \| ❌ not started — opcodes are present in `crates/wow-constants/src/opcodes.rs` (see §7) and `handle_request_stabled_pets` is a logging stub returning nothing; no `Pet` struct, no spell book, no SQL loader, no spawn flow, no AI, no save/load roundtrip, no stable. |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

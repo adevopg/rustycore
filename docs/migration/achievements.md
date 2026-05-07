@@ -375,6 +375,18 @@ Strategy: build the static catalog (criteria mgr) first, then the per-player run
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 4 files / 6262 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/AchievementMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Achievements/CriteriaHandler.h` | `crates/wow-achievement/` (currently empty), with handler/wire-up in `crates/wow-world/src/handlers/` (and existing SMSG stubs in `crates/wow-packet/src/packets/misc.rs`). \| ❌ not started (placeholder crate confirmed empty 2026-05-01) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

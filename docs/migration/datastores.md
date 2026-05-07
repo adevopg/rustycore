@@ -466,6 +466,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 13 files / 30200 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Metadata.h`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2LoadInfo.h`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h` | `crates/wow-data/` (also touches `crates/wow-database/` for hotfix statements) \| ⚠️ partial — confirmed via audit 2026-05-01 (raw WDC4 reader OK; **7 hand-rolled tables of ~261**, not 8; no DB2Manager, no hotfix overlay, no GameTables, no M2 cameras) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

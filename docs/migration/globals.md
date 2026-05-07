@@ -552,6 +552,18 @@ Each `LoadXxx` is a sub-task. Ordered by typical TC startup order (which is itse
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 10 files / 14883 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/AreaTriggerDataStore.cpp` | `wow-data` (templates), `wow-database` (loaders), `wow-world` (live registries / `MapManager`), `wow-network` (`PlayerRegistry`) \| ⚠️ partial — fragmented across 5+ crates; no central `ObjectMgr` analogue |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

@@ -370,6 +370,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 4 files / 1507 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/QuestPools.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h` | `crates/wow-data/` (load `pool_template`, `pool_members`, `quest_pool_template`, `quest_pool_members`, `pool_quest_save`), `crates/wow-world/src/pools/` (the in-memory `PoolMgr` + per-`Map` `SpawnedPoolData`), `crates/wow-database/` (CHAR_INS/DEL_POOL_QUEST_SAVE prepared statements). No dedicated `wow-pools` crate yet. \| ❌ not started — there is no `PoolMgr`, no `QuestPoolMgr`, no pool tables loader, no `SpawnedPoolData` per Map, no `PoolGroup<T>` template specializations. Every DB-defined creature/gameobject in `pool_members` is currently spawned unconditionally (or, more accurately, the spawn pipeline ignores pool membership entirely so all members spawn or none do, depending on how the spawn loader treats the rows). |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

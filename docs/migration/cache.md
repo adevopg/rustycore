@@ -206,6 +206,18 @@ Used to tell clients to drop their client-side name caches and re-query for that
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 2 files / 393 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Cache/CharacterCache.h` | `crates/wow-database/` (or a thin `crates/wow-cache/`); consumers in `wow-world` and `wow-social` \| ❌ not started — confirmed via audit 2026-05-01 (zero hits across `crates/`) |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)

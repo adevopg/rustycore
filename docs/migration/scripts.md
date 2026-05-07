@@ -4920,6 +4920,18 @@ These are encounter-level acceptance tests; one per major sub-system. **All depe
 
 ## 11. Notes / gotchas
 
+<!-- REFINE.025:BEGIN product-scope -->
+
+### R2 Product scope / exclusions (generated)
+
+> Fuente: cabecera del doc + inventario C++ asignado. Ninguna marca de alcance elimina C++ del backlog: solo define si se implementa, se sustituye por idiom Rust o se desactiva explicitamente para producto.
+
+| Scope | Decision | C++ retained | Evidence |
+|---|---|---|---|
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 636 files / 234478 lines; refs: `/home/server/woltk-trinity-legacy/src/server/scripts/Spells/spell_generic.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/EasternKingdoms/zone_silverpine_forest.cpp`, `/home/server/woltk-trinity-legacy/src/server/scripts/Spells/spell_item.cpp` | `crates/wow-scripts/` (content) + lateral crates (`wow-spell` for `spell_*` scripts, `wow-pvp`/`wow-battleground` for OutdoorPvP & Battlefield, `wow-pet` for Pet scripts, etc.). The framework that scripts plug into lives in `crates/wow-script/` and is covered by `scripting.md`. \| ❌ not started — `crates/wow-scripts/src/lib.rs` is **0 bytes**. **No** boss AI, **no** instance script, **no** spell script, **no** GM command, **no** holiday event, **no** OutdoorPvP, **no** Wintergrasp, **no** quest helper exists in Rust. This is the largest single migration surface in the entire project: ~725 `.cpp` files and ~294,137 lines (it dwarfs every other subsystem in line count). |
+
+<!-- REFINE.025:END product-scope -->
+
 <!-- REFINE.023:BEGIN known-divergences -->
 
 ### R2 Known divergences / bugs (generated)
