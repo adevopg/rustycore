@@ -402,6 +402,43 @@ pub struct CanEquipUniqueItemTemplateArgs<'a> {
     pub equipped_gems: &'a [EquippedGemRef],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SocketedGemUniqueRef<'a> {
+    pub proto: Option<&'a ItemStorageTemplate>,
+    pub unique_equippable: bool,
+    pub limit_category: Option<&'a ItemLimitCategoryTemplate>,
+    pub source_limit_category_count: u32,
+}
+
+impl<'a> SocketedGemUniqueRef<'a> {
+    pub const fn new(
+        proto: Option<&'a ItemStorageTemplate>,
+        unique_equippable: bool,
+        limit_category: Option<&'a ItemLimitCategoryTemplate>,
+        source_limit_category_count: u32,
+    ) -> Self {
+        Self {
+            proto,
+            unique_equippable,
+            limit_category,
+            source_limit_category_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CanEquipUniqueItemArgs<'a> {
+    pub source_item: Option<&'a Item>,
+    pub proto: Option<&'a ItemStorageTemplate>,
+    pub except_slot: u8,
+    pub limit_count: u32,
+    pub unique_equippable: bool,
+    pub limit_category: Option<&'a ItemLimitCategoryTemplate>,
+    pub equipped_items: &'a [ItemStorageRef<'a>],
+    pub equipped_gems: &'a [EquippedGemRef],
+    pub socketed_gems: &'a [SocketedGemUniqueRef<'a>],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanStoreItemOutcome {
     pub result: InventoryResult,
@@ -2346,6 +2383,52 @@ impl Player {
         InventoryResult::Ok
     }
 
+    pub fn can_equip_unique_item(&self, args: CanEquipUniqueItemArgs<'_>) -> InventoryResult {
+        let Some(source) = args.source_item else {
+            return InventoryResult::ItemNotFound;
+        };
+
+        let template_result = self.can_equip_unique_item_template(CanEquipUniqueItemTemplateArgs {
+            proto: args.proto,
+            except_slot: args.except_slot,
+            limit_count: args.limit_count,
+            unique_equippable: args.unique_equippable,
+            limit_category: args.limit_category,
+            equipped_items: args.equipped_items,
+            equipped_gems: args.equipped_gems,
+        });
+        if template_result != InventoryResult::Ok {
+            return template_result;
+        }
+
+        for gem in args.socketed_gems {
+            let Some(gem_proto) = gem.proto else {
+                continue;
+            };
+
+            let gem_limit_count = if !source.is_equipped() && gem_proto.item_limit_category != 0 {
+                gem.source_limit_category_count
+            } else {
+                1
+            };
+
+            let gem_result = self.can_equip_unique_item_template(CanEquipUniqueItemTemplateArgs {
+                proto: Some(gem_proto),
+                except_slot: args.except_slot,
+                limit_count: gem_limit_count,
+                unique_equippable: gem.unique_equippable,
+                limit_category: gem.limit_category,
+                equipped_items: args.equipped_items,
+                equipped_gems: args.equipped_gems,
+            });
+            if gem_result != InventoryResult::Ok {
+                return gem_result;
+            }
+        }
+
+        InventoryResult::Ok
+    }
+
     pub fn can_bank_item(
         &self,
         dest: &mut Vec<ItemPosCount>,
@@ -3879,6 +3962,23 @@ mod tests {
         }
     }
 
+    fn can_equip_unique_args<'a>(
+        source_item: Option<&'a Item>,
+        proto: Option<&'a ItemStorageTemplate>,
+    ) -> CanEquipUniqueItemArgs<'a> {
+        CanEquipUniqueItemArgs {
+            source_item,
+            proto,
+            except_slot: NULL_SLOT,
+            limit_count: 1,
+            unique_equippable: false,
+            limit_category: None,
+            equipped_items: &[],
+            equipped_gems: &[],
+            socketed_gems: &[],
+        }
+    }
+
     #[test]
     fn player_constructor_matches_cpp_base_state() {
         let player = Player::new(Some(42), false);
@@ -4860,6 +4960,81 @@ mod tests {
             player.can_equip_unique_item_template(args),
             InventoryResult::Ok
         );
+    }
+
+    #[test]
+    fn can_equip_unique_item_object_matches_cpp_template_then_gem_order() {
+        let player = Player::new(None, false);
+        let proto = ItemStorageTemplate::regular_item(704, 1);
+        let source = Item::default();
+        let gem_proto = ItemStorageTemplate::regular_item(705, 1);
+        let socketed_gems = [
+            SocketedGemUniqueRef::new(None, true, None, 1),
+            SocketedGemUniqueRef::new(Some(&gem_proto), true, None, 1),
+        ];
+        let equipped_gems = [EquippedGemRef::new(EQUIPMENT_SLOT_CHEST, 705, 0)];
+        let base_equipped_gems = [EquippedGemRef::new(EQUIPMENT_SLOT_CHEST, 704, 0)];
+
+        assert_eq!(
+            player.can_equip_unique_item(can_equip_unique_args(None, Some(&proto))),
+            InventoryResult::ItemNotFound
+        );
+
+        let mut template_first = can_equip_unique_args(Some(&source), Some(&proto));
+        template_first.unique_equippable = true;
+        template_first.equipped_gems = &base_equipped_gems;
+        template_first.socketed_gems = &socketed_gems;
+        assert_eq!(
+            player.can_equip_unique_item(template_first),
+            InventoryResult::ItemUniqueEquippable
+        );
+
+        let mut gem_args = can_equip_unique_args(Some(&source), Some(&proto));
+        gem_args.socketed_gems = &socketed_gems;
+        gem_args.equipped_gems = &equipped_gems;
+        assert_eq!(
+            player.can_equip_unique_item(gem_args),
+            InventoryResult::ItemUniqueEquippable
+        );
+    }
+
+    #[test]
+    fn can_equip_unique_item_object_matches_cpp_socketed_gem_limit_count() {
+        let player = Player::new(None, false);
+        let proto = ItemStorageTemplate::regular_item(706, 1);
+        let gem_proto = ItemStorageTemplate {
+            item_limit_category: 20,
+            ..ItemStorageTemplate::regular_item(707, 1)
+        };
+        let limit = ItemLimitCategoryTemplate {
+            id: 20,
+            quantity: 2,
+            flags: ITEM_LIMIT_CATEGORY_MODE_EQUIP,
+        };
+        let socketed_gems = [SocketedGemUniqueRef::new(
+            Some(&gem_proto),
+            false,
+            Some(&limit),
+            2,
+        )];
+        let equipped_gems = [EquippedGemRef::new(EQUIPMENT_SLOT_CHEST, 708, 20)];
+
+        let mut source = Item::default();
+        source.set_slot(INVENTORY_SLOT_ITEM_START);
+        let mut unequipped = can_equip_unique_args(Some(&source), Some(&proto));
+        unequipped.socketed_gems = &socketed_gems;
+        unequipped.equipped_gems = &equipped_gems;
+        assert_eq!(
+            player.can_equip_unique_item(unequipped),
+            InventoryResult::ItemMaxCountEquippedSocketed
+        );
+
+        let mut equipped_source = Item::default();
+        equipped_source.set_slot(EQUIPMENT_SLOT_FINGER1);
+        let mut equipped = can_equip_unique_args(Some(&equipped_source), Some(&proto));
+        equipped.socketed_gems = &socketed_gems;
+        equipped.equipped_gems = &equipped_gems;
+        assert_eq!(player.can_equip_unique_item(equipped), InventoryResult::Ok);
     }
 
     #[test]
