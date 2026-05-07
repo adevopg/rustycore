@@ -374,6 +374,16 @@ async fn main() -> Result<()> {
         item_stats_store.len()
     );
 
+    // Load ItemRandomSuffix.db2 for C++ ApplyEnchantment random suffix amount resolution.
+    let item_random_suffix_store = Arc::new(
+        wow_data::ItemRandomSuffixStore::load(&data_dir, &locale)
+            .context("Failed to load ItemRandomSuffix.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} item random suffixes from ItemRandomSuffix.db2",
+        item_random_suffix_store.len()
+    );
+
     // Build hotfix blob cache — pre-loads raw DB2 record bytes and hotfix DB overlays for DBReply.
     let mut hotfix_blob_cache = wow_data::build_hotfix_blob_cache(&data_dir, &locale);
     match hotfix_blob_cache
@@ -522,6 +532,7 @@ async fn main() -> Result<()> {
         item_store: Some(Arc::clone(&item_store)),
         player_stats: Some(Arc::clone(&player_stats)),
         item_stats_store: Some(Arc::clone(&item_stats_store)),
+        item_random_suffix_store: Some(Arc::clone(&item_random_suffix_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
         skill_store: Some(Arc::clone(&skill_store)),
         spell_store: Some(Arc::clone(&spell_store)),
@@ -847,6 +858,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.item_stats_store {
         session.set_item_stats_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.item_random_suffix_store {
+        session.set_item_random_suffix_store(Arc::clone(store));
     }
     if let Some(ref cache) = resources.hotfix_blob_cache {
         session.set_hotfix_blob_cache(Arc::clone(cache));

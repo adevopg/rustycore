@@ -14,11 +14,14 @@ use tracing::{debug, info, trace, warn};
 
 use wow_constants::{ClientOpcodes, InventoryResult};
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
-use wow_data::{HotfixBlobCache, ItemStore, ItemStatsStore, PlayerStatsStore, SkillStore, AreaTriggerStore, SpellStore};
+use wow_data::{
+    AreaTriggerStore, HotfixBlobCache, ItemRandomSuffixStore, ItemStatsStore, ItemStore,
+    PlayerStatsStore, SkillStore, SpellStore,
+};
 use wow_database::{CharacterDatabase, LoginDatabase, WorldDatabase};
 use wow_entities::{
-    PlayerEnchantTimeUpdate, PlayerItemTimeUpdate, SendNewItemDelivery, SendNewItemDisplayText,
-    SendNewItemPlan,
+    ApplyEnchantmentRandomSuffixRef, PlayerEnchantTimeUpdate, PlayerItemTimeUpdate,
+    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_network::session_mgr::{InstanceLink, SessionManager};
@@ -111,6 +114,9 @@ pub struct WorldSession {
 
     // Item stat modifiers store (item_id → stat bonuses from ItemSparse.db2)
     item_stats_store: Option<Arc<ItemStatsStore>>,
+
+    // Item random suffix store (ItemRandomSuffix.db2 data)
+    item_random_suffix_store: Option<Arc<ItemRandomSuffixStore>>,
 
     // Hotfix blob cache: raw DB2 record bytes for DBReply responses
     hotfix_blob_cache: Option<Arc<HotfixBlobCache>>,
@@ -419,6 +425,7 @@ impl WorldSession {
             item_store: None,
             player_stats: None,
             item_stats_store: None,
+            item_random_suffix_store: None,
             hotfix_blob_cache: None,
             skill_store: None,
             area_trigger_store: None,
@@ -572,6 +579,38 @@ impl WorldSession {
     /// Get the item stats store reference.
     pub fn item_stats_store(&self) -> Option<&Arc<ItemStatsStore>> {
         self.item_stats_store.as_ref()
+    }
+
+    /// Set the item random suffix store for this session.
+    pub fn set_item_random_suffix_store(&mut self, store: Arc<ItemRandomSuffixStore>) {
+        self.item_random_suffix_store = Some(store);
+    }
+
+    /// Get the item random suffix store reference.
+    pub fn item_random_suffix_store(&self) -> Option<&Arc<ItemRandomSuffixStore>> {
+        self.item_random_suffix_store.as_ref()
+    }
+
+    /// Resolve C++ `sItemRandomSuffixStore.LookupEntry(abs(RandomPropertiesID))`.
+    pub fn apply_enchantment_random_suffix_ref(
+        &self,
+        random_properties_id: i32,
+    ) -> Option<ApplyEnchantmentRandomSuffixRef> {
+        let id = random_properties_id.unsigned_abs();
+        if id == 0 {
+            return None;
+        }
+
+        self.item_random_suffix_store
+            .as_ref()
+            .and_then(|store| store.get(id))
+            .map(|entry| {
+                ApplyEnchantmentRandomSuffixRef::new(
+                    entry.id,
+                    entry.enchantments,
+                    entry.allocation_pct,
+                )
+            })
     }
 
     /// Set the hotfix blob cache for this session.
@@ -3178,6 +3217,7 @@ mod tests {
     use super::*;
     use wow_constants::EnchantmentSlot;
     use wow_core::Position;
+    use wow_data::{ItemRandomSuffixEntry, ItemRandomSuffixStore};
     use wow_entities::{SendNewItemInstancePlan, SendNewItemModifier};
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
     use wow_packet::ServerPacket;
@@ -3346,6 +3386,28 @@ mod tests {
             777,
         );
         assert_eq!(send_rx.try_recv().unwrap(), expected);
+    }
+
+    #[test]
+    fn apply_enchantment_random_suffix_ref_uses_cpp_abs_lookup() {
+        let (mut session, _, _) = make_session();
+        session.set_item_random_suffix_store(Arc::new(ItemRandomSuffixStore::from_entries([
+            ItemRandomSuffixEntry {
+                id: 77,
+                enchantments: [901, 900, 902, 0, 0],
+                allocation_pct: [1_000, 2_000, 3_000, 0, 0],
+            },
+        ])));
+
+        let suffix = session
+            .apply_enchantment_random_suffix_ref(-77)
+            .expect("random suffix should resolve by abs(RandomPropertiesID)");
+
+        assert_eq!(suffix.id, 77);
+        assert_eq!(suffix.enchantments, [901, 900, 902, 0, 0]);
+        assert_eq!(suffix.allocation_pct, [1_000, 2_000, 3_000, 0, 0]);
+        assert!(session.apply_enchantment_random_suffix_ref(0).is_none());
+        assert!(session.apply_enchantment_random_suffix_ref(-78).is_none());
     }
 
     #[test]

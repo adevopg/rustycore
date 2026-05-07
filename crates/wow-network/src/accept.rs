@@ -36,6 +36,7 @@ pub struct SessionResources {
     pub item_store: Option<Arc<wow_data::ItemStore>>,
     pub player_stats: Option<Arc<wow_data::PlayerStatsStore>>,
     pub item_stats_store: Option<Arc<wow_data::ItemStatsStore>>,
+    pub item_random_suffix_store: Option<Arc<wow_data::ItemRandomSuffixStore>>,
     pub hotfix_blob_cache: Option<Arc<wow_data::HotfixBlobCache>>,
     pub skill_store: Option<Arc<wow_data::SkillStore>>,
     pub spell_store: Option<Arc<wow_data::SpellStore>>,

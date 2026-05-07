@@ -7,6 +7,7 @@
 
 pub mod wdc4;
 pub mod item;
+pub mod item_random_suffix;
 pub mod item_stats;
 pub mod hotfix_cache;
 pub mod player_stats;
@@ -17,6 +18,7 @@ pub mod quest;
 pub mod quest_xp;
 
 pub use item::{ItemRecord, ItemStore};
+pub use item_random_suffix::{ItemRandomSuffixEntry, ItemRandomSuffixStore};
 pub use item_stats::{ItemStatEntry, ItemStatsStore};
 pub use hotfix_cache::{HotfixBlobCache, build_hotfix_blob_cache};
 pub use player_stats::{PlayerLevelStats, PlayerStatsStore};
