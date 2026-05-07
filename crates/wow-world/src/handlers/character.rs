@@ -158,7 +158,25 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::TimeSyncResponse,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::Inplace,
+        processing: PacketProcessing::ThreadSafe,
+        handler_name: "handle_time_sync_response",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::TimeSyncResponseDropped,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::ThreadSafe,
+        handler_name: "handle_time_sync_response",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::TimeSyncResponseFailed,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::ThreadSafe,
         handler_name: "handle_time_sync_response",
     }
 }
@@ -230,7 +248,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::TalkToGossip,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::ThreadUnsafe,
+        processing: PacketProcessing::Inplace,
         handler_name: "handle_gossip_hello",
     }
 }
@@ -259,15 +277,6 @@ inventory::submit! {
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::ThreadUnsafe,
         handler_name: "handle_list_inventory",
-    }
-}
-
-inventory::submit! {
-    PacketHandlerEntry {
-        opcode: ClientOpcodes::TrainerList,
-        status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::ThreadUnsafe,
-        handler_name: "handle_trainer_list",
     }
 }
 

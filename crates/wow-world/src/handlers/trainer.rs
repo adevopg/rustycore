@@ -44,7 +44,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::TrainerList,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::ThreadUnsafe,
+        processing: PacketProcessing::Inplace,
         handler_name: "handle_trainer_list",
     }
 }
@@ -53,7 +53,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::TrainerBuySpell,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::ThreadUnsafe,
+        processing: PacketProcessing::Inplace,
         handler_name: "handle_trainer_buy_spell",
     }
 }

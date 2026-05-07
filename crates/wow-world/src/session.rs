@@ -1483,7 +1483,9 @@ impl WorldSession {
                     Err(e) => warn!("Failed to read HotfixRequest: {e}"),
                 }
             }
-            ClientOpcodes::TimeSyncResponse => {
+            ClientOpcodes::TimeSyncResponse
+            | ClientOpcodes::TimeSyncResponseDropped
+            | ClientOpcodes::TimeSyncResponseFailed => {
                 match wow_packet::packets::misc::TimeSyncResponse::read(&mut pkt) {
                     Ok(resp) => self.handle_time_sync_response(resp).await,
                     Err(e) => warn!("Failed to read TimeSyncResponse: {e}"),
@@ -1913,6 +1915,12 @@ impl WorldSession {
                             "Queuing {:?} for thread-unsafe processing via {}",
                             opcode,
                             entry.handler_name
+                        );
+                    }
+                    PacketProcessing::ThreadSafe => {
+                        trace!(
+                            "Processing {:?} via thread-safe handler {}",
+                            opcode, entry.handler_name
                         );
                     }
                 }
@@ -3134,5 +3142,77 @@ mod tests {
 
         session.set_realm_id(5);
         assert_eq!(session.realm_id(), 5);
+    }
+
+    #[test]
+    fn dispatch_metadata_matches_cpp_for_touched_opcodes() {
+        let (session, _, _) = make_session();
+        let table = &session.dispatch_table;
+
+        let cases = [
+            (
+                ClientOpcodes::AreaTrigger,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::SetSelection,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadUnsafe,
+            ),
+            (
+                ClientOpcodes::TaxiNodeStatusQuery,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::TimeSyncResponse,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::TimeSyncResponseDropped,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::TimeSyncResponseFailed,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::TrainerList,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::TrainerBuySpell,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+        ];
+
+        for (opcode, status, processing) in cases {
+            let entry = table
+                .get(&opcode)
+                .unwrap_or_else(|| panic!("missing dispatch entry for {opcode:?}"));
+            assert_eq!(entry.status, status, "{opcode:?} status");
+            assert_eq!(entry.processing, processing, "{opcode:?} processing");
+        }
+    }
+
+    #[test]
+    fn dispatch_table_has_no_duplicate_registered_opcodes() {
+        let mut counts = std::collections::HashMap::new();
+        for entry in inventory::iter::<PacketHandlerEntry> {
+            *counts.entry(entry.opcode).or_insert(0usize) += 1;
+        }
+
+        let duplicates: Vec<_> = counts
+            .into_iter()
+            .filter_map(|(opcode, count)| (count > 1).then_some((opcode, count)))
+            .collect();
+
+        assert!(duplicates.is_empty(), "duplicate handlers: {duplicates:?}");
     }
 }

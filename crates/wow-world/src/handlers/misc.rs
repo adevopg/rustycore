@@ -19,7 +19,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::SetSelection,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::Inplace,
+        processing: PacketProcessing::ThreadUnsafe,
         handler_name: "handle_set_selection",
     }
 }
@@ -28,7 +28,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::AreaTrigger,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::ThreadUnsafe,
+        processing: PacketProcessing::Inplace,
         handler_name: "handle_area_trigger",
     }
 }
@@ -55,7 +55,7 @@ inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::TaxiNodeStatusQuery,
         status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::Inplace,
+        processing: PacketProcessing::ThreadSafe,
         handler_name: "handle_taxi_node_status_query",
     }
 }

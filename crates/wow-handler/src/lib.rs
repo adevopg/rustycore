@@ -34,6 +34,8 @@ pub enum PacketProcessing {
     Inplace,
     /// Queue for processing during the session update tick (thread-unsafe).
     ThreadUnsafe,
+    /// Safe to process from the map update path.
+    ThreadSafe,
 }
 
 /// A registered packet handler entry.

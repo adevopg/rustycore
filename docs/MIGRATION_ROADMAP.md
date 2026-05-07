@@ -509,6 +509,12 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [ ] **#NEXT.L1.INFRA.001** Ejecutar `docs/migration/inventory/r7-l1-infra-miniphase.md`: database/prepared + DB2/hotfix gate contra C++.
   Estado: `#NEXT.L1.INFRA.001.a` cerrado; `#NEXT.L1.INFRA.001.b/c` refinados; siguen `#NEXT.L1.DB.PREP.CHARACTER`, `#NEXT.L1.DB.PREP.HOTFIX` y `#NEXT.L1.DB2.STORES`.
 
+### Inmediato (R7 — L2 packets/dispatch gate)
+
+- [x] **#NEXT.L2.DISPATCH.001** Ejecutar `docs/migration/inventory/r7-l2-packets-miniphase.md`: restaurar metadata C++ de dispatch para opcodes tocados (`PROCESS_THREADSAFE`, duplicados y variantes `TimeSyncResponse*`).
+- [ ] **#NEXT.L2.DISPATCH.002** Generar/auditar tabla completa de metadata de opcodes cliente desde `Opcodes.cpp`.
+- [ ] **#NEXT.L2.PACKET.WIRE.001** Dividir auditoría wire de parsers/serializers por ruta login-to-world.
+
 ### Inmediato (Fase 0 — Maps rewrite)
 
 - [x] **#001** `wow-map`: módulo `coords.rs` con constantes y `compute_grid_coord` / `compute_cell_coord`. Tests vs `GridDefines.h`. Cerrado en `crates/wow-map/src/coords.rs` contra `GridDefines.h`.
