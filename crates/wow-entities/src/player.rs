@@ -222,7 +222,7 @@ pub struct CanStoreItemArgs<'a> {
     pub proto: Option<&'a ItemStorageTemplate>,
     pub source_item: Option<&'a Item>,
     pub source_is_not_empty_bag: bool,
-    pub source_is_binded_not_with_player: bool,
+    pub source_bop_trade_allowed_for_player: bool,
     pub swap: bool,
     pub limit_category: Option<&'a ItemLimitCategoryTemplate>,
     pub slot_items: &'a [ItemSlotRef<'a>],
@@ -1231,7 +1231,11 @@ impl Player {
                 return can_store_item_error(InventoryResult::LootGone, args.count, 0);
             }
 
-            if args.source_is_binded_not_with_player {
+            if source.is_binded_not_with(
+                self.guid(),
+                proto,
+                args.source_bop_trade_allowed_for_player,
+            ) {
                 return can_store_item_error(InventoryResult::NotOwner, args.count, 0);
             }
         }
@@ -2535,7 +2539,7 @@ mod tests {
             proto,
             source_item: None,
             source_is_not_empty_bag: false,
-            source_is_binded_not_with_player: false,
+            source_bop_trade_allowed_for_player: false,
             swap: false,
             limit_category: None,
             slot_items: &[],
@@ -3811,6 +3815,8 @@ mod tests {
         );
 
         source.set_loot_generated(false);
+        source.set_owner_guid(ObjectGuid::create_player(1, 42));
+        source.set_item_flag(ItemFieldFlags::SOULBOUND);
         let mut bound_args = can_store_args(
             INVENTORY_SLOT_BAG_0,
             INVENTORY_SLOT_ITEM_START,
@@ -3818,7 +3824,6 @@ mod tests {
             3,
         );
         bound_args.source_item = Some(&source);
-        bound_args.source_is_binded_not_with_player = true;
         assert_eq!(
             player.can_store_item(&mut Vec::new(), bound_args),
             CanStoreItemOutcome {

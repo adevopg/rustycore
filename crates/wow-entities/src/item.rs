@@ -186,6 +186,7 @@ pub struct ItemStorageTemplate {
     pub item_limit_category: u32,
     pub container_slots: u8,
     pub is_crafting_reagent: bool,
+    pub is_bound_account_wide: bool,
 }
 
 impl ItemStorageTemplate {
@@ -201,6 +202,7 @@ impl ItemStorageTemplate {
             item_limit_category: 0,
             container_slots: 0,
             is_crafting_reagent: false,
+            is_bound_account_wide: false,
         }
     }
 }
@@ -702,6 +704,31 @@ impl Item {
 
     pub fn is_bop_tradeable(&self) -> bool {
         self.has_item_flag(ItemFieldFlags::BOP_TRADEABLE)
+    }
+
+    pub fn is_binded_not_with(
+        &self,
+        player_guid: ObjectGuid,
+        template: &ItemStorageTemplate,
+        bop_trade_allowed_for_player: bool,
+    ) -> bool {
+        if !self.is_soul_bound() {
+            return false;
+        }
+
+        if self.owner_guid() == player_guid {
+            return false;
+        }
+
+        if self.is_bop_tradeable() && bop_trade_allowed_for_player {
+            return false;
+        }
+
+        if template.is_bound_account_wide {
+            return false;
+        }
+
+        true
     }
 
     pub fn clear_soulbound_tradeable(&mut self) {
@@ -1305,6 +1332,33 @@ mod tests {
             item.item_data_changes_mask()
                 .is_set(ITEM_DATA_DYNAMIC_FLAGS2_BIT)
         );
+    }
+
+    #[test]
+    fn is_binded_not_with_matches_cpp_representable_cases() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let other_guid = ObjectGuid::create_player(1, 43);
+        let template = ItemStorageTemplate::regular_item(6948, 1);
+        let mut item = Item::default();
+
+        assert!(!item.is_binded_not_with(player_guid, &template, false));
+
+        item.set_item_flag(ItemFieldFlags::SOULBOUND);
+        item.set_owner_guid(player_guid);
+        assert!(!item.is_binded_not_with(player_guid, &template, false));
+
+        item.set_owner_guid(other_guid);
+        assert!(item.is_binded_not_with(player_guid, &template, false));
+
+        item.set_item_flag(ItemFieldFlags::BOP_TRADEABLE);
+        assert!(!item.is_binded_not_with(player_guid, &template, true));
+        assert!(item.is_binded_not_with(player_guid, &template, false));
+
+        let account_bound_template = ItemStorageTemplate {
+            is_bound_account_wide: true,
+            ..template
+        };
+        assert!(!item.is_binded_not_with(player_guid, &account_bound_template, false));
     }
 
     #[test]
