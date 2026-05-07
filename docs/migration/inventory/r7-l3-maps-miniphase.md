@@ -15,8 +15,13 @@
   Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`.
   Acceptance: `Map` owns a 64x64 pointer-equivalent grid table; constructor starts with empty grid slots; `EnsureGridCreated` creates an idle `NGrid` and calls terrain load with reversed coords; `EnsureGridLoaded` marks data loaded before invoking the loader hook; active-object loading sets `GRID_STATE_ACTIVE` and 0.1 expiry; `UnloadGrid` refuses world creatures/near active objects unless forced and invokes object/terrain unload hooks.
 
+- [x] **#NEXT.L3.MAPS.003** Port `ObjectGridLoader::LoadN` GUID/container pass.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.h`, `ObjectGridLoader.cpp`.
+  Rust targets: `crates/wow-map/src/object_grid_loader.rs`, `crates/wow-map/src/spawn.rs`, `crates/wow-map/src/lib.rs`.
+  Acceptance: loader iterates all 8x8 cells, reads creature/gameobject/areatrigger IDs from `SpawnStore`, applies a `ShouldBeSpawnedOnGridLoad`-equivalent filter, materializes stable `ObjectGuid`s, loads world/grid corpses from a map corpse store, and can be wired through `Map::EnsureGridLoaded` via `SpawnGridLifecycle`.
+
 ## Follow-Up Work Items
 
-- [ ] **#NEXT.L3.MAPS.003** Port `ObjectGridLoader::LoadN` on top of `SpawnStore` + `NGrid`.
 - [ ] **#NEXT.L3.MAPS.004** Port `MultiPersonalPhaseTracker` grid hooks used by player-triggered loading.
-- [ ] **#NEXT.L3.MAPS.005** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.
+- [ ] **#NEXT.L3.MAPS.005** Port grid unload helpers (`ObjectGridStoper`, `ObjectGridEvacuator`, `ObjectGridCleaner`, `ObjectGridUnloader`) against real entity lifecycle once entities exist.
+- [ ] **#NEXT.L3.MAPS.006** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.

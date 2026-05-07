@@ -2,6 +2,7 @@ pub mod cell;
 pub mod coords;
 pub mod grid;
 pub mod map;
+pub mod object_grid_loader;
 pub mod spawn;
 
 use std::fmt;
@@ -20,6 +21,10 @@ pub use grid::{
 pub use map::{
     ActiveObjectKind, GridLifecycle, Map, NoopGridLifecycle, NoopTerrainGridLoader,
     TerrainGridLoader, cell_from_grid_center, cell_from_world, is_grid_id_loaded,
+};
+pub use object_grid_loader::{
+    CorpseCellStore, CorpseGridObject, GridSpawnLoadFilter, LoadAllGridSpawns,
+    ObjectGridLoadCounts, ObjectGridLoader, SpawnGridLifecycle,
 };
 pub use spawn::{
     CellSpawnGuids, Difficulty, PersonalSpawnMapKey, SpawnData, SpawnGroupFlags,

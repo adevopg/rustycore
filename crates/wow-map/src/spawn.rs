@@ -155,6 +155,7 @@ impl PersonalSpawnMapKey {
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnStore {
+    spawns: BTreeMap<(SpawnObjectType, SpawnId), SpawnData>,
     object_guids: BTreeMap<SpawnMapKey, BTreeMap<u32, CellSpawnGuids>>,
     personal_object_guids: BTreeMap<PersonalSpawnMapKey, BTreeMap<u32, CellSpawnGuids>>,
 }
@@ -169,6 +170,9 @@ impl SpawnStore {
     where
         F: Fn(u32) -> bool,
     {
+        self.spawns
+            .insert((data.object_type, data.spawn_id), data.clone());
+
         match data.object_type {
             SpawnObjectType::Creature | SpawnObjectType::GameObject => {}
             SpawnObjectType::AreaTrigger => {
@@ -208,6 +212,8 @@ impl SpawnStore {
     /// personal-phase store.
     pub fn add_area_trigger_spawn(&mut self, data: &SpawnData) {
         debug_assert_eq!(data.object_type, SpawnObjectType::AreaTrigger);
+        self.spawns
+            .insert((SpawnObjectType::AreaTrigger, data.spawn_id), data.clone());
         let cell_id = data.cell_id();
         for difficulty in data.spawn_difficulties.iter().copied() {
             let key = SpawnMapKey::new(data.map_id, difficulty);
@@ -233,6 +239,7 @@ impl SpawnStore {
             }
         }
 
+        self.spawns.remove(&(data.object_type, data.spawn_id));
         let cell_id = data.cell_id();
         if is_personal_phase(data.phase_id) {
             for difficulty in data.spawn_difficulties.iter().copied() {
@@ -253,6 +260,8 @@ impl SpawnStore {
 
     pub fn remove_area_trigger_spawn(&mut self, data: &SpawnData) {
         debug_assert_eq!(data.object_type, SpawnObjectType::AreaTrigger);
+        self.spawns
+            .remove(&(SpawnObjectType::AreaTrigger, data.spawn_id));
         let cell_id = data.cell_id();
         for difficulty in data.spawn_difficulties.iter().copied() {
             let key = SpawnMapKey::new(data.map_id, difficulty);
@@ -293,6 +302,14 @@ impl SpawnStore {
     pub fn has_personal_spawns(&self, map_id: u32, difficulty: Difficulty, phase_id: u32) -> bool {
         self.personal_object_guids
             .contains_key(&PersonalSpawnMapKey::new(map_id, difficulty, phase_id))
+    }
+
+    pub fn spawn_data(
+        &self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> Option<&SpawnData> {
+        self.spawns.get(&(object_type, spawn_id))
     }
 }
 
