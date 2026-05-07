@@ -2918,6 +2918,26 @@ impl Player {
         }
     }
 
+    pub fn quick_equip_item_object(
+        &mut self,
+        pos: u16,
+        item: &mut Item,
+        visible: VisibleItemValues,
+    ) -> Result<(), PlayerStorageError> {
+        let bag = (pos >> 8) as u8;
+        let slot = pos as u8;
+        if bag != INVENTORY_SLOT_BAG_0 {
+            return Err(PlayerStorageError::UnknownBag(bag));
+        }
+        if slot as usize >= PLAYER_SLOT_END {
+            return Err(PlayerStorageError::InvalidPlayerSlot(slot));
+        }
+
+        self.visualize_item_object(slot, item, visible)?;
+        item.set_item_flag2(ItemFieldFlags2::EQUIPPED);
+        Ok(())
+    }
+
     pub fn store_item_object(
         &mut self,
         slot: u8,
@@ -7092,6 +7112,49 @@ mod tests {
         assert!(!incoming.has_item_flag(ItemFieldFlags::REFUNDABLE));
         assert!(!incoming.has_item_flag(ItemFieldFlags::BOP_TRADEABLE));
         assert_eq!(incoming.update_state(), ItemUpdateState::Removed);
+    }
+
+    #[test]
+    fn quick_equip_item_object_visualizes_and_flags_item_like_cpp() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 513);
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+        let visible = VisibleItemValues {
+            item_id: 513,
+            item_appearance_mod_id: 8,
+            item_visual: 1,
+        };
+
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+        item.object_mut().create(item_guid);
+        item.force_state(ItemUpdateState::Unchanged);
+
+        player
+            .quick_equip_item_object(
+                make_item_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND),
+                &mut item,
+                visible,
+            )
+            .unwrap();
+
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND),
+            Some(item_guid)
+        );
+        assert_eq!(
+            player.data().visible_items[EQUIPMENT_SLOT_OFFHAND as usize],
+            visible
+        );
+        assert_eq!(item.data().contained_in, player_guid);
+        assert_eq!(item.owner_guid(), player_guid);
+        assert_eq!(item.slot(), EQUIPMENT_SLOT_OFFHAND);
+        assert!(item.has_item_flag2(ItemFieldFlags2::EQUIPPED));
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
     }
 
     #[test]
