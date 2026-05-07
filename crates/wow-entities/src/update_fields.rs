@@ -191,6 +191,7 @@ pub const DYNAMIC_OBJECT_DATA_BITS: usize = 7;
 pub const CORPSE_DATA_BITS: usize = 32;
 pub const AREA_TRIGGER_DATA_BITS: usize = 20;
 pub const SCENE_OBJECT_DATA_BITS: usize = 5;
+pub const CONVERSATION_DATA_BITS: usize = 4;
 pub const TYPEID_OBJECT: usize = 0;
 pub const TYPEID_UNIT: usize = 5;
 pub const TYPEID_PLAYER: usize = 6;
@@ -200,6 +201,7 @@ pub const TYPEID_DYNAMIC_OBJECT: usize = 9;
 pub const TYPEID_CORPSE: usize = 10;
 pub const TYPEID_AREA_TRIGGER: usize = 11;
 pub const TYPEID_SCENE_OBJECT: usize = 12;
+pub const TYPEID_CONVERSATION: usize = 13;
 pub const OBJECT_DATA_PARENT_BIT: usize = 0;
 pub const OBJECT_DATA_ENTRY_ID_BIT: usize = 1;
 pub const OBJECT_DATA_DYNAMIC_FLAGS_BIT: usize = 2;
@@ -258,6 +260,10 @@ mod tests {
         let scene_object_data = UpdateMask::new(SCENE_OBJECT_DATA_BITS);
         assert_eq!(scene_object_data.block_count(), 1);
         assert_eq!(scene_object_data.blocks_mask_count(), 1);
+
+        let conversation_data = UpdateMask::new(CONVERSATION_DATA_BITS);
+        assert_eq!(conversation_data.block_count(), 1);
+        assert_eq!(conversation_data.blocks_mask_count(), 1);
     }
 
     #[test]

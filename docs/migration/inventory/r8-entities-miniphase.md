@@ -65,6 +65,11 @@
   Rust targets: `crates/wow-entities/src/scene_object.rs`, `crates/wow-entities/src/update_fields.rs`, `crates/wow-entities/src/lib.rs`.
   Acceptance: base `SceneObject` constructor matches C++ type id/mask, `WorldObject(false)`, stationary and scene-object create flags, stationary position and created-by-spell-cast bridge; `ShouldBeRemoved` predicate shape is represented; `SceneObjectData` script package, random seed, created-by and scene type setters use C++ bit positions; values update sets `TYPEID_SCENEOBJECT`.
 
+- [x] **#NEXT.R8.ENTITIES.030** Port `Conversation` base state and core setters.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Conversation/Conversation.h`, `Conversation.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ConversationDataStore.h`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Updates/UpdateFields.h`.
+  Rust targets: `crates/wow-entities/src/conversation.rs`, `crates/wow-entities/src/update_fields.rs`, `crates/wow-entities/src/lib.rs`.
+  Acceptance: base `Conversation` constructor matches C++ type id/mask, `WorldObject(false)`, stationary and conversation create flags, creator/duration/texture/stationary-position defaults; lines, actors and last-line-end-time use C++ `ConversationData` bits; actor world-object/talking-head variants match C++ field shape; max last-line-end-time plus 10s despawn delay is represented; values update sets `TYPEID_CONVERSATION`.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
@@ -84,3 +89,4 @@
 - [ ] **#NEXT.R8.ENTITIES.025** Complete `DynamicObject` create/add-to-map/update runtime: caster map inheritance, GUID creation, phase inheritance, caster registration, Aura ownership/removal, SpellInfo lookup, farsight viewpoint, transport passenger offset and map relocation.
 - [ ] **#NEXT.R8.ENTITIES.027** Complete `AreaTrigger` create/load/update runtime: AreaTriggerDataStore templates/spawns, GUID creation, phase inheritance, static spawn store, AI selection, shape search, unit enter/exit actions, splines/orbit/attached movement, server-side visibility, transport offset and map relocation.
 - [ ] **#NEXT.R8.ENTITIES.029** Complete `SceneObject` create/map/update runtime: SceneTemplate lookup, GUID creation, private object owner, phase inheritance, random seed time source, map insertion, creator/aura lookup and removal scheduling.
+- [ ] **#NEXT.R8.ENTITIES.031** Complete `Conversation` create/start/update runtime: ConversationDataStore templates, conditions, actor fill visitor, line locale timings, private owner locale, script hooks, map insertion, actor unit/creature lookup and removal scheduling.

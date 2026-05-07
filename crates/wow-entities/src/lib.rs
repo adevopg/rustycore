@@ -6,6 +6,7 @@
 //! - `game/Entities/Object/ObjectGuid.h`
 
 mod area_trigger;
+mod conversation;
 mod corpse;
 mod creature;
 mod dynamic_object;
@@ -32,6 +33,12 @@ pub use area_trigger::{
     AREA_TRIGGER_FLAG_IS_SERVER_SIDE, AreaTrigger, AreaTriggerDataUpdate, AreaTriggerDataValues,
     AreaTriggerId, AreaTriggerShapeType, AreaTriggerValuesUpdate, ScaleCurveValues,
     VisualAnimValues,
+};
+pub use conversation::{
+    CONVERSATION_DATA_ACTORS_BIT, CONVERSATION_DATA_LAST_LINE_END_TIME_BIT,
+    CONVERSATION_DATA_LINES_BIT, CONVERSATION_DATA_PARENT_BIT, CONVERSATION_DESPAWN_DELAY_MS,
+    Conversation, ConversationActor, ConversationActorType, ConversationDataUpdate,
+    ConversationDataValues, ConversationLine, ConversationValuesUpdate,
 };
 pub use corpse::{
     CORPSE_BONES_EXPIRE_SECS, CORPSE_DATA_CLASS_BIT, CORPSE_DATA_DISPLAY_ID_BIT,
@@ -96,12 +103,12 @@ pub use unit::{
     UnitDataValues, UnitValuesUpdate,
 };
 pub use update_fields::{
-    ACTIVE_PLAYER_DATA_BITS, AREA_TRIGGER_DATA_BITS, CORPSE_DATA_BITS, DYNAMIC_OBJECT_DATA_BITS,
-    GAME_OBJECT_DATA_BITS, NUM_CLIENT_OBJECT_TYPES, OBJECT_DATA_BITS,
+    ACTIVE_PLAYER_DATA_BITS, AREA_TRIGGER_DATA_BITS, CONVERSATION_DATA_BITS, CORPSE_DATA_BITS,
+    DYNAMIC_OBJECT_DATA_BITS, GAME_OBJECT_DATA_BITS, NUM_CLIENT_OBJECT_TYPES, OBJECT_DATA_BITS,
     OBJECT_DATA_DYNAMIC_FLAGS_BIT, OBJECT_DATA_ENTRY_ID_BIT, OBJECT_DATA_PARENT_BIT,
     OBJECT_DATA_SCALE_BIT, ObjectDataUpdate, ObjectDataValues, PLAYER_DATA_BITS,
-    SCENE_OBJECT_DATA_BITS, TYPEID_ACTIVE_PLAYER, TYPEID_AREA_TRIGGER, TYPEID_CORPSE,
-    TYPEID_DYNAMIC_OBJECT, TYPEID_GAME_OBJECT, TYPEID_OBJECT, TYPEID_PLAYER, TYPEID_SCENE_OBJECT,
-    TYPEID_UNIT, UNIT_DATA_BITS, UpdateMask, ValuesUpdate,
+    SCENE_OBJECT_DATA_BITS, TYPEID_ACTIVE_PLAYER, TYPEID_AREA_TRIGGER, TYPEID_CONVERSATION,
+    TYPEID_CORPSE, TYPEID_DYNAMIC_OBJECT, TYPEID_GAME_OBJECT, TYPEID_OBJECT, TYPEID_PLAYER,
+    TYPEID_SCENE_OBJECT, TYPEID_UNIT, UNIT_DATA_BITS, UpdateMask, ValuesUpdate,
 };
 pub use world_object::{MAPID_INVALID, MapBindingError, PhaseShift, WorldLocation, WorldObject};
