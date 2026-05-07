@@ -148,34 +148,7 @@ impl ConfigStore {
             return parse_database_info(&key, value).unwrap_or(default);
         }
 
-        self.legacy_database_info_default(&key, default)
-    }
-
-    fn legacy_database_info_default(&self, key: &str, default: DatabaseInfo) -> DatabaseInfo {
-        let host_key = format!("{key}.Host");
-        let port_key = format!("{key}.Port");
-        let username_key = format!("{key}.Username");
-        let password_key = format!("{key}.Password");
-        let database_key = format!("{key}.Database");
-
-        DatabaseInfo {
-            host: self
-                .get(&host_key)
-                .map_or_else(|| default.host.clone(), ToOwned::to_owned),
-            port_or_socket: self
-                .get(&port_key)
-                .map_or_else(|| default.port_or_socket.clone(), ToOwned::to_owned),
-            username: self
-                .get(&username_key)
-                .map_or_else(|| default.username.clone(), ToOwned::to_owned),
-            password: self
-                .get(&password_key)
-                .map_or_else(|| default.password.clone(), ToOwned::to_owned),
-            database: self
-                .get(&database_key)
-                .map_or_else(|| default.database.clone(), ToOwned::to_owned),
-            ssl: default.ssl,
-        }
+        default
     }
 }
 
@@ -445,9 +418,6 @@ pub fn parse_database_info(key: &str, value: &str) -> Result<DatabaseInfo, Confi
 }
 
 /// Read `{name}DatabaseInfo` using the C++ semicolon schema.
-///
-/// The legacy Rust split subkeys are accepted only as a temporary fallback for
-/// the migration mini-phase tracked by `#NEXT.L0.CONFIG.REMOVE_LEGACY_DB_SUBKEYS`.
 pub fn get_database_info_default(name: &str, default: DatabaseInfo) -> DatabaseInfo {
     let store = CONFIG.read();
     store.database_info_default(name, default)
@@ -715,7 +685,7 @@ LogLevel = 3
     }
 
     #[test]
-    fn test_get_database_info_uses_canonical_key_before_legacy_split_keys() {
+    fn test_get_database_info_uses_canonical_key_only() {
         let store = parse(
             r#"
 LoginDatabaseInfo = "127.0.0.1;3306;trinity;trinity;auth"
@@ -736,7 +706,7 @@ LoginDatabaseInfo.Host = "legacy"
     }
 
     #[test]
-    fn test_get_database_info_legacy_split_fallback_is_temporary() {
+    fn test_get_database_info_ignores_legacy_split_subkeys() {
         let store = parse(
             r#"
 LoginDatabaseInfo.Host = "127.0.0.2"
@@ -752,11 +722,11 @@ LoginDatabaseInfo.Database = "legacy_auth"
             DatabaseInfo::new("fallback", 1, "fallback", "fallback", "fallback"),
         );
 
-        assert_eq!(info.host, "127.0.0.2");
-        assert_eq!(info.port_or_socket, "3307");
-        assert_eq!(info.username, "legacy_user");
-        assert_eq!(info.password, "legacy_pass");
-        assert_eq!(info.database, "legacy_auth");
+        assert_eq!(info.host, "fallback");
+        assert_eq!(info.port_or_socket, "1");
+        assert_eq!(info.username, "fallback");
+        assert_eq!(info.password, "fallback");
+        assert_eq!(info.database, "fallback");
     }
 
     #[test]

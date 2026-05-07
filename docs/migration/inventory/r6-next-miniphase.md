@@ -13,7 +13,7 @@ The next implementation mini-phase is `#NEXT.L0.CONFIG.001`:
 This runs before the inherited Maps rewrite queue. Maps remains the next L3 focus, but R4 proves that L3 depends on L0/L1/L2 gates. Config is the first L0 blocker because every executable startup path depends on it, and `cpp-config-keys.md` already found real Rust/C++ divergence:
 
 - C++ loads `worldserver.conf`, `worldserver.conf.d`, `bnetserver.conf`, and `bnetserver.conf.d`; Rust currently tries `WorldServer.conf` and `BNetServer.conf`.
-- C++ database settings are semicolon values like `LoginDatabaseInfo = "host;port;user;pass;db"`; Rust currently uses invented subkeys such as `LoginDatabaseInfo.Host`.
+- C++ database settings are semicolon values like `LoginDatabaseInfo = "host;port;user;pass;db"`; pre-cleanup Rust used invented subkeys such as `LoginDatabaseInfo.Host`.
 - C++ supports additional config directories and `TC_*` environment overrides; Rust config currently loads one plain file.
 
 ## Required C++ References
@@ -72,8 +72,7 @@ These references must be open beside the Rust patch when implementation starts:
 ## Rollback And Parking
 
 - No Maps, entities, packet, database schema, or gameplay changes are allowed in `#NEXT.L0.CONFIG.001`.
-- The legacy Rust split DB keys (`LoginDatabaseInfo.Host`, etc.) may remain only as a logged compatibility fallback during this mini-phase.
-- The fallback must be removed or product-approved in `#NEXT.L0.CONFIG.REMOVE_LEGACY_DB_SUBKEYS`.
+- The legacy Rust split DB keys (`LoginDatabaseInfo.Host`, etc.) were removed in `#NEXT.L0.CONFIG.REMOVE_LEGACY_DB_SUBKEYS`; Rust now follows C++ `name + "DatabaseInfo"` only.
 - Full `WorldBoolConfigs`/`WorldFloatConfigs`/`WorldIntConfigs`/`WorldInt64Configs` parity is not silently skipped: it is the explicit follow-up `#NEXT.L0.CONFIG.002`, backed by `docs/migration/inventory/cpp-world-config-registry.tsv`.
 
 ## R6 Closure
