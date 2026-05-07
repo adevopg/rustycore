@@ -80,6 +80,7 @@ pub enum PlayerStorageError {
     InvalidBagSlot(u8),
     InvalidBagItemSlot(u8),
     UnknownBag(u8),
+    OccupiedPlayerSlot(u8),
     TopLevelBuybackHiddenFromGetItemByPos(u8),
 }
 
@@ -596,6 +597,34 @@ impl Player {
             self.set_visible_item_slot(slot, Some(visible));
         }
 
+        item.set_state(ItemUpdateState::Changed);
+        Ok(())
+    }
+
+    pub fn store_item_object(
+        &mut self,
+        slot: u8,
+        item: &mut Item,
+        count: u32,
+    ) -> Result<(), PlayerStorageError> {
+        if slot as usize >= PLAYER_SLOT_END {
+            return Err(PlayerStorageError::InvalidPlayerSlot(slot));
+        }
+
+        if self.inventory.items[slot as usize].is_some() {
+            return Err(PlayerStorageError::OccupiedPlayerSlot(slot));
+        }
+
+        let item_guid = item.object().guid();
+        self.store_top_level_item(slot, item_guid)?;
+
+        let owner_guid = self.guid();
+        item.set_count(count);
+        item.bind_if_stored(is_bag_storage_slot(slot));
+        item.set_contained_in(owner_guid);
+        item.set_owner_guid(owner_guid);
+        item.set_slot(slot);
+        item.set_container_guid(ObjectGuid::EMPTY);
         item.set_state(ItemUpdateState::Changed);
         Ok(())
     }
@@ -1420,6 +1449,110 @@ mod tests {
         assert_eq!(item.bag_slot(), INVENTORY_SLOT_BAG_0);
         assert!(item.is_soul_bound());
         assert_eq!(item.update_state(), ItemUpdateState::Changed);
+    }
+
+    #[test]
+    fn store_item_object_mutates_empty_top_level_slot_like_cpp_storeitem() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 600);
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+        player.clear_active_player_data_changes();
+        item.object_mut().create(item_guid);
+        item.set_bonding(ItemBondingType::OnAcquire);
+        item.force_state(ItemUpdateState::Unchanged);
+        item.clear_item_data_changes();
+
+        player
+            .store_item_object(INVENTORY_SLOT_ITEM_START, &mut item, 4)
+            .unwrap();
+
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START),
+            Some(item_guid)
+        );
+        assert_eq!(
+            player.active_data().inv_slots[INVENTORY_SLOT_ITEM_START as usize],
+            item_guid
+        );
+        assert_eq!(item.count(), 4);
+        assert_eq!(item.data().contained_in, player_guid);
+        assert_eq!(item.owner_guid(), player_guid);
+        assert_eq!(item.slot(), INVENTORY_SLOT_ITEM_START);
+        assert_eq!(item.container_guid(), ObjectGuid::EMPTY);
+        assert_eq!(item.bag_slot(), INVENTORY_SLOT_BAG_0);
+        assert!(item.is_soul_bound());
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
+        assert!(
+            player.active_player_data_changes_mask().is_set(
+                ACTIVE_PLAYER_DATA_INV_SLOTS_FIRST_BIT + INVENTORY_SLOT_ITEM_START as usize
+            )
+        );
+    }
+
+    #[test]
+    fn store_item_object_binds_on_equip_only_for_bag_positions_like_cpp_storeitem() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let mut player = Player::new(None, false);
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(player_guid);
+
+        let mut inventory_item = Item::default();
+        inventory_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 601));
+        inventory_item.set_bonding(ItemBondingType::OnEquip);
+        player
+            .store_item_object(INVENTORY_SLOT_ITEM_START, &mut inventory_item, 1)
+            .unwrap();
+        assert!(!inventory_item.is_soul_bound());
+
+        let mut bag_item = Item::default();
+        bag_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 602));
+        bag_item.set_bonding(ItemBondingType::OnEquip);
+        player
+            .store_item_object(INVENTORY_SLOT_BAG_START, &mut bag_item, 1)
+            .unwrap();
+        assert!(bag_item.is_soul_bound());
+    }
+
+    #[test]
+    fn store_item_object_rejects_occupied_slot_until_stack_merge_registry_exists() {
+        let existing = ObjectGuid::create_item(1, 700);
+        let incoming = ObjectGuid::create_item(1, 701);
+        let mut player = Player::new(None, false);
+        let mut item = Item::default();
+        item.object_mut().create(incoming);
+        item.force_state(ItemUpdateState::Unchanged);
+
+        player
+            .store_top_level_item(INVENTORY_SLOT_ITEM_START, existing)
+            .unwrap();
+        let result = player.store_item_object(INVENTORY_SLOT_ITEM_START, &mut item, 3);
+
+        assert_eq!(
+            result,
+            Err(PlayerStorageError::OccupiedPlayerSlot(
+                INVENTORY_SLOT_ITEM_START
+            ))
+        );
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START),
+            Some(existing)
+        );
+        assert_eq!(item.count(), 0);
+        assert_eq!(item.update_state(), ItemUpdateState::Unchanged);
     }
 
     #[test]

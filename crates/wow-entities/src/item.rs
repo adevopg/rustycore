@@ -258,6 +258,10 @@ impl Item {
         &self.data
     }
 
+    pub const fn count(&self) -> u32 {
+        self.data.stack_count
+    }
+
     pub fn item_data_changes_mask(&self) -> &UpdateMask {
         &self.item_data_changes
     }
@@ -340,6 +344,16 @@ impl Item {
             self.bonding,
             ItemBondingType::OnEquip | ItemBondingType::OnAcquire | ItemBondingType::Quest
         ) {
+            self.set_binding(true);
+        }
+    }
+
+    pub fn bind_if_stored(&mut self, is_bag_pos: bool) {
+        if matches!(
+            self.bonding,
+            ItemBondingType::OnAcquire | ItemBondingType::Quest
+        ) || (self.bonding == ItemBondingType::OnEquip && is_bag_pos)
+        {
             self.set_binding(true);
         }
     }
@@ -1004,6 +1018,26 @@ mod tests {
             item.bind_if_visualized();
             assert!(!item.is_soul_bound());
         }
+    }
+
+    #[test]
+    fn bind_if_stored_matches_cpp_storeitem_bag_position_rule() {
+        for bonding in [ItemBondingType::OnAcquire, ItemBondingType::Quest] {
+            let mut item = Item::default();
+            item.set_bonding(bonding);
+            item.bind_if_stored(false);
+            assert!(item.is_soul_bound());
+        }
+
+        let mut inventory_item = Item::default();
+        inventory_item.set_bonding(ItemBondingType::OnEquip);
+        inventory_item.bind_if_stored(false);
+        assert!(!inventory_item.is_soul_bound());
+
+        let mut bag_item = Item::default();
+        bag_item.set_bonding(ItemBondingType::OnEquip);
+        bag_item.bind_if_stored(true);
+        assert!(bag_item.is_soul_bound());
     }
 
     #[test]
