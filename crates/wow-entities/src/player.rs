@@ -1,8 +1,10 @@
+use bitflags::bitflags;
 use wow_constants::{Gender, PowerType, TypeId, TypeMask};
 use wow_core::ObjectGuid;
 
 use crate::{
-    ObjectDataUpdate, Unit, UnitDataUpdate, UpdateMask,
+    EQUIPMENT_SLOT_END, INVENTORY_SLOT_BAG_0, MAX_BAG_SIZE, ObjectDataUpdate, PROFESSION_SLOT_END,
+    PROFESSION_SLOT_START, Unit, UnitDataUpdate, UpdateMask,
     update_fields::{
         ACTIVE_PLAYER_DATA_BITS, PLAYER_DATA_BITS, TYPEID_ACTIVE_PLAYER, TYPEID_PLAYER,
     },
@@ -27,7 +29,105 @@ pub const ACTIVE_PLAYER_DATA_CHARACTER_POINTS_BIT: usize = 33;
 pub const ACTIVE_PLAYER_DATA_NUM_BACKPACK_SLOTS_BIT: usize = 104;
 pub const ACTIVE_PLAYER_DATA_INV_SLOTS_PARENT_BIT: usize = 124;
 pub const ACTIVE_PLAYER_DATA_INV_SLOTS_FIRST_BIT: usize = 125;
+pub const ACTIVE_PLAYER_DATA_BUYBACK_PARENT_BIT: usize = 549;
+pub const ACTIVE_PLAYER_DATA_BUYBACK_PRICE_FIRST_BIT: usize = 550;
+pub const ACTIVE_PLAYER_DATA_BUYBACK_TIMESTAMP_FIRST_BIT: usize = 562;
 pub const PLAYER_SLOT_END: usize = 141;
+pub const INVENTORY_DEFAULT_SIZE: u8 = 16;
+pub const INVENTORY_SLOT_BAG_START: u8 = 30;
+pub const INVENTORY_SLOT_BAG_END: u8 = 34;
+pub const REAGENT_BAG_SLOT_START: u8 = 34;
+pub const REAGENT_BAG_SLOT_END: u8 = 35;
+pub const INVENTORY_SLOT_ITEM_START: u8 = 35;
+pub const INVENTORY_SLOT_ITEM_END: u8 = 59;
+pub const BANK_SLOT_ITEM_START: u8 = 59;
+pub const BANK_SLOT_ITEM_END: u8 = 87;
+pub const BANK_SLOT_BAG_START: u8 = 87;
+pub const BANK_SLOT_BAG_END: u8 = 94;
+pub const BUYBACK_SLOT_START: u8 = 94;
+pub const BUYBACK_SLOT_END: u8 = 106;
+pub const BUYBACK_SLOT_COUNT: usize = (BUYBACK_SLOT_END - BUYBACK_SLOT_START) as usize;
+pub const KEYRING_SLOT_START: u8 = 106;
+pub const KEYRING_SLOT_END: u8 = 138;
+pub const CHILD_EQUIPMENT_SLOT_START: u8 = 138;
+pub const CHILD_EQUIPMENT_SLOT_END: u8 = 141;
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ItemSearchLocation: u8 {
+        const EQUIPMENT = 0x01;
+        const INVENTORY = 0x02;
+        const BANK = 0x04;
+        const REAGENT_BANK = 0x08;
+
+        const DEFAULT = Self::EQUIPMENT.bits() | Self::INVENTORY.bits();
+        const EVERYWHERE = Self::EQUIPMENT.bits() | Self::INVENTORY.bits()
+            | Self::BANK.bits() | Self::REAGENT_BANK.bits();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemSearchCallbackResult {
+    Stop,
+    Continue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerStorageError {
+    InvalidPlayerSlot(u8),
+    InvalidBagSlot(u8),
+    InvalidBagItemSlot(u8),
+    UnknownBag(u8),
+    TopLevelBuybackHiddenFromGetItemByPos(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerBagStorage {
+    pub bag_guid: ObjectGuid,
+    pub bag_size: u8,
+    pub slots: [Option<ObjectGuid>; MAX_BAG_SIZE],
+}
+
+impl PlayerBagStorage {
+    pub fn new(bag_guid: ObjectGuid, bag_size: u8) -> Self {
+        assert!(bag_size as usize <= MAX_BAG_SIZE);
+        Self {
+            bag_guid,
+            bag_size,
+            slots: [None; MAX_BAG_SIZE],
+        }
+    }
+
+    pub fn item_by_pos(&self, slot: u8) -> Option<ObjectGuid> {
+        if slot < self.bag_size {
+            self.slots[slot as usize]
+        } else {
+            None
+        }
+    }
+
+    pub fn set_item(&mut self, slot: u8, guid: Option<ObjectGuid>) {
+        assert!((slot as usize) < MAX_BAG_SIZE);
+        self.slots[slot as usize] = guid;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerInventoryStorage {
+    pub items: [Option<ObjectGuid>; PLAYER_SLOT_END],
+    pub bags: [Option<PlayerBagStorage>; PLAYER_SLOT_END],
+    pub current_buyback_slot: u8,
+}
+
+impl Default for PlayerInventoryStorage {
+    fn default() -> Self {
+        Self {
+            items: [None; PLAYER_SLOT_END],
+            bags: [None; PLAYER_SLOT_END],
+            current_buyback_slot: BUYBACK_SLOT_START,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlayerDataValues {
@@ -60,6 +160,8 @@ pub struct ActivePlayerDataValues {
     pub character_points: i32,
     pub num_backpack_slots: u8,
     pub inv_slots: [ObjectGuid; PLAYER_SLOT_END],
+    pub buyback_price: [u32; BUYBACK_SLOT_COUNT],
+    pub buyback_timestamp: [i64; BUYBACK_SLOT_COUNT],
 }
 
 impl Default for ActivePlayerDataValues {
@@ -71,6 +173,8 @@ impl Default for ActivePlayerDataValues {
             character_points: 0,
             num_backpack_slots: 0,
             inv_slots: [ObjectGuid::EMPTY; PLAYER_SLOT_END],
+            buyback_price: [0; BUYBACK_SLOT_COUNT],
+            buyback_timestamp: [0; BUYBACK_SLOT_COUNT],
         }
     }
 }
@@ -108,6 +212,7 @@ pub struct Player {
     session_id: Option<u64>,
     data: PlayerDataValues,
     active_data: ActivePlayerDataValues,
+    inventory: PlayerInventoryStorage,
     player_data_changes: UpdateMask,
     active_player_data_changes: UpdateMask,
     mod_melee_hit_chance: f32,
@@ -135,6 +240,7 @@ impl Player {
             session_id,
             data: PlayerDataValues::default(),
             active_data: ActivePlayerDataValues::default(),
+            inventory: PlayerInventoryStorage::default(),
             player_data_changes: UpdateMask::new(PLAYER_DATA_BITS),
             active_player_data_changes: UpdateMask::new(ACTIVE_PLAYER_DATA_BITS),
             mod_melee_hit_chance: 7.5,
@@ -172,6 +278,10 @@ impl Player {
 
     pub const fn active_data(&self) -> &ActivePlayerDataValues {
         &self.active_data
+    }
+
+    pub const fn inventory(&self) -> &PlayerInventoryStorage {
+        &self.inventory
     }
 
     pub const fn hit_chances(&self) -> (f32, f32, f32) {
@@ -369,6 +479,291 @@ impl Player {
         );
     }
 
+    pub fn top_level_item_guid(&self, slot: u8) -> Option<ObjectGuid> {
+        self.inventory.items.get(slot as usize).copied().flatten()
+    }
+
+    pub fn register_bag_storage(
+        &mut self,
+        bag_slot: u8,
+        bag_guid: ObjectGuid,
+        bag_size: u8,
+    ) -> Result<(), PlayerStorageError> {
+        if !is_bag_storage_slot(bag_slot) {
+            return Err(PlayerStorageError::InvalidBagSlot(bag_slot));
+        }
+        if bag_size as usize > MAX_BAG_SIZE {
+            return Err(PlayerStorageError::InvalidBagItemSlot(bag_size));
+        }
+
+        self.inventory.bags[bag_slot as usize] = Some(PlayerBagStorage::new(bag_guid, bag_size));
+        Ok(())
+    }
+
+    pub fn store_top_level_item(
+        &mut self,
+        slot: u8,
+        guid: ObjectGuid,
+    ) -> Result<(), PlayerStorageError> {
+        if slot as usize >= PLAYER_SLOT_END {
+            return Err(PlayerStorageError::InvalidPlayerSlot(slot));
+        }
+
+        self.inventory.items[slot as usize] = Some(guid);
+        self.set_inv_slot(slot as usize, guid);
+        Ok(())
+    }
+
+    pub fn remove_top_level_item(
+        &mut self,
+        slot: u8,
+    ) -> Result<Option<ObjectGuid>, PlayerStorageError> {
+        if slot as usize >= PLAYER_SLOT_END {
+            return Err(PlayerStorageError::InvalidPlayerSlot(slot));
+        }
+
+        let removed = self.inventory.items[slot as usize].take();
+        self.set_inv_slot(slot as usize, ObjectGuid::EMPTY);
+        if is_bag_storage_slot(slot) {
+            self.inventory.bags[slot as usize] = None;
+        }
+        Ok(removed)
+    }
+
+    pub fn store_bag_item(
+        &mut self,
+        bag: u8,
+        slot: u8,
+        guid: ObjectGuid,
+    ) -> Result<(), PlayerStorageError> {
+        let bag_storage = self
+            .inventory
+            .bags
+            .get_mut(bag as usize)
+            .and_then(Option::as_mut)
+            .ok_or(PlayerStorageError::UnknownBag(bag))?;
+        if slot as usize >= MAX_BAG_SIZE || slot >= bag_storage.bag_size {
+            return Err(PlayerStorageError::InvalidBagItemSlot(slot));
+        }
+
+        bag_storage.set_item(slot, Some(guid));
+        Ok(())
+    }
+
+    pub fn remove_bag_item(
+        &mut self,
+        bag: u8,
+        slot: u8,
+    ) -> Result<Option<ObjectGuid>, PlayerStorageError> {
+        let bag_storage = self
+            .inventory
+            .bags
+            .get_mut(bag as usize)
+            .and_then(Option::as_mut)
+            .ok_or(PlayerStorageError::UnknownBag(bag))?;
+        if slot as usize >= MAX_BAG_SIZE || slot >= bag_storage.bag_size {
+            return Err(PlayerStorageError::InvalidBagItemSlot(slot));
+        }
+
+        let removed = bag_storage.item_by_pos(slot);
+        bag_storage.set_item(slot, None);
+        Ok(removed)
+    }
+
+    pub fn get_bag_by_pos(&self, bag: u8) -> Option<ObjectGuid> {
+        if is_bag_storage_slot(bag) {
+            self.inventory.bags[bag as usize].map(|bag| bag.bag_guid)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_item_by_pos(&self, bag: u8, slot: u8) -> Option<ObjectGuid> {
+        if bag == INVENTORY_SLOT_BAG_0
+            && (slot as usize) < PLAYER_SLOT_END
+            && !is_buyback_slot(slot)
+        {
+            return self.inventory.items[slot as usize];
+        }
+
+        self.inventory
+            .bags
+            .get(bag as usize)
+            .and_then(|bag| bag.as_ref())
+            .and_then(|bag| bag.item_by_pos(slot))
+    }
+
+    pub fn get_item_by_packed_pos(&self, pos: u16) -> Option<ObjectGuid> {
+        self.get_item_by_pos((pos >> 8) as u8, (pos & 0xFF) as u8)
+    }
+
+    pub fn get_item_by_guid(&self, guid: ObjectGuid) -> Option<ObjectGuid> {
+        let mut found = false;
+        self.for_each_item_guid(ItemSearchLocation::EVERYWHERE, |item_guid| {
+            if item_guid == guid {
+                found = true;
+                ItemSearchCallbackResult::Stop
+            } else {
+                ItemSearchCallbackResult::Continue
+            }
+        });
+
+        found.then_some(guid)
+    }
+
+    pub fn for_each_item_guid(
+        &self,
+        location: ItemSearchLocation,
+        mut callback: impl FnMut(ObjectGuid) -> ItemSearchCallbackResult,
+    ) -> bool {
+        if location.contains(ItemSearchLocation::EQUIPMENT) {
+            for slot in 0..EQUIPMENT_SLOT_END {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+            for slot in PROFESSION_SLOT_START..PROFESSION_SLOT_END {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+        }
+
+        if location.contains(ItemSearchLocation::INVENTORY) {
+            let inventory_end = INVENTORY_SLOT_ITEM_START
+                .saturating_add(self.active_data.num_backpack_slots)
+                .min(INVENTORY_SLOT_ITEM_END);
+            for slot in INVENTORY_SLOT_BAG_START..inventory_end {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+            for slot in KEYRING_SLOT_START..KEYRING_SLOT_END {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+            for slot in CHILD_EQUIPMENT_SLOT_START..CHILD_EQUIPMENT_SLOT_END {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+            for bag_slot in INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END {
+                if self.visit_bag_items(bag_slot, &mut callback) {
+                    return false;
+                }
+            }
+        }
+
+        if location.contains(ItemSearchLocation::BANK) {
+            for slot in BANK_SLOT_ITEM_START..BANK_SLOT_BAG_END {
+                if self.visit_top_slot(slot, &mut callback) {
+                    return false;
+                }
+            }
+            for bag_slot in BANK_SLOT_BAG_START..BANK_SLOT_BAG_END {
+                if self.visit_bag_items(bag_slot, &mut callback) {
+                    return false;
+                }
+            }
+        }
+
+        if location.contains(ItemSearchLocation::REAGENT_BANK) {
+            for bag_slot in REAGENT_BAG_SLOT_START..REAGENT_BAG_SLOT_END {
+                if self.visit_bag_items(bag_slot, &mut callback) {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    pub fn set_buyback_price(&mut self, slot: usize, price: u32) {
+        if slot >= BUYBACK_SLOT_COUNT || self.active_data.buyback_price[slot] == price {
+            return;
+        }
+
+        self.active_data.buyback_price[slot] = price;
+        self.mark_active_player_data_array(
+            ACTIVE_PLAYER_DATA_BUYBACK_PARENT_BIT,
+            ACTIVE_PLAYER_DATA_BUYBACK_PRICE_FIRST_BIT,
+            slot,
+        );
+    }
+
+    pub fn set_buyback_timestamp(&mut self, slot: usize, timestamp: i64) {
+        if slot >= BUYBACK_SLOT_COUNT || self.active_data.buyback_timestamp[slot] == timestamp {
+            return;
+        }
+
+        self.active_data.buyback_timestamp[slot] = timestamp;
+        self.mark_active_player_data_array(
+            ACTIVE_PLAYER_DATA_BUYBACK_PARENT_BIT,
+            ACTIVE_PLAYER_DATA_BUYBACK_TIMESTAMP_FIRST_BIT,
+            slot,
+        );
+    }
+
+    pub fn get_item_from_buyback_slot(&self, slot: u8) -> Option<ObjectGuid> {
+        if is_buyback_slot(slot) {
+            self.inventory.items[slot as usize]
+        } else {
+            None
+        }
+    }
+
+    pub fn remove_item_from_buyback_slot(&mut self, slot: u8) -> Option<ObjectGuid> {
+        if !is_buyback_slot(slot) {
+            return None;
+        }
+
+        let removed = self.inventory.items[slot as usize].take();
+        let buyback_index = (slot - BUYBACK_SLOT_START) as usize;
+        self.set_inv_slot(slot as usize, ObjectGuid::EMPTY);
+        self.set_buyback_price(buyback_index, 0);
+        self.set_buyback_timestamp(buyback_index, 0);
+        if self.inventory.items[self.inventory.current_buyback_slot as usize].is_some() {
+            self.inventory.current_buyback_slot = slot;
+        }
+        removed
+    }
+
+    pub fn add_item_to_buyback_slot(&mut self, guid: ObjectGuid, price: u32, timestamp: i64) -> u8 {
+        let mut slot = self.inventory.current_buyback_slot;
+        if self.inventory.items[slot as usize].is_some() {
+            let mut oldest_slot = BUYBACK_SLOT_START;
+            let mut oldest_time = self.active_data.buyback_timestamp[0];
+
+            for candidate in BUYBACK_SLOT_START + 1..BUYBACK_SLOT_END {
+                let candidate_index = (candidate - BUYBACK_SLOT_START) as usize;
+                if self.inventory.items[candidate as usize].is_none() {
+                    oldest_slot = candidate;
+                    break;
+                }
+                let candidate_time = self.active_data.buyback_timestamp[candidate_index];
+                if oldest_time > candidate_time {
+                    oldest_time = candidate_time;
+                    oldest_slot = candidate;
+                }
+            }
+            slot = oldest_slot;
+        }
+
+        self.remove_item_from_buyback_slot(slot);
+        self.inventory.items[slot as usize] = Some(guid);
+        let buyback_index = (slot - BUYBACK_SLOT_START) as usize;
+        self.set_inv_slot(slot as usize, guid);
+        self.set_buyback_price(buyback_index, price);
+        self.set_buyback_timestamp(buyback_index, timestamp);
+
+        if self.inventory.current_buyback_slot < BUYBACK_SLOT_END - 1 {
+            self.inventory.current_buyback_slot += 1;
+        }
+
+        slot
+    }
+
     pub fn set_power_index(&mut self, power: PowerType, index: Option<usize>) {
         self.unit.set_power_index(power, index);
     }
@@ -508,6 +903,42 @@ impl Player {
         self.active_player_data_changes
             .set(first_element_bit + index);
     }
+
+    fn visit_top_slot(
+        &self,
+        slot: u8,
+        callback: &mut impl FnMut(ObjectGuid) -> ItemSearchCallbackResult,
+    ) -> bool {
+        self.inventory.items[slot as usize]
+            .map(|guid| matches!(callback(guid), ItemSearchCallbackResult::Stop))
+            .unwrap_or(false)
+    }
+
+    fn visit_bag_items(
+        &self,
+        bag_slot: u8,
+        callback: &mut impl FnMut(ObjectGuid) -> ItemSearchCallbackResult,
+    ) -> bool {
+        let Some(bag) = self.inventory.bags[bag_slot as usize] else {
+            return false;
+        };
+
+        bag.slots
+            .iter()
+            .take(bag.bag_size as usize)
+            .filter_map(|guid| *guid)
+            .any(|guid| matches!(callback(guid), ItemSearchCallbackResult::Stop))
+    }
+}
+
+fn is_bag_storage_slot(slot: u8) -> bool {
+    (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot)
+        || (BANK_SLOT_BAG_START..BANK_SLOT_BAG_END).contains(&slot)
+        || (REAGENT_BAG_SLOT_START..REAGENT_BAG_SLOT_END).contains(&slot)
+}
+
+fn is_buyback_slot(slot: u8) -> bool {
+    (BUYBACK_SLOT_START..BUYBACK_SLOT_END).contains(&slot)
 }
 
 #[cfg(test)]
@@ -655,6 +1086,11 @@ mod tests {
         assert_eq!(player.active_data().character_points, 2);
         assert_eq!(player.active_data().num_backpack_slots, 16);
         assert_eq!(player.active_data().inv_slots[3], ObjectGuid::new(4, 5));
+        assert_eq!(player.active_data().buyback_price, [0; BUYBACK_SLOT_COUNT]);
+        assert_eq!(
+            player.active_data().buyback_timestamp,
+            [0; BUYBACK_SLOT_COUNT]
+        );
         assert!(
             player
                 .active_player_data_changes_mask()
@@ -711,5 +1147,152 @@ mod tests {
             (1 << TYPEID_PLAYER) | (1 << TYPEID_ACTIVE_PLAYER)
         );
         assert!(self_view.active_player_data.is_some());
+    }
+
+    #[test]
+    fn player_inventory_storage_matches_cpp_get_item_by_pos_rules() {
+        let mut player = Player::new(None, false);
+        player.set_inventory_slot_count(INVENTORY_DEFAULT_SIZE);
+        player.clear_active_player_data_changes();
+
+        let equipped = ObjectGuid::create_item(1, 100);
+        let bag_guid = ObjectGuid::create_item(1, 200);
+        let bag_item = ObjectGuid::create_item(1, 201);
+        let buyback = ObjectGuid::create_item(1, 300);
+
+        player.store_top_level_item(0, equipped).unwrap();
+        player
+            .store_top_level_item(INVENTORY_SLOT_BAG_START, bag_guid)
+            .unwrap();
+        player
+            .register_bag_storage(INVENTORY_SLOT_BAG_START, bag_guid, 4)
+            .unwrap();
+        player
+            .store_bag_item(INVENTORY_SLOT_BAG_START, 2, bag_item)
+            .unwrap();
+        player
+            .store_top_level_item(BUYBACK_SLOT_START, buyback)
+            .unwrap();
+
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, 0),
+            Some(equipped)
+        );
+        assert_eq!(
+            player.get_item_by_packed_pos((u16::from(INVENTORY_SLOT_BAG_0) << 8) | 0),
+            Some(equipped)
+        );
+        assert_eq!(
+            player.get_bag_by_pos(INVENTORY_SLOT_BAG_START),
+            Some(bag_guid)
+        );
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_START, 2),
+            Some(bag_item)
+        );
+        assert_eq!(
+            player.get_item_by_pos(INVENTORY_SLOT_BAG_0, BUYBACK_SLOT_START),
+            None
+        );
+        assert_eq!(
+            player.get_item_from_buyback_slot(BUYBACK_SLOT_START),
+            Some(buyback)
+        );
+        assert!(
+            player
+                .active_player_data_changes_mask()
+                .is_set(ACTIVE_PLAYER_DATA_INV_SLOTS_FIRST_BIT)
+        );
+    }
+
+    #[test]
+    fn player_get_item_by_guid_scans_everywhere_except_buyback_like_cpp_for_each_item() {
+        let mut player = Player::new(None, false);
+        player.set_inventory_slot_count(INVENTORY_DEFAULT_SIZE);
+
+        let inventory_item = ObjectGuid::create_item(1, 10);
+        let bank_item = ObjectGuid::create_item(1, 11);
+        let reagent_bag = ObjectGuid::create_item(1, 12);
+        let reagent_item = ObjectGuid::create_item(1, 13);
+        let buyback = ObjectGuid::create_item(1, 14);
+
+        player
+            .store_top_level_item(INVENTORY_SLOT_ITEM_START, inventory_item)
+            .unwrap();
+        player
+            .store_top_level_item(BANK_SLOT_ITEM_START, bank_item)
+            .unwrap();
+        player
+            .store_top_level_item(REAGENT_BAG_SLOT_START, reagent_bag)
+            .unwrap();
+        player
+            .register_bag_storage(REAGENT_BAG_SLOT_START, reagent_bag, 3)
+            .unwrap();
+        player
+            .store_bag_item(REAGENT_BAG_SLOT_START, 1, reagent_item)
+            .unwrap();
+        player
+            .store_top_level_item(BUYBACK_SLOT_START, buyback)
+            .unwrap();
+
+        assert_eq!(
+            player.get_item_by_guid(inventory_item),
+            Some(inventory_item)
+        );
+        assert_eq!(player.get_item_by_guid(bank_item), Some(bank_item));
+        assert_eq!(player.get_item_by_guid(reagent_item), Some(reagent_item));
+        assert_eq!(player.get_item_by_guid(buyback), None);
+
+        let mut visited = Vec::new();
+        let completed = player.for_each_item_guid(ItemSearchLocation::INVENTORY, |guid| {
+            visited.push(guid);
+            ItemSearchCallbackResult::Continue
+        });
+        assert!(completed);
+        assert!(visited.contains(&inventory_item));
+        assert!(!visited.contains(&bank_item));
+    }
+
+    #[test]
+    fn player_buyback_slots_follow_cpp_current_slot_and_masks() {
+        let mut player = Player::new(None, false);
+        player.clear_active_player_data_changes();
+
+        let first = ObjectGuid::create_item(1, 1000);
+        let second = ObjectGuid::create_item(1, 1001);
+
+        let first_slot = player.add_item_to_buyback_slot(first, 123, 456);
+        assert_eq!(first_slot, BUYBACK_SLOT_START);
+        assert_eq!(
+            player.inventory().current_buyback_slot,
+            BUYBACK_SLOT_START + 1
+        );
+        assert_eq!(player.get_item_from_buyback_slot(first_slot), Some(first));
+        assert_eq!(player.active_data().buyback_price[0], 123);
+        assert_eq!(player.active_data().buyback_timestamp[0], 456);
+        assert!(
+            player
+                .active_player_data_changes_mask()
+                .is_set(ACTIVE_PLAYER_DATA_BUYBACK_PRICE_FIRST_BIT)
+        );
+        assert!(
+            player
+                .active_player_data_changes_mask()
+                .is_set(ACTIVE_PLAYER_DATA_BUYBACK_TIMESTAMP_FIRST_BIT)
+        );
+
+        let second_slot = player.add_item_to_buyback_slot(second, 200, 500);
+        assert_eq!(second_slot, BUYBACK_SLOT_START + 1);
+        assert_eq!(
+            player.remove_item_from_buyback_slot(first_slot),
+            Some(first)
+        );
+        assert_eq!(player.get_item_from_buyback_slot(first_slot), None);
+        assert_eq!(
+            player.active_data().inv_slots[first_slot as usize],
+            ObjectGuid::EMPTY
+        );
+        assert_eq!(player.active_data().buyback_price[0], 0);
+        assert_eq!(player.active_data().buyback_timestamp[0], 0);
     }
 }
