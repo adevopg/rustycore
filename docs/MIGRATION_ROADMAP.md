@@ -507,7 +507,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 ### Inmediato (R7 — L1 infra gate)
 
 - [ ] **#NEXT.L1.INFRA.001** Ejecutar `docs/migration/inventory/r7-l1-infra-miniphase.md`: database/prepared + DB2/hotfix gate contra C++.
-  Estado: `#NEXT.L1.INFRA.001.a` cerrado; siguen `#NEXT.L1.INFRA.001.b` prepared-statement closure y `#NEXT.L1.INFRA.001.c` DB2 store closure.
+  Estado: `#NEXT.L1.INFRA.001.a` cerrado; `#NEXT.L1.INFRA.001.b/c` refinados; siguen `#NEXT.L1.DB.PREP.CHARACTER`, `#NEXT.L1.DB.PREP.HOTFIX` y `#NEXT.L1.DB2.STORES`.
 
 ### Inmediato (Fase 0 — Maps rewrite)
 
