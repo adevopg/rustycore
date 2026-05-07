@@ -879,6 +879,14 @@ bitflags! {
 }
 
 bitflags! {
+    /// Secondary item field flags (dynamic item state).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ItemFieldFlags2: u32 {
+        const EQUIPPED = 0x01;
+    }
+}
+
+bitflags! {
     /// Item flags (from item template).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ItemFlags: u64 {
