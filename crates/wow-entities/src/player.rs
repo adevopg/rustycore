@@ -509,6 +509,29 @@ pub struct DestroyItemCountPlan {
     pub actions: Vec<DestroyItemCountAction>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestroyFilteredItemRef {
+    pub bag: u8,
+    pub slot: u8,
+    pub should_destroy: bool,
+}
+
+impl DestroyFilteredItemRef {
+    pub const fn new(bag: u8, slot: u8, should_destroy: bool) -> Self {
+        Self {
+            bag,
+            slot,
+            should_destroy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestroyFilteredItemAction {
+    pub bag: u8,
+    pub slot: u8,
+}
+
 fn item_ref_by_pos<'a>(items: &'a [ItemSlotRef<'a>], bag: u8, slot: u8) -> Option<&'a Item> {
     items
         .iter()
@@ -3411,6 +3434,66 @@ impl Player {
         plan
     }
 
+    pub fn destroy_zone_limited_item_plan(
+        &self,
+        inventory_slot_count: u8,
+        items: &[DestroyFilteredItemRef],
+    ) -> Vec<DestroyFilteredItemAction> {
+        let mut actions = Vec::new();
+        destroy_filtered_scan_top_level_range(
+            &mut actions,
+            items,
+            INVENTORY_SLOT_ITEM_START,
+            INVENTORY_SLOT_ITEM_START.saturating_add(inventory_slot_count),
+        );
+        destroy_filtered_scan_top_level_range(
+            &mut actions,
+            items,
+            KEYRING_SLOT_START,
+            KEYRING_SLOT_END,
+        );
+        destroy_filtered_scan_bag_ranges(
+            &mut actions,
+            items,
+            INVENTORY_SLOT_BAG_START,
+            INVENTORY_SLOT_BAG_END,
+        );
+        destroy_filtered_scan_top_level_range(
+            &mut actions,
+            items,
+            EQUIPMENT_SLOT_HEAD,
+            INVENTORY_SLOT_BAG_END,
+        );
+        actions
+    }
+
+    pub fn destroy_conjured_items_plan(
+        &self,
+        inventory_slot_count: u8,
+        items: &[DestroyFilteredItemRef],
+    ) -> Vec<DestroyFilteredItemAction> {
+        let mut actions = Vec::new();
+        destroy_filtered_scan_top_level_range(
+            &mut actions,
+            items,
+            INVENTORY_SLOT_ITEM_START,
+            INVENTORY_SLOT_ITEM_START.saturating_add(inventory_slot_count),
+        );
+        destroy_filtered_scan_bag_ranges(
+            &mut actions,
+            items,
+            INVENTORY_SLOT_BAG_START,
+            INVENTORY_SLOT_BAG_END,
+        );
+        destroy_filtered_scan_top_level_range(
+            &mut actions,
+            items,
+            EQUIPMENT_SLOT_HEAD,
+            INVENTORY_SLOT_BAG_END,
+        );
+        actions
+    }
+
     pub fn store_bag_item(
         &mut self,
         bag: u8,
@@ -4237,6 +4320,57 @@ fn destroy_item_count_scan_bag_ranges(
                 if plan.removed_count >= requested_count {
                     return;
                 }
+            }
+        }
+    }
+}
+
+fn destroy_filtered_item_by_pos(
+    items: &[DestroyFilteredItemRef],
+    bag: u8,
+    slot: u8,
+) -> Option<DestroyFilteredItemRef> {
+    items
+        .iter()
+        .find(|item_ref| item_ref.bag == bag && item_ref.slot == slot)
+        .copied()
+}
+
+fn destroy_filtered_consider_item(
+    actions: &mut Vec<DestroyFilteredItemAction>,
+    item_ref: DestroyFilteredItemRef,
+) {
+    if item_ref.should_destroy {
+        actions.push(DestroyFilteredItemAction {
+            bag: item_ref.bag,
+            slot: item_ref.slot,
+        });
+    }
+}
+
+fn destroy_filtered_scan_top_level_range(
+    actions: &mut Vec<DestroyFilteredItemAction>,
+    items: &[DestroyFilteredItemRef],
+    start: u8,
+    end: u8,
+) {
+    for slot in start..end {
+        if let Some(item_ref) = destroy_filtered_item_by_pos(items, INVENTORY_SLOT_BAG_0, slot) {
+            destroy_filtered_consider_item(actions, item_ref);
+        }
+    }
+}
+
+fn destroy_filtered_scan_bag_ranges(
+    actions: &mut Vec<DestroyFilteredItemAction>,
+    items: &[DestroyFilteredItemRef],
+    start_bag: u8,
+    end_bag: u8,
+) {
+    for bag in start_bag..end_bag {
+        for slot in 0..MAX_BAG_SIZE as u8 {
+            if let Some(item_ref) = destroy_filtered_item_by_pos(items, bag, slot) {
+                destroy_filtered_consider_item(actions, item_ref);
             }
         }
     }
@@ -8058,6 +8192,69 @@ mod tests {
                 remaining_count: 0,
                 destroy_stack: true,
             }]
+        );
+    }
+
+    #[test]
+    fn destroy_zone_limited_item_plan_matches_cpp_scan_order() {
+        let player = Player::new(None, false);
+        let items = [
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, KEYRING_SLOT_START, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_START, 2, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START + 1, false),
+        ];
+
+        assert_eq!(
+            player.destroy_zone_limited_item_plan(16, &items),
+            vec![
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: INVENTORY_SLOT_ITEM_START,
+                },
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: KEYRING_SLOT_START,
+                },
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_START,
+                    slot: 2,
+                },
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: EQUIPMENT_SLOT_CHEST,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn destroy_conjured_items_plan_matches_cpp_scan_order_without_keyring() {
+        let player = Player::new(None, false);
+        let items = [
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, KEYRING_SLOT_START, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_START, 1, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_CHEST, true),
+            DestroyFilteredItemRef::new(INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, true),
+        ];
+
+        assert_eq!(
+            player.destroy_conjured_items_plan(16, &items),
+            vec![
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: INVENTORY_SLOT_ITEM_START,
+                },
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_START,
+                    slot: 1,
+                },
+                DestroyFilteredItemAction {
+                    bag: INVENTORY_SLOT_BAG_0,
+                    slot: EQUIPMENT_SLOT_CHEST,
+                },
+            ]
         );
     }
 
