@@ -40,9 +40,15 @@
   Rust targets: `crates/wow-map/src/manager.rs`, `crates/wow-map/src/lib.rs`.
   Acceptance: `activate`, `deactivate`, `activated`, `schedule_update` and `wait` mirror the C++ control-flow contract; activated `MapManager::update` schedules maps through `MapUpdater` and waits before delayed cleanup; current Rust execution remains inline/deterministic until a safe worker-pool ownership model exists.
 
+- [x] **#NEXT.L3.MAPS.012** Start canonical global map update loop.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp::Update`, `/home/server/woltk-trinity-legacy/src/server/worldserver/Main.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/MapManager.cpp::Initialize`.
+  Rust targets: `crates/world-server/src/main.rs`, `crates/world-server/Cargo.toml`.
+  Acceptance: world-server owns a process-wide `wow_map::MapManager`, initializes it from `GridCleanUpDelay`, `MapUpdateInterval` and `MapUpdate.Threads`, activates the updater when configured, and runs a global task that feeds elapsed `diff_ms` into `MapManager::update`.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.L3.MAPS.006** Bind grid unload actions to real entity lifecycle once canonical entities exist.
 - [ ] **#NEXT.L3.MAPS.008** Bind `MapManager::CreateMap(uint32, Player*)` to real Player/Group/InstanceLock/Battleground/DB2 models.
 - [ ] **#NEXT.L3.MAPS.009** Replace legacy `wow-world/src/map_manager.rs` only after the new `wow-map` skeleton owns grid lifecycle.
 - [ ] **#NEXT.L3.MAPS.011** Replace `MapUpdater` inline fallback with a real worker pool once map ownership can safely match C++ parallel requests.
+- [ ] **#NEXT.L3.MAPS.013** Remove session-local world ticks as source of truth once `Map`/entity ownership replaces `WorldSession::tick_creatures_sync` and `tick_combat_sync`.

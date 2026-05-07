@@ -535,7 +535,8 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [ ] **#014a** `wow-map`/`wow-world`: bind `MapManager::CreateMap(uint32, Player*)` decision tree against real `Player`, `Group`, `InstanceLockMgr`, `Battleground`, `MapEntry`/DB2 difficulty data and recent instance tracking.
 - [x] **#015** `wow-map`: `MapUpdater` API/fallback from `MapUpdater.cpp`: `activate`, `deactivate`, `activated`, `schedule_update`, `wait`; wired into `MapManager::update`. Cerrado como inline deterministic fallback in `crates/wow-map/src/manager.rs`.
 - [ ] **#015a** `wow-map`: real `MapUpdater` worker pool equivalent to C++ `ProducerConsumerQueue<MapUpdateRequest*>` + worker threads, if/when maps become independently mutable/sendable enough to update safely in parallel.
-- [ ] **#016** `world-server/main.rs`: arrancar `MapManager` global + update loop; no session-local world tick as source of truth.
+- [x] **#016** `world-server/main.rs`: arrancar `MapManager` global + update loop. Cerrado con `wow_map::MapManager` canónico inicializado desde `GridCleanUpDelay`, `MapUpdateInterval` y `MapUpdate.Threads`, y task global que llama `MapManager::update(diff)` como `World::Update -> sMapMgr->Update(diff)` en C++.
+- [ ] **#016a** `wow-world`/`world-server`: eliminar los ticks de mundo session-local como fuente de verdad (`WorldSession::tick_creatures_sync`, `tick_combat_sync`, visibilidad/aura ligada a entidades) cuando existan entidades canónicas y `ObjectAccessor`; no cerrar como port completo hasta que esos ticks pasen por Map/Entity.
 - [ ] **#017** Limpiar `crates/wow-world/src/map_manager.rs`: reemplazar implementación legacy por el nuevo `wow-map`; retener tests útiles solo si siguen contrastados contra C++.
 - [ ] **#018** Migrar `handlers/loot.rs` a lookups de criatura/GO vía Map/ObjectAccessor equivalente, no `self.creatures`.
 - [ ] **#019** Migrar `handlers/combat.rs` y `session.rs::tick_combat_sync` al Map/Entity model.

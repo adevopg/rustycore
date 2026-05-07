@@ -12,7 +12,8 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tracing::info;
@@ -25,7 +26,9 @@ use wow_database::{
 use wow_network::session_mgr::SessionManager;
 use wow_network::world_socket::{AccountInfo, AccountLookup};
 use wow_network::{GroupRegistry, PendingInvites, PlayerRegistry, SessionResources};
-use wow_world::{MapManager, SharedMapManager, WorldSession};
+use wow_world::{MapManager as LegacyMapManager, SharedMapManager, WorldSession};
+
+type SharedCanonicalMapManager = Arc<Mutex<wow_map::MapManager>>;
 
 const WORLD_CONFIG_CANDIDATES: &[&str] = &[
     "worldserver.conf",
@@ -506,7 +509,9 @@ async fn main() -> Result<()> {
 
     // Shared world state (creatures/grids visible to every session on the same map).
     // Each session gets a clone of this Arc on creation.
-    let shared_map: SharedMapManager = Arc::new(std::sync::RwLock::new(MapManager::new()));
+    let shared_map: SharedMapManager = Arc::new(std::sync::RwLock::new(LegacyMapManager::new()));
+
+    let canonical_map_manager = Arc::new(Mutex::new(create_canonical_map_manager(&world_configs)));
 
     // Build session resources
     let session_resources = Arc::new(SessionResources {
@@ -595,6 +600,11 @@ async fn main() -> Result<()> {
         }
     });
 
+    let map_update_interval_ms = world_config_u32(&world_configs, "CONFIG_INTERVAL_MAPUPDATE", 10)
+        .max(wow_map::MIN_MAP_UPDATE_DELAY_MS);
+    let map_update_handle =
+        spawn_canonical_map_update_loop(Arc::clone(&canonical_map_manager), map_update_interval_ms);
+
     // Wait for shutdown signal
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -608,6 +618,11 @@ async fn main() -> Result<()> {
         result = instance_handle => {
             if let Err(e) = result {
                 tracing::error!("Instance listener task failed: {e}");
+            }
+        }
+        result = map_update_handle => {
+            if let Err(e) = result {
+                tracing::error!("Map update task failed: {e}");
             }
         }
     }
@@ -646,6 +661,69 @@ fn world_config_u8(configs: &WorldConfigSet, enum_name: &str, default: u8) -> u8
         .get_int(enum_name)
         .map(|value| value as u8)
         .unwrap_or(default)
+}
+
+fn world_config_u32(configs: &WorldConfigSet, enum_name: &str, default: u32) -> u32 {
+    configs
+        .get_int(enum_name)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+fn create_canonical_map_manager(configs: &WorldConfigSet) -> wow_map::MapManager {
+    let grid_cleanup_delay_ms =
+        world_config_u32(configs, "CONFIG_INTERVAL_GRIDCLEAN", 5 * 60 * 1000)
+            .max(wow_map::MIN_GRID_DELAY_MS);
+    let map_update_interval_ms = world_config_u32(configs, "CONFIG_INTERVAL_MAPUPDATE", 10)
+        .max(wow_map::MIN_MAP_UPDATE_DELAY_MS);
+    let map_update_threads = world_config_u32(configs, "CONFIG_NUMTHREADS", 1);
+
+    let mut manager = wow_map::MapManager::new(grid_cleanup_delay_ms, map_update_interval_ms);
+    if map_update_threads > 0 {
+        manager
+            .map_updater_mut()
+            .activate(map_update_threads as usize);
+    }
+
+    info!(
+        "Canonical MapManager initialized: grid_cleanup_delay_ms={}, map_update_interval_ms={}, map_update_threads={}",
+        grid_cleanup_delay_ms, map_update_interval_ms, map_update_threads,
+    );
+
+    manager
+}
+
+fn spawn_canonical_map_update_loop(
+    map_manager: SharedCanonicalMapManager,
+    tick_interval_ms: u32,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(Duration::from_millis(u64::from(tick_interval_ms)));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        let mut last_tick = Instant::now();
+        loop {
+            interval.tick().await;
+
+            let now = Instant::now();
+            let diff_ms = now
+                .duration_since(last_tick)
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32;
+            last_tick = now;
+
+            if diff_ms == 0 {
+                continue;
+            }
+
+            let Ok(mut manager) = map_manager.lock() else {
+                tracing::error!("Canonical MapManager mutex poisoned; stopping map update loop");
+                break;
+            };
+            manager.update(diff_ms);
+        }
+    })
 }
 
 /// Load the realm's gamebuild from `realmlist` and the corresponding
