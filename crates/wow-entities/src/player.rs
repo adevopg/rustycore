@@ -178,6 +178,30 @@ impl<'a> ItemSlotRef<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct ItemStorageRef<'a> {
+    pub bag: u8,
+    pub slot: u8,
+    pub item: &'a Item,
+    pub template: Option<&'a ItemStorageTemplate>,
+}
+
+impl<'a> ItemStorageRef<'a> {
+    pub const fn new(
+        bag: u8,
+        slot: u8,
+        item: &'a Item,
+        template: Option<&'a ItemStorageTemplate>,
+    ) -> Self {
+        Self {
+            bag,
+            slot,
+            item,
+            template,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct BagTemplateRef<'a> {
     pub bag: u8,
     pub template: &'a ItemStorageTemplate,
@@ -200,10 +224,9 @@ pub struct CanStoreItemArgs<'a> {
     pub source_is_not_empty_bag: bool,
     pub source_is_binded_not_with_player: bool,
     pub swap: bool,
-    pub current_item_count: u32,
     pub limit_category: Option<&'a ItemLimitCategoryTemplate>,
-    pub current_limit_category_count: u32,
     pub slot_items: &'a [ItemSlotRef<'a>],
+    pub stored_items: &'a [ItemStorageRef<'a>],
     pub bag_templates: &'a [BagTemplateRef<'a>],
 }
 
@@ -1144,6 +1167,48 @@ impl Player {
         can_take_more_similar_ok()
     }
 
+    pub fn item_count_by_entry(
+        &self,
+        entry: u32,
+        in_bank_also: bool,
+        skip_item: Option<&Item>,
+        stored_items: &[ItemStorageRef<'_>],
+    ) -> u32 {
+        stored_items
+            .iter()
+            .filter(|stored| {
+                is_equipment_pos(stored.bag, stored.slot)
+                    || is_inventory_pos(stored.bag, stored.slot)
+                    || (in_bank_also && is_bank_pos(stored.bag, stored.slot))
+            })
+            .filter(|stored| {
+                skip_item.is_none_or(|skip| stored.item.object().guid() != skip.object().guid())
+            })
+            .filter(|stored| stored.item.object().entry() == entry)
+            .map(|stored| stored.item.count())
+            .sum()
+    }
+
+    pub fn item_count_with_limit_category(
+        &self,
+        limit_category: u32,
+        skip_item: Option<&Item>,
+        stored_items: &[ItemStorageRef<'_>],
+    ) -> u32 {
+        stored_items
+            .iter()
+            .filter(|stored| {
+                skip_item.is_none_or(|skip| stored.item.object().guid() != skip.object().guid())
+            })
+            .filter(|stored| {
+                stored
+                    .template
+                    .is_some_and(|template| template.item_limit_category == limit_category)
+            })
+            .map(|stored| stored.item.count())
+            .sum()
+    }
+
     pub fn can_store_item(
         &self,
         dest: &mut Vec<ItemPosCount>,
@@ -1176,9 +1241,18 @@ impl Player {
             proto: args.proto,
             count,
             source_item: args.source_item,
-            current_item_count: args.current_item_count,
+            current_item_count: self.item_count_by_entry(
+                proto.entry,
+                true,
+                args.source_item,
+                args.stored_items,
+            ),
             limit_category: args.limit_category,
-            current_limit_category_count: args.current_limit_category_count,
+            current_limit_category_count: self.item_count_with_limit_category(
+                proto.item_limit_category,
+                args.source_item,
+                args.stored_items,
+            ),
         });
         let no_similar_count = if similar_result.result == InventoryResult::Ok {
             0
@@ -2463,10 +2537,9 @@ mod tests {
             source_is_not_empty_bag: false,
             source_is_binded_not_with_player: false,
             swap: false,
-            current_item_count: 0,
             limit_category: None,
-            current_limit_category_count: 0,
             slot_items: &[],
+            stored_items: &[],
             bag_templates: &[],
         }
     }
@@ -3592,6 +3665,108 @@ mod tests {
     }
 
     #[test]
+    fn item_count_by_entry_matches_cpp_locations_and_skip_item() {
+        let player = Player::new(None, false);
+        let mut inventory_item = Item::default();
+        inventory_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 610));
+        inventory_item.object_mut().set_entry(6948);
+        inventory_item.set_count(2);
+        let mut bank_item = Item::default();
+        bank_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 611));
+        bank_item.object_mut().set_entry(6948);
+        bank_item.set_count(3);
+        let mut other_item = Item::default();
+        other_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 612));
+        other_item.object_mut().set_entry(6949);
+        other_item.set_count(7);
+        let stored = [
+            ItemStorageRef::new(
+                INVENTORY_SLOT_BAG_0,
+                INVENTORY_SLOT_ITEM_START,
+                &inventory_item,
+                None,
+            ),
+            ItemStorageRef::new(INVENTORY_SLOT_BAG_0, BANK_SLOT_ITEM_START, &bank_item, None),
+            ItemStorageRef::new(
+                INVENTORY_SLOT_BAG_0,
+                INVENTORY_SLOT_ITEM_START + 1,
+                &other_item,
+                None,
+            ),
+        ];
+
+        assert_eq!(player.item_count_by_entry(6948, false, None, &stored), 2);
+        assert_eq!(player.item_count_by_entry(6948, true, None, &stored), 5);
+        assert_eq!(
+            player.item_count_by_entry(6948, true, Some(&inventory_item), &stored),
+            3
+        );
+    }
+
+    #[test]
+    fn item_count_with_limit_category_matches_cpp_everywhere_and_skip_item() {
+        let player = Player::new(None, false);
+        let limited_template = ItemStorageTemplate {
+            item_limit_category: 77,
+            ..ItemStorageTemplate::regular_item(6948, 20)
+        };
+        let other_template = ItemStorageTemplate {
+            item_limit_category: 78,
+            ..ItemStorageTemplate::regular_item(6949, 20)
+        };
+        let mut limited_item = Item::default();
+        limited_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 620));
+        limited_item.object_mut().set_entry(6948);
+        limited_item.set_count(2);
+        let mut bank_limited_item = Item::default();
+        bank_limited_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 621));
+        bank_limited_item.object_mut().set_entry(6948);
+        bank_limited_item.set_count(3);
+        let mut other_item = Item::default();
+        other_item
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 622));
+        other_item.object_mut().set_entry(6949);
+        other_item.set_count(7);
+        let stored = [
+            ItemStorageRef::new(
+                INVENTORY_SLOT_BAG_0,
+                INVENTORY_SLOT_ITEM_START,
+                &limited_item,
+                Some(&limited_template),
+            ),
+            ItemStorageRef::new(
+                INVENTORY_SLOT_BAG_0,
+                BANK_SLOT_ITEM_START,
+                &bank_limited_item,
+                Some(&limited_template),
+            ),
+            ItemStorageRef::new(
+                INVENTORY_SLOT_BAG_0,
+                INVENTORY_SLOT_ITEM_START + 1,
+                &other_item,
+                Some(&other_template),
+            ),
+        ];
+
+        assert_eq!(player.item_count_with_limit_category(77, None, &stored), 5);
+        assert_eq!(
+            player.item_count_with_limit_category(77, Some(&limited_item), &stored),
+            3
+        );
+    }
+
+    #[test]
     fn can_store_item_preflight_matches_cpp_template_source_and_similar_guards() {
         let player = Player::new(None, false);
         let proto = ItemStorageTemplate::regular_item(6948, 20);
@@ -3662,7 +3837,19 @@ mod tests {
             Some(&limited_proto),
             3,
         );
-        similar_args.current_item_count = 3;
+        let mut existing_limited = Item::default();
+        existing_limited
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 501));
+        existing_limited.object_mut().set_entry(6948);
+        existing_limited.set_count(3);
+        let stored_limited = [ItemStorageRef::new(
+            INVENTORY_SLOT_BAG_0,
+            INVENTORY_SLOT_ITEM_START + 1,
+            &existing_limited,
+            Some(&limited_proto),
+        )];
+        similar_args.stored_items = &stored_limited;
         assert_eq!(
             player.can_store_item(&mut Vec::new(), similar_args),
             CanStoreItemOutcome {
@@ -3681,7 +3868,19 @@ mod tests {
             ..ItemStorageTemplate::regular_item(6948, 20)
         };
         let mut args = can_store_args(NULL_BAG, NULL_SLOT, Some(&proto), 5);
-        args.current_item_count = 7;
+        let mut existing_limited = Item::default();
+        existing_limited
+            .object_mut()
+            .create(ObjectGuid::create_item(1, 502));
+        existing_limited.object_mut().set_entry(6948);
+        existing_limited.set_count(7);
+        let stored_limited = [ItemStorageRef::new(
+            INVENTORY_SLOT_BAG_0,
+            INVENTORY_SLOT_ITEM_START + 1,
+            &existing_limited,
+            Some(&proto),
+        )];
+        args.stored_items = &stored_limited;
         let mut dest = Vec::new();
 
         assert_eq!(
