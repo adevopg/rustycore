@@ -712,6 +712,12 @@ fn vendor_buy_extended_cost_block_result(
     };
     let stacks = quantity / buy_count.max(1);
 
+    if extended_cost_entry.has_item_turnins() {
+        return Some(VendorExtendedCostBlock::Equip(
+            InventoryResult::VendorMissingTurnins,
+        ));
+    }
+
     for (i, currency_id) in extended_cost_entry.currency_id.iter().copied().enumerate() {
         if currency_id == 0 {
             continue;

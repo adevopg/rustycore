@@ -20,12 +20,14 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
-    AreaTriggerStore, CurrencyTypesStore, HotfixBlobCache, ItemExtendedCostStore, ItemAppearanceStore,
-    ItemModifiedAppearanceStore, ItemRandomSuffixStore, ItemStatsStore, ItemStore,
-    PlayerStatsStore, SkillStore,
-    SpellItemEnchantmentStore, SpellStore,
+    AreaTriggerStore, CurrencyTypesStore, HotfixBlobCache, ItemAppearanceStore,
+    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemRandomSuffixStore, ItemStatsStore,
+    ItemStore, PlayerStatsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
 };
-use wow_database::{CharacterDatabase, LoginDatabase, WorldDatabase};
+use wow_database::{
+    CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
+    StatementDef, WorldDatabase,
+};
 use wow_entities::{
     ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef, ApplyEnchantmentTemplateRef,
     CanStoreItemArgs, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, Item, ItemCreateInfo,
@@ -673,6 +675,80 @@ impl WorldSession {
     /// C++ `Player::HasCurrency`.
     pub(crate) fn has_currency(&self, currency_id: u32, amount: u32) -> bool {
         self.player_currency_quantity(currency_id) >= amount
+    }
+
+    /// C++ `Player::RemoveCurrency` underflow guard for vendor costs.
+    #[allow(dead_code)]
+    pub(crate) fn remove_currency(&mut self, currency_id: u32, amount: u32) -> bool {
+        if amount == 0 {
+            return true;
+        }
+
+        let Some(currency) = self.player_currencies.get_mut(&currency_id) else {
+            return false;
+        };
+        if currency.quantity == 0 {
+            return false;
+        }
+
+        let removed = amount.min(currency.quantity);
+        currency.quantity -= removed;
+        if currency.state != PlayerCurrencyState::New {
+            currency.state = PlayerCurrencyState::Changed;
+        }
+        true
+    }
+
+    /// C++ `Player::_SaveCurrency` for changed/new currency rows.
+    #[allow(dead_code)]
+    pub(crate) fn append_player_currency_save_statements(
+        &mut self,
+        tx: &mut SqlTransaction,
+        character_guid: u64,
+    ) {
+        let Some(store) = self.currency_types_store.as_ref() else {
+            return;
+        };
+        for (&currency_id, currency) in &mut self.player_currencies {
+            if !store.has_record(currency_id) {
+                continue;
+            }
+            let Ok(currency_db_id) = u16::try_from(currency_id) else {
+                continue;
+            };
+
+            match currency.state {
+                PlayerCurrencyState::New => {
+                    let mut stmt =
+                        PreparedStatement::new(CharStatements::REP_PLAYER_CURRENCY.sql());
+                    stmt.set_u64(0, character_guid);
+                    stmt.set_u16(1, currency_db_id);
+                    stmt.set_u32(2, currency.quantity);
+                    stmt.set_u32(3, currency.weekly_quantity);
+                    stmt.set_u32(4, currency.tracked_quantity);
+                    stmt.set_u32(5, currency.increased_cap_quantity);
+                    stmt.set_u32(6, currency.earned_quantity);
+                    stmt.set_u8(7, currency.flags);
+                    tx.append(stmt);
+                    currency.state = PlayerCurrencyState::Unchanged;
+                }
+                PlayerCurrencyState::Changed => {
+                    let mut stmt =
+                        PreparedStatement::new(CharStatements::UPD_PLAYER_CURRENCY.sql());
+                    stmt.set_u32(0, currency.quantity);
+                    stmt.set_u32(1, currency.weekly_quantity);
+                    stmt.set_u32(2, currency.tracked_quantity);
+                    stmt.set_u32(3, currency.increased_cap_quantity);
+                    stmt.set_u32(4, currency.earned_quantity);
+                    stmt.set_u8(5, currency.flags);
+                    stmt.set_u64(6, character_guid);
+                    stmt.set_u16(7, currency_db_id);
+                    tx.append(stmt);
+                    currency.state = PlayerCurrencyState::Unchanged;
+                }
+                PlayerCurrencyState::Unchanged | PlayerCurrencyState::Removed => {}
+            }
+        }
     }
 
     /// Set the item appearance store for this session.
@@ -3880,6 +3956,93 @@ mod tests {
         assert_eq!(session.player_currency_quantity(395), 42);
         assert!(session.has_currency(395, 42));
         assert!(!session.has_currency(395, 43));
+    }
+
+    fn currency_entry(id: u32) -> wow_data::CurrencyTypesEntry {
+        wow_data::CurrencyTypesEntry {
+            id,
+            category_id: 0,
+            inventory_icon_file_id: 0,
+            spell_weight: 0,
+            spell_category: 0,
+            max_qty: 0,
+            max_earnable_per_week: 0,
+            quality: 0,
+            faction_id: 0,
+            award_condition_id: 0,
+            flags: wow_constants::CurrencyTypesFlags::empty(),
+            flags_b: wow_constants::CurrencyTypesFlagsB::empty(),
+        }
+    }
+
+    #[test]
+    fn player_currency_remove_and_save_state_match_cpp() {
+        let (mut session, _, _) = make_session();
+        session.set_currency_types_store(Arc::new(wow_data::CurrencyTypesStore::from_entries([
+            currency_entry(395),
+            currency_entry(396),
+            currency_entry(397),
+        ])));
+        session.player_currencies.insert(
+            395,
+            PlayerCurrency {
+                state: PlayerCurrencyState::Unchanged,
+                quantity: 42,
+                weekly_quantity: 5,
+                tracked_quantity: 6,
+                increased_cap_quantity: 7,
+                earned_quantity: 8,
+                flags: 9,
+            },
+        );
+        session.player_currencies.insert(
+            396,
+            PlayerCurrency {
+                state: PlayerCurrencyState::New,
+                quantity: 3,
+                weekly_quantity: 0,
+                tracked_quantity: 0,
+                increased_cap_quantity: 0,
+                earned_quantity: 0,
+                flags: 0,
+            },
+        );
+        session.player_currencies.insert(
+            397,
+            PlayerCurrency {
+                state: PlayerCurrencyState::Unchanged,
+                quantity: 10,
+                weekly_quantity: 0,
+                tracked_quantity: 0,
+                increased_cap_quantity: 0,
+                earned_quantity: 0,
+                flags: 0,
+            },
+        );
+
+        assert!(session.remove_currency(395, 100));
+        assert_eq!(session.player_currency_quantity(395), 0);
+        assert_eq!(
+            session.player_currencies.get(&395).map(|currency| currency.state),
+            Some(PlayerCurrencyState::Changed)
+        );
+        assert!(!session.remove_currency(999, 1));
+
+        let mut tx = SqlTransaction::new();
+        session.append_player_currency_save_statements(&mut tx, 1);
+        assert_eq!(tx.len(), 2);
+        assert_eq!(
+            session.player_currencies.get(&395).map(|currency| currency.state),
+            Some(PlayerCurrencyState::Unchanged)
+        );
+        assert_eq!(
+            session.player_currencies.get(&396).map(|currency| currency.state),
+            Some(PlayerCurrencyState::Unchanged)
+        );
+        assert_eq!(
+            session.player_currencies.get(&397).map(|currency| currency.state),
+            Some(PlayerCurrencyState::Unchanged)
+        );
     }
 
     #[test]

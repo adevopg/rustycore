@@ -76,6 +76,16 @@ pub enum CharStatements {
     /// WHERE CharacterGuid = ?
     SEL_PLAYER_CURRENCY,
 
+    /// UPDATE character_currency SET Quantity = ?, WeeklyQuantity = ?,
+    /// TrackedQuantity = ?, IncreasedCapQuantity = ?, EarnedQuantity = ?,
+    /// Flags = ? WHERE CharacterGuid = ? AND Currency = ?
+    UPD_PLAYER_CURRENCY,
+
+    /// REPLACE INTO character_currency (CharacterGuid, Currency, Quantity,
+    /// WeeklyQuantity, TrackedQuantity, IncreasedCapQuantity, EarnedQuantity, Flags)
+    /// VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    REP_PLAYER_CURRENCY,
+
     /// SELECT button, action, type FROM character_action
     /// WHERE guid = ? AND spec = ? AND traitConfigId = ? ORDER BY button
     SEL_CHARACTER_ACTIONS_SPEC,
@@ -190,6 +200,17 @@ impl StatementDef for CharStatements {
                  IncreasedCapQuantity, EarnedQuantity, Flags \
                  FROM character_currency WHERE CharacterGuid = ?"
             }
+            Self::UPD_PLAYER_CURRENCY => {
+                "UPDATE character_currency SET Quantity = ?, WeeklyQuantity = ?, \
+                 TrackedQuantity = ?, IncreasedCapQuantity = ?, EarnedQuantity = ?, Flags = ? \
+                 WHERE CharacterGuid = ? AND Currency = ?"
+            }
+            Self::REP_PLAYER_CURRENCY => {
+                "REPLACE INTO character_currency \
+                 (CharacterGuid, Currency, Quantity, WeeklyQuantity, TrackedQuantity, \
+                  IncreasedCapQuantity, EarnedQuantity, Flags) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            }
             Self::SEL_CHARACTER_ACTIONS_SPEC => {
                 "SELECT button, action, type FROM character_action \
                  WHERE guid = ? AND spec = ? AND traitConfigId = ? ORDER BY button"
@@ -264,6 +285,9 @@ mod tests {
         assert!(!CharStatements::UPD_CHAR_OFFLINE.sql().is_empty());
         assert!(!CharStatements::SEL_CHAR_DEL_CHECK.sql().is_empty());
         assert!(!CharStatements::SEL_MAX_GUID.sql().is_empty());
+        assert!(!CharStatements::SEL_PLAYER_CURRENCY.sql().is_empty());
+        assert!(!CharStatements::UPD_PLAYER_CURRENCY.sql().is_empty());
+        assert!(!CharStatements::REP_PLAYER_CURRENCY.sql().is_empty());
         assert!(!CharStatements::UPD_CHAR_PLAYED_TIME.sql().is_empty());
     }
 
@@ -296,5 +320,9 @@ mod tests {
         assert_eq!(CharStatements::SEL_CHARACTER.sql().matches('?').count(), 1);
         // SEL_CHAR_DEL_CHECK has 2 placeholders
         assert_eq!(CharStatements::SEL_CHAR_DEL_CHECK.sql().matches('?').count(), 2);
+        // Player currency save/load statements mirror C++ CharacterDatabase.cpp.
+        assert_eq!(CharStatements::SEL_PLAYER_CURRENCY.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::UPD_PLAYER_CURRENCY.sql().matches('?').count(), 8);
+        assert_eq!(CharStatements::REP_PLAYER_CURRENCY.sql().matches('?').count(), 8);
     }
 }

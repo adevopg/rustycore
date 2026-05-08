@@ -38,7 +38,7 @@ pub struct PreparedStatement {
 
 impl PreparedStatement {
     /// Create a new prepared statement from a static SQL string.
-    pub(crate) fn new(sql: &'static str) -> Self {
+    pub fn new(sql: &'static str) -> Self {
         Self {
             sql,
             params: Vec::new(),
