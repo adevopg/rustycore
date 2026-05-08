@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use tracing::{debug, info, trace, warn};
 
-use wow_constants::{BuyResult, ClientOpcodes, InventoryResult, ItemEnchantmentType, SellResult};
+use wow_constants::{
+    BuyResult, ClientOpcodes, InventoryResult, ItemEnchantmentType, ItemFlags, SellResult,
+};
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTriggerStore, HotfixBlobCache, ItemAppearanceStore, ItemModifiedAppearanceStore,
@@ -655,6 +657,19 @@ impl WorldSession {
     /// Get the item stats store reference.
     pub fn item_stats_store(&self) -> Option<&Arc<ItemStatsStore>> {
         self.item_stats_store.as_ref()
+    }
+
+    /// Resolve C++ `ItemTemplate::ExtendedData->Flags[0]`.
+    pub fn item_template_flags(&self, item_id: u32) -> Option<ItemFlags> {
+        self.item_stats_store
+            .as_ref()
+            .and_then(|store| store.item_flags(item_id))
+    }
+
+    /// C++ `Item::IsBoundAccountWide` template-flag predicate.
+    pub fn is_item_bound_account_wide(&self, item_id: u32) -> bool {
+        self.item_template_flags(item_id)
+            .is_some_and(|flags| flags.contains(ItemFlags::IS_BOUND_TO_ACCOUNT))
     }
 
     /// Set the item random suffix store for this session.
@@ -3377,12 +3392,12 @@ fn default_available_classes() -> Vec<wow_packet::packets::auth::RaceClassAvaila
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wow_constants::{EnchantmentSlot, SpellItemEnchantmentFlags};
+    use wow_constants::{EnchantmentSlot, ItemFlags, SpellItemEnchantmentFlags};
     use wow_core::Position;
     use wow_data::{
         ItemAppearanceEntry, ItemAppearanceStore, ItemModifiedAppearanceEntry,
         ItemModifiedAppearanceStore, ItemRandomSuffixEntry, ItemRandomSuffixStore,
-        SpellItemEnchantmentEntry, SpellItemEnchantmentStore,
+        ItemStatsStore, SpellItemEnchantmentEntry, SpellItemEnchantmentStore,
     };
     use wow_entities::{SendNewItemInstancePlan, SendNewItemModifier};
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
@@ -3648,6 +3663,27 @@ mod tests {
         assert_eq!(session.item_display_id(100, 2), Some(777));
         assert_eq!(session.item_display_id(100, 9), Some(555));
         assert_eq!(session.item_display_id(101, 0), None);
+    }
+
+    #[test]
+    fn item_template_flags_use_item_sparse_flags_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_parts(
+            [],
+            [
+                (100, [ItemFlags::IS_BOUND_TO_ACCOUNT.bits() as u32, 0, 0, 0]),
+                (101, [0, 0, 0, 0]),
+            ],
+        )));
+
+        assert!(
+            session
+                .item_template_flags(100)
+                .is_some_and(|flags| flags.contains(ItemFlags::IS_BOUND_TO_ACCOUNT))
+        );
+        assert!(session.is_item_bound_account_wide(100));
+        assert!(!session.is_item_bound_account_wide(101));
+        assert_eq!(session.item_template_flags(102), None);
     }
 
     #[test]

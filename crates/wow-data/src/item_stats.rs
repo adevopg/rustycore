@@ -240,6 +240,16 @@ fn field_layout() -> [(u8, bool); 73] {
 }
 
 impl ItemStatsStore {
+    pub fn from_parts(
+        stats: impl IntoIterator<Item = (u32, ItemStatEntry)>,
+        flags: impl IntoIterator<Item = (u32, [u32; 4])>,
+    ) -> Self {
+        Self {
+            stats: stats.into_iter().collect(),
+            flags: flags.into_iter().collect(),
+        }
+    }
+
     /// Load item stat modifiers from ItemSparse.db2.
     pub fn load(data_dir: &str, locale: &str) -> Result<Self> {
         let path = Path::new(data_dir)
@@ -424,9 +434,9 @@ mod tests {
 
     #[test]
     fn item_sparse_flags_are_exposed_like_cpp_extended_data() {
-        let store = ItemStatsStore {
-            stats: HashMap::new(),
-            flags: HashMap::from([(
+        let store = ItemStatsStore::from_parts(
+            [],
+            [(
                 1,
                 [
                     ItemFlags::IS_BOUND_TO_ACCOUNT.bits() as u32,
@@ -434,8 +444,8 @@ mod tests {
                     0x400,
                     0,
                 ],
-            )]),
-        };
+            )],
+        );
 
         assert_eq!(store.raw_flags(1), Some([0x0800_0000, 0x20000, 0x400, 0]));
         assert!(
