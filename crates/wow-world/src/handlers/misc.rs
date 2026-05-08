@@ -8,10 +8,14 @@
 //! TaxiNodeStatusQuery, ChatJoinChannel, MoveTimeSkipped.
 
 use tracing::{debug, info, warn};
-use wow_constants::ClientOpcodes;
+use wow_constants::{ClientOpcodes, ItemExtendedCostFlags};
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
+use wow_packet::ClientPacket;
+use wow_packet::packets::item::{
+    GetItemPurchaseData, ItemPurchaseContents, ItemPurchaseRefundCurrency,
+    ItemPurchaseRefundItem, SetItemPurchaseData,
+};
 use wow_packet::packets::misc::{RequestCemeteryListResponse, TaxiNodeStatusPkt};
-use wow_packet::ServerPacket;
 
 // ── inventory registrations ───────────────────────────────────────────────────
 
@@ -404,6 +408,50 @@ inventory::submit! {
 
 // ── Handler implementations ───────────────────────────────────────────────────
 
+fn item_purchase_contents_from_extended_cost(
+    extended_cost: &wow_data::item_extended_cost::ItemExtendedCostEntry,
+    money: u64,
+) -> ItemPurchaseContents {
+    let mut contents = ItemPurchaseContents {
+        money,
+        ..Default::default()
+    };
+
+    for i in 0..5 {
+        contents.items[i] = ItemPurchaseRefundItem {
+            item_id: extended_cost.item_id[i] as i32,
+            item_count: extended_cost.item_count[i] as i32,
+        };
+
+        let season_earned = match i {
+            0 => extended_cost
+                .flags
+                .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_1),
+            1 => extended_cost
+                .flags
+                .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_2),
+            2 => extended_cost
+                .flags
+                .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_3),
+            3 => extended_cost
+                .flags
+                .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_4),
+            4 => extended_cost
+                .flags
+                .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_5),
+            _ => false,
+        };
+        if !season_earned {
+            contents.currencies[i] = ItemPurchaseRefundCurrency {
+                currency_id: extended_cost.currency_id[i] as i32,
+                currency_count: extended_cost.currency_count[i] as i32,
+            };
+        }
+    }
+
+    contents
+}
+
 impl crate::session::WorldSession {
 
     /// CMSG_SET_SELECTION — player selected a new target.
@@ -593,7 +641,55 @@ impl crate::session::WorldSession {
     pub async fn handle_set_action_bar_toggles(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_save_cuf_profiles(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_guild_set_achievement_tracking(&mut self, _pkt: wow_packet::WorldPacket) {}
-    pub async fn handle_get_item_purchase_data(&mut self, _pkt: wow_packet::WorldPacket) {}
+    pub async fn handle_get_item_purchase_data(&mut self, mut pkt: wow_packet::WorldPacket) {
+        let request = match GetItemPurchaseData::read(&mut pkt) {
+            Ok(request) => request,
+            Err(e) => {
+                warn!("GetItemPurchaseData parse failed: {e}");
+                return;
+            }
+        };
+        let Some(player_guid) = self.player_guid else {
+            return;
+        };
+        let current_total_played_time = self.total_played_time.saturating_add(
+            self.login_time
+                .map(|login_time| login_time.elapsed().as_secs() as u32)
+                .unwrap_or(0),
+        );
+
+        let Some(packet) = (|| {
+            let item = self.inventory_item_objects.get(&request.item_guid)?;
+            if !item.is_refundable() || item.refund_recipient() != player_guid {
+                return None;
+            }
+
+            let played_time = item.played_time(i64::from(current_total_played_time));
+            if played_time > 2 * 60 * 60 {
+                return None;
+            }
+
+            let extended_cost = self
+                .item_extended_cost_store()
+                .and_then(|store| store.get(item.paid_extended_cost()))?;
+            let contents =
+                item_purchase_contents_from_extended_cost(extended_cost, item.paid_money());
+            Some(SetItemPurchaseData {
+                item_guid: request.item_guid,
+                contents,
+                flags: 0,
+                purchase_time: current_total_played_time.saturating_sub(played_time),
+            })
+        })() else {
+            debug!(
+                "GetItemPurchaseData ignored for non-refundable or unknown item {:?}",
+                request.item_guid
+            );
+            return;
+        };
+
+        self.send_packet(&packet);
+    }
     pub async fn handle_request_forced_reactions(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_request_battlefield_status(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_request_rated_pvp_info(&mut self, _pkt: wow_packet::WorldPacket) {}
@@ -657,5 +753,36 @@ impl crate::session::WorldSession {
     /// C# ref: MiscHandler.HandleCloseInteraction → resets interaction data.
     pub async fn handle_close_interaction(&mut self, _pkt: wow_packet::WorldPacket) {
         // TODO: reset PlayerTalkClass interaction data and stable master.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_purchase_contents_skip_season_earned_currency_like_cpp() {
+        let extended_cost = wow_data::item_extended_cost::ItemExtendedCostEntry {
+            id: 1,
+            required_arena_rating: 0,
+            arena_bracket: 0,
+            flags: ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_2,
+            min_faction_id: 0,
+            min_reputation: 0,
+            required_achievement: 0,
+            item_id: [100, 0, 0, 0, 0],
+            item_count: [2, 0, 0, 0, 0],
+            currency_id: [390, 391, 0, 0, 0],
+            currency_count: [5, 7, 0, 0, 0],
+        };
+
+        let contents = item_purchase_contents_from_extended_cost(&extended_cost, 123);
+        assert_eq!(contents.money, 123);
+        assert_eq!(contents.items[0].item_id, 100);
+        assert_eq!(contents.items[0].item_count, 2);
+        assert_eq!(contents.currencies[0].currency_id, 390);
+        assert_eq!(contents.currencies[0].currency_count, 5);
+        assert_eq!(contents.currencies[1].currency_id, 0);
+        assert_eq!(contents.currencies[1].currency_count, 0);
     }
 }

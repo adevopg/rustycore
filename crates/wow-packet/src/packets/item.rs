@@ -213,6 +213,139 @@ impl ServerPacket for ItemEnchantTimeUpdate {
     }
 }
 
+/// CMSG_GET_ITEM_PURCHASE_DATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetItemPurchaseData {
+    pub item_guid: ObjectGuid,
+}
+
+impl ClientPacket for GetItemPurchaseData {
+    const OPCODE: ClientOpcodes = ClientOpcodes::GetItemPurchaseData;
+
+    fn read(packet: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            item_guid: packet.read_packed_guid()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemPurchaseRefundItem {
+    pub item_id: i32,
+    pub item_count: i32,
+}
+
+impl ItemPurchaseRefundItem {
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_int32(self.item_id);
+        pkt.write_int32(self.item_count);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemPurchaseRefundCurrency {
+    pub currency_id: i32,
+    pub currency_count: i32,
+}
+
+impl ItemPurchaseRefundCurrency {
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_int32(self.currency_id);
+        pkt.write_int32(self.currency_count);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemPurchaseContents {
+    pub money: u64,
+    pub items: [ItemPurchaseRefundItem; 5],
+    pub currencies: [ItemPurchaseRefundCurrency; 5],
+}
+
+impl ItemPurchaseContents {
+    pub fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_uint64(self.money);
+        for item in &self.items {
+            item.write(pkt);
+        }
+        for currency in &self.currencies {
+            currency.write(pkt);
+        }
+    }
+}
+
+/// SMSG_SET_ITEM_PURCHASE_DATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetItemPurchaseData {
+    pub item_guid: ObjectGuid,
+    pub contents: ItemPurchaseContents,
+    pub flags: u32,
+    pub purchase_time: u32,
+}
+
+impl ServerPacket for SetItemPurchaseData {
+    const OPCODE: ServerOpcodes = ServerOpcodes::SetItemPurchaseData;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.item_guid);
+        self.contents.write(pkt);
+        pkt.write_uint32(self.flags);
+        pkt.write_uint32(self.purchase_time);
+    }
+}
+
+/// CMSG_ITEM_PURCHASE_REFUND.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemPurchaseRefund {
+    pub item_guid: ObjectGuid,
+}
+
+impl ClientPacket for ItemPurchaseRefund {
+    const OPCODE: ClientOpcodes = ClientOpcodes::ItemPurchaseRefund;
+
+    fn read(packet: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            item_guid: packet.read_packed_guid()?,
+        })
+    }
+}
+
+/// SMSG_ITEM_PURCHASE_REFUND_RESULT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemPurchaseRefundResult {
+    pub item_guid: ObjectGuid,
+    pub result: u8,
+    pub contents: Option<ItemPurchaseContents>,
+}
+
+impl ServerPacket for ItemPurchaseRefundResult {
+    const OPCODE: ServerOpcodes = ServerOpcodes::ItemPurchaseRefundResult;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.item_guid);
+        pkt.write_uint8(self.result);
+        pkt.write_bit(self.contents.is_some());
+        pkt.flush_bits();
+        if let Some(contents) = &self.contents {
+            contents.write(pkt);
+        }
+    }
+}
+
+/// SMSG_ITEM_EXPIRE_PURCHASE_REFUND.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemExpirePurchaseRefund {
+    pub item_guid: ObjectGuid,
+}
+
+impl ServerPacket for ItemExpirePurchaseRefund {
+    const OPCODE: ServerOpcodes = ServerOpcodes::ItemExpirePurchaseRefund;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.item_guid);
+    }
+}
+
 // ── InvUpdate (bit-packed item position list) ──────────────────────
 
 /// Shared structure for client inventory packets.
@@ -795,6 +928,105 @@ mod tests {
                 0x03, 0x00, 0x02, 0x01,
             ]
         );
+    }
+
+    #[test]
+    fn item_purchase_data_client_packets_read_cpp_guid() {
+        let guid = ObjectGuid::new(0, 0x0102);
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        assert_eq!(
+            GetItemPurchaseData::read(&mut pkt).unwrap(),
+            GetItemPurchaseData { item_guid: guid }
+        );
+
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        assert_eq!(
+            ItemPurchaseRefund::read(&mut pkt).unwrap(),
+            ItemPurchaseRefund { item_guid: guid }
+        );
+    }
+
+    #[test]
+    fn set_item_purchase_data_writes_cpp_order() {
+        let mut contents = ItemPurchaseContents {
+            money: 0x0807_0605_0403_0201,
+            ..Default::default()
+        };
+        contents.items[0] = ItemPurchaseRefundItem {
+            item_id: 11,
+            item_count: 2,
+        };
+        contents.currencies[0] = ItemPurchaseRefundCurrency {
+            currency_id: 390,
+            currency_count: 5,
+        };
+        let packet = SetItemPurchaseData {
+            item_guid: ObjectGuid::new(0, 0x0102),
+            contents,
+            flags: 0xAABB_CCDD,
+            purchase_time: 0x1122_3344,
+        };
+
+        let mut pkt = WorldPacket::new_empty();
+        packet.write(&mut pkt);
+
+        assert_eq!(pkt.read_packed_guid().unwrap(), packet.item_guid);
+        assert_eq!(pkt.read_uint64().unwrap(), contents.money);
+        assert_eq!(pkt.read_int32().unwrap(), 11);
+        assert_eq!(pkt.read_int32().unwrap(), 2);
+        for _ in 1..5 {
+            assert_eq!(pkt.read_int32().unwrap(), 0);
+            assert_eq!(pkt.read_int32().unwrap(), 0);
+        }
+        assert_eq!(pkt.read_int32().unwrap(), 390);
+        assert_eq!(pkt.read_int32().unwrap(), 5);
+        for _ in 1..5 {
+            assert_eq!(pkt.read_int32().unwrap(), 0);
+            assert_eq!(pkt.read_int32().unwrap(), 0);
+        }
+        assert_eq!(pkt.read_uint32().unwrap(), 0xAABB_CCDD);
+        assert_eq!(pkt.read_uint32().unwrap(), 0x1122_3344);
+    }
+
+    #[test]
+    fn item_purchase_refund_result_writes_optional_contents_bit() {
+        let guid = ObjectGuid::new(0, 0x0102);
+        let empty = ItemPurchaseRefundResult {
+            item_guid: guid,
+            result: 10,
+            contents: None,
+        };
+        let mut pkt = WorldPacket::new_empty();
+        empty.write(&mut pkt);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert_eq!(pkt.read_uint8().unwrap(), 10);
+        assert!(!pkt.read_bit().unwrap());
+
+        let ok = ItemPurchaseRefundResult {
+            item_guid: guid,
+            result: 0,
+            contents: Some(ItemPurchaseContents {
+                money: 7,
+                ..Default::default()
+            }),
+        };
+        let mut pkt = WorldPacket::new_empty();
+        ok.write(&mut pkt);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert_eq!(pkt.read_uint8().unwrap(), 0);
+        assert!(pkt.read_bit().unwrap());
+        assert_eq!(pkt.read_uint64().unwrap(), 7);
+    }
+
+    #[test]
+    fn item_expire_purchase_refund_writes_guid_only() {
+        let guid = ObjectGuid::new(0, 0x0102);
+        let mut pkt = WorldPacket::new_empty();
+        ItemExpirePurchaseRefund { item_guid: guid }.write(&mut pkt);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert!(pkt.is_empty());
     }
 
     #[test]
