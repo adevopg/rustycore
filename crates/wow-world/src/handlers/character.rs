@@ -578,6 +578,12 @@ struct VendorBuyItem {
     buy_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VendorBuyTemplateBlock {
+    BuyError(BuyResult),
+    Silent,
+}
+
 fn vendor_buy_quantity_and_price(buy_price: u64, buy_count: u32, quantity: u32) -> (u32, u64) {
     if buy_price == 0 || quantity == 0 {
         return (quantity, 0);
@@ -721,6 +727,34 @@ fn vendor_list_should_skip_faction_flags(
     };
     ((flags2 & ItemFlags2::FactionHorde as u32) != 0 && team == Team::Alliance)
         || ((flags2 & ItemFlags2::FactionAlliance as u32) != 0 && team == Team::Horde)
+}
+
+fn vendor_buy_template_block_result(
+    allowable_class: Option<i16>,
+    bonding: Option<u8>,
+    flags2: Option<u32>,
+    player_class: u8,
+    player_race: u8,
+    is_game_master: bool,
+) -> Option<VendorBuyTemplateBlock> {
+    if vendor_list_should_skip_allowed_class(
+        allowable_class,
+        bonding,
+        player_class,
+        is_game_master,
+    ) {
+        return Some(VendorBuyTemplateBlock::BuyError(BuyResult::CantFindItem));
+    }
+
+    if vendor_list_should_skip_faction_flags(
+        flags2,
+        player_team_for_race_cpp(player_race),
+        is_game_master,
+    ) {
+        return Some(VendorBuyTemplateBlock::Silent);
+    }
+
+    None
 }
 
 fn vendor_buy_direct_inventory_destination(
@@ -3670,6 +3704,25 @@ impl WorldSession {
                 return;
             }
         };
+        let sparse_template = self
+            .item_stats_store()
+            .and_then(|store| store.sparse_template(buy.item_id as u32));
+        if let Some(block) = vendor_buy_template_block_result(
+            sparse_template.map(|template| template.allowable_class),
+            sparse_template.map(|template| template.bonding),
+            sparse_template.map(|template| template.flags[1]),
+            self.player_class,
+            self.player_race,
+            self.security > 0,
+        ) {
+            match block {
+                VendorBuyTemplateBlock::BuyError(result) => {
+                    self.send_buy_error(result, None, buy.item_id as u32);
+                }
+                VendorBuyTemplateBlock::Silent => {}
+            }
+            return;
+        }
         let vendor_current_count = self.vendor_item_current_count(
             buy.vendor_guid,
             vendor_item.item_id,
@@ -5325,6 +5378,56 @@ mod tests {
             true,
         ));
         assert!(!vendor_list_should_skip_faction_flags(None, Team::Alliance, false));
+    }
+
+    #[test]
+    fn vendor_buy_template_gates_match_cpp_error_shapes() {
+        let warrior_mask = 1i16 << (1 - 1);
+
+        assert_eq!(
+            vendor_buy_template_block_result(
+                Some(warrior_mask),
+                Some(ItemBondingType::OnAcquire as u8),
+                None,
+                8,
+                1,
+                false,
+            ),
+            Some(VendorBuyTemplateBlock::BuyError(BuyResult::CantFindItem))
+        );
+        assert_eq!(
+            vendor_buy_template_block_result(
+                Some(warrior_mask),
+                Some(ItemBondingType::OnAcquire as u8),
+                None,
+                8,
+                1,
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            vendor_buy_template_block_result(
+                None,
+                None,
+                Some(ItemFlags2::FactionHorde as u32),
+                1,
+                1,
+                false,
+            ),
+            Some(VendorBuyTemplateBlock::Silent)
+        );
+        assert_eq!(
+            vendor_buy_template_block_result(
+                None,
+                None,
+                Some(ItemFlags2::FactionHorde as u32),
+                1,
+                2,
+                false,
+            ),
+            None
+        );
     }
 
     #[test]
