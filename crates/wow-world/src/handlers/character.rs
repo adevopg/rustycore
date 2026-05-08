@@ -10,8 +10,8 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
-    ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemFlags, ItemUpdateState,
-    ItemFlags2, ItemVendorType, Team,
+    ClientOpcodes, CurrencyTypes, InventoryResult, ItemBondingType, ItemContext, ItemFlags,
+    ItemFlags2, ItemUpdateState, ItemVendorType, Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -606,6 +606,14 @@ fn vendor_buy_packet_quantity_to_cpp_count(quantity: i32) -> u32 {
 
 fn vendor_list_reaches_cpp_item_limit(count: usize) -> bool {
     count >= MAX_VENDOR_ITEMS_CPP
+}
+
+fn vendor_list_should_skip_currency_row(item_id: i32, extended_cost: i32) -> bool {
+    if extended_cost == 0 {
+        return true;
+    }
+
+    <CurrencyTypes as num_traits::FromPrimitive>::from_u32(item_id as u32).is_none()
 }
 
 fn vendor_buy_muid_to_cpp_slot(muid: i32) -> Option<u32> {
@@ -3589,6 +3597,33 @@ impl WorldSession {
                 if item_id > 0 {
                     let muid = raw_slot.saturating_add(1);
                     raw_slot = raw_slot.saturating_add(1);
+                    if item_type == ItemVendorType::Currency as i32 {
+                        if vendor_list_should_skip_currency_row(item_id, extended_cost) {
+                            if !result.next_row() { break; }
+                            continue;
+                        }
+                        items.push(VendorItem {
+                            muid,
+                            item_id,
+                            item_type,
+                            quantity: 0,
+                            price: 0,
+                            durability: 0,
+                            stack_count: maxcount,
+                            extended_cost,
+                            player_condition_failed: vendor_list_player_condition_failed_id(
+                                player_condition_id,
+                            ),
+                            locked: false,
+                            do_not_filter,
+                            refundable: false,
+                        });
+                        if vendor_list_reaches_cpp_item_limit(items.len()) {
+                            break 'vendor_expansion;
+                        }
+                        if !result.next_row() { break; }
+                        continue;
+                    }
                     let item_known = self.item_store()
                         .map_or(true, |s| s.get(item_id as u32).is_some());
                     if !item_known {
@@ -5280,6 +5315,19 @@ mod tests {
         assert!(!vendor_list_reaches_cpp_item_limit(149));
         assert!(vendor_list_reaches_cpp_item_limit(150));
         assert!(vendor_list_reaches_cpp_item_limit(151));
+    }
+
+    #[test]
+    fn vendor_list_currency_rows_match_cpp_basic_guards() {
+        assert!(vendor_list_should_skip_currency_row(
+            CurrencyTypes::JusticePoints as i32,
+            0,
+        ));
+        assert!(!vendor_list_should_skip_currency_row(
+            CurrencyTypes::JusticePoints as i32,
+            10,
+        ));
+        assert!(vendor_list_should_skip_currency_row(999_999, 10));
     }
 
     #[test]
