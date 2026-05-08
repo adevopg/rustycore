@@ -604,6 +604,10 @@ fn vendor_buy_packet_quantity_to_cpp_count(quantity: i32) -> u32 {
     u32::from((quantity as u8).max(1))
 }
 
+fn vendor_buy_currency_packet_quantity_to_cpp_count(quantity: i32) -> u32 {
+    (quantity as u32).max(1)
+}
+
 fn vendor_list_reaches_cpp_item_limit(count: usize) -> bool {
     count >= MAX_VENDOR_ITEMS_CPP
 }
@@ -613,7 +617,22 @@ fn vendor_list_should_skip_currency_row(item_id: i32, extended_cost: i32) -> boo
         return true;
     }
 
-    <CurrencyTypes as num_traits::FromPrimitive>::from_u32(item_id as u32).is_none()
+    !vendor_currency_type_is_known(item_id as u32)
+}
+
+fn vendor_currency_type_is_known(currency_id: u32) -> bool {
+    <CurrencyTypes as num_traits::FromPrimitive>::from_u32(currency_id).is_some()
+}
+
+fn vendor_buy_currency_quantity_block_result(
+    max_count: u32,
+    quantity: u32,
+) -> Option<InventoryResult> {
+    if max_count == 0 || quantity % max_count != 0 {
+        Some(InventoryResult::CantBuyQuantity)
+    } else {
+        None
+    }
 }
 
 fn vendor_buy_muid_to_cpp_slot(muid: i32) -> Option<u32> {
@@ -940,10 +959,16 @@ impl WorldSession {
                 if item_id > 0 {
                     let current_slot = raw_slot;
                     raw_slot = raw_slot.saturating_add(1);
+                    let item_type = result
+                        .try_read::<u8>(3)
+                        .unwrap_or(ItemVendorType::Item as u8)
+                        as i32;
                     let item_known = self
                         .item_store()
                         .map_or(true, |store| store.get(item_id as u32).is_some());
-                    if item_known && current_slot == vendor_slot {
+                    let currency_known = item_type == ItemVendorType::Currency as i32
+                        && vendor_currency_type_is_known(item_id as u32);
+                    if (item_known || currency_known) && current_slot == vendor_slot {
                         let row_item_id = item_id as u32;
                         if row_item_id != expected_item_id {
                             return None;
@@ -951,10 +976,7 @@ impl WorldSession {
 
                         return Some(VendorBuyItem {
                             item_id: row_item_id,
-                            item_type: result
-                                .try_read::<u8>(3)
-                                .unwrap_or(ItemVendorType::Item as u8)
-                                as i32,
+                            item_type,
                             max_count: result.try_read::<u32>(1).unwrap_or(0),
                             incr_time: result.try_read::<u32>(10).unwrap_or(0),
                             player_condition_id: result.try_read::<u32>(11).unwrap_or(0),
@@ -3736,6 +3758,69 @@ impl WorldSession {
             Some(slot) => slot,
             None => return,
         };
+
+        // ── Get vendor NPC entry from creature GUID ──
+        let vendor_entry = match self.creatures.get(&buy.vendor_guid) {
+            Some(c) => c.entry,
+            None => {
+                warn!("BuyItem: vendor {:?} not in creatures", buy.vendor_guid);
+                self.send_buy_error(
+                    BuyResult::DistanceTooFar,
+                    Some(buy.vendor_guid),
+                    buy.muid as u32,
+                );
+                return;
+            }
+        };
+
+        let world_db = match self.world_db() {
+            Some(db) => Arc::clone(db),
+            None => return,
+        };
+
+        if buy.item_type == ItemVendorType::Currency as i32 {
+            if !vendor_currency_type_is_known(buy.item_id as u32) {
+                self.send_buy_error(BuyResult::CantFindItem, None, buy.item_id as u32);
+                return;
+            }
+
+            let quantity = vendor_buy_currency_packet_quantity_to_cpp_count(buy.quantity);
+            let vendor_item = match self
+                .resolve_vendor_buy_item_by_cpp_slot(
+                    world_db.as_ref(),
+                    vendor_entry,
+                    vendor_slot,
+                    buy.item_id as u32,
+                )
+                .await
+            {
+                Some(item) if item.item_type == ItemVendorType::Currency as i32 => item,
+                _ => {
+                    self.send_buy_error(
+                        BuyResult::CantFindItem,
+                        Some(buy.vendor_guid),
+                        buy.item_id as u32,
+                    );
+                    return;
+                }
+            };
+
+            if let Some(result) =
+                vendor_buy_currency_quantity_block_result(vendor_item.max_count, quantity)
+            {
+                self.send_equip_error(result, None, None, 0, 0);
+                return;
+            }
+
+            if vendor_item.extended_cost == 0 {
+                self.send_buy_error(BuyResult::CantFindItem, None, buy.item_id as u32);
+                return;
+            }
+
+            self.send_equip_error(InventoryResult::VendorMissingTurnins, None, None, 0, 0);
+            return;
+        }
+
         if buy.item_type != ItemVendorType::Item as i32 {
             warn!("BuyItem: unsupported item type {}", buy.item_type);
             return;
@@ -3755,25 +3840,7 @@ impl WorldSession {
                 }
             };
 
-        // ── Get vendor NPC entry from creature GUID ──
-        let vendor_entry = match self.creatures.get(&buy.vendor_guid) {
-            Some(c) => c.entry,
-            None => {
-                warn!("BuyItem: vendor {:?} not in creatures", buy.vendor_guid);
-                self.send_buy_error(
-                    BuyResult::DistanceTooFar,
-                    Some(buy.vendor_guid),
-                    buy.muid as u32,
-                );
-                return;
-            }
-        };
-
         let char_db = match self.char_db() {
-            Some(db) => Arc::clone(db),
-            None => return,
-        };
-        let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
             None => return,
         };
@@ -5301,6 +5368,21 @@ mod tests {
         assert_eq!(vendor_buy_packet_quantity_to_cpp_count(1), 1);
         assert_eq!(vendor_buy_packet_quantity_to_cpp_count(256), 1);
         assert_eq!(vendor_buy_packet_quantity_to_cpp_count(-1), 255);
+    }
+
+    #[test]
+    fn vendor_buy_currency_preflight_matches_cpp_quantity_guards() {
+        assert_eq!(vendor_buy_currency_packet_quantity_to_cpp_count(0), 1);
+        assert_eq!(vendor_buy_currency_packet_quantity_to_cpp_count(5), 5);
+        assert_eq!(
+            vendor_buy_currency_quantity_block_result(5, 3),
+            Some(InventoryResult::CantBuyQuantity)
+        );
+        assert_eq!(vendor_buy_currency_quantity_block_result(5, 10), None);
+        assert_eq!(
+            vendor_buy_currency_quantity_block_result(0, 10),
+            Some(InventoryResult::CantBuyQuantity)
+        );
     }
 
     #[test]
