@@ -1195,6 +1195,7 @@ impl WorldSession {
         self.broadcast_destroy_player_to_others();
         // Remove from broadcast registry before clearing player_guid.
         self.unregister_from_player_registry();
+        self.unregister_from_object_accessor();
 
         // Send LogoutComplete → client returns to character select
         self.set_state(crate::session::SessionState::Authed);
@@ -1203,6 +1204,7 @@ impl WorldSession {
 
         // Clear inventory state
         self.inventory_items.clear();
+        self.inventory_item_objects.clear();
 
         // ── Restore realm socket as primary ──────────────────────────
         // After ConnectTo, send_tx/packet_rx point to the instance socket.
@@ -3376,6 +3378,7 @@ impl WorldSession {
             slot,
         );
         self.insert_inventory_item_object(item_object);
+        self.sync_object_accessor_player();
 
         info!(
             "BuyItem: player {:?} bought item {} at slot {} for {} copper (remaining: {})",
@@ -3491,6 +3494,7 @@ impl WorldSession {
         // ── Remove from in-memory inventory ──
         self.inventory_items.remove(&slot);
         self.remove_inventory_item_object(item.guid);
+        self.sync_object_accessor_player();
 
         info!(
             "SellItem: player {:?} sold item {} from slot {} for {} copper (total: {})",
@@ -3597,6 +3601,7 @@ impl WorldSession {
         } else {
             self.inventory_items.remove(&src);
         }
+        self.sync_object_accessor_player();
 
         // Update DB
         if let Some(ref item) = src_item {
@@ -3860,6 +3865,7 @@ impl WorldSession {
             }
         };
         self.remove_inventory_item_object(item.guid);
+        self.sync_object_accessor_player();
 
         // Delete from DB
         let char_db = match self.char_db() {
@@ -4480,6 +4486,7 @@ impl WorldSession {
         // Register in the shared player registry so other sessions can
         // broadcast chat / emotes / movement packets to us.
         self.register_in_player_registry();
+        self.sync_object_accessor_player();
 
         // 31. Broadcast this player's CREATE block to all other players on the same map.
         //     Each other player receives an UpdateObject with this player's CREATE block.

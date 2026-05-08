@@ -10,11 +10,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use parking_lot::RwLock;
 use tracing::{debug, info, trace, warn};
 
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
-    ItemClass, ItemContext, ItemEnchantmentType, ItemFlags, ItemFlags2, SellResult,
+    ItemClass, ItemContext, ItemEnchantmentType, ItemFlags, ItemFlags2, SellResult, TypeId,
+    TypeMask,
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
@@ -25,8 +27,9 @@ use wow_data::{
 use wow_database::{CharacterDatabase, LoginDatabase, WorldDatabase};
 use wow_entities::{
     ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef, ApplyEnchantmentTemplateRef,
-    Item, ItemCreateInfo, ItemStorageTemplate, MAX_ITEM_SPELLS, PlayerEnchantTimeUpdate,
-    PlayerItemTimeUpdate, SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan,
+    Item, ItemCreateInfo, ItemStorageTemplate, ObjectAccessor, PLAYER_SLOT_END,
+    PlayerEnchantTimeUpdate, PlayerInventoryStorage, PlayerItemTimeUpdate, SendNewItemDelivery,
+    SendNewItemDisplayText, SendNewItemPlan, WorldObject, MAX_ITEM_SPELLS,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_network::session_mgr::{InstanceLink, SessionManager};
@@ -40,6 +43,12 @@ use wow_packet::{ClientPacket, WorldPacket};
 
 /// Maximum number of packets processed per `update()` call.
 const MAX_PACKETS_PER_UPDATE: usize = 100;
+
+pub type SharedObjectAccessor = Arc<RwLock<ObjectAccessor>>;
+
+pub fn new_shared_object_accessor() -> SharedObjectAccessor {
+    Arc::new(RwLock::new(ObjectAccessor::default()))
+}
 
 /// Current state of the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +121,7 @@ pub struct WorldSession {
     // World database (for creature templates, spawns, etc.)
     world_db: Option<Arc<WorldDatabase>>,
 
-    // Item store (Item.db2 data — inventory types, class/subclass)
+    // Item store (Item.db2 BasicData — class/subclass)
     item_store: Option<Arc<ItemStore>>,
 
     // Item appearance store (ItemAppearance.db2 data)
@@ -144,6 +153,9 @@ pub struct WorldSession {
 
     // Shared player registry for broadcasting to nearby sessions
     player_registry: Option<Arc<PlayerRegistry>>,
+
+    // Shared C++-style ObjectAccessor for canonical in-world/player-owned object lookups.
+    object_accessor: Option<SharedObjectAccessor>,
 
     // Shared group registry for party management
     group_registry: Option<Arc<GroupRegistry>>,
@@ -450,6 +462,7 @@ impl WorldSession {
             skill_store: None,
             area_trigger_store: None,
             player_registry: None,
+            object_accessor: None,
             group_registry: None,
             pending_invites: None,
             group_guid: None,
@@ -1177,6 +1190,16 @@ impl WorldSession {
         self.player_registry = Some(registry);
     }
 
+    /// Set the shared ObjectAccessor used for C++-style object lookup.
+    pub fn set_object_accessor(&mut self, accessor: SharedObjectAccessor) {
+        self.object_accessor = Some(accessor);
+    }
+
+    /// Get a reference to the shared ObjectAccessor.
+    pub fn object_accessor(&self) -> Option<&SharedObjectAccessor> {
+        self.object_accessor.as_ref()
+    }
+
     /// Get a reference to the shared player registry.
     pub fn player_registry(&self) -> Option<&Arc<PlayerRegistry>> {
         self.player_registry.as_ref()
@@ -1235,6 +1258,70 @@ impl WorldSession {
         );
     }
 
+    fn object_accessor_player_object(&self) -> Option<WorldObject> {
+        let (Some(guid), Some(pos), Some(name)) =
+            (self.player_guid, self.player_position, &self.player_name)
+        else {
+            return None;
+        };
+
+        let mut object = WorldObject::new(true, TypeId::Player, TypeMask::PLAYER);
+        object.object_mut().create(guid);
+        object.set_name(name);
+        if object.set_map(u32::from(self.current_map_id), 0).is_err() {
+            return None;
+        }
+        object.relocate(pos);
+        object.object_mut().add_to_world();
+        Some(object)
+    }
+
+    fn object_accessor_inventory_snapshot(&self) -> PlayerInventoryStorage {
+        let mut inventory = PlayerInventoryStorage::default();
+        for (&slot, item) in &self.inventory_items {
+            if (slot as usize) < PLAYER_SLOT_END {
+                inventory.items[slot as usize] = Some(item.guid);
+            }
+        }
+        inventory
+    }
+
+    pub(crate) fn sync_object_accessor_player(&self) {
+        let Some(accessor) = &self.object_accessor else {
+            return;
+        };
+        let Some(object) = self.object_accessor_player_object() else {
+            return;
+        };
+        let Some(name) = &self.player_name else {
+            return;
+        };
+
+        let inventory = self.object_accessor_inventory_snapshot();
+        let items = self.inventory_item_objects.values().cloned();
+        if let Err(err) =
+            accessor
+                .write()
+                .add_player_with_inventory_and_items(name, object, inventory, items)
+        {
+            warn!("Failed to sync player into ObjectAccessor: {err:?}");
+        }
+    }
+
+    pub(crate) fn unregister_from_object_accessor(&self) {
+        let (Some(guid), Some(accessor)) = (self.player_guid, &self.object_accessor) else {
+            return;
+        };
+        accessor.write().remove_player(guid);
+    }
+
+    pub fn cleanup_shared_runtime_state(&mut self) {
+        self.unregister_from_player_registry();
+        self.unregister_from_object_accessor();
+        self.inventory_items.clear();
+        self.inventory_item_objects.clear();
+    }
+
     /// Remove this session from the player registry.
     /// Called on logout or disconnect.
     pub(crate) fn unregister_from_player_registry(&self) {
@@ -1258,6 +1345,11 @@ impl WorldSession {
         if let Some(mut entry) = reg.get_mut(&guid) {
             entry.position = pos;
             entry.map_id = self.current_map_id;
+        }
+        if let Some(accessor) = &self.object_accessor {
+            if let Some(object) = accessor.write().player_object_mut(guid) {
+                object.world_relocate(u32::from(self.current_map_id), pos);
+            }
         }
     }
 
@@ -3490,7 +3582,7 @@ mod tests {
         ItemSparseTemplateEntry, ItemStatsStore, ItemStore, SpellItemEnchantmentEntry,
         SpellItemEnchantmentStore,
     };
-    use wow_entities::{SendNewItemInstancePlan, SendNewItemModifier};
+    use wow_entities::{AccessorObjectRef, SendNewItemInstancePlan, SendNewItemModifier};
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
     use wow_packet::ServerPacket;
 
@@ -3877,6 +3969,71 @@ mod tests {
         assert_eq!(session.inventory_item_objects.get(&item_guid).unwrap().slot(), 36);
         assert!(session.remove_inventory_item_object(item_guid).is_some());
         assert!(!session.inventory_item_objects.contains_key(&item_guid));
+    }
+
+    #[test]
+    fn object_accessor_sync_exposes_session_inventory_items_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let accessor = new_shared_object_accessor();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 900);
+
+        session.set_object_accessor(Arc::clone(&accessor));
+        session.set_player_guid(Some(player_guid));
+        session.player_name = Some("Jaina".into());
+        session.player_position = Some(Position::new(1.0, 2.0, 3.0, 0.0));
+        session.current_map_id = 571;
+        session.inventory_items.insert(23, InventoryItem {
+            guid: item_guid,
+            entry_id: 700,
+            db_guid: 900,
+            inventory_type: None,
+        });
+        let item = session.make_inventory_item_object(
+            item_guid,
+            700,
+            player_guid,
+            2,
+            0,
+            ItemContext::None,
+            23,
+        );
+        session.insert_inventory_item_object(item);
+        session.sync_object_accessor_player();
+
+        {
+            let accessor = accessor.read();
+            let player = accessor.find_connected_player(player_guid).unwrap();
+            match accessor.get_object_ref_by_type_mask(player, item_guid, TypeMask::ITEM) {
+                Some(AccessorObjectRef::Item(item)) => {
+                    assert_eq!(item.object().guid(), item_guid);
+                    assert_eq!(item.slot(), 23);
+                    assert_eq!(item.count(), 2);
+                }
+                other => panic!("expected item ref, got {other:?}"),
+            }
+        }
+
+        let moved = session.inventory_items.remove(&23).unwrap();
+        session.inventory_items.insert(24, moved);
+        session.set_inventory_item_object_slot(item_guid, 24);
+        session.sync_object_accessor_player();
+        {
+            let accessor = accessor.read();
+            let item = accessor.player_item(player_guid, item_guid).unwrap();
+            assert_eq!(item.slot(), 24);
+        }
+
+        session.inventory_items.remove(&24);
+        session.remove_inventory_item_object(item_guid);
+        session.sync_object_accessor_player();
+        assert!(accessor.read().player_item(player_guid, item_guid).is_none());
+
+        session.cleanup_shared_runtime_state();
+        let accessor = accessor.read();
+        assert!(accessor.find_connected_player(player_guid).is_none());
+        assert!(session.inventory_items.is_empty());
+        assert!(session.inventory_item_objects.is_empty());
     }
 
     #[test]

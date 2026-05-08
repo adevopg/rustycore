@@ -10,4 +10,4 @@ pub mod map_manager;
 pub mod session;
 
 pub use map_manager::{GridCoord, MapManager, SharedMapManager, WorldCreature};
-pub use session::WorldSession;
+pub use session::{new_shared_object_accessor, SharedObjectAccessor, WorldSession};

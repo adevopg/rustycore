@@ -544,6 +544,7 @@ async fn main() -> Result<()> {
 
     // Shared player registry for broadcast (chat, emotes, movement)
     let player_registry = Arc::new(PlayerRegistry::new());
+    let object_accessor = wow_world::new_shared_object_accessor();
 
     // Shared group registry and pending invites
     let group_registry = Arc::new(GroupRegistry::new());
@@ -608,6 +609,7 @@ async fn main() -> Result<()> {
         let resources = Arc::clone(&session_resources);
         let mgr = Arc::clone(&session_mgr);
         let smap = Arc::clone(&shared_map);
+        let accessor = Arc::clone(&object_accessor);
         let port = instance_port;
         async move {
             if let Err(e) = wow_network::start_world_listener(
@@ -617,6 +619,7 @@ async fn main() -> Result<()> {
                 move |account, pkt_rx, send_tx, res| {
                     let mgr = Arc::clone(&mgr);
                     let smap = Arc::clone(&smap);
+                    let accessor = Arc::clone(&accessor);
                     create_session(
                         account,
                         pkt_rx,
@@ -624,6 +627,7 @@ async fn main() -> Result<()> {
                         res,
                         mgr,
                         smap,
+                        accessor,
                         port,
                         max_expansion,
                     )
@@ -838,6 +842,7 @@ async fn create_session(
     resources: Arc<SessionResources>,
     session_mgr: Arc<SessionManager>,
     shared_map: SharedMapManager,
+    object_accessor: wow_world::SharedObjectAccessor,
     instance_port: u16,
     max_expansion: u8,
 ) {
@@ -930,6 +935,7 @@ async fn create_session(
     if let Some(ref registry) = resources.player_registry {
         session.set_player_registry(Arc::clone(registry));
     }
+    session.set_object_accessor(object_accessor);
     if let (Some(greg), Some(pinv)) = (&resources.group_registry, &resources.pending_invites) {
         session.set_group_registry(Arc::clone(greg), Arc::clone(pinv));
     }
@@ -975,6 +981,7 @@ async fn create_session(
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     }
+    session.cleanup_shared_runtime_state();
 }
 
 /// Load realm external and local addresses from the `realmlist` table.

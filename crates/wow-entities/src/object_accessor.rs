@@ -107,6 +107,10 @@ impl AccessorPlayer {
         &self.object
     }
 
+    pub fn object_mut(&mut self) -> &mut WorldObject {
+        &mut self.object
+    }
+
     pub const fn inventory(&self) -> &PlayerInventoryStorage {
         &self.inventory
     }
@@ -267,6 +271,10 @@ impl ObjectAccessor {
 
     pub fn find_connected_player(&self, guid: ObjectGuid) -> Option<&WorldObject> {
         self.players.get(&guid).map(AccessorPlayer::object)
+    }
+
+    pub fn player_object_mut(&mut self, guid: ObjectGuid) -> Option<&mut WorldObject> {
+        self.players.get_mut(&guid).map(AccessorPlayer::object_mut)
     }
 
     pub fn find_connected_player_by_name(&self, name: &str) -> Option<&WorldObject> {
