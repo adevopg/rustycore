@@ -458,6 +458,110 @@ impl ServerPacket for SetupCurrency {
     }
 }
 
+// ── SetCurrency (SMSG 0x2574) ───────────────────────────────────────
+
+/// Currency delta update.
+///
+/// Mirrors C++ `WorldPackets::Misc::SetCurrency::Write`.
+pub struct SetCurrency {
+    pub type_id: i32,
+    pub quantity: i32,
+    pub flags: u32,
+    pub weekly_quantity: Option<i32>,
+    pub tracked_quantity: Option<i32>,
+    pub max_quantity: Option<i32>,
+    pub total_earned: Option<i32>,
+    pub suppress_chat_log: bool,
+    pub quantity_change: Option<i32>,
+    pub quantity_gain_source: Option<i32>,
+    pub quantity_lost_source: Option<i32>,
+    pub first_craft_operation_id: Option<u32>,
+    pub next_recharge_time: Option<u64>,
+    pub recharge_cycle_start_time: Option<u64>,
+    pub overflown_currency_id: Option<i32>,
+}
+
+impl SetCurrency {
+    pub fn vendor_loss(type_id: i32, quantity: i32, amount: i32) -> Self {
+        Self {
+            type_id,
+            quantity,
+            flags: 0,
+            weekly_quantity: None,
+            tracked_quantity: None,
+            max_quantity: None,
+            total_earned: None,
+            suppress_chat_log: false,
+            quantity_change: Some(-amount),
+            quantity_gain_source: None,
+            quantity_lost_source: Some(4),
+            first_craft_operation_id: None,
+            next_recharge_time: None,
+            recharge_cycle_start_time: None,
+            overflown_currency_id: None,
+        }
+    }
+}
+
+impl ServerPacket for SetCurrency {
+    const OPCODE: ServerOpcodes = ServerOpcodes::SetCurrency;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_int32(self.type_id);
+        pkt.write_int32(self.quantity);
+        pkt.write_uint32(self.flags);
+        pkt.write_uint32(0);
+
+        pkt.write_bit(self.weekly_quantity.is_some());
+        pkt.write_bit(self.tracked_quantity.is_some());
+        pkt.write_bit(self.max_quantity.is_some());
+        pkt.write_bit(self.total_earned.is_some());
+        pkt.write_bit(self.suppress_chat_log);
+        pkt.write_bit(self.quantity_change.is_some());
+        pkt.write_bit(self.quantity_gain_source.is_some());
+        pkt.write_bit(self.quantity_lost_source.is_some());
+        pkt.write_bit(self.first_craft_operation_id.is_some());
+        pkt.write_bit(self.next_recharge_time.is_some());
+        pkt.write_bit(self.recharge_cycle_start_time.is_some());
+        pkt.write_bit(self.overflown_currency_id.is_some());
+        pkt.flush_bits();
+
+        if let Some(value) = self.weekly_quantity {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.tracked_quantity {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.max_quantity {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.total_earned {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.quantity_change {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.quantity_gain_source {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.quantity_lost_source {
+            pkt.write_int32(value);
+        }
+        if let Some(value) = self.first_craft_operation_id {
+            pkt.write_uint32(value);
+        }
+        if let Some(value) = self.next_recharge_time {
+            pkt.write_uint64(value);
+        }
+        if let Some(value) = self.recharge_cycle_start_time {
+            pkt.write_uint64(value);
+        }
+        if let Some(value) = self.overflown_currency_id {
+            pkt.write_int32(value);
+        }
+    }
+}
+
 // ── UndeleteCooldownStatusResponse (SMSG 0x27ce) ────────────────────
 
 /// Response to GetUndeleteCharacterCooldownStatus.
@@ -2173,6 +2277,22 @@ mod tests {
         let bytes = pkt.to_bytes();
         // opcode(2) + i32(4) = 6
         assert_eq!(bytes.len(), 6);
+    }
+
+    #[test]
+    fn set_currency_vendor_loss_matches_cpp_field_order() {
+        let pkt = SetCurrency::vendor_loss(395, 90, 10);
+        let bytes = pkt.to_bytes();
+        assert_eq!(bytes.len(), 28);
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x2574);
+        assert_eq!(i32::from_le_bytes(bytes[2..6].try_into().unwrap()), 395);
+        assert_eq!(i32::from_le_bytes(bytes[6..10].try_into().unwrap()), 90);
+        assert_eq!(u32::from_le_bytes(bytes[10..14].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[14..18].try_into().unwrap()), 0);
+        assert_eq!(bytes[18], 0x05);
+        assert_eq!(bytes[19], 0x00);
+        assert_eq!(i32::from_le_bytes(bytes[20..24].try_into().unwrap()), -10);
+        assert_eq!(i32::from_le_bytes(bytes[24..28].try_into().unwrap()), 4);
     }
 
     #[test]
