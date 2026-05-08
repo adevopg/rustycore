@@ -10,8 +10,8 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
-    ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemFlags, ItemFlags2,
-    ItemUpdateState, ItemVendorType, Team,
+    ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemExtendedCostFlags,
+    ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -692,6 +692,7 @@ enum VendorExtendedCostBlock {
 fn vendor_buy_extended_cost_block_result(
     extended_cost_store: Option<&ItemExtendedCostStore>,
     currency_store: Option<&CurrencyTypesStore>,
+    has_currency: impl Fn(u32, u32) -> bool,
     extended_cost: u32,
     buy_count: u32,
     quantity: u32,
@@ -709,15 +710,28 @@ fn vendor_buy_extended_cost_block_result(
     else {
         return Some(VendorExtendedCostBlock::Silent);
     };
+    let stacks = quantity / buy_count.max(1);
 
-    if extended_cost_entry
-        .currency_id
-        .iter()
-        .copied()
-        .filter(|currency_id| *currency_id != 0)
-        .any(|currency_id| !vendor_currency_type_is_known(currency_store, u32::from(currency_id)))
-    {
-        return Some(VendorExtendedCostBlock::Buy(BuyResult::CantFindItem));
+    for (i, currency_id) in extended_cost_entry.currency_id.iter().copied().enumerate() {
+        if currency_id == 0 {
+            continue;
+        }
+
+        let currency_id = u32::from(currency_id);
+        if !vendor_currency_type_is_known(currency_store, currency_id) {
+            return Some(VendorExtendedCostBlock::Buy(BuyResult::CantFindItem));
+        }
+
+        if item_extended_cost_currency_requires_season_earned(extended_cost_entry.flags, i)
+            || !has_currency(
+                currency_id,
+                extended_cost_entry.currency_count[i].wrapping_mul(stacks),
+            )
+        {
+            return Some(VendorExtendedCostBlock::Equip(
+                InventoryResult::VendorMissingTurnins,
+            ));
+        }
     }
 
     if extended_cost_entry.required_arena_rating != 0 {
@@ -731,6 +745,20 @@ fn vendor_buy_extended_cost_block_result(
     Some(VendorExtendedCostBlock::Equip(
         InventoryResult::VendorMissingTurnins,
     ))
+}
+
+fn item_extended_cost_currency_requires_season_earned(
+    flags: ItemExtendedCostFlags,
+    currency_index: usize,
+) -> bool {
+    match currency_index {
+        0 => flags.contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_1),
+        1 => flags.contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_2),
+        2 => flags.contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_3),
+        3 => flags.contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_4),
+        4 => flags.contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_5),
+        _ => false,
+    }
 }
 
 fn vendor_buy_direct_store_block_result(
@@ -3921,6 +3949,7 @@ impl WorldSession {
             match vendor_buy_extended_cost_block_result(
                 self.item_extended_cost_store().map(|store| store.as_ref()),
                 self.currency_types_store().map(|store| store.as_ref()),
+                |currency_id, amount| self.has_currency(currency_id, amount),
                 vendor_item.extended_cost,
                 vendor_item.max_count,
                 quantity,
@@ -4045,6 +4074,7 @@ impl WorldSession {
         if let Some(result) = vendor_buy_extended_cost_block_result(
             self.item_extended_cost_store().map(|store| store.as_ref()),
             self.currency_types_store().map(|store| store.as_ref()),
+            |currency_id, amount| self.has_currency(currency_id, amount),
             vendor_item.extended_cost,
             vendor_item.buy_count,
             quantity,
@@ -5617,16 +5647,17 @@ mod tests {
                 item_count: [0; wow_data::MAX_ITEM_EXT_COST_ITEMS],
                 currency_id: [395, 0, 0, 0, 0],
                 currency_count: [10, 0, 0, 0, 0],
-            }]);
+        }]);
 
         assert_eq!(
-            vendor_buy_extended_cost_block_result(None, None, 0, 5, 3),
+            vendor_buy_extended_cost_block_result(None, None, |_, _| false, 0, 5, 3),
             None
         );
         assert_eq!(
             vendor_buy_extended_cost_block_result(
                 Some(&extended_cost_store),
                 Some(&currency_store),
+                |_, _| false,
                 12,
                 5,
                 3
@@ -5637,6 +5668,7 @@ mod tests {
             vendor_buy_extended_cost_block_result(
                 Some(&extended_cost_store),
                 Some(&currency_store),
+                |currency_id, amount| currency_id == 395 && amount >= 20,
                 12,
                 5,
                 10
@@ -5645,14 +5677,42 @@ mod tests {
                 InventoryResult::VendorMissingTurnins
             ))
         );
+        let checked_currency_amount = std::cell::Cell::new(false);
         assert_eq!(
-            vendor_buy_extended_cost_block_result(Some(&extended_cost_store), None, 12, 5, 10),
+            vendor_buy_extended_cost_block_result(
+                Some(&extended_cost_store),
+                Some(&currency_store),
+                |currency_id, amount| {
+                    checked_currency_amount.set(true);
+                    assert_eq!(currency_id, 395);
+                    assert_eq!(amount, 20);
+                    false
+                },
+                12,
+                5,
+                10
+            ),
+            Some(VendorExtendedCostBlock::Equip(
+                InventoryResult::VendorMissingTurnins
+            ))
+        );
+        assert!(checked_currency_amount.get());
+        assert_eq!(
+            vendor_buy_extended_cost_block_result(
+                Some(&extended_cost_store),
+                None,
+                |_, _| true,
+                12,
+                5,
+                10
+            ),
             Some(VendorExtendedCostBlock::Buy(BuyResult::CantFindItem))
         );
         assert_eq!(
             vendor_buy_extended_cost_block_result(
                 Some(&extended_cost_store),
                 Some(&currency_store),
+                |_, _| true,
                 99,
                 5,
                 10

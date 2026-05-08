@@ -663,7 +663,6 @@ impl WorldSession {
     }
 
     /// C++ `Player::GetCurrencyQuantity`.
-    #[allow(dead_code)]
     pub(crate) fn player_currency_quantity(&self, currency_id: u32) -> u32 {
         self.player_currencies
             .get(&currency_id)
@@ -672,7 +671,6 @@ impl WorldSession {
     }
 
     /// C++ `Player::HasCurrency`.
-    #[allow(dead_code)]
     pub(crate) fn has_currency(&self, currency_id: u32, amount: u32) -> bool {
         self.player_currency_quantity(currency_id) >= amount
     }
