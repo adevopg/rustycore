@@ -71,6 +71,7 @@ pub struct ItemSparseTemplateEntry {
     pub sell_price: u32,
     pub max_durability: u32,
     pub limit_category: u16,
+    pub allowable_class: i16,
     pub bonding: u8,
     pub container_slots: u8,
     pub inventory_type: i8,
@@ -332,6 +333,7 @@ impl ItemStatsStore {
             let mut flags_offset: usize = 0;
             let mut max_durability_offset: usize = 0;
             let mut limit_category_offset: usize = 0;
+            let mut allowable_class_offset: usize = 0;
             let mut resistances_offset: usize = 0;
             let mut stat_amount_offset: usize = 0;
             let mut bonding_offset: usize = 0;
@@ -360,6 +362,9 @@ impl ItemStatsStore {
                 }
                 if fi == 32 {
                     limit_category_offset = pos;
+                }
+                if fi == 48 {
+                    allowable_class_offset = pos;
                 }
                 if fi == 51 {
                     resistances_offset = pos;
@@ -419,6 +424,7 @@ impl ItemStatsStore {
                 && flags_offset + 16 <= record.len()
                 && max_durability_offset + 4 <= record.len()
                 && limit_category_offset + 2 <= record.len()
+                && allowable_class_offset + 2 <= record.len()
                 && bonding_offset < record.len()
                 && container_slots_offset < record.len()
                 && inventory_type_offset < record.len()
@@ -433,6 +439,7 @@ impl ItemStatsStore {
                         sell_price: read_u32(record, sell_price_offset),
                         max_durability: read_u32(record, max_durability_offset),
                         limit_category: read_u16(record, limit_category_offset),
+                        allowable_class: read_i16(record, allowable_class_offset),
                         bonding: record[bonding_offset],
                         container_slots: record[container_slots_offset],
                         inventory_type: record[inventory_type_offset] as i8,
@@ -537,6 +544,10 @@ fn read_u16(record: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([record[offset], record[offset + 1]])
 }
 
+fn read_i16(record: &[u8], offset: usize) -> i16 {
+    i16::from_le_bytes([record[offset], record[offset + 1]])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +620,7 @@ mod tests {
             sell_price: 123,
             max_durability: 77,
             limit_category: 9,
+            allowable_class: -1,
             bonding: 2,
             container_slots: 16,
             inventory_type: 18,
@@ -621,6 +633,7 @@ mod tests {
         assert_eq!(loaded.sell_price, 123);
         assert_eq!(loaded.container_slots, 16);
         assert_eq!(loaded.inventory_type, 18);
+        assert_eq!(loaded.allowable_class, -1);
         assert!(loaded.item_flags().contains(ItemFlags::IS_BOUND_TO_ACCOUNT));
         assert_eq!(store.raw_flags(1), Some(template.flags));
 

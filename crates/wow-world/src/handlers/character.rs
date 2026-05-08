@@ -10,7 +10,8 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
-    ClientOpcodes, InventoryResult, ItemContext, ItemFlags, ItemUpdateState, ItemVendorType,
+    ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemFlags, ItemUpdateState,
+    ItemVendorType,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -673,6 +674,29 @@ fn vendor_list_item_refundable(
     extended_cost > 0
         && max_stack_size == Some(1)
         && item_flags.is_some_and(|flags| flags.contains(ItemFlags::ITEM_PURCHASE_RECORD))
+}
+
+fn player_class_mask(player_class: u8) -> u32 {
+    player_class
+        .checked_sub(1)
+        .and_then(|shift| 1u32.checked_shl(u32::from(shift)))
+        .unwrap_or(0)
+}
+
+fn vendor_list_should_skip_allowed_class(
+    allowable_class: Option<i16>,
+    bonding: Option<u8>,
+    player_class: u8,
+    is_game_master: bool,
+) -> bool {
+    if is_game_master || bonding != Some(ItemBondingType::OnAcquire as u8) {
+        return false;
+    }
+
+    let Some(allowable_class) = allowable_class else {
+        return false;
+    };
+    (i32::from(allowable_class) & player_class_mask(player_class) as i32) == 0
 }
 
 fn vendor_buy_direct_inventory_destination(
@@ -3479,6 +3503,18 @@ impl WorldSession {
                         continue;
                     }
                     let template = self.item_storage_template(item_id as u32);
+                    let sparse_template = self
+                        .item_stats_store()
+                        .and_then(|store| store.sparse_template(item_id as u32));
+                    if vendor_list_should_skip_allowed_class(
+                        sparse_template.map(|template| template.allowable_class),
+                        sparse_template.map(|template| template.bonding),
+                        self.player_class,
+                        self.security > 0,
+                    ) {
+                        if !result.next_row() { break; }
+                        continue;
+                    }
                     let refundable = vendor_list_item_refundable(
                         template.as_ref().map(|template| template.flags),
                         template.as_ref().map(|template| template.max_stack_size),
@@ -5184,6 +5220,49 @@ mod tests {
             0
         ));
         assert!(!vendor_list_item_refundable(None, Some(1), 42));
+    }
+
+    #[test]
+    fn vendor_list_allowed_class_filter_matches_cpp_bind_on_acquire_branch() {
+        let warrior_mask = 1i16 << (1 - 1);
+        let mage_mask = 1i16 << (8 - 1);
+
+        assert!(!vendor_list_should_skip_allowed_class(
+            Some(warrior_mask),
+            Some(ItemBondingType::OnAcquire as u8),
+            1,
+            false,
+        ));
+        assert!(vendor_list_should_skip_allowed_class(
+            Some(warrior_mask),
+            Some(ItemBondingType::OnAcquire as u8),
+            8,
+            false,
+        ));
+        assert!(!vendor_list_should_skip_allowed_class(
+            Some(warrior_mask),
+            Some(ItemBondingType::OnEquip as u8),
+            8,
+            false,
+        ));
+        assert!(!vendor_list_should_skip_allowed_class(
+            Some(warrior_mask),
+            Some(ItemBondingType::OnAcquire as u8),
+            8,
+            true,
+        ));
+        assert!(!vendor_list_should_skip_allowed_class(
+            Some(warrior_mask | mage_mask),
+            Some(ItemBondingType::OnAcquire as u8),
+            8,
+            false,
+        ));
+        assert!(!vendor_list_should_skip_allowed_class(
+            Some(-1),
+            Some(ItemBondingType::OnAcquire as u8),
+            8,
+            false,
+        ));
     }
 
     #[test]
