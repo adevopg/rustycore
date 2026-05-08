@@ -1697,6 +1697,7 @@ impl WorldSession {
         // Clear inventory state
         self.inventory_items.clear();
         self.inventory_item_objects.clear();
+        self.player_currencies.clear();
 
         // ── Restore realm socket as primary ──────────────────────────
         // After ConnectTo, send_tx/packet_rx point to the instance socket.
@@ -1879,6 +1880,7 @@ impl WorldSession {
         let realm_id = self.realm_id();
         self.inventory_items.clear();
         self.inventory_item_objects.clear();
+        self.player_currencies.clear();
         {
             let mut eq_stmt = char_db.prepare(CharStatements::SEL_CHAR_EQUIPMENT);
             eq_stmt.set_u64(0, guid.counter() as u64);
@@ -1952,6 +1954,52 @@ impl WorldSession {
 
             // inventory_type is now loaded from the canonical ItemTemplate bridge.
             // No SQL cache needed.
+        }
+
+        // ── Load character currencies from character_currency ──
+        // C++ `Player::_LoadCurrency` skips rows not found in sCurrencyTypesStore.
+        {
+            let mut currency_stmt = char_db.prepare(CharStatements::SEL_PLAYER_CURRENCY);
+            currency_stmt.set_u64(0, guid.counter() as u64);
+            match char_db.query(&currency_stmt).await {
+                Ok(mut currency_result) => {
+                    if !currency_result.is_empty() {
+                        loop {
+                            let currency_id: u32 =
+                                u32::from(currency_result.try_read::<u16>(0).unwrap_or(0));
+                            let known_currency = self
+                                .currency_types_store()
+                                .is_some_and(|store| store.has_record(currency_id));
+                            if known_currency {
+                                self.player_currencies.entry(currency_id).or_insert_with(|| {
+                                    crate::session::PlayerCurrency {
+                                        state: crate::session::PlayerCurrencyState::Unchanged,
+                                        quantity: currency_result.try_read(1).unwrap_or(0),
+                                        weekly_quantity: currency_result.try_read(2).unwrap_or(0),
+                                        tracked_quantity: currency_result.try_read(3).unwrap_or(0),
+                                        increased_cap_quantity: currency_result
+                                            .try_read(4)
+                                            .unwrap_or(0),
+                                        earned_quantity: currency_result.try_read(5).unwrap_or(0),
+                                        flags: currency_result.try_read(6).unwrap_or(0),
+                                    }
+                                });
+                            }
+                            if !currency_result.next_row() {
+                                break;
+                            }
+                        }
+                    }
+                    info!(
+                        "Loaded {} currencies for {:?}",
+                        self.player_currencies.len(),
+                        guid
+                    );
+                }
+                Err(e) => {
+                    warn!("Failed to load currencies for {:?}: {}", guid, e);
+                }
+            }
         }
 
         // ── Load known spells from character_spell ──

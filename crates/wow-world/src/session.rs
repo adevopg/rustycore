@@ -245,6 +245,10 @@ pub struct WorldSession {
 
     /// In-memory inventory: slot → (item ObjectGuid, entry_id, db_guid).
     pub(crate) inventory_items: HashMap<u8, InventoryItem>,
+
+    /// C++ `_currencyStorage`, keyed by CurrencyTypes.db2 ID.
+    pub(crate) player_currencies: HashMap<u32, PlayerCurrency>,
+
     /// In-memory item objects keyed by item GUID, mirroring C++ `Player::m_items` ownership.
     pub(crate) inventory_item_objects: HashMap<ObjectGuid, Item>,
 
@@ -389,6 +393,26 @@ pub(crate) struct VendorItemCount {
     pub last_increment_time: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum PlayerCurrencyState {
+    Unchanged = 0,
+    Changed = 1,
+    New = 2,
+    Removed = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlayerCurrency {
+    pub state: PlayerCurrencyState,
+    pub quantity: u32,
+    pub weekly_quantity: u32,
+    pub tracked_quantity: u32,
+    pub increased_cap_quantity: u32,
+    pub earned_quantity: u32,
+    pub flags: u8,
+}
+
 /// An aura applied to the player.
 #[derive(Debug, Clone)]
 pub struct AuraApplication {
@@ -513,6 +537,7 @@ impl WorldSession {
             pending_creature_spawn: None,
             respawn_queue: Vec::new(),
             inventory_items: HashMap::new(),
+            player_currencies: HashMap::new(),
             inventory_item_objects: HashMap::new(),
             current_map_id: 0,
             player_race: 0,
@@ -635,6 +660,21 @@ impl WorldSession {
     /// Get the item store reference.
     pub fn item_store(&self) -> Option<&Arc<ItemStore>> {
         self.item_store.as_ref()
+    }
+
+    /// C++ `Player::GetCurrencyQuantity`.
+    #[allow(dead_code)]
+    pub(crate) fn player_currency_quantity(&self, currency_id: u32) -> u32 {
+        self.player_currencies
+            .get(&currency_id)
+            .map(|currency| currency.quantity)
+            .unwrap_or(0)
+    }
+
+    /// C++ `Player::HasCurrency`.
+    #[allow(dead_code)]
+    pub(crate) fn has_currency(&self, currency_id: u32, amount: u32) -> bool {
+        self.player_currency_quantity(currency_id) >= amount
     }
 
     /// Set the item appearance store for this session.
@@ -3818,6 +3858,30 @@ mod tests {
     fn session_starts_authed() {
         let (session, _, _) = make_session();
         assert_eq!(session.state(), SessionState::Authed);
+    }
+
+    #[test]
+    fn player_currency_helpers_match_cpp_storage_lookup() {
+        let (mut session, _, _) = make_session();
+        assert_eq!(session.player_currency_quantity(395), 0);
+        assert!(!session.has_currency(395, 1));
+
+        session.player_currencies.insert(
+            395,
+            PlayerCurrency {
+                state: PlayerCurrencyState::Unchanged,
+                quantity: 42,
+                weekly_quantity: 5,
+                tracked_quantity: 6,
+                increased_cap_quantity: 7,
+                earned_quantity: 8,
+                flags: 9,
+            },
+        );
+
+        assert_eq!(session.player_currency_quantity(395), 42);
+        assert!(session.has_currency(395, 42));
+        assert!(!session.has_currency(395, 43));
     }
 
     #[test]

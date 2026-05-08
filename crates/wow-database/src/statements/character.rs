@@ -71,6 +71,11 @@ pub enum CharStatements {
     /// SELECT spell, active, disabled FROM character_spell WHERE guid = ?
     SEL_CHARACTER_SPELL,
 
+    /// SELECT Currency, Quantity, WeeklyQuantity, TrackedQuantity,
+    /// IncreasedCapQuantity, EarnedQuantity, Flags FROM character_currency
+    /// WHERE CharacterGuid = ?
+    SEL_PLAYER_CURRENCY,
+
     /// SELECT button, action, type FROM character_action
     /// WHERE guid = ? AND spec = ? AND traitConfigId = ? ORDER BY button
     SEL_CHARACTER_ACTIONS_SPEC,
@@ -179,6 +184,11 @@ impl StatementDef for CharStatements {
             }
             Self::SEL_CHARACTER_SPELL => {
                 "SELECT spell, active, disabled FROM character_spell WHERE guid = ?"
+            }
+            Self::SEL_PLAYER_CURRENCY => {
+                "SELECT Currency, Quantity, WeeklyQuantity, TrackedQuantity, \
+                 IncreasedCapQuantity, EarnedQuantity, Flags \
+                 FROM character_currency WHERE CharacterGuid = ?"
             }
             Self::SEL_CHARACTER_ACTIONS_SPEC => {
                 "SELECT button, action, type FROM character_action \
