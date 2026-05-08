@@ -976,6 +976,22 @@ fn loaded_item_refund_decision(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestroyItemCountAction {
+    FullStack,
+    PartialStack { new_count: u32 },
+}
+
+fn destroy_item_count_action(current_count: u32, requested_count: u32) -> DestroyItemCountAction {
+    if requested_count != 0 && current_count > requested_count {
+        return DestroyItemCountAction::PartialStack {
+            new_count: current_count - requested_count,
+        };
+    }
+
+    DestroyItemCountAction::FullStack
+}
+
 fn append_item_refund_clear_statements(
     char_db: &CharacterDatabase,
     tx: &mut SqlTransaction,
@@ -4980,6 +4996,14 @@ impl WorldSession {
             return;
         }
 
+        if self
+            .inventory_item_objects
+            .get(&item.guid)
+            .is_some_and(|item_object| item_object.is_refundable())
+        {
+            return;
+        }
+
         let char_db = match self.char_db() {
             Some(db) => Arc::clone(db),
             None => return,
@@ -5868,15 +5892,22 @@ impl WorldSession {
         }
 
         let slot = destroy.slot_num;
-        let item = match self.inventory_items.remove(&slot) {
+        let item = match self.inventory_items.get(&slot).cloned() {
             Some(item) => item,
             None => {
                 self.send_packet(&InventoryChangeFailure::error(InventoryResult::SlotEmpty));
                 return;
             }
         };
-        self.remove_inventory_item_object(item.guid);
-        self.sync_object_accessor_player();
+
+        let runtime_item = self.inventory_item_objects.get(&item.guid).cloned();
+        if self
+            .item_template_flags(item.entry_id)
+            .is_some_and(|flags| flags.contains(ItemFlags::NO_USER_DESTROY))
+        {
+            self.send_packet(&InventoryChangeFailure::error(InventoryResult::DropBoundItem));
+            return;
+        }
 
         // Delete from DB
         let char_db = match self.char_db() {
@@ -5884,10 +5915,80 @@ impl WorldSession {
             None => return,
         };
 
-        let mut del_stmt = char_db.prepare(CharStatements::DEL_CHAR_INVENTORY_ITEM);
-        del_stmt.set_u64(0, player_guid.counter() as u64);
-        del_stmt.set_u64(1, item.db_guid);
-        let _ = char_db.execute(&del_stmt).await;
+        let count_action = runtime_item
+            .as_ref()
+            .map(|item_object| {
+                destroy_item_count_action(
+                    item_object.count(),
+                    u32::try_from(destroy.count).unwrap_or(u32::MAX),
+                )
+            })
+            .unwrap_or(DestroyItemCountAction::FullStack);
+
+        if let DestroyItemCountAction::PartialStack { new_count } = count_action {
+            let mut upd_count = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_COUNT);
+            upd_count.set_u32(0, new_count);
+            upd_count.set_u64(1, item.db_guid);
+            if let Err(e) = char_db.execute(&upd_count).await {
+                warn!("DestroyItem: update partial stack count failed: {e}");
+                self.send_packet(&InventoryChangeFailure::error(
+                    InventoryResult::InternalBagError,
+                ));
+                return;
+            }
+
+            if let Some(item_object) = self.inventory_item_objects.get_mut(&item.guid) {
+                item_object.set_count(new_count);
+            }
+            self.sync_object_accessor_player();
+            self.send_packet(&UpdateObject::item_stack_count_update(
+                item.guid,
+                self.current_map_id,
+                new_count,
+            ));
+            info!(
+                "Destroyed partial item entry={} at slot {} count={} for {:?}",
+                item.entry_id, slot, destroy.count, player_guid
+            );
+            return;
+        }
+
+        let mut tx = SqlTransaction::new();
+        let should_expire_refund = runtime_item
+            .as_ref()
+            .is_some_and(|item_object| item_object.is_refundable());
+        if should_expire_refund {
+            let mut del_refund = char_db.prepare(CharStatements::DEL_ITEM_REFUND_INSTANCE);
+            del_refund.set_u64(0, item.db_guid);
+            tx.append(del_refund);
+        }
+
+        let mut del_inv = char_db.prepare(CharStatements::DEL_CHAR_INVENTORY_ITEM);
+        del_inv.set_u64(0, player_guid.counter() as u64);
+        del_inv.set_u64(1, item.db_guid);
+        tx.append(del_inv);
+
+        let mut del_item = char_db.prepare(CharStatements::DEL_ITEM_INSTANCE);
+        del_item.set_u64(0, item.db_guid);
+        tx.append(del_item);
+
+        if let Err(e) = char_db.commit_transaction(tx).await {
+            warn!("DestroyItem: delete transaction failed: {e}");
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::InternalBagError,
+            ));
+            return;
+        }
+
+        self.inventory_items.remove(&slot);
+        self.remove_inventory_item_object(item.guid);
+        self.sync_object_accessor_player();
+
+        if should_expire_refund {
+            self.send_packet(&ItemExpirePurchaseRefund {
+                item_guid: item.guid,
+            });
+        }
 
         // Send VALUES update to clear the slot
         let inv_slot_changes = vec![(slot, ObjectGuid::EMPTY)];
@@ -7100,6 +7201,26 @@ mod tests {
         assert_eq!(
             loaded_item_refund_decision(ItemFieldFlags::SOULBOUND.bits(), 10, Some(123), Some(45)),
             LoadedItemRefundDecision::None
+        );
+    }
+
+    #[test]
+    fn destroy_item_count_action_matches_cpp_direct_item_branch() {
+        assert_eq!(
+            destroy_item_count_action(5, 0),
+            DestroyItemCountAction::FullStack
+        );
+        assert_eq!(
+            destroy_item_count_action(5, 5),
+            DestroyItemCountAction::FullStack
+        );
+        assert_eq!(
+            destroy_item_count_action(5, 7),
+            DestroyItemCountAction::FullStack
+        );
+        assert_eq!(
+            destroy_item_count_action(5, 2),
+            DestroyItemCountAction::PartialStack { new_count: 3 }
         );
     }
 
