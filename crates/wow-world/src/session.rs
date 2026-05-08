@@ -32,12 +32,12 @@ use wow_database::{
 };
 use wow_entities::{
     ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef, ApplyEnchantmentTemplateRef,
-    CanStoreItemArgs, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, Item, ItemCreateInfo,
-    ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate, BUYBACK_SLOT_COUNT,
-    BUYBACK_SLOT_END, BUYBACK_SLOT_START, NULL_BAG, NULL_SLOT,
+    CanStoreItemArgs, CanUnequipItemArgs, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, Item,
+    ItemCreateInfo, ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate,
+    BUYBACK_SLOT_COUNT, BUYBACK_SLOT_END, BUYBACK_SLOT_START, NULL_BAG, NULL_SLOT,
     ObjectAccessor, PLAYER_SLOT_END, Player, PlayerEnchantTimeUpdate, PlayerInventoryStorage,
     PlayerItemTimeUpdate, SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan,
-    WorldObject, MAX_ITEM_SPELLS,
+    WorldObject, is_bag_pos, is_equipment_packed_pos, make_item_pos, MAX_ITEM_SPELLS,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_network::session_mgr::{InstanceLink, SessionManager};
@@ -1174,6 +1174,40 @@ impl WorldSession {
         }
 
         Some(player)
+    }
+
+    pub(crate) fn can_destroy_direct_item_like_cpp(
+        &self,
+        slot: u8,
+        source_item: Option<&Item>,
+        proto: Option<&ItemStorageTemplate>,
+        source_is_not_empty_bag: bool,
+    ) -> InventoryResult {
+        let pos = make_item_pos(INVENTORY_SLOT_BAG_0, slot);
+        if !is_equipment_packed_pos(pos) && !is_bag_pos(pos) {
+            return InventoryResult::Ok;
+        }
+
+        let Some(player) = self.direct_inventory_player_snapshot() else {
+            return InventoryResult::Ok;
+        };
+
+        player.can_unequip_item(CanUnequipItemArgs {
+            pos,
+            source_item,
+            proto,
+            swap: false,
+            source_is_not_empty_bag,
+            is_charmed: false,
+            is_in_combat: self.in_combat,
+            is_in_progress_arena: false,
+        })
+    }
+
+    pub(crate) fn direct_item_contains_items(&self, item_guid: ObjectGuid) -> bool {
+        self.inventory_item_objects
+            .values()
+            .any(|item| item.container_guid() == item_guid)
     }
 
     pub fn plan_store_new_direct_inventory_item(
@@ -4064,7 +4098,10 @@ mod tests {
         ItemSparseTemplateEntry, ItemStatsStore, ItemStore, SpellItemEnchantmentEntry,
         SpellItemEnchantmentStore,
     };
-    use wow_entities::{AccessorObjectRef, SendNewItemInstancePlan, SendNewItemModifier};
+    use wow_entities::{
+        AccessorObjectRef, EQUIPMENT_SLOT_CHEST, INVENTORY_SLOT_BAG_START,
+        SendNewItemInstancePlan, SendNewItemModifier,
+    };
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
     use wow_packet::ServerPacket;
 
@@ -4637,6 +4674,141 @@ mod tests {
         assert!(template.is_bound_account_wide());
         assert_eq!(session.item_template_inventory_type(100), Some(InventoryType::Bag as u8));
         assert_eq!(session.item_storage_template(101), None);
+    }
+
+    #[test]
+    fn direct_destroy_uses_cpp_can_unequip_gate_for_equipment_and_bags() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(player_guid));
+        session.set_item_store(Arc::new(ItemStore::from_records([
+            ItemRecord {
+                id: 100,
+                class_id: ItemClass::Armor as u8,
+                subclass_id: 0,
+                material: 0,
+                inventory_type: InventoryType::Chest as i8,
+                sheathe_type: 0,
+            },
+            ItemRecord {
+                id: 101,
+                class_id: ItemClass::Container as u8,
+                subclass_id: 0,
+                material: 0,
+                inventory_type: InventoryType::Bag as i8,
+                sheathe_type: 0,
+            },
+        ])));
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([
+            (
+                100,
+                ItemSparseTemplateEntry {
+                    flags: [0, 0, 0, 0],
+                    bag_family: 0,
+                    stackable: 1,
+                    max_count: 0,
+                    required_reputation_rank: 0,
+                    sell_price: 0,
+                    max_durability: 0,
+                    limit_category: 0,
+                    required_reputation_faction: 0,
+                    allowable_class: -1,
+                    bonding: 0,
+                    container_slots: 0,
+                    inventory_type: InventoryType::Chest as i8,
+                },
+            ),
+            (
+                101,
+                ItemSparseTemplateEntry {
+                    flags: [0, 0, 0, 0],
+                    bag_family: 0,
+                    stackable: 1,
+                    max_count: 0,
+                    required_reputation_rank: 0,
+                    sell_price: 0,
+                    max_durability: 0,
+                    limit_category: 0,
+                    required_reputation_faction: 0,
+                    allowable_class: -1,
+                    bonding: 0,
+                    container_slots: 16,
+                    inventory_type: InventoryType::Bag as i8,
+                },
+            ),
+        ])));
+
+        let chest_guid = ObjectGuid::create_item(1, 1000);
+        session.inventory_items.insert(EQUIPMENT_SLOT_CHEST, InventoryItem {
+            guid: chest_guid,
+            entry_id: 100,
+            db_guid: 1000,
+            inventory_type: Some(InventoryType::Chest as u8),
+        });
+        let chest_item = session.make_inventory_item_object(
+            chest_guid,
+            100,
+            player_guid,
+            1,
+            0,
+            ItemContext::None,
+            EQUIPMENT_SLOT_CHEST,
+        );
+        session.insert_inventory_item_object(chest_item);
+        let chest_proto = session.item_storage_template(100);
+        session.in_combat = true;
+        assert_eq!(
+            session.can_destroy_direct_item_like_cpp(
+                EQUIPMENT_SLOT_CHEST,
+                session.inventory_item_objects.get(&chest_guid),
+                chest_proto.as_ref(),
+                false,
+            ),
+            InventoryResult::NotInCombat
+        );
+        session.in_combat = false;
+
+        let bag_guid = ObjectGuid::create_item(1, 1001);
+        session.inventory_items.insert(INVENTORY_SLOT_BAG_START, InventoryItem {
+            guid: bag_guid,
+            entry_id: 101,
+            db_guid: 1001,
+            inventory_type: Some(InventoryType::Bag as u8),
+        });
+        let bag_item = session.make_inventory_item_object(
+            bag_guid,
+            101,
+            player_guid,
+            1,
+            0,
+            ItemContext::None,
+            INVENTORY_SLOT_BAG_START,
+        );
+        session.insert_inventory_item_object(bag_item);
+        let child_guid = ObjectGuid::create_item(1, 1002);
+        let mut child = session.make_inventory_item_object(
+            child_guid,
+            100,
+            player_guid,
+            1,
+            0,
+            ItemContext::None,
+            0,
+        );
+        child.set_container_guid_and_slot(bag_guid, 0);
+        session.insert_inventory_item_object(child);
+
+        let bag_proto = session.item_storage_template(101);
+        assert!(session.direct_item_contains_items(bag_guid));
+        assert_eq!(
+            session.can_destroy_direct_item_like_cpp(
+                INVENTORY_SLOT_BAG_START,
+                session.inventory_item_objects.get(&bag_guid),
+                bag_proto.as_ref(),
+                session.direct_item_contains_items(bag_guid),
+            ),
+            InventoryResult::DestroyNonemptyBag
+        );
     }
 
     #[test]

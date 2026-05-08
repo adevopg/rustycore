@@ -6427,6 +6427,18 @@ impl WorldSession {
         };
 
         let runtime_item = self.inventory_item_objects.get(&item.guid).cloned();
+        let item_proto = self.item_storage_template(item.entry_id);
+        let unequip_result = self.can_destroy_direct_item_like_cpp(
+            slot,
+            runtime_item.as_ref(),
+            item_proto.as_ref(),
+            self.direct_item_contains_items(item.guid),
+        );
+        if unequip_result != InventoryResult::Ok {
+            self.send_packet(&InventoryChangeFailure::error(unequip_result));
+            return;
+        }
+
         if self
             .item_template_flags(item.entry_id)
             .is_some_and(|flags| flags.contains(ItemFlags::NO_USER_DESTROY))
