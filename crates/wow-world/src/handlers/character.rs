@@ -567,8 +567,10 @@ const MAX_MONEY_AMOUNT: u64 = 99_999_999_999;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VendorBuyItem {
+    item_id: u32,
     item_type: i32,
     max_count: u32,
+    incr_time: u32,
     extended_cost: u32,
     buy_price: u64,
     max_durability: u32,
@@ -629,6 +631,32 @@ fn vendor_buy_direct_store_block_result(
     Some(InventoryResult::WrongSlot)
 }
 
+fn vendor_buy_stock_refill_count(
+    current_count: u32,
+    elapsed_secs: u64,
+    incr_time: u32,
+    buy_count: u32,
+    max_count: u32,
+) -> (u32, bool) {
+    if max_count == 0 || current_count >= max_count || incr_time == 0 {
+        // C++ assumes nonzero incrtime for finite stock; keep invalid DB rows from dividing by zero.
+        return (current_count.min(max_count), current_count >= max_count);
+    }
+
+    let increments = elapsed_secs / u64::from(incr_time);
+    if increments == 0 {
+        return (current_count, false);
+    }
+
+    let restored = increments.saturating_mul(u64::from(buy_count.max(1)));
+    let new_count = u64::from(current_count).saturating_add(restored);
+    if new_count >= u64::from(max_count) {
+        (max_count, true)
+    } else {
+        (new_count as u32, false)
+    }
+}
+
 fn vendor_buy_direct_inventory_destination(
     player_guid: ObjectGuid,
     buy: &BuyItem,
@@ -650,6 +678,86 @@ fn vendor_buy_direct_inventory_destination(
 // ── Handler implementations ─────────────────────────────────────────
 
 impl WorldSession {
+    fn vendor_stock_now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0)
+    }
+
+    fn vendor_item_current_count(
+        &mut self,
+        vendor_guid: ObjectGuid,
+        item_id: u32,
+        max_count: u32,
+        incr_time: u32,
+        buy_count: u32,
+    ) -> u32 {
+        if max_count == 0 {
+            return 0;
+        }
+
+        let key = (vendor_guid, item_id);
+        let now = Self::vendor_stock_now_secs();
+        let Some(count) = self.vendor_item_counts.get(&key).copied() else {
+            return max_count;
+        };
+
+        let elapsed = now.saturating_sub(count.last_increment_time);
+        let (new_count, full) = vendor_buy_stock_refill_count(
+            count.count,
+            elapsed,
+            incr_time,
+            buy_count,
+            max_count,
+        );
+        if full {
+            self.vendor_item_counts.remove(&key);
+            max_count
+        } else {
+            if let Some(count) = self.vendor_item_counts.get_mut(&key) {
+                count.count = new_count;
+                if incr_time > 0 && elapsed >= u64::from(incr_time) {
+                    count.last_increment_time = now;
+                }
+                count.count
+            } else {
+                new_count
+            }
+        }
+    }
+
+    fn update_vendor_item_current_count(
+        &mut self,
+        vendor_guid: ObjectGuid,
+        item_id: u32,
+        max_count: u32,
+        incr_time: u32,
+        buy_count: u32,
+        used_count: u32,
+    ) -> u32 {
+        if max_count == 0 {
+            return 0;
+        }
+
+        let current = self.vendor_item_current_count(
+            vendor_guid,
+            item_id,
+            max_count,
+            incr_time,
+            buy_count,
+        );
+        let new_count = current.saturating_sub(used_count);
+        self.vendor_item_counts.insert(
+            (vendor_guid, item_id),
+            crate::session::VendorItemCount {
+                count: new_count,
+                last_increment_time: Self::vendor_stock_now_secs(),
+            },
+        );
+        new_count
+    }
+
     async fn resolve_vendor_buy_item_by_visible_slot(
         &self,
         world_db: &WorldDatabase,
@@ -691,11 +799,13 @@ impl WorldSession {
                             }
 
                             return Some(VendorBuyItem {
+                                item_id: row_item_id,
                                 item_type: result
                                     .try_read::<u8>(3)
                                     .unwrap_or(ItemVendorType::Item as u8)
                                     as i32,
                                 max_count: result.try_read::<u32>(1).unwrap_or(0),
+                                incr_time: result.try_read::<u32>(10).unwrap_or(0),
                                 extended_cost: result.try_read::<u32>(2).unwrap_or(0),
                                 buy_price: result
                                     .try_read::<i64>(5)
@@ -3317,6 +3427,7 @@ impl WorldSession {
                 let stack_count: i32 = result.try_read::<i64>(8).map(|v| v as i32)
                     .unwrap_or(1);
                 let do_not_filter: bool = result.try_read::<u8>(9).map(|v| v != 0).unwrap_or(false);
+                let incr_time: u32 = result.try_read::<u32>(10).unwrap_or(0);
 
                 // Solo enviar items con ID válido; 0 o negativo el cliente lo muestra como ? y nombre vacío
                 // Además filtrar items que no existen en Item.db2 — igual que C#:
@@ -3334,11 +3445,18 @@ impl WorldSession {
                         if !result.next_row() { break; }
                         continue;
                     }
+                    let current_count = self.vendor_item_current_count(
+                        vendor_guid,
+                        item_id as u32,
+                        maxcount.max(0) as u32,
+                        incr_time,
+                        stack_count.max(1) as u32,
+                    );
                     items.push(VendorItem {
                         muid: slot,
                         item_id,
                         item_type,
-                        quantity: if maxcount == 0 { -1 } else { maxcount },
+                        quantity: if maxcount == 0 { -1 } else { current_count as i32 },
                         price: buy_price,
                         durability,
                         stack_count: stack_count.max(1),
@@ -3452,7 +3570,14 @@ impl WorldSession {
                 return;
             }
         };
-        if vendor_item.max_count != 0 && vendor_item.max_count < quantity {
+        let vendor_current_count = self.vendor_item_current_count(
+            buy.vendor_guid,
+            vendor_item.item_id,
+            vendor_item.max_count,
+            vendor_item.incr_time,
+            vendor_item.buy_count,
+        );
+        if vendor_item.max_count != 0 && vendor_current_count < quantity {
             self.send_buy_error(
                 BuyResult::ItemAlreadySold,
                 Some(buy.vendor_guid),
@@ -3636,12 +3761,24 @@ impl WorldSession {
             "BuyItem: player {:?} bought item {} across {} destination(s) for {} copper (remaining: {})",
             player_guid, buy.item_id, store_dest.len(), buy_price, self.player_gold
         );
+        let new_quantity = if vendor_item.max_count == 0 {
+            -1
+        } else {
+            self.update_vendor_item_current_count(
+                buy.vendor_guid,
+                vendor_item.item_id,
+                vendor_item.max_count,
+                vendor_item.incr_time,
+                vendor_item.buy_count,
+                quantity,
+            ) as i32
+        };
 
         // ── Send BuySucceeded ──
         self.send_packet(&BuySucceeded {
             vendor_guid: buy.vendor_guid,
             muid: buy.muid,
-            new_quantity: -1, // unlimited stock
+            new_quantity,
             quantity_bought: quantity as i32,
         });
 
@@ -4929,6 +5066,64 @@ mod tests {
             vendor_buy_direct_store_block_result(INVENTORY_SLOT_BAG_0, 0, 1),
             Some(InventoryResult::NotEquippable)
         );
+    }
+
+    #[test]
+    fn vendor_buy_stock_refill_matches_cpp_increment_and_full_reset() {
+        assert_eq!(
+            vendor_buy_stock_refill_count(2, 20, 10, 5, 20),
+            (12, false)
+        );
+        assert_eq!(
+            vendor_buy_stock_refill_count(18, 10, 10, 5, 20),
+            (20, true)
+        );
+        assert_eq!(
+            vendor_buy_stock_refill_count(2, 9, 10, 5, 20),
+            (2, false)
+        );
+    }
+
+    #[test]
+    fn vendor_item_current_count_updates_like_cpp() {
+        let (_pkt_tx, pkt_rx) = flume::bounded::<wow_packet::WorldPacket>(8);
+        let (send_tx, _send_rx) = flume::bounded::<Vec<u8>>(8);
+        let mut session = WorldSession::new(
+            1,
+            "TestAccount".into(),
+            0,
+            2,
+            9,
+            54261,
+            vec![0u8; 40],
+            "esES".into(),
+            pkt_rx,
+            send_tx,
+        );
+        let vendor_guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 7, 1);
+
+        assert_eq!(
+            session.vendor_item_current_count(vendor_guid, 700, 5, 60, 1),
+            5
+        );
+        assert_eq!(
+            session.update_vendor_item_current_count(vendor_guid, 700, 5, 60, 1, 2),
+            3
+        );
+        assert_eq!(
+            session.vendor_item_current_count(vendor_guid, 700, 5, 60, 1),
+            3
+        );
+
+        if let Some(count) = session.vendor_item_counts.get_mut(&(vendor_guid, 700)) {
+            count.last_increment_time = WorldSession::vendor_stock_now_secs().saturating_sub(120);
+        }
+
+        assert_eq!(
+            session.vendor_item_current_count(vendor_guid, 700, 5, 60, 1),
+            5
+        );
+        assert!(!session.vendor_item_counts.contains_key(&(vendor_guid, 700)));
     }
 
     #[test]

@@ -156,12 +156,13 @@ impl StatementDef for WorldStatements {
             Self::DEL_NPC_VENDOR => "DELETE FROM npc_vendor WHERE entry = ? AND item = ? AND type = ?",
             Self::SEL_NPC_VENDOR_REF => "SELECT item, maxcount, incrtime, ExtendedCost, type, BonusListIDs, PlayerConditionID, IgnoreFiltering FROM npc_vendor WHERE entry = ? ORDER BY slot ASC",
             // Cols: 0=item, 1=maxcount, 2=ExtendedCost, 3=type, 4=slot,
-            //       5=BuyPrice, 6=SellPrice, 7=MaxDurability, 8=VendorStackCount, 9=IgnoreFiltering
+            //       5=BuyPrice, 6=SellPrice, 7=MaxDurability, 8=VendorStackCount,
+            //       9=IgnoreFiltering, 10=incrtime
             Self::SEL_VENDOR_ITEMS => concat!(
                 "SELECT nv.item, nv.maxcount, nv.ExtendedCost, nv.type, nv.slot, ",
                 "COALESCE(isp.BuyPrice, 0), COALESCE(isp.SellPrice, 0), ",
                 "COALESCE(isp.MaxDurability, 0), COALESCE(isp.VendorStackCount, 1), ",
-                "nv.IgnoreFiltering ",
+                "nv.IgnoreFiltering, nv.incrtime ",
                 "FROM npc_vendor nv ",
                 "LEFT JOIN hotfixes.item_sparse isp ON nv.item = isp.ID ",
                 "WHERE nv.entry = ? ORDER BY nv.slot ASC"

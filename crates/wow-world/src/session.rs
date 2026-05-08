@@ -277,6 +277,9 @@ pub struct WorldSession {
     /// Legacy per-session storage. New code should prefer `MapManager` access
     /// (see `map_manager` field) which is shared across sessions on the same map.
     pub(crate) creatures: std::collections::HashMap<wow_core::ObjectGuid, wow_ai::CreatureAI>,
+    /// Per-session finite vendor stock state, mirroring Creature::m_vendorItemCounts
+    /// until vendor ownership moves into the shared creature model.
+    pub(crate) vendor_item_counts: HashMap<(wow_core::ObjectGuid, u32), VendorItemCount>,
 
     /// Tick counter for creature movement (throttle to every N ticks).
     pub(crate) creature_tick: u32,
@@ -370,6 +373,13 @@ pub struct InventoryItem {
     /// InventoryType from Item.db2 (e.g. 1=Head, 5=Chest, 13=Weapon).
     /// Loaded from the item store at login, with slot-based fallback.
     pub inventory_type: Option<u8>,
+}
+
+/// Current finite stock for a vendor item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VendorItemCount {
+    pub count: u32,
+    pub last_increment_time: u64,
 }
 
 /// An aura applied to the player.
@@ -506,6 +516,7 @@ impl WorldSession {
             player_position: None,
             player_name: None,
             creatures: std::collections::HashMap::new(),
+            vendor_item_counts: HashMap::new(),
             creature_tick: 0,
             map_manager: None,
             combat_target: None,
