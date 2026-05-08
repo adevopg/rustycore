@@ -321,7 +321,9 @@ impl StatementDef for CharStatements {
                  JOIN item_instance ii ON ci.item = ii.guid \
                  LEFT JOIN item_refund_instance ir \
                    ON ir.item_guid = ci.item AND ir.player_guid = ci.guid \
-                 WHERE ci.guid = ? AND bag_ci.bag = 0 AND bag_ci.slot >= 30 AND bag_ci.slot < 34"
+                 WHERE ci.guid = ? AND bag_ci.bag = 0 AND ((bag_ci.slot >= 30 AND bag_ci.slot < 34) OR \
+                 (bag_ci.slot >= 87 AND bag_ci.slot < 94) OR \
+                 (bag_ci.slot >= 34 AND bag_ci.slot < 35))"
             }
             Self::SEL_ITEM_REFUNDS => {
                 "SELECT paidMoney, paidExtendedCost \

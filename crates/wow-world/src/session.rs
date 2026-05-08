@@ -32,9 +32,10 @@ use wow_database::{
 };
 use wow_entities::{
     ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef, ApplyEnchantmentTemplateRef,
-    CanStoreItemArgs, CanUnequipItemArgs, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0,
-    INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo, ItemPosCount,
-    ItemSlotRef, ItemStorageRef, ItemStorageTemplate,
+    BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, CanStoreItemArgs, CanUnequipItemArgs,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END,
+    INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo, ItemPosCount, ItemSlotRef, ItemStorageRef,
+    ItemStorageTemplate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
     BUYBACK_SLOT_COUNT, BUYBACK_SLOT_END, BUYBACK_SLOT_START, NULL_BAG, NULL_SLOT,
     ObjectAccessor, PLAYER_SLOT_END, Player, PlayerEnchantTimeUpdate, PlayerInventoryStorage,
     PlayerItemTimeUpdate, SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan,
@@ -505,6 +506,12 @@ pub struct PendingRespawn {
     pub npc_flags: u32,
     pub unit_flags: u32,
     pub map_id: u16,
+}
+
+fn is_represented_bag_slot(slot: u8) -> bool {
+    (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot)
+        || (BANK_SLOT_BAG_START..BANK_SLOT_BAG_END).contains(&slot)
+        || (REAGENT_BAG_SLOT_START..REAGENT_BAG_SLOT_END).contains(&slot)
 }
 
 impl WorldSession {
@@ -1151,15 +1158,15 @@ impl WorldSession {
 
     /// Resolve an inventory item by (bag, slot) following C++ Player::GetItemByPos.
     ///
-    /// - `bag == INVENTORY_SLOT_BAG_0`  → top-level direct inventory (buyback excluded).
-    /// - `bag` in carried bag range      → search nested runtime items inside the bag.
+    /// - `bag == INVENTORY_SLOT_BAG_0`       → top-level direct inventory (buyback excluded).
+    /// - `bag` in carried/bank/reagent range → search nested runtime items inside the bag.
     pub(crate) fn get_inventory_item_by_pos(&self, bag: u8, slot: u8) -> Option<InventoryItem> {
         if bag == INVENTORY_SLOT_BAG_0 {
-            if Self::is_buyback_slot(slot) {
+            if (slot as usize) >= PLAYER_SLOT_END || Self::is_buyback_slot(slot) {
                 return None;
             }
             self.inventory_items.get(&slot).cloned()
-        } else if (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&bag) {
+        } else if is_represented_bag_slot(bag) {
             let bag_item = self.inventory_items.get(&bag)?;
             let bag_guid = bag_item.guid;
             let nested = self
@@ -4172,8 +4179,8 @@ mod tests {
         SpellItemEnchantmentStore,
     };
     use wow_entities::{
-        AccessorObjectRef, EQUIPMENT_SLOT_CHEST, INVENTORY_SLOT_BAG_START,
-        SendNewItemInstancePlan, SendNewItemModifier,
+        AccessorObjectRef, BANK_SLOT_BAG_START, EQUIPMENT_SLOT_CHEST, INVENTORY_SLOT_BAG_START,
+        REAGENT_BAG_SLOT_START, SendNewItemInstancePlan, SendNewItemModifier,
     };
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
     use wow_packet::ServerPacket;
@@ -4858,6 +4865,36 @@ mod tests {
     }
 
     #[test]
+    fn open_item_get_inventory_item_by_pos_resolves_nested_bank_bag_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(player_guid));
+        let (_, child_guid) =
+            insert_open_item_bag_with_child(&mut session, player_guid, BANK_SLOT_BAG_START, 5);
+
+        assert_eq!(
+            session.get_inventory_item_by_pos(BANK_SLOT_BAG_START, 5).map(|i| i.guid),
+            Some(child_guid)
+        );
+    }
+
+    #[test]
+    fn open_item_get_inventory_item_by_pos_resolves_nested_reagent_bag_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(player_guid));
+        let (_, child_guid) =
+            insert_open_item_bag_with_child(&mut session, player_guid, REAGENT_BAG_SLOT_START, 5);
+
+        assert_eq!(
+            session
+                .get_inventory_item_by_pos(REAGENT_BAG_SLOT_START, 5)
+                .map(|i| i.guid),
+            Some(child_guid)
+        );
+    }
+
+    #[test]
     fn open_item_get_inventory_item_by_pos_missing_bag_or_empty_slot_is_missing() {
         let (mut session, _, _) = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
@@ -4895,21 +4932,15 @@ mod tests {
         assert_eq!(child.position(), u16::from(INVENTORY_SLOT_BAG_START) << 8 | 5);
     }
 
-    #[tokio::test]
-    async fn open_item_nested_has_loot_opens_without_internal_bag_error() {
+    async fn assert_open_item_nested_has_loot_opens_without_internal_bag_error(bag_slot: u8) {
         let (mut session, _, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
         session.set_player_guid(Some(player_guid));
         install_open_item_has_loot_template(&mut session, 700);
-        let (_, child_guid) = insert_open_item_bag_with_child(
-            &mut session,
-            player_guid,
-            INVENTORY_SLOT_BAG_START,
-            5,
-        );
+        let (_, child_guid) = insert_open_item_bag_with_child(&mut session, player_guid, bag_slot, 5);
 
         session
-            .handle_open_item(WorldPacket::from_bytes(&[INVENTORY_SLOT_BAG_START, 5]))
+            .handle_open_item(WorldPacket::from_bytes(&[bag_slot, 5]))
             .await;
 
         let sent = send_rx.try_recv().unwrap();
@@ -4925,17 +4956,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn open_item_release_destroy_nested_item_leaves_container_in_place() {
+    #[tokio::test]
+    async fn open_item_nested_has_loot_opens_without_internal_bag_error() {
+        assert_open_item_nested_has_loot_opens_without_internal_bag_error(INVENTORY_SLOT_BAG_START)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn open_item_nested_bank_bag_has_loot_opens_without_internal_bag_error() {
+        assert_open_item_nested_has_loot_opens_without_internal_bag_error(BANK_SLOT_BAG_START)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn open_item_nested_reagent_bag_has_loot_opens_without_internal_bag_error() {
+        assert_open_item_nested_has_loot_opens_without_internal_bag_error(REAGENT_BAG_SLOT_START)
+            .await;
+    }
+
+    fn assert_open_item_release_destroy_nested_item_leaves_container_in_place(bag_slot: u8) {
         let (mut session, _, _) = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
         session.set_player_guid(Some(player_guid));
-        let (bag_guid, child_guid) = insert_open_item_bag_with_child(
-            &mut session,
-            player_guid,
-            INVENTORY_SLOT_BAG_START,
-            5,
-        );
+        let (bag_guid, child_guid) =
+            insert_open_item_bag_with_child(&mut session, player_guid, bag_slot, 5);
         let child = session.inventory_item_objects.get(&child_guid).unwrap();
         let child_bag = child.bag_slot();
         let child_slot = child.slot();
@@ -4947,8 +4991,18 @@ mod tests {
         session.remove_fully_looted_runtime_item(child_bag, child_slot, child_guid);
         assert!(session.get_inventory_item_by_pos(child_bag, child_slot).is_none());
         assert!(!session.inventory_item_objects.contains_key(&child_guid));
-        assert!(session.inventory_items.contains_key(&INVENTORY_SLOT_BAG_START));
-        assert_eq!(session.inventory_items[&INVENTORY_SLOT_BAG_START].guid, bag_guid);
+        assert!(session.inventory_items.contains_key(&bag_slot));
+        assert_eq!(session.inventory_items[&bag_slot].guid, bag_guid);
+    }
+
+    #[test]
+    fn open_item_release_destroy_nested_item_leaves_container_in_place() {
+        assert_open_item_release_destroy_nested_item_leaves_container_in_place(INVENTORY_SLOT_BAG_START);
+    }
+
+    #[test]
+    fn open_item_release_destroy_nested_bank_bag_item_leaves_container_in_place() {
+        assert_open_item_release_destroy_nested_item_leaves_container_in_place(BANK_SLOT_BAG_START);
     }
 
     #[test]

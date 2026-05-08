@@ -22,10 +22,10 @@ use wow_database::{
     WorldStatements,
 };
 use wow_entities::{
-    BUYBACK_SLOT_COUNT, BUYBACK_SLOT_START, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0,
-    INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE,
-    NULL_BAG, NULL_SLOT, is_equipment_pos,
-    is_inventory_pos,
+    BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_COUNT, BUYBACK_SLOT_START,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END,
+    INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT,
+    REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, is_equipment_pos, is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
@@ -1184,6 +1184,12 @@ fn vendor_buy_direct_inventory_destination(
 }
 
 // ── Handler implementations ─────────────────────────────────────────
+
+fn is_represented_bag_slot(slot: u8) -> bool {
+    (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot)
+        || (BANK_SLOT_BAG_START..BANK_SLOT_BAG_END).contains(&slot)
+        || (REAGENT_BAG_SLOT_START..REAGENT_BAG_SLOT_END).contains(&slot)
+}
 
 impl WorldSession {
     fn vendor_stock_now_secs() -> u64 {
@@ -2350,10 +2356,10 @@ impl WorldSession {
                 }
             }
 
-            // ── Load carried bag contents (nested items) ──
+            // ── Load represented bag contents (nested items) ──
             // C++ `Player::_LoadInventory` loads child rows after their top-level
             // bag rows. `character_inventory.bag` stores the bag item GUID, so the
-            // query joins back to the carried bag row and returns its top-level slot.
+            // query joins back to the represented bag row and returns its top-level slot.
             {
                 let mut bag_stmt = char_db.prepare(CharStatements::SEL_CHAR_BAG_CONTENTS);
                 bag_stmt.set_u64(0, guid.counter() as u64);
@@ -2373,9 +2379,7 @@ impl WorldSession {
                                     .unwrap_or(ItemContext::None);
                                 let item_flags = bag_result.try_read::<u32>(7).unwrap_or(0);
                                 let item_played_time = bag_result.try_read::<u32>(8).unwrap_or(0);
-                                if item_entry > 0
-                                    && (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&bag_slot)
-                                {
+                                if item_entry > 0 && is_represented_bag_slot(bag_slot) {
                                     if let Some(bag_item_guid) = self
                                         .inventory_items
                                         .get(&bag_slot)
@@ -2400,7 +2404,7 @@ impl WorldSession {
                                         self.insert_inventory_item_object(item_object);
                                     } else {
                                         warn!(
-                                            "Skipping bag content {:?}/{} for {:?}: missing represented carried bag slot {}",
+                                            "Skipping bag content {:?}/{} for {:?}: missing represented bag slot {}",
                                             ObjectGuid::create_item(realm_id, item_db_guid as i64),
                                             inner_slot,
                                             guid,
