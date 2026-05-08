@@ -565,6 +565,7 @@ fn parse_equipment_cache(cache: &str) -> [VisualItemInfo; 34] {
 }
 
 const MAX_MONEY_AMOUNT: u64 = 99_999_999_999;
+const MAX_VENDOR_ITEMS_CPP: usize = 150;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VendorBuyItem {
@@ -601,6 +602,10 @@ fn vendor_buy_quantity_and_price(buy_price: u64, buy_count: u32, quantity: u32) 
 
 fn vendor_buy_packet_quantity_to_cpp_count(quantity: i32) -> u32 {
     u32::from((quantity as u8).max(1))
+}
+
+fn vendor_list_reaches_cpp_item_limit(count: usize) -> bool {
+    count >= MAX_VENDOR_ITEMS_CPP
 }
 
 fn vendor_buy_muid_to_cpp_slot(muid: i32) -> Option<u32> {
@@ -3534,7 +3539,7 @@ impl WorldSession {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(entry);
 
-        while let Some(vendor_entry) = queue.pop_front() {
+        'vendor_expansion: while let Some(vendor_entry) = queue.pop_front() {
             if !expanded.insert(vendor_entry) {
                 continue; // already expanded (avoid cycles)
             }
@@ -3655,6 +3660,9 @@ impl WorldSession {
                         do_not_filter,
                         refundable,
                     });
+                    if vendor_list_reaches_cpp_item_limit(items.len()) {
+                        break 'vendor_expansion;
+                    }
                 } else if item_id < 0 {
                     let ref_entry = (-item_id) as u32;
                     queue.push_back(ref_entry);
@@ -5265,6 +5273,13 @@ mod tests {
         assert_eq!(vendor_buy_muid_to_cpp_slot(1), Some(0));
         assert_eq!(vendor_buy_muid_to_cpp_slot(2), Some(1));
         assert_eq!(vendor_buy_muid_to_cpp_slot(-1), Some(u32::MAX - 1));
+    }
+
+    #[test]
+    fn vendor_list_item_limit_matches_cpp_cap() {
+        assert!(!vendor_list_reaches_cpp_item_limit(149));
+        assert!(vendor_list_reaches_cpp_item_limit(150));
+        assert!(vendor_list_reaches_cpp_item_limit(151));
     }
 
     #[test]
