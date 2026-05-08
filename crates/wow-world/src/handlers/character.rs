@@ -22,7 +22,8 @@ use wow_database::{
     WorldStatements,
 };
 use wow_entities::{
-    INVENTORY_SLOT_BAG_0, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT, is_equipment_pos, is_inventory_pos,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE,
+    NULL_BAG, NULL_SLOT, is_equipment_pos, is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
@@ -305,6 +306,15 @@ inventory::submit! {
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::ThreadUnsafe,
         handler_name: "handle_sell_item",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::ItemPurchaseRefund,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_item_purchase_refund",
     }
 }
 
@@ -5032,6 +5042,486 @@ impl WorldSession {
             self.player_gold,
             Some((slot, ObjectGuid::EMPTY)),
         ));
+    }
+
+    /// Handle CMSG_ITEM_PURCHASE_REFUND.
+    ///
+    /// C++ ref: `ItemHandler.HandleItemRefund` -> `Player::RefundItem`.
+    pub async fn handle_item_purchase_refund(&mut self, refund: ItemPurchaseRefund) {
+        const REFUND_RESULT_OK: u8 = 0;
+        const REFUND_RESULT_ERR_GENERIC: u8 = 10;
+
+        #[derive(Debug, Clone)]
+        struct PlannedNewStack {
+            slot: u8,
+            entry_id: u32,
+            count: u32,
+            max_durability: u32,
+        }
+
+        let player_guid = match self.player_guid {
+            Some(guid) => guid,
+            None => return,
+        };
+        let map_id = self.current_map_id;
+
+        let Some((refund_slot, refund_inv_item)) = self
+            .inventory_items
+            .iter()
+            .find(|(_, item)| item.guid == refund.item_guid)
+            .map(|(&slot, item)| (slot, item.clone()))
+        else {
+            warn!("ItemPurchaseRefund: item {:?} not in inventory", refund.item_guid);
+            return;
+        };
+
+        let Some(refund_item) = self.inventory_item_objects.get(&refund.item_guid).cloned() else {
+            warn!(
+                "ItemPurchaseRefund: item {:?} missing runtime object",
+                refund.item_guid
+            );
+            return;
+        };
+
+        if !refund_item.is_refundable() {
+            return;
+        }
+
+        let char_db = match self.char_db() {
+            Some(db) => Arc::clone(db),
+            None => return,
+        };
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+
+        if refund_item.is_refund_expired_at(now_secs)
+            || refund_item.refund_recipient() != player_guid
+        {
+            let new_flags = refund_item.item_flags_bits() & !ItemFieldFlags::REFUNDABLE.bits();
+            let mut tx = SqlTransaction::new();
+            append_item_refund_clear_statements(
+                char_db.as_ref(),
+                &mut tx,
+                refund_inv_item.db_guid,
+                new_flags,
+            );
+            if let Err(e) = char_db.commit_transaction(tx).await {
+                warn!("ItemPurchaseRefund: refund cleanup transaction failed: {e}");
+                return;
+            }
+
+            if let Some(item) = self.inventory_item_objects.get_mut(&refund.item_guid) {
+                item.set_not_refundable();
+            }
+            self.sync_object_accessor_player();
+            self.send_packet(&ItemExpirePurchaseRefund {
+                item_guid: refund.item_guid,
+            });
+
+            if refund_item.is_refund_expired_at(now_secs) {
+                self.send_packet(&ItemPurchaseRefundResult {
+                    item_guid: refund.item_guid,
+                    result: REFUND_RESULT_ERR_GENERIC,
+                    contents: None,
+                });
+            }
+            return;
+        }
+
+        let Some(extended_cost) = self
+            .item_extended_cost_store()
+            .and_then(|store| store.get(refund_item.paid_extended_cost()))
+            .copied()
+        else {
+            return;
+        };
+
+        let contents = super::misc::item_purchase_contents_from_extended_cost(
+            &extended_cost,
+            refund_item.paid_money(),
+        );
+
+        let mut item_costs = Vec::new();
+        for i in 0..5 {
+            let item_id = extended_cost.item_id[i] as u32;
+            let count = extended_cost.item_count[i] as u32;
+            if item_id != 0 && count != 0 {
+                item_costs.push((item_id, count));
+            }
+        }
+
+        let mut currency_costs = Vec::new();
+        for i in 0..5 {
+            let season_earned = match i {
+                0 => extended_cost
+                    .flags
+                    .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_1),
+                1 => extended_cost
+                    .flags
+                    .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_2),
+                2 => extended_cost
+                    .flags
+                    .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_3),
+                3 => extended_cost
+                    .flags
+                    .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_4),
+                4 => extended_cost
+                    .flags
+                    .contains(ItemExtendedCostFlags::REQUIRE_SEASON_EARNED_5),
+                _ => false,
+            };
+            if season_earned {
+                continue;
+            }
+            let currency_id = extended_cost.currency_id[i] as u32;
+            let count = extended_cost.currency_count[i] as u32;
+            if currency_id != 0 && count != 0 {
+                currency_costs.push((currency_id, count));
+            }
+        }
+
+        let mut planned_existing_counts =
+            std::collections::HashMap::<u8, (ObjectGuid, u64, u32)>::new();
+        let mut planned_new_stacks = Vec::<PlannedNewStack>::new();
+        for &(entry_id, count) in &item_costs {
+            let (store_result, store_dest, _) =
+                match self.plan_store_new_direct_inventory_item(entry_id, count) {
+                    Some(plan) => plan,
+                    None => {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    }
+                };
+            if store_result != InventoryResult::Ok {
+                self.send_packet(&ItemPurchaseRefundResult {
+                    item_guid: refund.item_guid,
+                    result: REFUND_RESULT_ERR_GENERIC,
+                    contents: Some(contents),
+                });
+                return;
+            }
+
+            for dest in store_dest {
+                let bag = (dest.pos >> 8) as u8;
+                let slot = (dest.pos & 0x00FF) as u8;
+                if bag != u8::from(INVENTORY_SLOT_BAG_0) {
+                    self.send_packet(&ItemPurchaseRefundResult {
+                        item_guid: refund.item_guid,
+                        result: REFUND_RESULT_ERR_GENERIC,
+                        contents: Some(contents),
+                    });
+                    return;
+                }
+
+                let max_stack = self
+                    .item_storage_template(entry_id)
+                    .map(|template| template.max_stack_size)
+                    .unwrap_or(1)
+                    .max(1);
+
+                if let Some(existing) = self.inventory_items.get(&slot) {
+                    let Some(existing_object) = self.inventory_item_objects.get(&existing.guid)
+                    else {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    };
+                    let base_count = planned_existing_counts
+                        .get(&slot)
+                        .map(|(_, _, count)| *count)
+                        .unwrap_or_else(|| existing_object.count());
+                    let new_count = base_count.saturating_add(dest.count);
+                    if existing.entry_id != entry_id || new_count > max_stack {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    }
+                    planned_existing_counts.insert(
+                        slot,
+                        (existing.guid, existing.db_guid, new_count),
+                    );
+                    continue;
+                }
+
+                if let Some(new_stack) = planned_new_stacks
+                    .iter_mut()
+                    .find(|stack| stack.slot == slot)
+                {
+                    if new_stack.entry_id == entry_id
+                        && new_stack.count.saturating_add(dest.count) <= max_stack
+                    {
+                        new_stack.count = new_stack.count.saturating_add(dest.count);
+                        continue;
+                    }
+
+                    let backpack_end =
+                        INVENTORY_SLOT_ITEM_START.saturating_add(INVENTORY_DEFAULT_SIZE);
+                    let Some(alt_slot) = (INVENTORY_SLOT_ITEM_START..backpack_end).find(|slot| {
+                        !self.inventory_items.contains_key(slot)
+                            && !planned_new_stacks
+                                .iter()
+                                .any(|stack| stack.slot == *slot)
+                    }) else {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    };
+                    let Some((InventoryResult::Ok, alt_dest, _)) = self
+                        .plan_store_new_direct_inventory_item_at(
+                            entry_id,
+                            dest.count,
+                            u8::from(INVENTORY_SLOT_BAG_0),
+                            alt_slot,
+                        )
+                    else {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    };
+                    if alt_dest.len() != 1 || (alt_dest[0].pos & 0x00FF) as u8 != alt_slot {
+                        self.send_packet(&ItemPurchaseRefundResult {
+                            item_guid: refund.item_guid,
+                            result: REFUND_RESULT_ERR_GENERIC,
+                            contents: Some(contents),
+                        });
+                        return;
+                    }
+                    planned_new_stacks.push(PlannedNewStack {
+                        slot: alt_slot,
+                        entry_id,
+                        count: dest.count,
+                        max_durability: self.item_template_max_durability(entry_id),
+                    });
+                    continue;
+                }
+
+                planned_new_stacks.push(PlannedNewStack {
+                    slot,
+                    entry_id,
+                    count: dest.count,
+                    max_durability: self.item_template_max_durability(entry_id),
+                });
+            }
+        }
+
+        let mut tx = SqlTransaction::new();
+        let mut del_refund = char_db.prepare(CharStatements::DEL_ITEM_REFUND_INSTANCE);
+        del_refund.set_u64(0, refund_inv_item.db_guid);
+        tx.append(del_refund);
+
+        let mut del_inv = char_db.prepare(CharStatements::DEL_CHAR_INVENTORY_ITEM);
+        del_inv.set_u64(0, player_guid.counter() as u64);
+        del_inv.set_u64(1, refund_inv_item.db_guid);
+        tx.append(del_inv);
+
+        let mut del_item = char_db.prepare(CharStatements::DEL_ITEM_INSTANCE);
+        del_item.set_u64(0, refund_inv_item.db_guid);
+        tx.append(del_item);
+
+        let new_gold = self.player_gold.saturating_add(refund_item.paid_money());
+        let mut upd_money = char_db.prepare(CharStatements::UPD_CHAR_MONEY);
+        upd_money.set_u64(0, new_gold);
+        upd_money.set_u64(1, player_guid.counter() as u64);
+        tx.append(upd_money);
+
+        for &(_, db_guid, new_count) in planned_existing_counts.values() {
+            let mut upd_count = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_COUNT);
+            upd_count.set_u32(0, new_count);
+            upd_count.set_u64(1, db_guid);
+            tx.append(upd_count);
+        }
+
+        let realm_id = self.realm_id();
+        let mut created_new_stacks = Vec::new();
+        if !planned_new_stacks.is_empty() {
+            let max_guid_stmt = char_db.prepare(CharStatements::SEL_MAX_ITEM_GUID);
+            let mut next_item_guid = match char_db.query(&max_guid_stmt).await {
+                Ok(r) => r.try_read::<u64>(0).unwrap_or(0) + 1,
+                Err(_) => 1,
+            };
+
+            for stack in &planned_new_stacks {
+                let db_guid = next_item_guid;
+                next_item_guid += 1;
+                let item_guid = ObjectGuid::create_item(realm_id, db_guid as i64);
+
+                let mut ins_item = char_db.prepare(CharStatements::INS_ITEM_INSTANCE);
+                ins_item.set_u64(0, db_guid);
+                ins_item.set_u32(1, stack.entry_id);
+                ins_item.set_u64(2, player_guid.counter() as u64);
+                ins_item.set_u32(3, stack.count);
+                ins_item.set_u32(4, stack.max_durability);
+                tx.append(ins_item);
+
+                let mut ins_inv = char_db.prepare(CharStatements::INS_CHAR_INVENTORY);
+                ins_inv.set_u64(0, player_guid.counter() as u64);
+                ins_inv.set_u8(1, stack.slot);
+                ins_inv.set_u64(2, db_guid);
+                tx.append(ins_inv);
+
+                created_new_stacks.push((stack.clone(), db_guid, item_guid));
+            }
+        }
+
+        let currency_snapshot = self.player_currencies.clone();
+        let mut currency_deltas = Vec::new();
+        for &(currency_id, amount) in &currency_costs {
+            match self.add_currency_item_refund(currency_id, amount) {
+                Ok(Some(delta)) => currency_deltas.push(delta),
+                Ok(None) => {}
+                Err(()) => {
+                    self.player_currencies = currency_snapshot;
+                    self.send_packet(&ItemPurchaseRefundResult {
+                        item_guid: refund.item_guid,
+                        result: REFUND_RESULT_ERR_GENERIC,
+                        contents: Some(contents),
+                    });
+                    return;
+                }
+            }
+        }
+        self.append_player_currency_save_statements(&mut tx, player_guid.counter() as u64);
+
+        if let Err(e) = char_db.commit_transaction(tx).await {
+            self.player_currencies = currency_snapshot;
+            warn!("ItemPurchaseRefund: refund transaction failed: {e}");
+            self.send_packet(&ItemPurchaseRefundResult {
+                item_guid: refund.item_guid,
+                result: REFUND_RESULT_ERR_GENERIC,
+                contents: Some(contents),
+            });
+            return;
+        }
+
+        self.player_gold = new_gold;
+        self.inventory_items.remove(&refund_slot);
+        self.remove_inventory_item_object(refund.item_guid);
+
+        for &(item_guid, _, new_count) in planned_existing_counts.values() {
+            if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+                item.set_count(new_count);
+            }
+        }
+
+        for (stack, db_guid, item_guid) in &created_new_stacks {
+            self.inventory_items.insert(
+                stack.slot,
+                InventoryItem {
+                    guid: *item_guid,
+                    entry_id: stack.entry_id,
+                    db_guid: *db_guid,
+                    inventory_type: self.item_template_inventory_type(stack.entry_id),
+                },
+            );
+            let item_object = self.make_inventory_item_object(
+                *item_guid,
+                stack.entry_id,
+                player_guid,
+                stack.count,
+                stack.max_durability,
+                ItemContext::None,
+                stack.slot,
+            );
+            self.insert_inventory_item_object(item_object);
+        }
+        self.sync_object_accessor_player();
+
+        self.send_packet(&ItemPurchaseRefundResult {
+            item_guid: refund.item_guid,
+            result: REFUND_RESULT_OK,
+            contents: Some(contents),
+        });
+        self.send_packet(&ItemExpirePurchaseRefund {
+            item_guid: refund.item_guid,
+        });
+
+        for delta in currency_deltas {
+            let Some(type_id) = i32::try_from(delta.currency_id).ok() else {
+                continue;
+            };
+            let Some(quantity) = i32::try_from(delta.quantity).ok() else {
+                continue;
+            };
+            let Some(amount) = i32::try_from(delta.amount).ok() else {
+                continue;
+            };
+            self.send_packet(&SetCurrency::item_refund_gain(
+                type_id,
+                quantity,
+                amount,
+                delta.weekly_quantity.and_then(|value| i32::try_from(value).ok()),
+                delta.max_quantity.and_then(|value| i32::try_from(value).ok()),
+                delta.total_earned.and_then(|value| i32::try_from(value).ok()),
+                delta.suppress_chat_log,
+            ));
+        }
+
+        if !created_new_stacks.is_empty() {
+            let item_creates = created_new_stacks
+                .iter()
+                .map(|(stack, _, item_guid)| ItemCreateData {
+                    item_guid: *item_guid,
+                    entry_id: stack.entry_id as i32,
+                    owner_guid: player_guid,
+                    contained_in: player_guid,
+                    stack_count: stack.count,
+                    durability: stack.max_durability,
+                    max_durability: stack.max_durability,
+                })
+                .collect();
+            self.send_packet(&UpdateObject::create_items(item_creates, map_id));
+        }
+
+        for &(item_guid, _, new_count) in planned_existing_counts.values() {
+            self.send_packet(&UpdateObject::item_stack_count_update(
+                item_guid, map_id, new_count,
+            ));
+        }
+
+        self.send_packet(&UpdateObject::player_money_update(
+            player_guid,
+            map_id,
+            self.player_gold,
+            None,
+        ));
+
+        let mut changed_slots = Vec::new();
+        changed_slots.push((refund_slot, ObjectGuid::EMPTY));
+        changed_slots.extend(
+            created_new_stacks
+                .iter()
+                .map(|(stack, _, item_guid)| (stack.slot, *item_guid)),
+        );
+        self.send_packet(&UpdateObject::player_values_update(
+            player_guid,
+            map_id,
+            changed_slots,
+            Vec::new(),
+            Vec::new(),
+        ));
+
+        if refund_slot < 19 {
+            self.send_stat_update();
+        }
     }
 
     /// Handle CMSG_QUEST_GIVER_STATUS_MULTIPLE_QUERY — client asks quest status for all NPCs.

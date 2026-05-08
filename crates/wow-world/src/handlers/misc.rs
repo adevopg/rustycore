@@ -408,7 +408,7 @@ inventory::submit! {
 
 // ── Handler implementations ───────────────────────────────────────────────────
 
-fn item_purchase_contents_from_extended_cost(
+pub(crate) fn item_purchase_contents_from_extended_cost(
     extended_cost: &wow_data::item_extended_cost::ItemExtendedCostEntry,
     money: u64,
 ) -> ItemPurchaseContents {

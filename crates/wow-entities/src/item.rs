@@ -711,6 +711,10 @@ impl Item {
         });
     }
 
+    pub const fn item_flags_bits(&self) -> u32 {
+        self.data.dynamic_flags
+    }
+
     pub fn has_item_flag(&self, flag: ItemFieldFlags) -> bool {
         (self.data.dynamic_flags & flag.bits()) != 0
     }

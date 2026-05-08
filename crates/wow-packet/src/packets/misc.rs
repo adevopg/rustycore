@@ -502,6 +502,34 @@ impl SetCurrency {
         }
     }
 
+    pub fn item_refund_gain(
+        type_id: i32,
+        quantity: i32,
+        amount: i32,
+        weekly_quantity: Option<i32>,
+        max_quantity: Option<i32>,
+        total_earned: Option<i32>,
+        suppress_chat_log: bool,
+    ) -> Self {
+        Self {
+            type_id,
+            quantity,
+            flags: 0,
+            weekly_quantity,
+            tracked_quantity: None,
+            max_quantity,
+            total_earned,
+            suppress_chat_log,
+            quantity_change: Some(amount),
+            quantity_gain_source: Some(2),
+            quantity_lost_source: None,
+            first_craft_operation_id: None,
+            next_recharge_time: None,
+            recharge_cycle_start_time: None,
+            overflown_currency_id: None,
+        }
+    }
+
     pub fn vendor_loss(type_id: i32, quantity: i32, amount: i32) -> Self {
         Self {
             type_id,
@@ -2329,6 +2357,20 @@ mod tests {
         assert_eq!(bytes[19], 0x00);
         assert_eq!(i32::from_le_bytes(bytes[20..24].try_into().unwrap()), 10);
         assert_eq!(i32::from_le_bytes(bytes[24..28].try_into().unwrap()), 5);
+    }
+
+    #[test]
+    fn set_currency_item_refund_gain_matches_cpp_source() {
+        let pkt = SetCurrency::item_refund_gain(395, 110, 10, None, None, None, false);
+        let bytes = pkt.to_bytes();
+        assert_eq!(bytes.len(), 28);
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x2574);
+        assert_eq!(i32::from_le_bytes(bytes[2..6].try_into().unwrap()), 395);
+        assert_eq!(i32::from_le_bytes(bytes[6..10].try_into().unwrap()), 110);
+        assert_eq!(bytes[18], 0x06);
+        assert_eq!(bytes[19], 0x00);
+        assert_eq!(i32::from_le_bytes(bytes[20..24].try_into().unwrap()), 10);
+        assert_eq!(i32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
     }
 
     #[test]
