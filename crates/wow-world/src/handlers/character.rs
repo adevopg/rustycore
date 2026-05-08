@@ -693,6 +693,7 @@ fn vendor_buy_extended_cost_block_result(
     extended_cost_store: Option<&ItemExtendedCostStore>,
     currency_store: Option<&CurrencyTypesStore>,
     has_currency: impl Fn(u32, u32) -> bool,
+    allow_currency_only_success: bool,
     extended_cost: u32,
     buy_count: u32,
     quantity: u32,
@@ -748,9 +749,44 @@ fn vendor_buy_extended_cost_block_result(
         return Some(VendorExtendedCostBlock::Buy(BuyResult::ReputationRequire));
     }
 
-    Some(VendorExtendedCostBlock::Equip(
-        InventoryResult::VendorMissingTurnins,
-    ))
+    if extended_cost_entry.requires_guild() || extended_cost_entry.required_achievement != 0 {
+        return Some(VendorExtendedCostBlock::Equip(
+            InventoryResult::VendorMissingTurnins,
+        ));
+    }
+
+    if allow_currency_only_success {
+        None
+    } else {
+        Some(VendorExtendedCostBlock::Equip(
+            InventoryResult::VendorMissingTurnins,
+        ))
+    }
+}
+
+fn vendor_buy_extended_cost_currency_costs(
+    extended_cost_store: Option<&ItemExtendedCostStore>,
+    extended_cost: u32,
+    buy_count: u32,
+    quantity: u32,
+) -> Vec<(u32, u32)> {
+    if extended_cost == 0 {
+        return Vec::new();
+    }
+    let Some(extended_cost_entry) =
+        extended_cost_store.and_then(|store| store.get(extended_cost))
+    else {
+        return Vec::new();
+    };
+    let stacks = quantity / buy_count.max(1);
+    extended_cost_entry
+        .currency_id
+        .iter()
+        .copied()
+        .zip(extended_cost_entry.currency_count.iter().copied())
+        .filter(|(currency_id, _)| *currency_id != 0)
+        .map(|(currency_id, count)| (u32::from(currency_id), count.wrapping_mul(stacks)))
+        .collect()
 }
 
 fn item_extended_cost_currency_requires_season_earned(
@@ -3956,6 +3992,7 @@ impl WorldSession {
                 self.item_extended_cost_store().map(|store| store.as_ref()),
                 self.currency_types_store().map(|store| store.as_ref()),
                 |currency_id, amount| self.has_currency(currency_id, amount),
+                false,
                 vendor_item.extended_cost,
                 vendor_item.max_count,
                 quantity,
@@ -4081,6 +4118,7 @@ impl WorldSession {
             self.item_extended_cost_store().map(|store| store.as_ref()),
             self.currency_types_store().map(|store| store.as_ref()),
             |currency_id, amount| self.has_currency(currency_id, amount),
+            true,
             vendor_item.extended_cost,
             vendor_item.buy_count,
             quantity,
@@ -4096,6 +4134,12 @@ impl WorldSession {
             }
             return;
         }
+        let extended_cost_currency_costs = vendor_buy_extended_cost_currency_costs(
+            self.item_extended_cost_store().map(|store| store.as_ref()),
+            vendor_item.extended_cost,
+            vendor_item.buy_count,
+            quantity,
+        );
         if let Some(result) = vendor_buy_direct_store_block_result(
             store_bag,
             store_slot,
@@ -4216,7 +4260,24 @@ impl WorldSession {
             }
         }
 
+        let currency_snapshot = self.player_currencies.clone();
+        for &(currency_id, amount) in &extended_cost_currency_costs {
+            if i32::try_from(amount).is_err() || !self.remove_currency(currency_id, amount) {
+                self.player_currencies = currency_snapshot;
+                self.send_equip_error(
+                    InventoryResult::VendorMissingTurnins,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                return;
+            }
+        }
+        self.append_player_currency_save_statements(&mut tx, player_guid.counter() as u64);
+
         if let Err(e) = char_db.commit_transaction(tx).await {
+            self.player_currencies = currency_snapshot;
             warn!("BuyItem: store transaction failed: {e}");
             self.send_buy_error(
                 BuyResult::CantFindItem,
@@ -4227,6 +4288,20 @@ impl WorldSession {
         }
 
         self.player_gold = new_gold;
+        for &(currency_id, amount) in &extended_cost_currency_costs {
+            let Some(quantity) = i32::try_from(self.player_currency_quantity(currency_id)).ok()
+            else {
+                continue;
+            };
+            let Some(amount) = i32::try_from(amount).ok() else {
+                continue;
+            };
+            self.send_packet(&SetCurrency::vendor_loss(
+                currency_id as i32,
+                quantity,
+                amount,
+            ));
+        }
 
         for &(_, item_guid, new_count) in &existing_updates {
             if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
@@ -5653,10 +5728,10 @@ mod tests {
                 item_count: [0; wow_data::MAX_ITEM_EXT_COST_ITEMS],
                 currency_id: [395, 0, 0, 0, 0],
                 currency_count: [10, 0, 0, 0, 0],
-        }]);
+            }]);
 
         assert_eq!(
-            vendor_buy_extended_cost_block_result(None, None, |_, _| false, 0, 5, 3),
+            vendor_buy_extended_cost_block_result(None, None, |_, _| false, false, 0, 5, 3),
             None
         );
         assert_eq!(
@@ -5664,6 +5739,7 @@ mod tests {
                 Some(&extended_cost_store),
                 Some(&currency_store),
                 |_, _| false,
+                false,
                 12,
                 5,
                 3
@@ -5675,6 +5751,7 @@ mod tests {
                 Some(&extended_cost_store),
                 Some(&currency_store),
                 |currency_id, amount| currency_id == 395 && amount >= 20,
+                false,
                 12,
                 5,
                 10
@@ -5682,6 +5759,22 @@ mod tests {
             Some(VendorExtendedCostBlock::Equip(
                 InventoryResult::VendorMissingTurnins
             ))
+        );
+        assert_eq!(
+            vendor_buy_extended_cost_block_result(
+                Some(&extended_cost_store),
+                Some(&currency_store),
+                |currency_id, amount| currency_id == 395 && amount >= 20,
+                true,
+                12,
+                5,
+                10
+            ),
+            None
+        );
+        assert_eq!(
+            vendor_buy_extended_cost_currency_costs(Some(&extended_cost_store), 12, 5, 10),
+            vec![(395, 20)]
         );
         let checked_currency_amount = std::cell::Cell::new(false);
         assert_eq!(
@@ -5694,6 +5787,7 @@ mod tests {
                     assert_eq!(amount, 20);
                     false
                 },
+                true,
                 12,
                 5,
                 10
@@ -5708,6 +5802,7 @@ mod tests {
                 Some(&extended_cost_store),
                 None,
                 |_, _| true,
+                true,
                 12,
                 5,
                 10
@@ -5719,6 +5814,7 @@ mod tests {
                 Some(&extended_cost_store),
                 Some(&currency_store),
                 |_, _| true,
+                true,
                 99,
                 5,
                 10

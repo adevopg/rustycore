@@ -678,7 +678,6 @@ impl WorldSession {
     }
 
     /// C++ `Player::RemoveCurrency` underflow guard for vendor costs.
-    #[allow(dead_code)]
     pub(crate) fn remove_currency(&mut self, currency_id: u32, amount: u32) -> bool {
         if amount == 0 {
             return true;
@@ -700,7 +699,6 @@ impl WorldSession {
     }
 
     /// C++ `Player::_SaveCurrency` for changed/new currency rows.
-    #[allow(dead_code)]
     pub(crate) fn append_player_currency_save_statements(
         &mut self,
         tx: &mut SqlTransaction,
