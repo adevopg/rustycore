@@ -559,13 +559,19 @@ fn parse_equipment_cache(cache: &str) -> [VisualItemInfo; 34] {
     equipment
 }
 
-fn vendor_buy_price_for_count(buy_price: u64, buy_count: u32, quantity: u32) -> u64 {
+const MAX_MONEY_AMOUNT: u64 = 99_999_999_999;
+
+fn vendor_buy_quantity_and_price(buy_price: u64, buy_count: u32, quantity: u32) -> (u32, u64) {
     if buy_price == 0 || quantity == 0 {
-        return 0;
+        return (quantity, 0);
     }
 
-    let buy_count = buy_count.max(1) as f64;
-    ((buy_price as f64 / buy_count) * quantity as f64) as u64
+    let buy_price_per_item = buy_price as f64 / buy_count.max(1) as f64;
+    let max_count = (MAX_MONEY_AMOUNT as f64 / buy_price_per_item) as u32;
+    let quantity = quantity.min(max_count);
+    let price = (buy_price_per_item * quantity as f64) as u64;
+
+    (quantity, price)
 }
 
 // ── Handler implementations ─────────────────────────────────────────
@@ -3277,7 +3283,7 @@ impl WorldSession {
             }
         };
 
-        let buy_price: u64 = if price_result.is_empty() {
+        let (quantity, buy_price): (u32, u64) = if price_result.is_empty() {
             warn!("BuyItem: item {} not found in vendor {}", buy.item_id, vendor_entry);
             self.send_buy_error(
                 BuyResult::CantFindItem,
@@ -3288,7 +3294,7 @@ impl WorldSession {
         } else {
             let raw: u64 = price_result.try_read::<u64>(0).unwrap_or(0);
             let buy_count: u32 = price_result.try_read::<u32>(3).unwrap_or(1);
-            vendor_buy_price_for_count(raw, buy_count, quantity)
+            vendor_buy_quantity_and_price(raw, buy_count, quantity)
         };
 
         let max_durability: u32 = if price_result.is_empty() { 0 } else {
@@ -4672,10 +4678,20 @@ mod tests {
 
     #[test]
     fn vendor_buy_price_uses_cpp_buy_count_unit_price() {
-        assert_eq!(vendor_buy_price_for_count(500, 5, 1), 100);
-        assert_eq!(vendor_buy_price_for_count(500, 5, 3), 300);
-        assert_eq!(vendor_buy_price_for_count(500, 0, 2), 1000);
-        assert_eq!(vendor_buy_price_for_count(0, 5, 3), 0);
+        assert_eq!(vendor_buy_quantity_and_price(500, 5, 1), (1, 100));
+        assert_eq!(vendor_buy_quantity_and_price(500, 5, 3), (3, 300));
+        assert_eq!(vendor_buy_quantity_and_price(500, 0, 2), (2, 1000));
+        assert_eq!(vendor_buy_quantity_and_price(0, 5, 3), (3, 0));
+    }
+
+    #[test]
+    fn vendor_buy_price_clamps_count_to_cpp_max_money_amount() {
+        let unit_price = (MAX_MONEY_AMOUNT / 2) + 1;
+
+        assert_eq!(
+            vendor_buy_quantity_and_price(unit_price, 1, 3),
+            (1, unit_price)
+        );
     }
 
     #[test]
