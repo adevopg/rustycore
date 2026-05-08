@@ -595,7 +595,7 @@ fn vendor_buy_quantity_and_price(buy_price: u64, buy_count: u32, quantity: u32) 
     let buy_price_per_item = buy_price as f64 / buy_count.max(1) as f64;
     let max_count = (MAX_MONEY_AMOUNT as f64 / buy_price_per_item) as u32;
     let quantity = quantity.min(max_count);
-    let price = (buy_price_per_item * quantity as f64) as u64;
+    let price = ((buy_price_per_item * quantity as f64) as u64).max(1);
 
     (quantity, price)
 }
@@ -5282,6 +5282,7 @@ mod tests {
         assert_eq!(vendor_buy_quantity_and_price(500, 5, 3), (3, 300));
         assert_eq!(vendor_buy_quantity_and_price(500, 0, 2), (2, 1000));
         assert_eq!(vendor_buy_quantity_and_price(0, 5, 3), (3, 0));
+        assert_eq!(vendor_buy_quantity_and_price(1, 5, 1), (1, 1));
     }
 
     #[test]
