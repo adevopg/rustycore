@@ -14,7 +14,7 @@ use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
 use wow_crypto::rsa_sign::rsa_sign_connect_to;
 use wow_database::{CharStatements, LoginStatements, SqlTransaction, WorldDatabase, WorldStatements};
-use wow_entities::INVENTORY_SLOT_BAG_0;
+use wow_entities::{INVENTORY_SLOT_BAG_0, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT};
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
     ConnectTo, ConnectToAddress, ConnectToFailed, ConnectToKey, ConnectToSerial, ResumeComms,
@@ -572,6 +572,28 @@ fn vendor_buy_quantity_and_price(buy_price: u64, buy_count: u32, quantity: u32) 
     let price = (buy_price_per_item * quantity as f64) as u64;
 
     (quantity, price)
+}
+
+fn vendor_buy_packet_quantity_to_cpp_count(quantity: i32) -> u32 {
+    u32::from((quantity as u8).max(1))
+}
+
+fn vendor_buy_direct_inventory_destination(
+    player_guid: ObjectGuid,
+    buy: &BuyItem,
+) -> Option<(u8, u8)> {
+    let slot = buy.slot as u8;
+    if slot as usize > MAX_BAG_SIZE && slot != NULL_SLOT {
+        return None;
+    }
+
+    let bag = if buy.container_guid == player_guid {
+        INVENTORY_SLOT_BAG_0
+    } else {
+        NULL_BAG
+    };
+
+    Some((bag, slot))
 }
 
 // ── Handler implementations ─────────────────────────────────────────
@@ -3241,7 +3263,18 @@ impl WorldSession {
         let map_id = self.current_map_id;
 
         // ── Validate: player alive ──
-        let quantity = buy.quantity.max(1) as u32;
+        let quantity = vendor_buy_packet_quantity_to_cpp_count(buy.quantity);
+        let (store_bag, store_slot) =
+            match vendor_buy_direct_inventory_destination(player_guid, &buy) {
+                Some(destination) => destination,
+                None => {
+                    warn!(
+                        "BuyItem: rejected slot {} above C++ MAX_BAG_SIZE {}",
+                        buy.slot, MAX_BAG_SIZE
+                    );
+                    return;
+                }
+            };
 
         // ── Get vendor NPC entry from creature GUID ──
         let vendor_entry = match self.creatures.get(&buy.vendor_guid) {
@@ -3312,7 +3345,12 @@ impl WorldSession {
         }
 
         let (store_result, store_dest, _) = match self
-            .plan_store_new_direct_inventory_item(buy.item_id as u32, quantity)
+            .plan_store_new_direct_inventory_item_at(
+                buy.item_id as u32,
+                quantity,
+                store_bag,
+                store_slot,
+            )
         {
             Some(plan) => plan,
             None => {
@@ -4691,6 +4729,68 @@ mod tests {
         assert_eq!(
             vendor_buy_quantity_and_price(unit_price, 1, 3),
             (1, unit_price)
+        );
+    }
+
+    #[test]
+    fn vendor_buy_packet_quantity_uses_cpp_uint8_count_conversion() {
+        assert_eq!(vendor_buy_packet_quantity_to_cpp_count(0), 1);
+        assert_eq!(vendor_buy_packet_quantity_to_cpp_count(1), 1);
+        assert_eq!(vendor_buy_packet_quantity_to_cpp_count(256), 1);
+        assert_eq!(vendor_buy_packet_quantity_to_cpp_count(-1), 255);
+    }
+
+    #[test]
+    fn vendor_buy_destination_maps_player_container_like_cpp() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let buy = BuyItem {
+            vendor_guid: ObjectGuid::EMPTY,
+            container_guid: player_guid,
+            quantity: 1,
+            muid: 1,
+            slot: 35,
+            item_type: 0,
+            item_id: 700,
+        };
+
+        assert_eq!(
+            vendor_buy_direct_inventory_destination(player_guid, &buy),
+            Some((INVENTORY_SLOT_BAG_0, 35))
+        );
+    }
+
+    #[test]
+    fn vendor_buy_destination_rejects_cpp_slot_over_max_bag_size() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let buy = BuyItem {
+            vendor_guid: ObjectGuid::EMPTY,
+            container_guid: player_guid,
+            quantity: 1,
+            muid: 1,
+            slot: (MAX_BAG_SIZE + 1) as i32,
+            item_type: 0,
+            item_id: 700,
+        };
+
+        assert_eq!(vendor_buy_direct_inventory_destination(player_guid, &buy), None);
+    }
+
+    #[test]
+    fn vendor_buy_destination_uses_cpp_uint8_slot_conversion() {
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let buy = BuyItem {
+            vendor_guid: ObjectGuid::EMPTY,
+            container_guid: player_guid,
+            quantity: 1,
+            muid: 1,
+            slot: 256,
+            item_type: 0,
+            item_id: 700,
+        };
+
+        assert_eq!(
+            vendor_buy_direct_inventory_destination(player_guid, &buy),
+            Some((INVENTORY_SLOT_BAG_0, 0))
         );
     }
 

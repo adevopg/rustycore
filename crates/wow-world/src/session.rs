@@ -798,6 +798,16 @@ impl WorldSession {
         entry_id: u32,
         count: u32,
     ) -> Option<(InventoryResult, Vec<ItemPosCount>, Option<u32>)> {
+        self.plan_store_new_direct_inventory_item_at(entry_id, count, NULL_BAG, NULL_SLOT)
+    }
+
+    pub fn plan_store_new_direct_inventory_item_at(
+        &self,
+        entry_id: u32,
+        count: u32,
+        bag: u8,
+        slot: u8,
+    ) -> Option<(InventoryResult, Vec<ItemPosCount>, Option<u32>)> {
         let player = self.direct_inventory_player_snapshot()?;
         let proto = self.item_storage_template(entry_id);
         let mut template_cache = HashMap::new();
@@ -824,8 +834,8 @@ impl WorldSession {
 
         let mut dest = Vec::new();
         let outcome = player.can_store_item(&mut dest, CanStoreItemArgs {
-            bag: NULL_BAG,
-            slot: NULL_SLOT,
+            bag,
+            slot,
             entry: entry_id,
             count,
             proto: proto.as_ref(),
@@ -3677,6 +3687,36 @@ mod tests {
         (session, pkt_tx, send_rx)
     }
 
+    fn install_stackable_test_item_template(
+        session: &mut WorldSession,
+        entry: u32,
+        max_stack_size: i32,
+    ) {
+        session.set_item_store(Arc::new(ItemStore::from_records([ItemRecord {
+            id: entry,
+            class_id: ItemClass::Consumable as u8,
+            subclass_id: 0,
+            material: 0,
+            inventory_type: InventoryType::NonEquip as i8,
+            sheathe_type: 0,
+        }])));
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([(
+            entry,
+            ItemSparseTemplateEntry {
+                flags: [0, 0, 0, 0],
+                bag_family: 0,
+                stackable: max_stack_size,
+                max_count: 0,
+                sell_price: 0,
+                max_durability: 0,
+                limit_category: 0,
+                bonding: ItemBondingType::None as u8,
+                container_slots: 0,
+                inventory_type: InventoryType::NonEquip as i8,
+            },
+        )])));
+    }
+
     fn send_new_item_plan(delivery: SendNewItemDelivery) -> SendNewItemPlan {
         SendNewItemPlan {
             player_guid: ObjectGuid::create_player(1, 42),
@@ -4168,6 +4208,70 @@ mod tests {
         assert_eq!(
             dest[1],
             ItemPosCount::new((u16::from(INVENTORY_SLOT_BAG_0) << 8) | 36, 3)
+        );
+    }
+
+    #[test]
+    fn direct_inventory_store_plan_respects_cpp_explicit_empty_slot() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(player_guid));
+        install_stackable_test_item_template(&mut session, 700, 20);
+
+        let (result, dest, no_space) = session
+            .plan_store_new_direct_inventory_item_at(700, 5, INVENTORY_SLOT_BAG_0, 36)
+            .expect("player snapshot should exist");
+
+        assert_eq!(result, InventoryResult::Ok);
+        assert_eq!(no_space, None);
+        assert_eq!(
+            dest,
+            vec![ItemPosCount::new(
+                (u16::from(INVENTORY_SLOT_BAG_0) << 8) | 36,
+                5,
+            )]
+        );
+    }
+
+    #[test]
+    fn direct_inventory_store_plan_respects_cpp_explicit_stack_before_other_merge() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(player_guid));
+        install_stackable_test_item_template(&mut session, 700, 20);
+
+        for (slot, db_guid) in [(35, 900_u64), (36, 901_u64)] {
+            let item_guid = ObjectGuid::create_item(1, db_guid as i64);
+            session.inventory_items.insert(slot, InventoryItem {
+                guid: item_guid,
+                entry_id: 700,
+                db_guid,
+                inventory_type: None,
+            });
+            let item = session.make_inventory_item_object(
+                item_guid,
+                700,
+                player_guid,
+                18,
+                0,
+                ItemContext::None,
+                slot,
+            );
+            session.insert_inventory_item_object(item);
+        }
+
+        let (result, dest, no_space) = session
+            .plan_store_new_direct_inventory_item_at(700, 3, INVENTORY_SLOT_BAG_0, 36)
+            .expect("player snapshot should exist");
+
+        assert_eq!(result, InventoryResult::Ok);
+        assert_eq!(no_space, None);
+        assert_eq!(
+            dest,
+            vec![
+                ItemPosCount::new((u16::from(INVENTORY_SLOT_BAG_0) << 8) | 36, 2),
+                ItemPosCount::new((u16::from(INVENTORY_SLOT_BAG_0) << 8) | 35, 1),
+            ]
         );
     }
 
