@@ -11,7 +11,7 @@ use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
     ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemExtendedCostFlags,
-    ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, Team,
+    ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, InventoryType, Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -1044,6 +1044,13 @@ fn item_spell_charges_db_string(charges: &[i32]) -> String {
 
 fn item_is_currently_looted_like_cpp(item: &wow_entities::Item) -> bool {
     item.loot_generated()
+}
+
+fn item_is_not_empty_bag_like_cpp(
+    inventory_type: Option<InventoryType>,
+    contains_items: bool,
+) -> bool {
+    matches!(inventory_type, Some(InventoryType::Bag)) && contains_items
 }
 
 fn append_item_refund_clear_statements(
@@ -5353,6 +5360,20 @@ impl WorldSession {
             );
             return;
         };
+        let item_inventory_type = self
+            .item_storage_template(item.entry_id)
+            .map(|template| template.inventory_type);
+        if item_is_not_empty_bag_like_cpp(
+            item_inventory_type,
+            self.direct_item_contains_items(item.guid),
+        ) {
+            self.send_sell_error(
+                SellResult::CantSellItem,
+                Some(sell.vendor_guid),
+                sell.item_guid,
+            );
+            return;
+        }
         if item_is_currently_looted_like_cpp(&runtime_item) {
             self.send_sell_error(
                 SellResult::CantSellItem,
@@ -7790,6 +7811,23 @@ mod tests {
 
         item.set_loot_generated(true);
         assert!(item_is_currently_looted_like_cpp(&item));
+    }
+
+    #[test]
+    fn sell_non_empty_bag_guard_matches_cpp_is_not_empty_bag() {
+        assert!(item_is_not_empty_bag_like_cpp(
+            Some(InventoryType::Bag),
+            true
+        ));
+        assert!(!item_is_not_empty_bag_like_cpp(
+            Some(InventoryType::Bag),
+            false
+        ));
+        assert!(!item_is_not_empty_bag_like_cpp(
+            Some(InventoryType::Chest),
+            true
+        ));
+        assert!(!item_is_not_empty_bag_like_cpp(None, true));
     }
 
     #[test]
