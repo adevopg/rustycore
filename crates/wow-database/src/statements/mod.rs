@@ -84,6 +84,18 @@ mod tests {
                 .contains("smart_scripts")
         );
         assert!(WorldStatements::INS_GAME_TELE.sql().contains("game_tele"));
+        assert!(
+            WorldStatements::SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT
+                .sql()
+                .contains("item_template_addon")
+        );
+        assert_eq!(
+            WorldStatements::SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
     }
 
     #[test]

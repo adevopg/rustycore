@@ -19,8 +19,10 @@
 //!
 //! Reference: C# Game/Handlers/SpellHandler.cs, Game/Spells/Spell.cs
 
+use rand::Rng;
 use tracing::{debug, info, warn};
 
+use wow_database::WorldStatements;
 use wow_constants::{ClientOpcodes, InventoryResult, ItemFlags};
 use wow_entities::INVENTORY_SLOT_BAG_0;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
@@ -28,7 +30,7 @@ use wow_packet::packets::loot::{CreatureLoot, LootItemData, LootResponse};
 use wow_packet::packets::spell::{
     CastFailed, CastSpellRequest, OpenItem, SpellCastVisual, SpellStartPkt, SpellTargetData,
 };
-use wow_packet::{ClientPacket, ServerPacket};
+use wow_packet::ClientPacket;
 
 use crate::session::WorldSession;
 
@@ -328,9 +330,14 @@ impl WorldSession {
         }
 
         if !self.loot_table.contains_key(&item.guid) {
+            let (min_money, max_money) = self
+                .load_item_template_addon_money_loot_like_cpp(item.entry_id)
+                .await;
+            let coins =
+                generate_money_loot_like_cpp(min_money, max_money, &mut rand::thread_rng());
             self.loot_table.insert(item.guid, CreatureLoot {
                 loot_guid: item.guid,
-                coins: 0,
+                coins,
                 items: Vec::new(),
                 looted_by_player: false,
             });
@@ -374,6 +381,32 @@ impl WorldSession {
         });
     }
 
+    async fn load_item_template_addon_money_loot_like_cpp(&self, item_entry: u32) -> (u32, u32) {
+        let Some(world_db) = self.world_db() else {
+            return (0, 0);
+        };
+
+        let mut stmt = world_db.prepare(WorldStatements::SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT);
+        stmt.set_u32(0, item_entry);
+
+        match world_db.query(&stmt).await {
+            Ok(result) if !result.is_empty() => {
+                let min_money = result.try_read::<u32>(0).unwrap_or(0);
+                let max_money = result.try_read::<u32>(1).unwrap_or(0);
+                (min_money, max_money)
+            }
+            Ok(_) => (0, 0),
+            Err(err) => {
+                warn!(
+                    item_entry,
+                    error = %err,
+                    "failed to load item_template_addon money loot"
+                );
+                (0, 0)
+            }
+        }
+    }
+
     /// Handle `CMSG_CANCEL_CAST` — player cancels an in-progress cast.
     pub async fn handle_cancel_cast(&mut self, _pkt: wow_packet::WorldPacket) {
         // TODO: Phase 3 — implement cancel cast
@@ -382,5 +415,48 @@ impl WorldSession {
     /// Handle `CMSG_CANCEL_CHANNELLING` — player stops a channelled spell.
     pub async fn handle_cancel_channelling(&mut self, _pkt: wow_packet::WorldPacket) {
         // TODO: Phase 3 — implement cancel channelling
+    }
+}
+
+fn generate_money_loot_like_cpp<R: Rng + ?Sized>(
+    min_amount: u32,
+    max_amount: u32,
+    rng: &mut R,
+) -> u32 {
+    if max_amount == 0 {
+        return 0;
+    }
+
+    if max_amount <= min_amount {
+        return max_amount;
+    }
+
+    if max_amount - min_amount < 32_700 {
+        return rng.gen_range(min_amount..=max_amount);
+    }
+
+    rng.gen_range((min_amount >> 8)..=(max_amount >> 8)) << 8
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{rngs::StdRng, SeedableRng};
+
+    use super::generate_money_loot_like_cpp;
+
+    #[test]
+    fn item_money_loot_generation_matches_cpp_boundary_branches() {
+        let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+
+        assert_eq!(generate_money_loot_like_cpp(0, 0, &mut rng), 0);
+        assert_eq!(generate_money_loot_like_cpp(120, 100, &mut rng), 100);
+        assert_eq!(generate_money_loot_like_cpp(100, 100, &mut rng), 100);
+
+        let small_range = generate_money_loot_like_cpp(100, 200, &mut rng);
+        assert!((100..=200).contains(&small_range));
+
+        let wide_range = generate_money_loot_like_cpp(1_000, 100_000, &mut rng);
+        assert_eq!(wide_range & 0xFF, 0);
+        assert!((((1_000 >> 8) << 8)..=((100_000 >> 8) << 8)).contains(&wide_range));
     }
 }

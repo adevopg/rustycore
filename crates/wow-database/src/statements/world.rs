@@ -117,6 +117,9 @@ pub enum WorldStatements {
     /// Sell price for any item directly from item_sparse (no vendor check).
     /// Args: item ID (u32).
     SEL_ITEM_SELL_PRICE,
+    /// Min/max money loot bounds for an item from item_template_addon.
+    /// Args: item ID (u32).
+    SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT,
     /// Load all area trigger teleport destinations.
     SEL_AREA_TRIGGER_TELEPORT,
     // Quest system
@@ -361,6 +364,11 @@ impl StatementDef for WorldStatements {
             Self::SEL_ITEM_SELL_PRICE => {
                 "SELECT COALESCE(SellPrice, 0) FROM hotfixes.item_sparse WHERE ID = ? LIMIT 1"
             }
+            Self::SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT => concat!(
+                "SELECT LEAST(COALESCE(MinMoneyLoot, 0), COALESCE(MaxMoneyLoot, 0)), ",
+                "GREATEST(COALESCE(MinMoneyLoot, 0), COALESCE(MaxMoneyLoot, 0)) ",
+                "FROM item_template_addon WHERE Id = ? LIMIT 1",
+            ),
             Self::SEL_AREA_TRIGGER_TELEPORT => {
                 "SELECT at.ID, wsl.MapID, wsl.LocX, wsl.LocY, wsl.LocZ, wsl.Facing FROM areatrigger_teleport at LEFT JOIN world_safe_locs wsl ON at.PortLocID = wsl.ID"
             }
