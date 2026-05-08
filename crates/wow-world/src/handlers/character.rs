@@ -11,7 +11,7 @@ use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
     ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemFlags, ItemUpdateState,
-    ItemVendorType,
+    ItemFlags2, ItemVendorType, Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -697,6 +697,30 @@ fn vendor_list_should_skip_allowed_class(
         return false;
     };
     (i32::from(allowable_class) & player_class_mask(player_class) as i32) == 0
+}
+
+fn player_team_for_race_cpp(race: u8) -> Team {
+    match race {
+        // C++ resolves this from ChrRacesEntry::Alliance: 1 = Horde, 0 = Alliance.
+        2 | 5 | 6 | 8 | 9 | 10 | 26 | 27 | 28 | 31 | 35 | 36 | 70 => Team::Horde,
+        _ => Team::Alliance,
+    }
+}
+
+fn vendor_list_should_skip_faction_flags(
+    flags2: Option<u32>,
+    team: Team,
+    is_game_master: bool,
+) -> bool {
+    if is_game_master {
+        return false;
+    }
+
+    let Some(flags2) = flags2 else {
+        return false;
+    };
+    ((flags2 & ItemFlags2::FactionHorde as u32) != 0 && team == Team::Alliance)
+        || ((flags2 & ItemFlags2::FactionAlliance as u32) != 0 && team == Team::Horde)
 }
 
 fn vendor_buy_direct_inventory_destination(
@@ -3515,6 +3539,14 @@ impl WorldSession {
                         if !result.next_row() { break; }
                         continue;
                     }
+                    if vendor_list_should_skip_faction_flags(
+                        sparse_template.map(|template| template.flags[1]),
+                        player_team_for_race_cpp(self.player_race),
+                        self.security > 0,
+                    ) {
+                        if !result.next_row() { break; }
+                        continue;
+                    }
                     let refundable = vendor_list_item_refundable(
                         template.as_ref().map(|template| template.flags),
                         template.as_ref().map(|template| template.max_stack_size),
@@ -5263,6 +5295,36 @@ mod tests {
             8,
             false,
         ));
+    }
+
+    #[test]
+    fn vendor_list_faction_filter_matches_cpp_team_branch() {
+        assert_eq!(player_team_for_race_cpp(1), Team::Alliance);
+        assert_eq!(player_team_for_race_cpp(2), Team::Horde);
+        assert_eq!(player_team_for_race_cpp(11), Team::Alliance);
+        assert_eq!(player_team_for_race_cpp(10), Team::Horde);
+
+        assert!(vendor_list_should_skip_faction_flags(
+            Some(ItemFlags2::FactionHorde as u32),
+            Team::Alliance,
+            false,
+        ));
+        assert!(!vendor_list_should_skip_faction_flags(
+            Some(ItemFlags2::FactionHorde as u32),
+            Team::Horde,
+            false,
+        ));
+        assert!(vendor_list_should_skip_faction_flags(
+            Some(ItemFlags2::FactionAlliance as u32),
+            Team::Horde,
+            false,
+        ));
+        assert!(!vendor_list_should_skip_faction_flags(
+            Some(ItemFlags2::FactionAlliance as u32),
+            Team::Horde,
+            true,
+        ));
+        assert!(!vendor_list_should_skip_faction_flags(None, Team::Alliance, false));
     }
 
     #[test]
