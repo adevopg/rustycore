@@ -21,10 +21,11 @@
 
 use tracing::{debug, info, warn};
 
-use wow_constants::ClientOpcodes;
+use wow_constants::{ClientOpcodes, InventoryResult, ItemFlags};
+use wow_entities::INVENTORY_SLOT_BAG_0;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::spell::{
-    CastFailed, CastSpellRequest, SpellCastVisual, SpellStartPkt, SpellTargetData,
+    CastFailed, CastSpellRequest, OpenItem, SpellCastVisual, SpellStartPkt, SpellTargetData,
 };
 use wow_packet::{ClientPacket, ServerPacket};
 
@@ -56,6 +57,15 @@ inventory::submit! {
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::Inplace,
         handler_name: "handle_cancel_channelling",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::OpenItem,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_open_item",
     }
 }
 
@@ -274,6 +284,54 @@ impl WorldSession {
                 "Instant spell executed"
             );
         }
+    }
+
+    /// Handle `CMSG_OPEN_ITEM`.
+    ///
+    /// This ports Trinity's initial validation and fails closed until item loot
+    /// storage/generation is represented in Rust.
+    pub async fn handle_open_item(&mut self, mut pkt: wow_packet::WorldPacket) {
+        let open = match OpenItem::read(&mut pkt) {
+            Ok(open) => open,
+            Err(e) => {
+                warn!(account = self.account_id, "Failed to parse CMSG_OPEN_ITEM: {e}");
+                return;
+            }
+        };
+
+        debug!(
+            account = self.account_id,
+            slot = open.slot,
+            pack_slot = open.pack_slot,
+            "CMSG_OPEN_ITEM"
+        );
+
+        if open.slot != INVENTORY_SLOT_BAG_0 {
+            self.send_equip_error(InventoryResult::InternalBagError, None, None, 0, 0);
+            return;
+        }
+
+        let Some(item) = self.inventory_items.get(&open.pack_slot).cloned() else {
+            self.send_equip_error(InventoryResult::ItemNotFound, None, None, 0, 0);
+            return;
+        };
+
+        let Some(flags) = self.item_template_flags(item.entry_id) else {
+            self.send_equip_error(InventoryResult::ItemNotFound, Some(item.guid), None, 0, 0);
+            return;
+        };
+
+        if !flags.contains(ItemFlags::HAS_LOOT) {
+            self.send_equip_error(InventoryResult::ClientLockedOut, Some(item.guid), None, 0, 0);
+            return;
+        }
+
+        warn!(
+            item = ?item.guid,
+            entry = item.entry_id,
+            "CMSG_OPEN_ITEM item loot generation/storage not ported yet"
+        );
+        self.send_equip_error(InventoryResult::ClientLockedOut, Some(item.guid), None, 0, 0);
     }
 
     /// Handle `CMSG_CANCEL_CAST` — player cancels an in-progress cast.

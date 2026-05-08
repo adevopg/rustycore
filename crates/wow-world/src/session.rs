@@ -2661,6 +2661,9 @@ impl WorldSession {
             ClientOpcodes::CancelChannelling => {
                 self.handle_cancel_channelling(pkt).await;
             }
+            ClientOpcodes::OpenItem => {
+                self.handle_open_item(pkt).await;
+            }
 
             // ── QueryTime / QueryNextMailTime ─────────────────────────────────
             ClientOpcodes::QueryTime => {

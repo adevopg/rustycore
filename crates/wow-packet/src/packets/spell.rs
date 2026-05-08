@@ -231,6 +231,26 @@ impl ClientPacket for CastSpellRequest {
     }
 }
 
+/// CMSG_OPEN_ITEM payload.
+///
+/// C++ `WorldPackets::Spells::OpenItem::Read` reads `Slot` then `PackSlot`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenItem {
+    pub slot: u8,
+    pub pack_slot: u8,
+}
+
+impl ClientPacket for OpenItem {
+    const OPCODE: ClientOpcodes = ClientOpcodes::OpenItem;
+
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            slot: pkt.read_uint8()?,
+            pack_slot: pkt.read_uint8()?,
+        })
+    }
+}
+
 // ── Server packet helpers ─────────────────────────────────────────
 
 /// Write a minimal `SpellCastData` (used by both SpellStart and SpellGo).
@@ -463,4 +483,17 @@ impl ServerPacket for SpellCooldownPkt {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn open_item_reads_cpp_slot_then_pack_slot() {
+        let mut pkt = WorldPacket::from_bytes(&[0xC6, 0x32, 0xFF, 0x24]);
+        pkt.skip_opcode();
+
+        let open = OpenItem::read(&mut pkt).unwrap();
+        assert_eq!(open.slot, 0xFF);
+        assert_eq!(open.pack_slot, 0x24);
+    }
+}
