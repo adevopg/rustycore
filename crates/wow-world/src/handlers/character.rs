@@ -3201,11 +3201,11 @@ impl WorldSession {
             Some(c) => c.entry,
             None => {
                 warn!("BuyItem: vendor {:?} not in creatures", buy.vendor_guid);
-                self.send_packet(&BuyFailed {
-                    vendor_guid: buy.vendor_guid,
-                    muid: buy.muid,
-                    reason: BuyResult::DistanceTooFar,
-                });
+                self.send_buy_error(
+                    BuyResult::DistanceTooFar,
+                    Some(buy.vendor_guid),
+                    buy.muid as u32,
+                );
                 return;
             }
         };
@@ -3227,14 +3227,22 @@ impl WorldSession {
             Ok(r) => r,
             Err(e) => {
                 warn!("BuyItem: price query failed: {e}");
-                self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::CantFindItem });
+                self.send_buy_error(
+                    BuyResult::CantFindItem,
+                    Some(buy.vendor_guid),
+                    buy.muid as u32,
+                );
                 return;
             }
         };
 
         let buy_price: u64 = if price_result.is_empty() {
             warn!("BuyItem: item {} not found in vendor {}", buy.item_id, vendor_entry);
-            self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::CantFindItem });
+            self.send_buy_error(
+                BuyResult::CantFindItem,
+                Some(buy.vendor_guid),
+                buy.muid as u32,
+            );
             return;
         } else {
             let raw: u64 = price_result.try_read::<u64>(0).unwrap_or(0);
@@ -3247,7 +3255,11 @@ impl WorldSession {
 
         // ── Check gold ──
         if self.player_gold < buy_price {
-            self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::NotEnoughtMoney });
+            self.send_buy_error(
+                BuyResult::NotEnoughtMoney,
+                Some(buy.vendor_guid),
+                buy.muid as u32,
+            );
             return;
         }
 
@@ -3259,7 +3271,11 @@ impl WorldSession {
         let slot = match free_slot {
             Some(s) => s,
             None => {
-                self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::CantCarryMore });
+                self.send_buy_error(
+                    BuyResult::CantCarryMore,
+                    Some(buy.vendor_guid),
+                    buy.muid as u32,
+                );
                 return;
             }
         };
@@ -3281,7 +3297,11 @@ impl WorldSession {
         ins_item.set_u32(4, max_durability);
         if let Err(e) = char_db.execute(&ins_item).await {
             warn!("BuyItem: insert item_instance failed: {e}");
-            self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::CantFindItem });
+            self.send_buy_error(
+                BuyResult::CantFindItem,
+                Some(buy.vendor_guid),
+                buy.muid as u32,
+            );
             return;
         }
 
@@ -3297,7 +3317,11 @@ impl WorldSession {
             let mut del = char_db.prepare(CharStatements::DEL_ITEM_INSTANCE);
             del.set_u64(0, next_item_guid);
             let _ = char_db.execute(&del).await;
-            self.send_packet(&BuyFailed { vendor_guid: buy.vendor_guid, muid: buy.muid, reason: BuyResult::CantFindItem });
+            self.send_buy_error(
+                BuyResult::CantFindItem,
+                Some(buy.vendor_guid),
+                buy.muid as u32,
+            );
             return;
         }
 
@@ -3370,22 +3394,22 @@ impl WorldSession {
             Some(pair) => pair,
             None => {
                 warn!("SellItem: item {:?} not in inventory", sell.item_guid);
-                self.send_packet(&SellResponse::error(
-                    sell.vendor_guid,
-                    sell.item_guid,
+                self.send_sell_error(
                     SellResult::YouDontOwnThatItem,
-                ));
+                    Some(sell.vendor_guid),
+                    sell.item_guid,
+                );
                 return;
             }
         };
 
         // Equipped items (slots 0-18) can't be sold without unequipping first
         if slot < 19 {
-            self.send_packet(&SellResponse::error(
-                sell.vendor_guid,
-                sell.item_guid,
+            self.send_sell_error(
                 SellResult::CantSellItem,
-            ));
+                Some(sell.vendor_guid),
+                sell.item_guid,
+            );
             return;
         }
 
