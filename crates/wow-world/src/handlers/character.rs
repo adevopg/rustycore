@@ -1042,6 +1042,10 @@ fn item_spell_charges_db_string(charges: &[i32]) -> String {
     out
 }
 
+fn item_is_currently_looted_like_cpp(item: &wow_entities::Item) -> bool {
+    item.loot_generated()
+}
+
 fn append_item_refund_clear_statements(
     char_db: &CharacterDatabase,
     tx: &mut SqlTransaction,
@@ -5336,14 +5340,6 @@ impl WorldSession {
             return;
         }
 
-        if self
-            .inventory_item_objects
-            .get(&item.guid)
-            .is_some_and(|item_object| item_object.is_refundable())
-        {
-            return;
-        }
-
         let char_db = match self.char_db() {
             Some(db) => Arc::clone(db),
             None => return,
@@ -5357,6 +5353,17 @@ impl WorldSession {
             );
             return;
         };
+        if item_is_currently_looted_like_cpp(&runtime_item) {
+            self.send_sell_error(
+                SellResult::CantSellItem,
+                Some(sell.vendor_guid),
+                sell.item_guid,
+            );
+            return;
+        }
+        if runtime_item.is_refundable() {
+            return;
+        }
         let sell_amount = match sell_item_amount_action(runtime_item.count(), sell.amount) {
             SellItemAmountAction::Invalid => {
                 self.send_sell_error(
@@ -5623,6 +5630,9 @@ impl WorldSession {
             return;
         };
 
+        if item_is_currently_looted_like_cpp(&refund_item) {
+            return;
+        }
         if !refund_item.is_refundable() {
             return;
         }
@@ -7759,6 +7769,15 @@ mod tests {
         );
         assert_eq!(sell_item_amount_action(5, 6), SellItemAmountAction::Invalid);
         assert_eq!(sell_item_amount_action(5, -1), SellItemAmountAction::Invalid);
+    }
+
+    #[test]
+    fn item_currently_looted_guard_uses_runtime_loot_generated_state() {
+        let mut item = wow_entities::Item::default();
+        assert!(!item_is_currently_looted_like_cpp(&item));
+
+        item.set_loot_generated(true);
+        assert!(item_is_currently_looted_like_cpp(&item));
     }
 
     #[test]
