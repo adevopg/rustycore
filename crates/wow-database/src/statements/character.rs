@@ -142,6 +142,9 @@ pub enum CharStatements {
     /// DELETE FROM item_loot_money WHERE container_id = ?
     DEL_ITEMCONTAINER_MONEY,
 
+    /// DELETE FROM item_loot_items WHERE container_id = ?
+    DEL_ITEMCONTAINER_ITEMS,
+
     /// DELETE FROM item_loot_items WHERE container_id = ? AND item_id = ? AND item_count = ? AND item_index = ?
     DEL_ITEMCONTAINER_ITEM,
 
@@ -150,6 +153,12 @@ pub enum CharStatements {
 
     /// INSERT INTO item_loot_money (container_id, money) VALUES (?, ?)
     INS_ITEMCONTAINER_MONEY,
+
+    /// SELECT item_loot_items rows for one container_id.
+    SEL_ITEMCONTAINER_ITEMS,
+
+    /// INSERT INTO item_loot_items with Trinity's stored item loot shape.
+    INS_ITEMCONTAINER_ITEMS,
 
     /// INSERT INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost)
     /// VALUES (?, ?, ?, ?)
@@ -304,6 +313,9 @@ impl StatementDef for CharStatements {
             Self::DEL_ITEMCONTAINER_MONEY => {
                 "DELETE FROM item_loot_money WHERE container_id = ?"
             }
+            Self::DEL_ITEMCONTAINER_ITEMS => {
+                "DELETE FROM item_loot_items WHERE container_id = ?"
+            }
             Self::DEL_ITEMCONTAINER_ITEM => {
                 "DELETE FROM item_loot_items WHERE container_id = ? AND item_id = ? AND item_count = ? AND item_index = ?"
             }
@@ -312,6 +324,15 @@ impl StatementDef for CharStatements {
             }
             Self::INS_ITEMCONTAINER_MONEY => {
                 "INSERT INTO item_loot_money (container_id, money) VALUES (?, ?)"
+            }
+            Self::SEL_ITEMCONTAINER_ITEMS => {
+                "SELECT item_id, item_count, item_index, follow_rules, ffa, blocked, counted, under_threshold, needs_quest, random_properties_id, random_properties_seed, context \
+                 FROM item_loot_items WHERE container_id = ? ORDER BY item_index"
+            }
+            Self::INS_ITEMCONTAINER_ITEMS => {
+                "INSERT INTO item_loot_items \
+                 (container_id, item_id, item_count, item_index, follow_rules, ffa, blocked, counted, under_threshold, needs_quest, random_properties_id, random_properties_seed, context) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             }
             Self::INS_ITEM_REFUND_INSTANCE => {
                 "INSERT INTO item_refund_instance \
@@ -398,9 +419,12 @@ mod tests {
         assert_eq!(CharStatements::SEL_ITEM_REFUNDS.sql().matches('?').count(), 2);
         assert_eq!(CharStatements::DEL_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::DEL_ITEMCONTAINER_MONEY.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::DEL_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::DEL_ITEMCONTAINER_ITEM.sql().matches('?').count(), 4);
         assert_eq!(CharStatements::SEL_ITEMCONTAINER_MONEY.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::INS_ITEMCONTAINER_MONEY.sql().matches('?').count(), 2);
+        assert_eq!(CharStatements::SEL_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::INS_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 13);
         assert_eq!(CharStatements::INS_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 4);
     }
 }

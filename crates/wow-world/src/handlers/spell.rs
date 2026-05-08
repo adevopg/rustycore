@@ -336,32 +336,33 @@ impl WorldSession {
 
         if !self.loot_table.contains_key(&item.guid) {
             let stored_money = self.load_stored_item_money_like_cpp(item.guid).await;
-            let coins = match stored_money {
-                Some(money) => money,
-                None => {
+            let stored_items = self.load_stored_item_items_like_cpp(item.guid).await;
+            let loaded_stored_loot = stored_money.is_some() || stored_items.is_some();
+            let (coins, items) = if loaded_stored_loot {
+                (stored_money.unwrap_or(0), stored_items.unwrap_or_default())
+            } else {
+                let coins = {
                     let (min_money, max_money) = self
                         .load_item_template_addon_money_loot_like_cpp(item.entry_id)
                         .await;
                     generate_money_loot_like_cpp(min_money, max_money, &mut rand::thread_rng())
-                }
+                };
+                let items = self
+                    .generate_plain_item_loot_template_entries_like_cpp(item.entry_id)
+                    .await;
+                (coins, items)
             };
-            let items = if stored_money.is_some() {
-                Vec::new()
-            } else {
-                self.generate_plain_item_loot_template_entries_like_cpp(item.entry_id)
-                    .await
-            };
+            if !loaded_stored_loot && (coins > 0 || !items.is_empty()) {
+                self.save_new_stored_item_loot_like_cpp(item.guid, coins, &items)
+                    .await;
+            }
+
             self.loot_table.insert(item.guid, CreatureLoot {
                 loot_guid: item.guid,
                 coins,
                 items,
                 looted_by_player: false,
             });
-
-            if stored_money.is_none() && coins > 0 {
-                self.save_new_stored_item_money_like_cpp(item.guid, coins)
-                    .await;
-            }
         }
 
         if let Some(item_object) = self.inventory_item_objects.get_mut(&item.guid) {
@@ -518,28 +519,125 @@ impl WorldSession {
         }
     }
 
-    async fn save_new_stored_item_money_like_cpp(&self, item_guid: wow_core::ObjectGuid, money: u32) {
+    async fn load_stored_item_items_like_cpp(
+        &self,
+        item_guid: wow_core::ObjectGuid,
+    ) -> Option<Vec<LootEntry>> {
+        let char_db = self.char_db().map(Arc::clone)?;
+
+        let mut stmt = char_db.prepare(CharStatements::SEL_ITEMCONTAINER_ITEMS);
+        stmt.set_u64(0, item_guid.counter() as u64);
+
+        let mut result = match char_db.query(&stmt).await {
+            Ok(result) if !result.is_empty() => result,
+            Ok(_) => return None,
+            Err(err) => {
+                warn!(
+                    item_guid = item_guid.counter(),
+                    error = %err,
+                    "failed to load stored item loot rows"
+                );
+                return None;
+            }
+        };
+
+        let mut items = Vec::new();
+        loop {
+            let item_id = result.try_read::<u32>(0).unwrap_or(0);
+            let count = result.try_read::<u32>(1).unwrap_or(0);
+            let item_index = result.try_read::<u32>(2).unwrap_or(u32::MAX);
+            let _follow_rules = result.try_read::<bool>(3).unwrap_or(false);
+            let _ffa = result.try_read::<bool>(4).unwrap_or(false);
+            let blocked = result.try_read::<bool>(5).unwrap_or(false);
+            let _counted = result.try_read::<bool>(6).unwrap_or(false);
+            let _under_threshold = result.try_read::<bool>(7).unwrap_or(false);
+            let needs_quest = result.try_read::<bool>(8).unwrap_or(false);
+            let random_properties_id = result.try_read::<i32>(9).unwrap_or(0);
+            let random_properties_seed = result.try_read::<i32>(10).unwrap_or(0);
+            let context = result.try_read::<u8>(11).unwrap_or(0);
+
+            if stored_item_row_can_load_like_cpp_representable(
+                item_id,
+                count,
+                item_index,
+                blocked,
+                needs_quest,
+                random_properties_id,
+                random_properties_seed,
+                context,
+                self.item_storage_template(item_id).is_some(),
+            ) {
+                items.push(LootEntry {
+                    loot_list_id: item_index as u8,
+                    item_id,
+                    quantity: count,
+                    taken: false,
+                });
+            }
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        Some(items)
+    }
+
+    async fn save_new_stored_item_loot_like_cpp(
+        &self,
+        item_guid: wow_core::ObjectGuid,
+        money: u32,
+        items: &[LootEntry],
+    ) {
         let Some(char_db) = self.char_db().map(Arc::clone) else {
             return;
         };
 
         let mut tx = SqlTransaction::new();
 
-        let mut del_money = char_db.prepare(CharStatements::DEL_ITEMCONTAINER_MONEY);
-        del_money.set_u64(0, item_guid.counter() as u64);
-        tx.append(del_money);
+        if money > 0 {
+            let mut del_money = char_db.prepare(CharStatements::DEL_ITEMCONTAINER_MONEY);
+            del_money.set_u64(0, item_guid.counter() as u64);
+            tx.append(del_money);
 
-        let mut ins_money = char_db.prepare(CharStatements::INS_ITEMCONTAINER_MONEY);
-        ins_money.set_u64(0, item_guid.counter() as u64);
-        ins_money.set_u32(1, money);
-        tx.append(ins_money);
+            let mut ins_money = char_db.prepare(CharStatements::INS_ITEMCONTAINER_MONEY);
+            ins_money.set_u64(0, item_guid.counter() as u64);
+            ins_money.set_u32(1, money);
+            tx.append(ins_money);
+        }
+
+        let mut del_items = char_db.prepare(CharStatements::DEL_ITEMCONTAINER_ITEMS);
+        del_items.set_u64(0, item_guid.counter() as u64);
+        tx.append(del_items);
+
+        for item in items {
+            let Some(flags) = self.item_template_flags(item.item_id) else {
+                continue;
+            };
+
+            let mut ins_item = char_db.prepare(CharStatements::INS_ITEMCONTAINER_ITEMS);
+            ins_item.set_u64(0, item_guid.counter() as u64);
+            ins_item.set_u32(1, item.item_id);
+            ins_item.set_u32(2, item.quantity);
+            ins_item.set_u32(3, u32::from(item.loot_list_id));
+            ins_item.set_bool(4, true);
+            ins_item.set_bool(5, flags.contains(ItemFlags::MULTI_DROP));
+            ins_item.set_bool(6, false);
+            ins_item.set_bool(7, false);
+            ins_item.set_bool(8, false);
+            ins_item.set_bool(9, false);
+            ins_item.set_i32(10, 0);
+            ins_item.set_i32(11, 0);
+            ins_item.set_u8(12, 0);
+            tx.append(ins_item);
+        }
 
         if let Err(err) = char_db.commit_transaction(tx).await {
             warn!(
                 item_guid = item_guid.counter(),
                 money,
                 error = %err,
-                "failed to save stored item loot money"
+                "failed to save stored item loot rows"
             );
         }
     }
@@ -599,6 +697,28 @@ fn loot_template_plain_row_can_roll_like_cpp(
     loot_mode & LOOT_MODE_DEFAULT_LIKE_CPP != 0
 }
 
+fn stored_item_row_can_load_like_cpp_representable(
+    item_id: u32,
+    count: u32,
+    item_index: u32,
+    blocked: bool,
+    needs_quest: bool,
+    random_properties_id: i32,
+    random_properties_seed: i32,
+    context: u8,
+    item_exists: bool,
+) -> bool {
+    item_id != 0
+        && item_exists
+        && count != 0
+        && item_index <= u32::from(u8::MAX)
+        && !blocked
+        && !needs_quest
+        && random_properties_id == 0
+        && random_properties_seed == 0
+        && context == 0
+}
+
 fn add_loot_item_stacks_like_cpp(
     loot_items: &mut Vec<LootEntry>,
     item_id: u32,
@@ -622,7 +742,10 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
 
     use super::generate_money_loot_like_cpp;
-    use super::{add_loot_item_stacks_like_cpp, loot_template_plain_row_can_roll_like_cpp};
+    use super::{
+        add_loot_item_stacks_like_cpp, loot_template_plain_row_can_roll_like_cpp,
+        stored_item_row_can_load_like_cpp_representable,
+    };
 
     #[test]
     fn item_money_loot_generation_matches_cpp_boundary_branches() {
@@ -682,5 +805,21 @@ mod tests {
         add_loot_item_stacks_like_cpp(&mut capped, 25, 100, 1);
         assert_eq!(capped.len(), 18);
         assert_eq!(capped[17].loot_list_id, 17);
+    }
+
+    #[test]
+    fn stored_item_row_loader_keeps_only_currently_representable_rows() {
+        assert!(stored_item_row_can_load_like_cpp_representable(
+            25, 2, 7, false, false, 0, 0, 0, true
+        ));
+        assert!(!stored_item_row_can_load_like_cpp_representable(
+            25, 2, 256, false, false, 0, 0, 0, true
+        ));
+        assert!(!stored_item_row_can_load_like_cpp_representable(
+            25, 2, 7, true, false, 0, 0, 0, true
+        ));
+        assert!(!stored_item_row_can_load_like_cpp_representable(
+            25, 2, 7, false, false, 12, 0, 0, true
+        ));
     }
 }
