@@ -11,13 +11,16 @@ use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
     ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemExtendedCostFlags,
-    ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, Team,
+    ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
 use wow_crypto::rsa_sign::rsa_sign_connect_to;
 use wow_data::{CurrencyTypesStore, ItemExtendedCostStore};
-use wow_database::{CharStatements, LoginStatements, SqlTransaction, WorldDatabase, WorldStatements};
+use wow_database::{
+    CharStatements, CharacterDatabase, LoginStatements, SqlTransaction, WorldDatabase,
+    WorldStatements,
+};
 use wow_entities::{
     INVENTORY_SLOT_BAG_0, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT, is_equipment_pos, is_inventory_pos,
 };
@@ -924,6 +927,79 @@ fn vendor_list_item_refundable(
     extended_cost > 0
         && max_stack_size == Some(1)
         && item_flags.is_some_and(|flags| flags.contains(ItemFlags::ITEM_PURCHASE_RECORD))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadedItemRefundDecision {
+    None,
+    Valid {
+        paid_money: u64,
+        paid_extended_cost: u16,
+    },
+    Clear {
+        new_flags: u32,
+    },
+}
+
+fn loaded_item_refund_decision(
+    item_flags: u32,
+    played_time: u32,
+    paid_money: Option<u64>,
+    paid_extended_cost: Option<u16>,
+) -> LoadedItemRefundDecision {
+    let flags = ItemFieldFlags::from_bits_retain(item_flags);
+    if !flags.contains(ItemFieldFlags::REFUNDABLE) {
+        return LoadedItemRefundDecision::None;
+    }
+
+    let new_flags = (flags & !ItemFieldFlags::REFUNDABLE).bits();
+    if played_time > 2 * 60 * 60 {
+        return LoadedItemRefundDecision::Clear { new_flags };
+    }
+
+    match (paid_money, paid_extended_cost) {
+        (Some(paid_money), Some(paid_extended_cost)) => LoadedItemRefundDecision::Valid {
+            paid_money,
+            paid_extended_cost,
+        },
+        _ => LoadedItemRefundDecision::Clear { new_flags },
+    }
+}
+
+fn append_item_refund_clear_statements(
+    char_db: &CharacterDatabase,
+    tx: &mut SqlTransaction,
+    item_db_guid: u64,
+    new_flags: u32,
+) {
+    let mut del_refund = char_db.prepare(CharStatements::DEL_ITEM_REFUND_INSTANCE);
+    del_refund.set_u64(0, item_db_guid);
+    tx.append(del_refund);
+
+    let mut upd_flags = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_FLAGS);
+    upd_flags.set_u32(0, new_flags);
+    upd_flags.set_u64(1, item_db_guid);
+    tx.append(upd_flags);
+}
+
+fn append_item_refund_insert_statements(
+    char_db: &CharacterDatabase,
+    tx: &mut SqlTransaction,
+    item_db_guid: u64,
+    player_db_guid: u64,
+    paid_money: u64,
+    paid_extended_cost: u16,
+) {
+    let mut del_refund = char_db.prepare(CharStatements::DEL_ITEM_REFUND_INSTANCE);
+    del_refund.set_u64(0, item_db_guid);
+    tx.append(del_refund);
+
+    let mut ins_refund = char_db.prepare(CharStatements::INS_ITEM_REFUND_INSTANCE);
+    ins_refund.set_u64(0, item_db_guid);
+    ins_refund.set_u64(1, player_db_guid);
+    ins_refund.set_u64(2, paid_money);
+    ins_refund.set_u16(3, paid_extended_cost);
+    tx.append(ins_refund);
 }
 
 fn player_class_mask(player_class: u8) -> u32 {
@@ -2017,6 +2093,7 @@ impl WorldSession {
         {
             let mut eq_stmt = char_db.prepare(CharStatements::SEL_CHAR_EQUIPMENT);
             eq_stmt.set_u64(0, guid.counter() as u64);
+            let mut refund_cleanup_tx = SqlTransaction::new();
             match char_db.query(&eq_stmt).await {
                 Ok(mut eq_result) => {
                     loop {
@@ -2029,11 +2106,32 @@ impl WorldSession {
                             .try_read::<u8>(5)
                             .and_then(<ItemContext as num_traits::FromPrimitive>::from_u8)
                             .unwrap_or(ItemContext::None);
+                        let item_flags = eq_result.try_read::<u32>(6).unwrap_or(0);
+                        let item_played_time = eq_result.try_read::<u32>(7).unwrap_or(0);
+                        let refund_decision = loaded_item_refund_decision(
+                            item_flags,
+                            item_played_time,
+                            eq_result.try_read::<u64>(8),
+                            eq_result.try_read::<u16>(9),
+                        );
                         if item_entry > 0 && (slot as usize) < 141 {
                             let item_max_durability = self
                                 .item_template_max_durability(item_entry)
                                 .max(item_durability);
                             let item_guid = ObjectGuid::create_item(realm_id, item_db_guid as i64);
+                            let stored_flags = match refund_decision {
+                                LoadedItemRefundDecision::Clear { new_flags } => {
+                                    append_item_refund_clear_statements(
+                                        char_db.as_ref(),
+                                        &mut refund_cleanup_tx,
+                                        item_db_guid,
+                                        new_flags,
+                                    );
+                                    new_flags
+                                }
+                                LoadedItemRefundDecision::None
+                                | LoadedItemRefundDecision::Valid { .. } => item_flags,
+                            };
                             inv_slots[slot as usize] = item_guid;
                             item_creates.push(wow_packet::packets::update::ItemCreateData {
                                 item_guid,
@@ -2068,6 +2166,19 @@ impl WorldSession {
                                 item_context,
                                 slot,
                             );
+                            item_object.set_create_played_time(item_played_time);
+                            item_object.replace_all_item_flags(ItemFieldFlags::from_bits_retain(
+                                stored_flags,
+                            ));
+                            if let LoadedItemRefundDecision::Valid {
+                                paid_money,
+                                paid_extended_cost,
+                            } = refund_decision
+                            {
+                                item_object.set_refund_recipient(guid);
+                                item_object.set_paid_money(paid_money);
+                                item_object.set_paid_extended_cost(u32::from(paid_extended_cost));
+                            }
                             item_object.set_state(ItemUpdateState::Unchanged);
                             self.insert_inventory_item_object(item_object);
                             // Slots 0-18 also populate VisibleItems for character model
@@ -2082,6 +2193,14 @@ impl WorldSession {
                 }
                 Err(e) => {
                     warn!("Failed to load equipment for {:?}: {}", guid, e);
+                }
+            }
+            if !refund_cleanup_tx.is_empty() {
+                if let Err(e) = char_db.commit_transaction(refund_cleanup_tx).await {
+                    warn!(
+                        "Failed to clean expired/missing item refund metadata for {:?}: {}",
+                        guid, e
+                    );
                 }
             }
 
@@ -4514,6 +4633,14 @@ impl WorldSession {
             quantity,
         );
         let max_durability = vendor_item.max_durability;
+        let refund_template = self.item_storage_template(buy.item_id as u32);
+        let creates_refund_metadata = vendor_list_item_refundable(
+            refund_template.as_ref().map(|template| template.flags),
+            refund_template
+                .as_ref()
+                .map(|template| template.max_stack_size),
+            vendor_item.extended_cost as i32,
+        );
 
         // ── Check gold ──
         if self.player_gold < buy_price {
@@ -4618,6 +4745,23 @@ impl WorldSession {
                 new_stacks.push((slot, db_guid, item_guid, dest.count));
             }
         }
+        let refund_item_db_guid = creates_refund_metadata
+            .then(|| new_stacks.last().map(|&(_, db_guid, _, _)| db_guid))
+            .flatten();
+        if let Some(refund_item_db_guid) = refund_item_db_guid {
+            let mut upd_flags = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_FLAGS);
+            upd_flags.set_u32(0, ItemFieldFlags::REFUNDABLE.bits());
+            upd_flags.set_u64(1, refund_item_db_guid);
+            tx.append(upd_flags);
+            append_item_refund_insert_statements(
+                char_db.as_ref(),
+                &mut tx,
+                refund_item_db_guid,
+                player_guid.counter() as u64,
+                buy_price,
+                vendor_item.extended_cost as u16,
+            );
+        }
 
         let mut item_turnin_changes = Vec::new();
         for &(item_id, amount) in &extended_cost_item_costs {
@@ -4699,7 +4843,7 @@ impl WorldSession {
                 db_guid,
                 inventory_type: inv_type,
             });
-            let item_object = self.make_inventory_item_object(
+            let mut item_object = self.make_inventory_item_object(
                 item_guid,
                 buy.item_id as u32,
                 player_guid,
@@ -4708,6 +4852,12 @@ impl WorldSession {
                 ItemContext::Vendor,
                 slot,
             );
+            if refund_item_db_guid == Some(db_guid) {
+                item_object.set_item_flag(ItemFieldFlags::REFUNDABLE);
+                item_object.set_refund_recipient(player_guid);
+                item_object.set_paid_money(buy_price);
+                item_object.set_paid_extended_cost(vendor_item.extended_cost as u32);
+            }
             self.insert_inventory_item_object(item_object);
         }
         self.sync_object_accessor_player();
@@ -6432,6 +6582,35 @@ mod tests {
             0
         ));
         assert!(!vendor_list_item_refundable(None, Some(1), 42));
+    }
+
+    #[test]
+    fn loaded_refund_metadata_matches_cpp_load_cleanup() {
+        let refundable_flags =
+            (ItemFieldFlags::SOULBOUND | ItemFieldFlags::REFUNDABLE).bits();
+        assert_eq!(
+            loaded_item_refund_decision(refundable_flags, 7_200, Some(123), Some(45)),
+            LoadedItemRefundDecision::Valid {
+                paid_money: 123,
+                paid_extended_cost: 45,
+            }
+        );
+        assert_eq!(
+            loaded_item_refund_decision(refundable_flags, 7_201, Some(123), Some(45)),
+            LoadedItemRefundDecision::Clear {
+                new_flags: ItemFieldFlags::SOULBOUND.bits(),
+            }
+        );
+        assert_eq!(
+            loaded_item_refund_decision(refundable_flags, 10, None, Some(45)),
+            LoadedItemRefundDecision::Clear {
+                new_flags: ItemFieldFlags::SOULBOUND.bits(),
+            }
+        );
+        assert_eq!(
+            loaded_item_refund_decision(ItemFieldFlags::SOULBOUND.bits(), 10, Some(123), Some(45)),
+            LoadedItemRefundDecision::None
+        );
     }
 
     #[test]

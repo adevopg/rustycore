@@ -53,9 +53,11 @@ pub enum CharStatements {
     /// SELECT MAX(guid) FROM characters
     SEL_MAX_GUID,
 
-    /// SELECT ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context
+    /// SELECT ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context,
+    /// ii.flags, ii.playedTime, ir.paidMoney, ir.paidExtendedCost
     /// FROM character_inventory ci
     /// JOIN item_instance ii ON ci.item = ii.guid
+    /// LEFT JOIN item_refund_instance ir ON ir.item_guid = ci.item AND ir.player_guid = ci.guid
     /// WHERE ci.guid = ? AND ci.bag = 0
     SEL_CHAR_EQUIPMENT,
 
@@ -118,11 +120,25 @@ pub enum CharStatements {
     /// UPDATE item_instance SET count = ? WHERE guid = ?
     UPD_ITEM_INSTANCE_COUNT,
 
+    /// UPDATE item_instance SET flags = ? WHERE guid = ?
+    UPD_ITEM_INSTANCE_FLAGS,
+
     /// INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)
     INS_CHAR_INVENTORY,
 
     /// DELETE FROM item_instance WHERE guid = ?
     DEL_ITEM_INSTANCE,
+
+    /// SELECT paidMoney, paidExtendedCost FROM item_refund_instance
+    /// WHERE item_guid = ? AND player_guid = ? LIMIT 1
+    SEL_ITEM_REFUNDS,
+
+    /// DELETE FROM item_refund_instance WHERE item_guid = ?
+    DEL_ITEM_REFUND_INSTANCE,
+
+    /// INSERT INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost)
+    /// VALUES (?, ?, ?, ?)
+    INS_ITEM_REFUND_INSTANCE,
 
     /// INSERT IGNORE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)
     INS_CHARACTER_SPELL,
@@ -178,9 +194,12 @@ impl StatementDef for CharStatements {
                 "SELECT MAX(guid) FROM characters"
             }
             Self::SEL_CHAR_EQUIPMENT => {
-                "SELECT ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context \
+                "SELECT ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context, \
+                 ii.flags, ii.playedTime, ir.paidMoney, ir.paidExtendedCost \
                  FROM character_inventory ci \
                  JOIN item_instance ii ON ci.item = ii.guid \
+                 LEFT JOIN item_refund_instance ir \
+                   ON ir.item_guid = ci.item AND ir.player_guid = ci.guid \
                  WHERE ci.guid = ? AND ci.bag = 0"
             }
             Self::UPD_CHAR_INVENTORY_SLOT => {
@@ -244,11 +263,26 @@ impl StatementDef for CharStatements {
             Self::UPD_ITEM_INSTANCE_COUNT => {
                 "UPDATE item_instance SET count = ? WHERE guid = ?"
             }
+            Self::UPD_ITEM_INSTANCE_FLAGS => {
+                "UPDATE item_instance SET flags = ? WHERE guid = ?"
+            }
             Self::INS_CHAR_INVENTORY => {
                 "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)"
             }
             Self::DEL_ITEM_INSTANCE => {
                 "DELETE FROM item_instance WHERE guid = ?"
+            }
+            Self::SEL_ITEM_REFUNDS => {
+                "SELECT paidMoney, paidExtendedCost \
+                 FROM item_refund_instance WHERE item_guid = ? AND player_guid = ? LIMIT 1"
+            }
+            Self::DEL_ITEM_REFUND_INSTANCE => {
+                "DELETE FROM item_refund_instance WHERE item_guid = ?"
+            }
+            Self::INS_ITEM_REFUND_INSTANCE => {
+                "INSERT INTO item_refund_instance \
+                 (item_guid, player_guid, paidMoney, paidExtendedCost) \
+                 VALUES (?, ?, ?, ?)"
             }
             Self::INS_CHARACTER_SPELL => {
                 "INSERT IGNORE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)"
@@ -324,5 +358,10 @@ mod tests {
         assert_eq!(CharStatements::SEL_PLAYER_CURRENCY.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::UPD_PLAYER_CURRENCY.sql().matches('?').count(), 8);
         assert_eq!(CharStatements::REP_PLAYER_CURRENCY.sql().matches('?').count(), 8);
+        assert_eq!(CharStatements::SEL_CHAR_EQUIPMENT.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::UPD_ITEM_INSTANCE_FLAGS.sql().matches('?').count(), 2);
+        assert_eq!(CharStatements::SEL_ITEM_REFUNDS.sql().matches('?').count(), 2);
+        assert_eq!(CharStatements::DEL_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::INS_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 4);
     }
 }
