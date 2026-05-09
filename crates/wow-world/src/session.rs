@@ -4798,15 +4798,16 @@ mod tests {
         install_open_item_has_loot_template_with_lock(session, entry, 0);
     }
 
-    fn install_open_item_has_loot_template_with_lock(
+    fn install_open_item_template_with_flags(
         session: &mut WorldSession,
         entry: u32,
+        flags: ItemFlags,
         lock_id: u16,
     ) {
         session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([(
             entry,
             ItemSparseTemplateEntry {
-                flags: [ItemFlags::HAS_LOOT.bits() as u32, 0, 0, 0],
+                flags: [flags.bits() as u32, 0, 0, 0],
                 bag_family: 0,
                 stackable: 1,
                 max_count: 0,
@@ -4822,6 +4823,14 @@ mod tests {
                 inventory_type: InventoryType::NonEquip as i8,
             },
         )])));
+    }
+
+    fn install_open_item_has_loot_template_with_lock(
+        session: &mut WorldSession,
+        entry: u32,
+        lock_id: u16,
+    ) {
+        install_open_item_template_with_flags(session, entry, ItemFlags::HAS_LOOT, lock_id);
     }
 
     fn insert_open_item_top_level(
@@ -5041,6 +5050,99 @@ mod tests {
     async fn open_item_nested_reagent_bag_has_loot_opens_without_internal_bag_error() {
         assert_open_item_nested_has_loot_opens_without_internal_bag_error(REAGENT_BAG_SLOT_START)
             .await;
+    }
+
+    #[tokio::test]
+    async fn open_item_wrapped_without_has_loot_does_not_generate_loot_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 903);
+        session.set_player_guid(Some(player_guid));
+        install_open_item_template_with_flags(&mut session, 700, ItemFlags::empty(), 0);
+        insert_open_item_top_level(&mut session, player_guid, 23, item_guid, 700, true);
+        session
+            .inventory_item_objects
+            .get_mut(&item_guid)
+            .unwrap()
+            .set_item_flag(ItemFieldFlags::WRAPPED);
+
+        session
+            .handle_open_item(WorldPacket::from_bytes(&[INVENTORY_SLOT_BAG_0, 23]))
+            .await;
+
+        assert!(!session.loot_table.contains_key(&item_guid));
+        assert!(send_rx.try_recv().is_err());
+        assert!(session
+            .inventory_item_objects
+            .get(&item_guid)
+            .is_some_and(|item| !item.loot_generated() && item.is_wrapped()));
+    }
+
+    #[test]
+    fn open_item_wrapped_gift_row_helper_updates_runtime_and_top_level_metadata_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gift_creator = ObjectGuid::create_player(1, 77);
+        let item_guid = ObjectGuid::create_item(1, 904);
+        session.set_player_guid(Some(player_guid));
+        session.set_item_store(Arc::new(ItemStore::from_records([ItemRecord {
+            id: 200,
+            class_id: ItemClass::Weapon as u8,
+            subclass_id: 0,
+            material: 0,
+            inventory_type: InventoryType::Weapon as i8,
+            sheathe_type: 0,
+        }])));
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([(
+            200,
+            ItemSparseTemplateEntry {
+                flags: [0, 0, 0, 0],
+                bag_family: 0,
+                stackable: 1,
+                max_count: 0,
+                lock_id: 0,
+                required_reputation_rank: 0,
+                sell_price: 0,
+                max_durability: 40,
+                limit_category: 0,
+                required_reputation_faction: 0,
+                allowable_class: -1,
+                bonding: ItemBondingType::None as u8,
+                container_slots: 0,
+                inventory_type: InventoryType::Weapon as i8,
+            },
+        )])));
+        insert_open_item_top_level(&mut session, player_guid, 23, item_guid, 100, true);
+        {
+            let item = session.inventory_item_objects.get_mut(&item_guid).unwrap();
+            item.set_gift_creator(gift_creator);
+            item.set_item_flag(ItemFieldFlags::WRAPPED);
+            item.set_durability(55);
+            item.force_state(ItemUpdateState::Unchanged);
+        }
+
+        let durability = session
+            .apply_wrapped_gift_row_to_runtime_item_like_cpp(
+                INVENTORY_SLOT_BAG_0,
+                item_guid,
+                23,
+                200,
+                ItemFieldFlags::SOULBOUND.bits(),
+            )
+            .unwrap();
+
+        let item = session.inventory_item_objects.get(&item_guid).unwrap();
+        assert_eq!(durability, 40);
+        assert_eq!(item.object().entry(), 200);
+        assert_eq!(item.data().gift_creator, ObjectGuid::EMPTY);
+        assert_eq!(item.item_flags_bits(), ItemFieldFlags::SOULBOUND.bits());
+        assert_eq!(item.data().max_durability, 40);
+        assert_eq!(item.data().durability, 40);
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
+        assert!(!item.is_wrapped());
+        let inventory_item = session.inventory_items.get(&23).unwrap();
+        assert_eq!(inventory_item.entry_id, 200);
+        assert_eq!(inventory_item.inventory_type, Some(InventoryType::Weapon as u8));
     }
 
     #[tokio::test]

@@ -126,6 +126,15 @@ pub enum CharStatements {
     /// UPDATE item_instance SET flags = ? WHERE guid = ?
     UPD_ITEM_INSTANCE_FLAGS,
 
+    /// SELECT entry, flags FROM character_gifts WHERE item_guid = ?
+    SEL_CHARACTER_GIFT_BY_ITEM,
+
+    /// DELETE FROM character_gifts WHERE item_guid = ?
+    DEL_GIFT,
+
+    /// UPDATE item_instance after opening a wrapped gift.
+    UPD_ITEM_INSTANCE_OPEN_GIFT,
+
     /// INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)
     INS_CHAR_INVENTORY,
 
@@ -306,6 +315,15 @@ impl StatementDef for CharStatements {
             Self::UPD_ITEM_INSTANCE_FLAGS => {
                 "UPDATE item_instance SET flags = ? WHERE guid = ?"
             }
+            Self::SEL_CHARACTER_GIFT_BY_ITEM => {
+                "SELECT entry, flags FROM character_gifts WHERE item_guid = ?"
+            }
+            Self::DEL_GIFT => {
+                "DELETE FROM character_gifts WHERE item_guid = ?"
+            }
+            Self::UPD_ITEM_INSTANCE_OPEN_GIFT => {
+                "UPDATE item_instance SET itemEntry = ?, giftCreatorGuid = 0, flags = ?, durability = ? WHERE guid = ?"
+            }
             Self::INS_CHAR_INVENTORY => {
                 "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)"
             }
@@ -438,6 +456,9 @@ mod tests {
         assert_eq!(CharStatements::SEL_CHAR_EQUIPMENT.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::INS_ITEM_INSTANCE_CLONE.sql().matches('?').count(), 14);
         assert_eq!(CharStatements::UPD_ITEM_INSTANCE_FLAGS.sql().matches('?').count(), 2);
+        assert_eq!(CharStatements::SEL_CHARACTER_GIFT_BY_ITEM.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::DEL_GIFT.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::UPD_ITEM_INSTANCE_OPEN_GIFT.sql().matches('?').count(), 4);
         assert_eq!(CharStatements::SEL_ITEM_REFUNDS.sql().matches('?').count(), 2);
         assert_eq!(CharStatements::SEL_CHAR_BAG_CONTENTS.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::DEL_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 1);

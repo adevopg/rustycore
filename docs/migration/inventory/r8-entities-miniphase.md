@@ -575,6 +575,11 @@
   Rust targets: `crates/wow-data/src/item_stats.rs`, `crates/wow-world/src/handlers/spell.rs`, `crates/wow-world/src/session.rs`.
   Acceptance: `ItemSparseTemplateEntry` now preserves `LockID`, `WorldSession::item_template_lock_id` exposes the represented `ItemTemplate::GetLockID()` value, and `CMSG_OPEN_ITEM` sends `EQUIP_ERR_ITEM_LOCKED` without creating item loot when a `HAS_LOOT` item has `LockID != 0` and the runtime item is still locked. Items with the same locked template but `ItemFieldFlags::UNLOCKED` continue through the existing loot path. Full `Lock.db2`/`sLockStore` key lookup, wrapped gifts, random/context preservation, quest/condition/rate loot branches, scripts and collection appearance side effects remain under #NEXT.R8.ENTITIES.013.
 
+- [x] **#NEXT.R8.ENTITIES.186** Open wrapped gifts like C++.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Handlers/SpellHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/Item.cpp`, `/home/server/woltk-trinity-legacy/src/server/database/Database/Implementation/CharacterDatabase.cpp`.
+  Rust targets: `crates/wow-database/src/statements/character.rs`, `crates/wow-world/src/handlers/spell.rs`, `crates/wow-world/src/session.rs`.
+  Acceptance: `CMSG_OPEN_ITEM` now opens represented wrapped gifts like Trinity: wrapped runtime items pass the open gate even without `HAS_LOOT`, never generate item loot, load `character_gifts(entry, flags)`, revalidate the same still-wrapped runtime item, clear `giftCreatorGuid`, replace entry/flags/durability fields, update top-level inventory metadata when applicable, persist the `item_instance` gift transformation and delete `character_gifts` transactionally when the character DB is available. Full `Lock.db2`/`sLockStore` key lookup, random/context preservation, quest/condition/rate loot branches, scripts and collection appearance side effects remain under #NEXT.R8.ENTITIES.013.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

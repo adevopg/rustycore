@@ -24,8 +24,12 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, warn};
 
+use wow_constants::{
+    BagFamilyMask, ClientOpcodes, InventoryResult, ItemFieldFlags, ItemFlags, ItemUpdateState,
+};
+use wow_core::ObjectGuid;
 use wow_database::{CharStatements, SqlTransaction, WorldStatements};
-use wow_constants::{BagFamilyMask, ClientOpcodes, InventoryResult, ItemFlags};
+use wow_entities::INVENTORY_SLOT_BAG_0;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::loot::{CreatureLoot, LootEntry, LootItemData, LootResponse};
 use wow_packet::packets::spell::{
@@ -324,8 +328,18 @@ impl WorldSession {
             return;
         };
 
-        if !flags.contains(ItemFlags::HAS_LOOT) {
+        let is_wrapped = self
+            .inventory_item_objects
+            .get(&item.guid)
+            .is_some_and(|runtime_item| runtime_item.is_wrapped());
+
+        if !flags.contains(ItemFlags::HAS_LOOT) && !is_wrapped {
             self.send_equip_error(InventoryResult::ClientLockedOut, Some(item.guid), None, 0, 0);
+            return;
+        }
+
+        if is_wrapped {
+            self.open_wrapped_gift_like_cpp(open.slot, open.pack_slot, item.guid).await;
             return;
         }
 
@@ -406,6 +420,102 @@ impl WorldSession {
             acquired: true,
             ae_looting: false,
         });
+    }
+
+    async fn open_wrapped_gift_like_cpp(&mut self, bag: u8, slot: u8, item_guid: ObjectGuid) {
+        let Some(gift) = self.load_wrapped_gift_row_like_cpp(item_guid).await else {
+            // Without `character_gifts` data we intentionally do not fall through to item loot.
+            // Rust does not yet represent enough Player::DestroyItem side effects for this stale
+            // gift branch, so fail closed instead of generating unrelated loot.
+            return;
+        };
+
+        let Some(durability) = self.apply_wrapped_gift_row_to_runtime_item_like_cpp(
+            bag, item_guid, slot, gift.entry, gift.flags,
+        ) else {
+            return;
+        };
+
+        self.persist_wrapped_gift_open_like_cpp(item_guid, gift.entry, gift.flags, durability)
+            .await;
+        self.sync_object_accessor_player();
+    }
+
+    pub(crate) fn apply_wrapped_gift_row_to_runtime_item_like_cpp(
+        &mut self,
+        bag: u8,
+        item_guid: ObjectGuid,
+        slot: u8,
+        entry: u32,
+        flags: u32,
+    ) -> Option<u32> {
+        let current_item = self.get_inventory_item_by_pos(bag, slot)?;
+        if current_item.guid != item_guid {
+            return None;
+        }
+
+        let max_durability = self.item_template_max_durability(entry);
+        let inventory_type = self.item_template_inventory_type(entry);
+        let item_object = self.inventory_item_objects.get_mut(&item_guid)?;
+        if !item_object.is_wrapped() || item_object.object().guid() != item_guid {
+            return None;
+        }
+
+        let durability =
+            apply_wrapped_gift_transform_like_cpp(item_object, entry, flags, max_durability);
+
+        if bag == INVENTORY_SLOT_BAG_0 {
+            if let Some(inventory_item) = self
+                .inventory_items
+                .get_mut(&slot)
+                .filter(|inventory_item| inventory_item.guid == item_guid)
+            {
+                inventory_item.entry_id = entry;
+                inventory_item.inventory_type = inventory_type;
+            }
+        }
+
+        Some(durability)
+    }
+
+    async fn load_wrapped_gift_row_like_cpp(&self, item_guid: ObjectGuid) -> Option<WrappedGiftRow> {
+        let char_db = self.char_db().map(Arc::clone)?;
+        let mut stmt = char_db.prepare(CharStatements::SEL_CHARACTER_GIFT_BY_ITEM);
+        stmt.set_u64(0, item_guid.counter() as u64);
+
+        match char_db.query(&stmt).await {
+            Ok(result) if !result.is_empty() => Some(WrappedGiftRow {
+                entry: result.try_read::<u32>(0).unwrap_or(0),
+                flags: result.try_read::<u32>(1).unwrap_or(0),
+            }),
+            Ok(_) => None,
+            Err(err) => {
+                warn!(item_guid = item_guid.counter(), error = %err, "failed to load wrapped gift row");
+                None
+            }
+        }
+    }
+
+    async fn persist_wrapped_gift_open_like_cpp(&self, item_guid: ObjectGuid, entry: u32, flags: u32, durability: u32) {
+        let Some(char_db) = self.char_db().map(Arc::clone) else {
+            return;
+        };
+
+        let mut tx = SqlTransaction::new();
+        let mut upd_item = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_OPEN_GIFT);
+        upd_item.set_u32(0, entry);
+        upd_item.set_u32(1, flags);
+        upd_item.set_u32(2, durability);
+        upd_item.set_u64(3, item_guid.counter() as u64);
+        tx.append(upd_item);
+
+        let mut del_gift = char_db.prepare(CharStatements::DEL_GIFT);
+        del_gift.set_u64(0, item_guid.counter() as u64);
+        tx.append(del_gift);
+
+        if let Err(err) = char_db.commit_transaction(tx).await {
+            warn!(item_guid = item_guid.counter(), entry, error = %err, "failed to persist wrapped gift open");
+        }
     }
 
     async fn load_item_template_addon_money_loot_like_cpp(&self, item_entry: u32) -> (u32, u32) {
@@ -783,6 +893,34 @@ impl WorldSession {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WrappedGiftRow {
+    entry: u32,
+    flags: u32,
+}
+
+fn apply_wrapped_gift_transform_like_cpp(
+    item: &mut wow_entities::Item,
+    entry: u32,
+    flags: u32,
+    max_durability: u32,
+) -> u32 {
+    let old_durability = item.data().durability;
+    let durability = if old_durability == 0 {
+        max_durability
+    } else {
+        old_durability.min(max_durability)
+    };
+
+    item.set_gift_creator(ObjectGuid::EMPTY);
+    item.object_mut().set_entry(entry);
+    item.replace_all_item_flags(ItemFieldFlags::from_bits_retain(flags));
+    item.set_max_durability(max_durability);
+    item.set_durability(durability);
+    item.set_state(ItemUpdateState::Changed);
+    durability
+}
+
 fn stored_loot_item_should_persist_like_cpp(template_exists: bool, bag_family: BagFamilyMask) -> bool {
     if !template_exists {
         return false;
@@ -1019,17 +1157,56 @@ fn add_loot_template_row_item_like_cpp<F>(
 mod tests {
     use rand::{rngs::StdRng, SeedableRng};
 
-    use wow_constants::BagFamilyMask;
+    use wow_constants::{BagFamilyMask, ItemContext, ItemFieldFlags, ItemUpdateState};
+    use wow_core::ObjectGuid;
+    use wow_entities::{Item, ItemCreateInfo, MAX_ITEM_SPELLS};
 
     use super::generate_money_loot_like_cpp;
     use super::{
-        add_loot_item_stacks_like_cpp, loot_template_plain_row_can_roll_like_cpp,
-        loot_template_group_row_can_roll_like_cpp,
+        add_loot_item_stacks_like_cpp, apply_wrapped_gift_transform_like_cpp,
+        loot_template_plain_row_can_roll_like_cpp, loot_template_group_row_can_roll_like_cpp,
         loot_template_reference_row_can_roll_like_cpp,
         roll_group_loot_row_like_cpp, LootTemplateRow,
         stored_item_row_can_load_like_cpp_representable,
         stored_loot_item_should_persist_like_cpp,
     };
+
+    #[test]
+    fn open_item_wrapped_without_has_loot_uses_gift_row_like_cpp() {
+        let item_guid = ObjectGuid::create_item(1, 900);
+        let owner_guid = ObjectGuid::create_player(1, 42);
+        let gift_creator = ObjectGuid::create_player(1, 77);
+        let mut item = Item::new(0);
+        item.initialize_created_state(ItemCreateInfo {
+            guid: item_guid,
+            item_id: 100,
+            context: ItemContext::None,
+            owner: Some(owner_guid),
+            max_durability: 30,
+            expiration: 0,
+            spell_charges: [0; MAX_ITEM_SPELLS],
+        });
+        item.force_state(ItemUpdateState::Unchanged);
+        item.set_gift_creator(gift_creator);
+        item.replace_all_item_flags(ItemFieldFlags::WRAPPED);
+        item.set_durability(25);
+
+        let durability = apply_wrapped_gift_transform_like_cpp(
+            &mut item,
+            200,
+            ItemFieldFlags::SOULBOUND.bits(),
+            20,
+        );
+
+        assert_eq!(durability, 20);
+        assert_eq!(item.object().entry(), 200);
+        assert_eq!(item.data().gift_creator, ObjectGuid::EMPTY);
+        assert_eq!(item.item_flags_bits(), ItemFieldFlags::SOULBOUND.bits());
+        assert_eq!(item.data().max_durability, 20);
+        assert_eq!(item.data().durability, 20);
+        assert_eq!(item.update_state(), ItemUpdateState::Changed);
+        assert!(!item.is_wrapped());
+    }
 
     #[test]
     fn item_money_loot_generation_matches_cpp_boundary_branches() {
