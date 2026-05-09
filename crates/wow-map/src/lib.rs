@@ -22,8 +22,9 @@ pub use grid::{
     TimeTracker, update_grid_state,
 };
 pub use grid_unload::{
-    GridObjectKind, GridUnloadAction, GuidGridUnloadLifecycle, object_grid_cleaner,
-    object_grid_evacuator, object_grid_stoper, object_grid_unloader,
+    GridObjectKind, GridUnloadAction, GridUnloadApplyOutcome, GridUnloadEntityStore,
+    GuidGridUnloadLifecycle, apply_grid_unload_action, apply_grid_unload_actions,
+    object_grid_cleaner, object_grid_evacuator, object_grid_stoper, object_grid_unloader,
 };
 pub use manager::{
     InstanceIdAllocator, MIN_GRID_DELAY_MS, MIN_MAP_UPDATE_DELAY_MS, ManagedMap, ManagedMapKind,

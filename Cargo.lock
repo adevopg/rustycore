@@ -3139,6 +3139,7 @@ dependencies = [
  "smallvec",
  "wow-core",
  "wow-ecs",
+ "wow-entities",
  "wow-math",
 ]
 

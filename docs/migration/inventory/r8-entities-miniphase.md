@@ -587,7 +587,9 @@
 
 ## Follow-Up Work Items
 
-- [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
+- [x] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
+  Rust targets: `crates/wow-entities/src/creature.rs`, `crates/wow-entities/src/game_object.rs`, `crates/wow-entities/src/corpse.rs`, `crates/wow-map/src/grid_unload.rs`.
+  Acceptance: `wow-map` keeps the GUID-only unload collector unchanged and adds a `GridUnloadEntityStore` applier for real `Creature`/`GameObject`/`Corpse` instances; `SetDestroyedObject` now calls entity-level destroyed-object methods, `CleanupsBeforeDelete` records represented cleanup calls, `DeleteObject` records represented delete requests and clears grid/cell state, creature `CombatStop` clears the represented attack target, creature/gameobject respawn relocation requests are recorded, and currently unrepresented creature dyn-object/area-trigger ownership is an explicit no-op. Canonical MapManager/global object-container deletion, real respawn relocation and full creature/gameobject/corpse runtime lifecycle remain under #NEXT.R8.ENTITIES.006/#NEXT.R8.ENTITIES.017/#NEXT.R8.ENTITIES.021/#NEXT.R8.ENTITIES.023.
 - [ ] **#NEXT.R8.ENTITIES.005** Port `WorldObject` LOS, terrain-height, transport relocation and visibility-range helpers that require Map/Terrain/Transport integration.
 - [ ] **#NEXT.R8.ENTITIES.006** Complete remaining `ObjectAccessor` integration: real `SaveAllPlayers` and wiring to canonical `wow_map::Map` containers instead of bridge storage.
 - [ ] **#NEXT.R8.ENTITIES.008** Complete generated update-field sections beyond `ObjectData`: `UnitData`, `PlayerData`, `ActivePlayerData`, `GameObjectData`, `ItemData`, `CorpseData`, `DynamicObjectData`, `AreaTriggerData`, `SceneObjectData`, `ConversationData`, including visibility flag filters and dynamic/optional fields.

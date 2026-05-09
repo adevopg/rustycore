@@ -6,6 +6,7 @@
 //! - `game/Maps/Map.cpp::UnloadGrid`
 
 use wow_core::ObjectGuid;
+use wow_entities::{Corpse, Creature, GameObject};
 
 use crate::cell::GridObjectGuids;
 use crate::grid::NGrid;
@@ -70,6 +71,171 @@ impl GridLifecycle for GuidGridUnloadLifecycle {
 
     fn unload_grid_objects(&mut self, grid: &mut NGrid) {
         object_grid_unloader(grid, &mut self.actions);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridUnloadApplyOutcome {
+    Applied,
+    MissingEntity,
+    UnsupportedKind,
+}
+
+pub trait GridUnloadEntityStore {
+    fn creature_mut(&mut self, guid: ObjectGuid) -> Option<&mut Creature>;
+    fn game_object_mut(&mut self, guid: ObjectGuid) -> Option<&mut GameObject>;
+    fn corpse_mut(&mut self, guid: ObjectGuid) -> Option<&mut Corpse>;
+}
+
+pub fn apply_grid_unload_action<S>(
+    store: &mut S,
+    action: GridUnloadAction,
+) -> GridUnloadApplyOutcome
+where
+    S: GridUnloadEntityStore + ?Sized,
+{
+    match action {
+        GridUnloadAction::RemoveAllDynObjects(guid) => store
+            .creature_mut(guid)
+            .map(|creature| creature.remove_all_dyn_objects())
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridUnloadAction::RemoveAllAreaTriggers(guid) => store
+            .creature_mut(guid)
+            .map(|creature| creature.remove_all_area_triggers())
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridUnloadAction::CombatStop(guid) => store
+            .creature_mut(guid)
+            .map(|creature| creature.combat_stop())
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridUnloadAction::CreatureRespawnRelocation(guid) => store
+            .creature_mut(guid)
+            .map(|creature| creature.request_respawn_relocation_from_grid_unload())
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridUnloadAction::GameObjectRespawnRelocation(guid) => store
+            .game_object_mut(guid)
+            .map(|game_object| game_object.request_respawn_relocation_from_grid_unload())
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridUnloadAction::SetDestroyedObject(kind, guid) => {
+            apply_grid_unload_object_kind(store, kind, guid, |entity| {
+                entity.set_destroyed_object(true);
+            })
+        }
+        GridUnloadAction::CleanupsBeforeDelete(kind, guid) => {
+            apply_grid_unload_object_kind(store, kind, guid, |entity| {
+                entity.cleanup_before_delete();
+            })
+        }
+        GridUnloadAction::DeleteObject(kind, guid) => {
+            apply_grid_unload_object_kind(store, kind, guid, |entity| {
+                entity.request_delete_from_grid_unload();
+            })
+        }
+    }
+}
+
+pub fn apply_grid_unload_actions<S>(
+    store: &mut S,
+    actions: impl IntoIterator<Item = GridUnloadAction>,
+) -> Vec<GridUnloadApplyOutcome>
+where
+    S: GridUnloadEntityStore + ?Sized,
+{
+    actions
+        .into_iter()
+        .map(|action| apply_grid_unload_action(store, action))
+        .collect()
+}
+
+trait GridUnloadEntity {
+    fn set_destroyed_object(&mut self, destroyed: bool);
+    fn cleanup_before_delete(&mut self);
+    fn request_delete_from_grid_unload(&mut self);
+}
+
+impl GridUnloadEntity for Creature {
+    fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.set_destroyed_object(destroyed);
+    }
+
+    fn cleanup_before_delete(&mut self) {
+        self.cleanup_before_delete();
+    }
+
+    fn request_delete_from_grid_unload(&mut self) {
+        self.request_delete_from_grid_unload();
+    }
+}
+
+impl GridUnloadEntity for GameObject {
+    fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.set_destroyed_object(destroyed);
+    }
+
+    fn cleanup_before_delete(&mut self) {
+        self.cleanup_before_delete();
+    }
+
+    fn request_delete_from_grid_unload(&mut self) {
+        self.request_delete_from_grid_unload();
+    }
+}
+
+impl GridUnloadEntity for Corpse {
+    fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.set_destroyed_object(destroyed);
+    }
+
+    fn cleanup_before_delete(&mut self) {
+        self.cleanup_before_delete();
+    }
+
+    fn request_delete_from_grid_unload(&mut self) {
+        self.request_delete_from_grid_unload();
+    }
+}
+
+fn apply_grid_unload_object_kind<S>(
+    store: &mut S,
+    kind: GridObjectKind,
+    guid: ObjectGuid,
+    apply: impl FnOnce(&mut dyn GridUnloadEntity),
+) -> GridUnloadApplyOutcome
+where
+    S: GridUnloadEntityStore + ?Sized,
+{
+    match kind {
+        GridObjectKind::Creature => store
+            .creature_mut(guid)
+            .map(|creature| apply(creature))
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridObjectKind::GameObject => store
+            .game_object_mut(guid)
+            .map(|game_object| apply(game_object))
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridObjectKind::Corpse => store
+            .corpse_mut(guid)
+            .map(|corpse| apply(corpse))
+            .map_or(GridUnloadApplyOutcome::MissingEntity, |_| {
+                GridUnloadApplyOutcome::Applied
+            }),
+        GridObjectKind::DynamicObject
+        | GridObjectKind::AreaTrigger
+        | GridObjectKind::SceneObject
+        | GridObjectKind::Conversation => GridUnloadApplyOutcome::UnsupportedKind,
     }
 }
 
@@ -200,7 +366,30 @@ pub fn grid_object_count(grid_objects: &GridObjectGuids) -> usize {
 mod tests {
     use super::*;
     use crate::grid::NGrid;
+    use std::collections::HashMap;
     use wow_core::guid::HighGuid;
+    use wow_entities::CorpseType;
+
+    #[derive(Default)]
+    struct TestGridUnloadStore {
+        creatures: HashMap<ObjectGuid, Creature>,
+        game_objects: HashMap<ObjectGuid, GameObject>,
+        corpses: HashMap<ObjectGuid, Corpse>,
+    }
+
+    impl GridUnloadEntityStore for TestGridUnloadStore {
+        fn creature_mut(&mut self, guid: ObjectGuid) -> Option<&mut Creature> {
+            self.creatures.get_mut(&guid)
+        }
+
+        fn game_object_mut(&mut self, guid: ObjectGuid) -> Option<&mut GameObject> {
+            self.game_objects.get_mut(&guid)
+        }
+
+        fn corpse_mut(&mut self, guid: ObjectGuid) -> Option<&mut Corpse> {
+            self.corpses.get_mut(&guid)
+        }
+    }
 
     fn guid(kind: HighGuid, counter: i64) -> ObjectGuid {
         ObjectGuid::create_world_object(kind, 0, 1, 571, 1, counter as u32, counter)
@@ -292,6 +481,126 @@ mod tests {
             ]
         );
         assert!(grid.get_grid_type(0, 0).unwrap().grid_objects.is_empty());
+    }
+
+    #[test]
+    fn apply_set_destroyed_marks_real_creature() {
+        let creature_guid = guid(HighGuid::Creature, 1);
+        let mut creature = Creature::new(false);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(creature_guid);
+        let mut store = TestGridUnloadStore::default();
+        store.creatures.insert(creature_guid, creature);
+
+        let outcome = apply_grid_unload_action(
+            &mut store,
+            GridUnloadAction::SetDestroyedObject(GridObjectKind::Creature, creature_guid),
+        );
+
+        assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
+        assert!(store
+            .creatures
+            .get(&creature_guid)
+            .unwrap()
+            .unit()
+            .world()
+            .object()
+            .is_destroyed_object());
+    }
+
+    #[test]
+    fn apply_set_destroyed_marks_real_gameobject() {
+        let go_guid = guid(HighGuid::GameObject, 2);
+        let mut go = GameObject::new();
+        go.world_mut().object_mut().create(go_guid);
+        let mut store = TestGridUnloadStore::default();
+        store.game_objects.insert(go_guid, go);
+
+        let outcome = apply_grid_unload_action(
+            &mut store,
+            GridUnloadAction::SetDestroyedObject(GridObjectKind::GameObject, go_guid),
+        );
+
+        assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
+        assert!(store
+            .game_objects
+            .get(&go_guid)
+            .unwrap()
+            .world()
+            .object()
+            .is_destroyed_object());
+    }
+
+    #[test]
+    fn apply_set_destroyed_marks_real_corpse() {
+        let corpse_guid = guid(HighGuid::Corpse, 3);
+        let mut corpse = Corpse::new_at(CorpseType::Bones, 10);
+        corpse.world_mut().object_mut().create(corpse_guid);
+        let mut store = TestGridUnloadStore::default();
+        store.corpses.insert(corpse_guid, corpse);
+
+        let outcome = apply_grid_unload_action(
+            &mut store,
+            GridUnloadAction::SetDestroyedObject(GridObjectKind::Corpse, corpse_guid),
+        );
+
+        assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
+        assert!(store
+            .corpses
+            .get(&corpse_guid)
+            .unwrap()
+            .world()
+            .object()
+            .is_destroyed_object());
+    }
+
+    #[test]
+    fn apply_cleanup_and_delete_are_represented_without_panics() {
+        let creature_guid = guid(HighGuid::Creature, 4);
+        let mut creature = Creature::new(false);
+        creature.unit_mut().world_mut().set_current_cell(11, 12);
+        let go_guid = guid(HighGuid::GameObject, 5);
+        let mut go = GameObject::new();
+        go.world_mut().set_current_cell(13, 14);
+        let corpse_guid = guid(HighGuid::Corpse, 6);
+        let mut corpse = Corpse::new_at(CorpseType::Bones, 10);
+        corpse.set_cell_coord(15, 16);
+        corpse.world_mut().set_current_cell(15, 16);
+
+        let mut store = TestGridUnloadStore::default();
+        store.creatures.insert(creature_guid, creature);
+        store.game_objects.insert(go_guid, go);
+        store.corpses.insert(corpse_guid, corpse);
+
+        let outcomes = apply_grid_unload_actions(
+            &mut store,
+            [
+                GridUnloadAction::CleanupsBeforeDelete(GridObjectKind::Creature, creature_guid),
+                GridUnloadAction::DeleteObject(GridObjectKind::Creature, creature_guid),
+                GridUnloadAction::CleanupsBeforeDelete(GridObjectKind::GameObject, go_guid),
+                GridUnloadAction::DeleteObject(GridObjectKind::GameObject, go_guid),
+                GridUnloadAction::CleanupsBeforeDelete(GridObjectKind::Corpse, corpse_guid),
+                GridUnloadAction::DeleteObject(GridObjectKind::Corpse, corpse_guid),
+            ],
+        );
+
+        assert_eq!(outcomes, vec![GridUnloadApplyOutcome::Applied; 6]);
+        let creature = store.creatures.get(&creature_guid).unwrap();
+        assert_eq!(creature.cleanup_before_delete_count(), 1);
+        assert!(creature.grid_unload_delete_requested());
+        assert_eq!(creature.unit().world().current_cell(), None);
+        let go = store.game_objects.get(&go_guid).unwrap();
+        assert_eq!(go.cleanup_before_delete_count(), 1);
+        assert!(go.grid_unload_delete_requested());
+        assert_eq!(go.world().current_cell(), None);
+        let corpse = store.corpses.get(&corpse_guid).unwrap();
+        assert_eq!(corpse.cleanup_before_delete_count(), 1);
+        assert!(corpse.grid_unload_delete_requested());
+        assert_eq!(corpse.cell_coord(), None);
+        assert_eq!(corpse.world().current_cell(), None);
     }
 
     #[test]

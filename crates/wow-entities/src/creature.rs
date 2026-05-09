@@ -70,6 +70,9 @@ pub struct Creature {
     combat_distance: f32,
     loot_mode: u16,
     is_temp_world_object: bool,
+    grid_unload_cleanup_before_delete_count: u32,
+    grid_unload_delete_requested: bool,
+    grid_unload_respawn_relocation_requested: bool,
 }
 
 impl Creature {
@@ -118,6 +121,9 @@ impl Creature {
             combat_distance: 0.0,
             loot_mode: LOOT_MODE_DEFAULT,
             is_temp_world_object: false,
+            grid_unload_cleanup_before_delete_count: 0,
+            grid_unload_delete_requested: false,
+            grid_unload_respawn_relocation_requested: false,
         }
     }
 
@@ -310,6 +316,56 @@ impl Creature {
         self.is_temp_world_object
     }
 
+    pub const fn cleanup_before_delete_count(&self) -> u32 {
+        self.grid_unload_cleanup_before_delete_count
+    }
+
+    pub const fn grid_unload_delete_requested(&self) -> bool {
+        self.grid_unload_delete_requested
+    }
+
+    pub const fn grid_unload_respawn_relocation_requested(&self) -> bool {
+        self.grid_unload_respawn_relocation_requested
+    }
+
+    pub fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.unit
+            .world_mut()
+            .object_mut()
+            .set_destroyed_object(destroyed);
+    }
+
+    /// Rust placeholder for TrinityCore `Creature::RemoveAllDynObjects`.
+    ///
+    /// Dynamic-object ownership is not represented on canonical `Creature` yet,
+    /// so the grid unload bridge can call this safely as an explicit no-op.
+    pub fn remove_all_dyn_objects(&mut self) {}
+
+    /// Rust placeholder for TrinityCore `Creature::RemoveAllAreaTriggers`.
+    ///
+    /// Area-trigger ownership is not represented on canonical `Creature` yet,
+    /// so the grid unload bridge can call this safely as an explicit no-op.
+    pub fn remove_all_area_triggers(&mut self) {}
+
+    pub fn combat_stop(&mut self) {
+        self.unit.set_attacking(None);
+    }
+
+    pub fn request_respawn_relocation_from_grid_unload(&mut self) {
+        self.grid_unload_respawn_relocation_requested = true;
+    }
+
+    pub fn cleanup_before_delete(&mut self) {
+        self.grid_unload_cleanup_before_delete_count = self
+            .grid_unload_cleanup_before_delete_count
+            .saturating_add(1);
+    }
+
+    pub fn request_delete_from_grid_unload(&mut self) {
+        self.grid_unload_delete_requested = true;
+        self.unit.world_mut().clear_current_cell();
+    }
+
     pub fn get_power_index(&self, power: PowerType) -> Option<usize> {
         if power == self.power_type() {
             Some(0)
@@ -440,6 +496,9 @@ mod tests {
         assert_eq!(creature.combat_distance(), 0.0);
         assert_eq!(creature.loot_mode(), LOOT_MODE_DEFAULT);
         assert!(!creature.is_temp_world_object());
+        assert_eq!(creature.cleanup_before_delete_count(), 0);
+        assert!(!creature.grid_unload_delete_requested());
+        assert!(!creature.grid_unload_respawn_relocation_requested());
     }
 
     #[test]
@@ -505,5 +564,29 @@ mod tests {
 
         assert!(creature.has_react_state(ReactState::Passive));
         assert_eq!(creature.unit().data().faction_template, 35);
+    }
+
+    #[test]
+    fn creature_grid_unload_helpers_apply_represented_state() {
+        let victim = wow_core::ObjectGuid::new(1, 2);
+        let mut creature = Creature::new(false);
+        creature.unit_mut().set_attacking(Some(victim));
+        creature.unit_mut().world_mut().set_current_cell(7, 8);
+
+        creature.set_destroyed_object(true);
+        creature.remove_all_dyn_objects();
+        creature.remove_all_area_triggers();
+        creature.combat_stop();
+        creature.request_respawn_relocation_from_grid_unload();
+        creature.cleanup_before_delete();
+        creature.request_delete_from_grid_unload();
+
+        assert!(creature.unit().world().object().is_destroyed_object());
+        assert_eq!(creature.unit().attacking(), None);
+        assert!(creature.grid_unload_respawn_relocation_requested());
+        assert_eq!(creature.cleanup_before_delete_count(), 1);
+        assert!(creature.grid_unload_delete_requested());
+        assert_eq!(creature.unit().world().current_cell(), None);
+        assert!(!creature.unit().world().object().is_in_grid());
     }
 }

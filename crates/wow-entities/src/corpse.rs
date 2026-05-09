@@ -96,6 +96,8 @@ pub struct Corpse {
     corpse_type: CorpseType,
     ghost_time: i64,
     cell_coord: Option<(u32, u32)>,
+    grid_unload_cleanup_before_delete_count: u32,
+    grid_unload_delete_requested: bool,
 }
 
 impl Corpse {
@@ -121,6 +123,8 @@ impl Corpse {
             corpse_type,
             ghost_time,
             cell_coord: None,
+            grid_unload_cleanup_before_delete_count: 0,
+            grid_unload_delete_requested: false,
         }
     }
 
@@ -162,6 +166,30 @@ impl Corpse {
 
     pub fn set_cell_coord(&mut self, x: u32, y: u32) {
         self.cell_coord = Some((x, y));
+    }
+
+    pub const fn cleanup_before_delete_count(&self) -> u32 {
+        self.grid_unload_cleanup_before_delete_count
+    }
+
+    pub const fn grid_unload_delete_requested(&self) -> bool {
+        self.grid_unload_delete_requested
+    }
+
+    pub fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.world.object_mut().set_destroyed_object(destroyed);
+    }
+
+    pub fn cleanup_before_delete(&mut self) {
+        self.grid_unload_cleanup_before_delete_count = self
+            .grid_unload_cleanup_before_delete_count
+            .saturating_add(1);
+    }
+
+    pub fn request_delete_from_grid_unload(&mut self) {
+        self.grid_unload_delete_requested = true;
+        self.cell_coord = None;
+        self.world.clear_current_cell();
     }
 
     pub fn is_expired(&self, now: i64) -> bool {
@@ -369,6 +397,8 @@ mod tests {
         assert_eq!(bones.corpse_type(), CorpseType::Bones);
         assert_eq!(bones.ghost_time(), 1_000);
         assert_eq!(bones.cell_coord(), None);
+        assert_eq!(bones.cleanup_before_delete_count(), 0);
+        assert!(!bones.grid_unload_delete_requested());
         assert!(!bones.corpse_data_changes_mask().is_any_set());
 
         let resurrectable = Corpse::new_at(CorpseType::ResurrectablePve, 1_000);
@@ -453,5 +483,23 @@ mod tests {
         let corpse_data = update.corpse_data.unwrap();
         assert_eq!(corpse_data.values.display_id, 1234);
         assert!(corpse_data.mask.is_set(CORPSE_DATA_DISPLAY_ID_BIT));
+    }
+
+    #[test]
+    fn corpse_grid_unload_helpers_apply_represented_state() {
+        let mut corpse = Corpse::new_at(CorpseType::Bones, 10);
+        corpse.set_cell_coord(1, 2);
+        corpse.world_mut().set_current_cell(1, 2);
+
+        corpse.set_destroyed_object(true);
+        corpse.cleanup_before_delete();
+        corpse.request_delete_from_grid_unload();
+
+        assert!(corpse.world().object().is_destroyed_object());
+        assert_eq!(corpse.cleanup_before_delete_count(), 1);
+        assert!(corpse.grid_unload_delete_requested());
+        assert_eq!(corpse.cell_coord(), None);
+        assert_eq!(corpse.world().current_cell(), None);
+        assert!(!corpse.world().object().is_in_grid());
     }
 }

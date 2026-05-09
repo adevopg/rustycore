@@ -111,6 +111,9 @@ pub struct GameObject {
     anim_kit_id: u16,
     world_effect_id: u32,
     stationary_position: Position,
+    grid_unload_cleanup_before_delete_count: u32,
+    grid_unload_delete_requested: bool,
+    grid_unload_respawn_relocation_requested: bool,
 }
 
 impl GameObject {
@@ -148,6 +151,9 @@ impl GameObject {
             anim_kit_id: 0,
             world_effect_id: 0,
             stationary_position: Position::new(0.0, 0.0, 0.0, 0.0),
+            grid_unload_cleanup_before_delete_count: 0,
+            grid_unload_delete_requested: false,
+            grid_unload_respawn_relocation_requested: false,
         }
     }
 
@@ -289,6 +295,37 @@ impl GameObject {
 
     pub const fn stationary_position(&self) -> Position {
         self.stationary_position
+    }
+
+    pub const fn cleanup_before_delete_count(&self) -> u32 {
+        self.grid_unload_cleanup_before_delete_count
+    }
+
+    pub const fn grid_unload_delete_requested(&self) -> bool {
+        self.grid_unload_delete_requested
+    }
+
+    pub const fn grid_unload_respawn_relocation_requested(&self) -> bool {
+        self.grid_unload_respawn_relocation_requested
+    }
+
+    pub fn set_destroyed_object(&mut self, destroyed: bool) {
+        self.world.object_mut().set_destroyed_object(destroyed);
+    }
+
+    pub fn request_respawn_relocation_from_grid_unload(&mut self) {
+        self.grid_unload_respawn_relocation_requested = true;
+    }
+
+    pub fn cleanup_before_delete(&mut self) {
+        self.grid_unload_cleanup_before_delete_count = self
+            .grid_unload_cleanup_before_delete_count
+            .saturating_add(1);
+    }
+
+    pub fn request_delete_from_grid_unload(&mut self) {
+        self.grid_unload_delete_requested = true;
+        self.world.clear_current_cell();
     }
 
     pub fn set_display_id(&mut self, display_id: u32) {
@@ -503,6 +540,9 @@ mod tests {
         assert_eq!(go.anim_kit_id(), 0);
         assert_eq!(go.world_effect_id(), 0);
         assert_eq!(go.stationary_position(), Position::new(0.0, 0.0, 0.0, 0.0));
+        assert_eq!(go.cleanup_before_delete_count(), 0);
+        assert!(!go.grid_unload_delete_requested());
+        assert!(!go.grid_unload_respawn_relocation_requested());
         assert!(!go.game_object_data_changes_mask().is_any_set());
     }
 
@@ -647,5 +687,23 @@ mod tests {
                 .mask
                 .is_set(GAME_OBJECT_DATA_DISPLAY_ID_BIT)
         );
+    }
+
+    #[test]
+    fn gameobject_grid_unload_helpers_apply_represented_state() {
+        let mut go = GameObject::new();
+        go.world_mut().set_current_cell(3, 4);
+
+        go.set_destroyed_object(true);
+        go.request_respawn_relocation_from_grid_unload();
+        go.cleanup_before_delete();
+        go.request_delete_from_grid_unload();
+
+        assert!(go.world().object().is_destroyed_object());
+        assert!(go.grid_unload_respawn_relocation_requested());
+        assert_eq!(go.cleanup_before_delete_count(), 1);
+        assert!(go.grid_unload_delete_requested());
+        assert_eq!(go.world().current_cell(), None);
+        assert!(!go.world().object().is_in_grid());
     }
 }
