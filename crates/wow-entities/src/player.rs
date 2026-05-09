@@ -270,6 +270,349 @@ impl PlayerWorldInsertionState {
     }
 }
 
+/// TrinityCore `Player::LoadFromDB` gameplay subsystem load order, represented as a bridge plan.
+///
+/// These steps deliberately describe ordering and owned entity-state buckets only. They are not a
+/// DB loader, packet delivery pipeline, spell runtime, manager implementation, or session queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerGameplayLoadStep {
+    LoadAchievementsAndQuestCriteria,
+    LoadHomeBind,
+    InitializeSkillFields,
+    LoadGroup,
+    LoadCurrency,
+    LoadInstanceLocks,
+    LoadBattlegroundData,
+    LoadTaxiMaskAndDestinations,
+    InitTaxiNodesForLevel,
+    InitStatsForLevel,
+    ApplyRestBonus,
+    LoadSkills,
+    UpdateSkillsForLevel,
+    LoadTalents,
+    LoadSpells,
+    LoadCollectionsGlyphsAndAuras,
+    LoadQuestStatus,
+    LoadQuestObjectives,
+    LoadRewardedQuests,
+    LoadDailyWeeklyMonthlySeasonalQuests,
+    LoadRandomBattleground,
+    LearnDefaultSkills,
+    LearnCustomSpells,
+    LoadTraits,
+    LoadReputation,
+    LoadInventory,
+    LoadVoidStorage,
+    LoadActionButtons,
+    LoadMail,
+    LoadSocial,
+    FinalRelocate,
+    LoadSpellCooldownsAndCharges,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerGameplayLoadPlan {
+    steps: Vec<PlayerGameplayLoadStep>,
+}
+
+impl PlayerGameplayLoadPlan {
+    pub fn trinity_load_from_db() -> Self {
+        Self {
+            steps: vec![
+                PlayerGameplayLoadStep::LoadAchievementsAndQuestCriteria,
+                PlayerGameplayLoadStep::LoadHomeBind,
+                PlayerGameplayLoadStep::InitializeSkillFields,
+                PlayerGameplayLoadStep::LoadGroup,
+                PlayerGameplayLoadStep::LoadCurrency,
+                PlayerGameplayLoadStep::LoadInstanceLocks,
+                PlayerGameplayLoadStep::LoadBattlegroundData,
+                PlayerGameplayLoadStep::LoadTaxiMaskAndDestinations,
+                PlayerGameplayLoadStep::InitTaxiNodesForLevel,
+                PlayerGameplayLoadStep::InitStatsForLevel,
+                PlayerGameplayLoadStep::ApplyRestBonus,
+                PlayerGameplayLoadStep::LoadSkills,
+                PlayerGameplayLoadStep::UpdateSkillsForLevel,
+                PlayerGameplayLoadStep::LoadTalents,
+                PlayerGameplayLoadStep::LoadSpells,
+                PlayerGameplayLoadStep::LoadCollectionsGlyphsAndAuras,
+                PlayerGameplayLoadStep::LoadQuestStatus,
+                PlayerGameplayLoadStep::LoadQuestObjectives,
+                PlayerGameplayLoadStep::LoadRewardedQuests,
+                PlayerGameplayLoadStep::LoadDailyWeeklyMonthlySeasonalQuests,
+                PlayerGameplayLoadStep::LoadRandomBattleground,
+                PlayerGameplayLoadStep::LearnDefaultSkills,
+                PlayerGameplayLoadStep::LearnCustomSpells,
+                PlayerGameplayLoadStep::LoadTraits,
+                PlayerGameplayLoadStep::LoadReputation,
+                PlayerGameplayLoadStep::LoadInventory,
+                PlayerGameplayLoadStep::LoadVoidStorage,
+                PlayerGameplayLoadStep::LoadActionButtons,
+                PlayerGameplayLoadStep::LoadMail,
+                PlayerGameplayLoadStep::LoadSocial,
+                PlayerGameplayLoadStep::FinalRelocate,
+                PlayerGameplayLoadStep::LoadSpellCooldownsAndCharges,
+            ],
+        }
+    }
+
+    pub fn steps(&self) -> &[PlayerGameplayLoadStep] {
+        &self.steps
+    }
+
+    pub fn position_of(&self, step: PlayerGameplayLoadStep) -> Option<usize> {
+        self.steps.iter().position(|candidate| *candidate == step)
+    }
+
+    pub fn occurs_before(
+        &self,
+        before: PlayerGameplayLoadStep,
+        after: PlayerGameplayLoadStep,
+    ) -> bool {
+        match (self.position_of(before), self.position_of(after)) {
+            (Some(before_index), Some(after_index)) => before_index < after_index,
+            _ => false,
+        }
+    }
+}
+
+impl Default for PlayerGameplayLoadPlan {
+    fn default() -> Self {
+        Self::trinity_load_from_db()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerQuestGameplayState {
+    pub statuses: Vec<PlayerQuestStatusRecord>,
+    pub objective_progress: Vec<PlayerQuestObjectiveProgress>,
+    pub rewarded_quest_ids: Vec<u32>,
+    pub daily_quest_ids: Vec<u32>,
+    pub weekly_quest_ids: Vec<u32>,
+    pub monthly_quest_ids: Vec<u32>,
+    pub seasonal_quest_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerQuestStatusRecord {
+    pub quest_id: u32,
+    pub status: u8,
+    pub explored: bool,
+    pub timer_expires_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerQuestObjectiveProgress {
+    pub quest_id: u32,
+    pub objective_id: u32,
+    pub counter: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerSkillRecord {
+    pub skill_line_id: u32,
+    pub current_value: u16,
+    pub max_value: u16,
+    pub step: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerSpellLoadState {
+    Unchanged,
+    New,
+    Changed,
+    Removed,
+    Temporary,
+}
+
+impl Default for PlayerSpellLoadState {
+    fn default() -> Self {
+        Self::Unchanged
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerKnownSpellRecord {
+    pub spell_id: u32,
+    pub state: PlayerSpellLoadState,
+    pub active: bool,
+    pub favorite: bool,
+    pub dependent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerTalentRecord {
+    pub talent_id: u32,
+    pub spell_id: u32,
+    pub rank: u8,
+    pub talent_group: u8,
+    pub specialization_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerActionButtonRecord {
+    pub button: u8,
+    pub action_id: u32,
+    pub action_type: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerTaxiState {
+    pub known_node_mask: Vec<u8>,
+    pub known_node_mask_text: Option<String>,
+    pub source_node_id: Option<u32>,
+    pub destination_node_id: Option<u32>,
+    pub destinations: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerSocialState {
+    pub friend_guids: Vec<ObjectGuid>,
+    pub ignore_guids: Vec<ObjectGuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerMailRecord {
+    pub mail_id: u32,
+    pub sender: ObjectGuid,
+    pub receiver: ObjectGuid,
+    pub template_id: Option<u32>,
+    pub deliver_time: u64,
+    pub expire_time: u64,
+    pub checked_flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerGroupState {
+    pub group_guid: ObjectGuid,
+    pub leader_guid: ObjectGuid,
+    pub role_mask: u8,
+    pub subgroup: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerGuildState {
+    pub guild_id: Option<u64>,
+    pub invited_guild_id: Option<u64>,
+    pub rank_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerBattlegroundState {
+    pub queues: Vec<PlayerBattlegroundQueueRecord>,
+    pub current_bg_instance_id: Option<u32>,
+    pub current_bg_team: Option<u32>,
+    pub random: PlayerRandomBattlegroundState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerBattlegroundQueueRecord {
+    pub queue_id: u32,
+    pub bracket_id: u8,
+    pub joined_at: u64,
+    pub team_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerRandomBattlegroundState {
+    pub reward_claimed_today: bool,
+    pub last_reward_time: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerReputationRecord {
+    pub faction_id: u32,
+    pub standing: i32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerAchievementRecord {
+    pub achievement_id: u32,
+    pub completed_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerAchievementCriteriaRecord {
+    pub criteria_id: u32,
+    pub counter: u64,
+    pub completed_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerCurrencyRecord {
+    pub currency_id: u32,
+    pub count: u32,
+    pub weekly_count: u32,
+    pub tracked_quantity: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerSpellCooldownRecord {
+    pub spell_id: u32,
+    pub item_id: Option<u32>,
+    pub category_id: Option<u32>,
+    pub cooldown_expires_at: u64,
+    pub category_cooldown_expires_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerSpellChargeRecord {
+    pub category_id: u32,
+    pub consumed_charges: u8,
+    pub recharge_started_at: Option<u64>,
+    pub recharge_ends_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlayerRestState {
+    pub rest_xp: u32,
+    pub rest_bonus: f32,
+    pub rest_honor_bonus: f32,
+    pub rest_state: u8,
+    pub logout_time: Option<u64>,
+    pub logout_was_resting: bool,
+    pub is_resting_now: bool,
+}
+
+/// Canonical `wow-entities` bridge snapshot for gameplay data loaded by TrinityCore
+/// `Player::LoadFromDB` after the base `characters` row.
+///
+/// This state is intentionally independent from update masks. Runtime managers, DB loaders,
+/// packet serializers/delivery, spell/aura execution, social/mail managers and session queues
+/// remain separate layers and should consume/produce these buckets explicitly.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlayerGameplayState {
+    pub quests: PlayerQuestGameplayState,
+    pub skills: Vec<PlayerSkillRecord>,
+    pub spells: Vec<PlayerKnownSpellRecord>,
+    pub talents: Vec<PlayerTalentRecord>,
+    pub action_buttons: Vec<PlayerActionButtonRecord>,
+    pub taxi: PlayerTaxiState,
+    pub social: PlayerSocialState,
+    pub mails: Vec<PlayerMailRecord>,
+    pub group: Option<PlayerGroupState>,
+    pub guild: PlayerGuildState,
+    pub battleground: PlayerBattlegroundState,
+    pub reputations: Vec<PlayerReputationRecord>,
+    pub achievements: Vec<PlayerAchievementRecord>,
+    pub achievement_criteria: Vec<PlayerAchievementCriteriaRecord>,
+    pub currencies: Vec<PlayerCurrencyRecord>,
+    pub spell_cooldowns: Vec<PlayerSpellCooldownRecord>,
+    pub spell_charges: Vec<PlayerSpellChargeRecord>,
+    pub rest: PlayerRestState,
+}
+
+impl PlayerGameplayState {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlayerGameplayLoadRecord {
+    pub state: PlayerGameplayState,
+}
+
 fn representable_power_types() -> [PowerType; MAX_POWERS] {
     [
         PowerType::Mana,
@@ -2416,6 +2759,7 @@ pub struct Player {
     data: PlayerDataValues,
     active_data: ActivePlayerDataValues,
     inventory: PlayerInventoryStorage,
+    gameplay_state: PlayerGameplayState,
     player_data_changes: UpdateMask,
     active_player_data_changes: UpdateMask,
     mod_melee_hit_chance: f32,
@@ -2450,6 +2794,7 @@ impl Player {
             data: PlayerDataValues::default(),
             active_data: ActivePlayerDataValues::default(),
             inventory: PlayerInventoryStorage::default(),
+            gameplay_state: PlayerGameplayState::default(),
             player_data_changes: UpdateMask::new(PLAYER_DATA_BITS),
             active_player_data_changes: UpdateMask::new(ACTIVE_PLAYER_DATA_BITS),
             mod_melee_hit_chance: 7.5,
@@ -2654,6 +2999,22 @@ impl Player {
     pub const fn inventory(&self) -> &PlayerInventoryStorage {
         &self.inventory
     }
+
+    pub const fn gameplay_state(&self) -> &PlayerGameplayState {
+        &self.gameplay_state
+    }
+
+    pub fn gameplay_state_mut(&mut self) -> &mut PlayerGameplayState {
+        &mut self.gameplay_state
+    }
+
+    pub fn apply_gameplay_state_from_load(&mut self, record: PlayerGameplayLoadRecord) {
+        self.gameplay_state = record.state;
+    }
+
+    /// Gameplay bridge state is not update-mask tracked yet; this is a documented no-op baseline
+    /// hook for future DB/session integration.
+    pub fn clear_gameplay_changes(&mut self) {}
 
     pub fn soulbound_tradeable_items(&self) -> &HashSet<ObjectGuid> {
         &self.soulbound_tradeable_items
@@ -7993,6 +8354,267 @@ mod tests {
         assert!(after_add.object_accessor_registered);
         assert!(after_add.visibility_bootstrapped);
         assert!(after_add.worldstates_sent);
+    }
+
+    fn player_gameplay_sample_state() -> PlayerGameplayState {
+        PlayerGameplayState {
+            quests: PlayerQuestGameplayState {
+                statuses: vec![PlayerQuestStatusRecord {
+                    quest_id: 100,
+                    status: 3,
+                    explored: true,
+                    timer_expires_at: Some(1_700_000_100),
+                }],
+                objective_progress: vec![PlayerQuestObjectiveProgress {
+                    quest_id: 100,
+                    objective_id: 7,
+                    counter: 4,
+                }],
+                rewarded_quest_ids: vec![90],
+                daily_quest_ids: vec![101],
+                weekly_quest_ids: vec![102],
+                monthly_quest_ids: vec![103],
+                seasonal_quest_ids: vec![104],
+            },
+            skills: vec![PlayerSkillRecord {
+                skill_line_id: SKILL_PLATE_MAIL,
+                current_value: 225,
+                max_value: 300,
+                step: 2,
+            }],
+            spells: vec![PlayerKnownSpellRecord {
+                spell_id: 635,
+                state: PlayerSpellLoadState::Unchanged,
+                active: true,
+                favorite: false,
+                dependent: false,
+            }],
+            talents: vec![PlayerTalentRecord {
+                talent_id: 42,
+                spell_id: 20165,
+                rank: 1,
+                talent_group: 0,
+                specialization_id: Some(65),
+            }],
+            action_buttons: vec![PlayerActionButtonRecord {
+                button: 1,
+                action_id: 635,
+                action_type: 0,
+            }],
+            taxi: PlayerTaxiState {
+                known_node_mask: vec![0b0000_0011, 0b1000_0000],
+                known_node_mask_text: Some("3 128".to_string()),
+                source_node_id: Some(1),
+                destination_node_id: Some(2),
+                destinations: vec![1, 2, 3],
+            },
+            social: PlayerSocialState {
+                friend_guids: vec![ObjectGuid::create_player(1, 1001)],
+                ignore_guids: vec![ObjectGuid::create_player(1, 1002)],
+            },
+            mails: vec![PlayerMailRecord {
+                mail_id: 55,
+                sender: ObjectGuid::create_player(1, 1003),
+                receiver: ObjectGuid::create_player(1, 42),
+                template_id: Some(9),
+                deliver_time: 1_700_000_000,
+                expire_time: 1_700_086_400,
+                checked_flags: 0x2,
+            }],
+            group: Some(PlayerGroupState {
+                group_guid: ObjectGuid::new(1, 77),
+                leader_guid: ObjectGuid::create_player(1, 1001),
+                role_mask: 0x1,
+                subgroup: 0,
+            }),
+            guild: PlayerGuildState {
+                guild_id: Some(12),
+                invited_guild_id: Some(13),
+                rank_id: Some(4),
+            },
+            battleground: PlayerBattlegroundState {
+                queues: vec![PlayerBattlegroundQueueRecord {
+                    queue_id: 30,
+                    bracket_id: 4,
+                    joined_at: 1_700_000_050,
+                    team_id: TEAM_ALLIANCE_ID,
+                }],
+                current_bg_instance_id: Some(7001),
+                current_bg_team: Some(TEAM_ALLIANCE_ID),
+                random: PlayerRandomBattlegroundState {
+                    reward_claimed_today: true,
+                    last_reward_time: Some(1_700_000_060),
+                },
+            },
+            reputations: vec![PlayerReputationRecord {
+                faction_id: TEAM_ALLIANCE_ID,
+                standing: 4_200,
+                flags: 0x1,
+            }],
+            achievements: vec![PlayerAchievementRecord {
+                achievement_id: 6,
+                completed_at: Some(1_700_000_070),
+            }],
+            achievement_criteria: vec![PlayerAchievementCriteriaRecord {
+                criteria_id: 10,
+                counter: 99,
+                completed_at: None,
+            }],
+            currencies: vec![PlayerCurrencyRecord {
+                currency_id: 395,
+                count: 12,
+                weekly_count: 3,
+                tracked_quantity: Some(20),
+            }],
+            spell_cooldowns: vec![PlayerSpellCooldownRecord {
+                spell_id: 642,
+                item_id: None,
+                category_id: Some(100),
+                cooldown_expires_at: 1_700_000_200,
+                category_cooldown_expires_at: Some(1_700_000_150),
+            }],
+            spell_charges: vec![PlayerSpellChargeRecord {
+                category_id: 100,
+                consumed_charges: 1,
+                recharge_started_at: Some(1_700_000_120),
+                recharge_ends_at: Some(1_700_000_180),
+            }],
+            rest: PlayerRestState {
+                rest_xp: 1234,
+                rest_bonus: 1.5,
+                rest_honor_bonus: 0.25,
+                rest_state: 2,
+                logout_time: Some(1_699_999_999),
+                logout_was_resting: true,
+                is_resting_now: true,
+            },
+        }
+    }
+
+    #[test]
+    fn player_gameplay_default_state_is_empty_and_attached_to_new_player() {
+        let player = Player::new(None, false);
+
+        assert!(player.gameplay_state().is_empty());
+        assert!(player.gameplay_state().quests.statuses.is_empty());
+        assert!(player.gameplay_state().skills.is_empty());
+        assert!(player.gameplay_state().spells.is_empty());
+        assert!(player.gameplay_state().taxi.destinations.is_empty());
+        assert!(player.gameplay_state().rest.logout_time.is_none());
+    }
+
+    #[test]
+    fn player_gameplay_apply_load_record_stores_every_major_bucket() {
+        let mut player = Player::new(None, false);
+        let state = player_gameplay_sample_state();
+
+        player.apply_gameplay_state_from_load(PlayerGameplayLoadRecord {
+            state: state.clone(),
+        });
+
+        assert_eq!(
+            player.gameplay_state().quests.statuses,
+            state.quests.statuses
+        );
+        assert_eq!(
+            player.gameplay_state().quests.objective_progress,
+            state.quests.objective_progress
+        );
+        assert_eq!(player.gameplay_state().skills, state.skills);
+        assert_eq!(player.gameplay_state().spells, state.spells);
+        assert_eq!(player.gameplay_state().talents, state.talents);
+        assert_eq!(player.gameplay_state().action_buttons, state.action_buttons);
+        assert_eq!(player.gameplay_state().taxi, state.taxi);
+        assert_eq!(player.gameplay_state().social, state.social);
+        assert_eq!(player.gameplay_state().mails, state.mails);
+        assert_eq!(player.gameplay_state().group, state.group);
+        assert_eq!(player.gameplay_state().guild, state.guild);
+        assert_eq!(player.gameplay_state().battleground, state.battleground);
+        assert_eq!(player.gameplay_state().reputations, state.reputations);
+        assert_eq!(player.gameplay_state().achievements, state.achievements);
+        assert_eq!(
+            player.gameplay_state().achievement_criteria,
+            state.achievement_criteria
+        );
+        assert_eq!(player.gameplay_state().currencies, state.currencies);
+        assert_eq!(
+            player.gameplay_state().spell_cooldowns,
+            state.spell_cooldowns
+        );
+        assert_eq!(player.gameplay_state().spell_charges, state.spell_charges);
+        assert_eq!(player.gameplay_state().rest, state.rest);
+    }
+
+    #[test]
+    fn player_gameplay_load_plan_preserves_trinity_order() {
+        let plan = PlayerGameplayLoadPlan::trinity_load_from_db();
+
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadAchievementsAndQuestCriteria,
+            PlayerGameplayLoadStep::LoadHomeBind,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::InitializeSkillFields,
+            PlayerGameplayLoadStep::LoadSpells,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadSkills,
+            PlayerGameplayLoadStep::LoadSpells,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadSkills,
+            PlayerGameplayLoadStep::LoadActionButtons,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadTaxiMaskAndDestinations,
+            PlayerGameplayLoadStep::InitTaxiNodesForLevel,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::InitStatsForLevel,
+            PlayerGameplayLoadStep::ApplyRestBonus,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadQuestStatus,
+            PlayerGameplayLoadStep::LoadReputation,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadQuestStatus,
+            PlayerGameplayLoadStep::LoadInventory,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadQuestStatus,
+            PlayerGameplayLoadStep::LoadActionButtons,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadQuestStatus,
+            PlayerGameplayLoadStep::LoadMail,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::LoadQuestStatus,
+            PlayerGameplayLoadStep::LoadSocial,
+        ));
+        assert!(plan.occurs_before(
+            PlayerGameplayLoadStep::FinalRelocate,
+            PlayerGameplayLoadStep::LoadSpellCooldownsAndCharges,
+        ));
+    }
+
+    #[test]
+    fn player_gameplay_rest_and_taxi_destination_round_trip() {
+        let mut player = Player::new(None, false);
+        let state = player_gameplay_sample_state();
+        let expected_taxi = state.taxi.clone();
+        let expected_rest = state.rest.clone();
+
+        player.apply_gameplay_state_from_load(PlayerGameplayLoadRecord { state });
+
+        assert_eq!(player.gameplay_state().taxi, expected_taxi);
+        assert_eq!(player.gameplay_state().taxi.source_node_id, Some(1));
+        assert_eq!(player.gameplay_state().taxi.destination_node_id, Some(2));
+        assert_eq!(player.gameplay_state().taxi.destinations, vec![1, 2, 3]);
+        assert_eq!(player.gameplay_state().rest, expected_rest);
+        assert_eq!(player.gameplay_state().rest.rest_bonus, 1.5);
+        assert!(player.gameplay_state().rest.logout_was_resting);
     }
 
     fn can_bank_args<'a>(
