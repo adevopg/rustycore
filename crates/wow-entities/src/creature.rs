@@ -1,4 +1,4 @@
-use wow_constants::{PowerType, TypeId, TypeMask, WeaponAttackType};
+use wow_constants::{DeathState, PowerType, TypeId, TypeMask, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
 
 use crate::{BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit};
@@ -10,6 +10,8 @@ pub const DEFAULT_CORPSE_DELAY_SECS: u32 = 60;
 pub const DEFAULT_BOUNDARY_CHECK_TIME_MS: u32 = 2_500;
 pub const DEFAULT_MONSTER_SIGHT_DISTANCE: f32 = 50.0;
 pub const LOOT_MODE_DEFAULT: u16 = 0x1;
+pub const CREATURE_TAPPERS_SOFT_CAP: usize = 5;
+pub const CREATURE_NOPATH_EVADE_TIME_MS: u32 = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -287,6 +289,173 @@ impl Default for CreatureLifecyclePlan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatureRuntimeEvadeReason {
+    Boundary,
+    NoPath,
+    ForcedDespawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatureRuntimeAction {
+    NotifyJustAppeared,
+    SaveRespawnTime,
+    ClearTarget,
+    ClearNpcFlags,
+    ClearMount,
+    Deactivate,
+    ClearAssistanceSearch,
+    ClearTapList,
+    ResetPlayerDamageReq,
+    ResetCannotReachTarget,
+    ClearErasableUnitState,
+    InitializeMotion,
+    ResetAi,
+    LoadAddonAndSparring,
+    UpdateMovementFlags,
+    UpdateLoot,
+    RemoveLoot,
+    RemoveAllAuras,
+    CorpseRemovedAiHook,
+    RelocateToRespawnPosition,
+    DestroyVisibility,
+    UpdateVisibility,
+    ResetPickpocketLoot,
+    RestoreOriginalEntry,
+    SelectLevel,
+    ResetDisplay,
+    ResetReactState,
+    UpdatePool,
+    RequestMapRespawn,
+    RequestObjectRemove,
+    RequestDelayedForcedDespawn,
+    BoundaryCheck,
+    CombatPulse,
+    AiUpdateTick,
+    MeleeAttackIfReady,
+    RegenerateHealth,
+    RegeneratePower,
+    Evade(CreatureRuntimeEvadeReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureRuntimePlan {
+    actions: Vec<CreatureRuntimeAction>,
+}
+
+impl CreatureRuntimePlan {
+    pub fn new() -> Self {
+        Self {
+            actions: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, action: CreatureRuntimeAction) {
+        self.actions.push(action);
+    }
+
+    pub fn extend<I>(&mut self, actions: I)
+    where
+        I: IntoIterator<Item = CreatureRuntimeAction>,
+    {
+        self.actions.extend(actions);
+    }
+
+    pub fn actions(&self) -> &[CreatureRuntimeAction] {
+        &self.actions
+    }
+
+    pub fn contains(&self, action: CreatureRuntimeAction) -> bool {
+        self.actions.contains(&action)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+}
+
+impl Default for CreatureRuntimePlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureRuntimeState {
+    pub appeared_notified: bool,
+    pub respawn_requested: bool,
+    pub remove_corpse_requested: bool,
+    pub forced_despawn_pending: bool,
+    pub save_respawn_requested: bool,
+    pub ai_reset_requested: bool,
+    pub visibility_update_requested: bool,
+    pub visibility_destroy_requested: bool,
+    pub map_respawn_requested: bool,
+    pub object_remove_requested: bool,
+    pub evade_requested: Option<CreatureRuntimeEvadeReason>,
+    pub corpse_removed_count: u32,
+    pub loot_updated_count: u32,
+    pub loot_removed_count: u32,
+    pub pickpocket_reset_count: u32,
+    pub has_loot_recipient: bool,
+}
+
+impl Default for CreatureRuntimeState {
+    fn default() -> Self {
+        Self {
+            appeared_notified: false,
+            respawn_requested: false,
+            remove_corpse_requested: false,
+            forced_despawn_pending: false,
+            save_respawn_requested: false,
+            ai_reset_requested: false,
+            visibility_update_requested: false,
+            visibility_destroy_requested: false,
+            map_respawn_requested: false,
+            object_remove_requested: false,
+            evade_requested: None,
+            corpse_removed_count: 0,
+            loot_updated_count: 0,
+            loot_removed_count: 0,
+            pickpocket_reset_count: 0,
+            has_loot_recipient: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureRuntimeUpdateContext {
+    pub ai_enabled: bool,
+    pub is_engaged: bool,
+    pub in_evade_mode: bool,
+    pub is_dungeon: bool,
+    pub is_raid: bool,
+    pub has_map_players: bool,
+    pub cannot_reach_target: bool,
+    pub allow_cannot_reach_regen: bool,
+    pub is_polymorphed: bool,
+    pub has_loot: bool,
+    pub has_personal_loot: bool,
+}
+
+impl Default for CreatureRuntimeUpdateContext {
+    fn default() -> Self {
+        Self {
+            ai_enabled: true,
+            is_engaged: false,
+            in_evade_mode: false,
+            is_dungeon: false,
+            is_raid: false,
+            has_map_players: false,
+            cannot_reach_target: false,
+            allow_cannot_reach_regen: true,
+            is_polymorphed: false,
+            has_loot: false,
+            has_personal_loot: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Creature {
     unit: Unit,
@@ -331,6 +500,8 @@ pub struct Creature {
     grid_unload_delete_requested: bool,
     grid_unload_respawn_relocation_requested: bool,
     lifecycle_metadata: CreatureLifecycleMetadata,
+    runtime_state: CreatureRuntimeState,
+    tap_list: Vec<ObjectGuid>,
 }
 
 impl Creature {
@@ -383,6 +554,8 @@ impl Creature {
             grid_unload_delete_requested: false,
             grid_unload_respawn_relocation_requested: false,
             lifecycle_metadata: CreatureLifecycleMetadata::default(),
+            runtime_state: CreatureRuntimeState::default(),
+            tap_list: Vec::new(),
         }
     }
 
@@ -843,6 +1016,457 @@ impl Creature {
     pub fn set_faction(&mut self, faction: u32) {
         self.unit.set_faction(faction);
     }
+
+    pub const fn runtime_state(&self) -> &CreatureRuntimeState {
+        &self.runtime_state
+    }
+
+    pub fn runtime_state_mut(&mut self) -> &mut CreatureRuntimeState {
+        &mut self.runtime_state
+    }
+
+    pub fn tap_list(&self) -> &[ObjectGuid] {
+        &self.tap_list
+    }
+
+    pub fn has_loot_recipient(&self) -> bool {
+        self.runtime_state.has_loot_recipient
+    }
+
+    pub fn is_reputation_gain_disabled(&self) -> bool {
+        self.disable_reputation_gain
+    }
+
+    pub fn set_disable_reputation_gain(&mut self, disabled: bool) {
+        self.disable_reputation_gain = disabled;
+    }
+
+    pub fn set_pickpocket_loot_restore(&mut self, restore_time: i64) {
+        self.pickpocket_loot_restore = restore_time;
+    }
+
+    pub const fn pickpocket_loot_restore(&self) -> i64 {
+        self.pickpocket_loot_restore
+    }
+
+    pub fn reset_pickpocket_loot_restore(&mut self) {
+        self.pickpocket_loot_restore = 0;
+        self.runtime_state.pickpocket_reset_count =
+            self.runtime_state.pickpocket_reset_count.saturating_add(1);
+    }
+
+    pub fn set_dont_clear_tap_list_on_evade(&mut self, dont_clear: bool) {
+        if self.spawn_id == 0 {
+            self.dont_clear_tap_list_on_evade = dont_clear;
+        }
+    }
+
+    pub const fn dont_clear_tap_list_on_evade(&self) -> bool {
+        self.dont_clear_tap_list_on_evade
+    }
+
+    pub fn set_tapped_by_player(&mut self, player_guid: ObjectGuid, group_guids: &[ObjectGuid]) {
+        if self.tap_list.len() >= CREATURE_TAPPERS_SOFT_CAP || player_guid == ObjectGuid::EMPTY {
+            return;
+        }
+        self.insert_tapper(player_guid);
+        for guid in group_guids {
+            if self.tap_list.len() >= CREATURE_TAPPERS_SOFT_CAP {
+                break;
+            }
+            if *guid != ObjectGuid::EMPTY {
+                self.insert_tapper(*guid);
+            }
+        }
+        self.runtime_state.has_loot_recipient = !self.tap_list.is_empty();
+    }
+
+    pub fn is_tapped_by(&self, player_guid: ObjectGuid) -> bool {
+        self.tap_list.contains(&player_guid)
+    }
+
+    pub fn clear_tap_list(&mut self) {
+        self.tap_list.clear();
+        self.runtime_state.has_loot_recipient = false;
+    }
+
+    pub fn clear_tap_list_for_evade(&mut self) {
+        if !self.dont_clear_tap_list_on_evade {
+            self.clear_tap_list();
+        }
+    }
+
+    fn insert_tapper(&mut self, guid: ObjectGuid) {
+        if !self.tap_list.contains(&guid) && self.tap_list.len() < CREATURE_TAPPERS_SOFT_CAP {
+            self.tap_list.push(guid);
+        }
+    }
+
+    pub fn apply_death_transition(&mut self, state: DeathState, now: i64) -> CreatureRuntimePlan {
+        self.set_death_state_runtime(state, now)
+    }
+
+    pub fn set_death_state_runtime(&mut self, state: DeathState, now: i64) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+        self.unit.set_death_state(state);
+
+        match state {
+            DeathState::JustDied => {
+                self.corpse_remove_time = now.saturating_add(self.corpse_delay as i64);
+                let respawn_delay = self.respawn_delay as i64;
+                self.respawn_time = if self.respawn_compatibility_mode {
+                    now.saturating_add(respawn_delay)
+                        .saturating_add(self.corpse_delay as i64)
+                } else {
+                    now.saturating_add(respawn_delay)
+                };
+                self.runtime_state.save_respawn_requested = true;
+                self.runtime_state.visibility_update_requested = true;
+                self.unit.set_target(ObjectGuid::EMPTY);
+                self.unit.set_attacking(None);
+                self.already_searched_assistance = false;
+                self.already_call_assistance = false;
+                plan.extend([
+                    CreatureRuntimeAction::SaveRespawnTime,
+                    CreatureRuntimeAction::ClearTarget,
+                    CreatureRuntimeAction::ClearNpcFlags,
+                    CreatureRuntimeAction::ClearMount,
+                    CreatureRuntimeAction::Deactivate,
+                    CreatureRuntimeAction::ClearAssistanceSearch,
+                ]);
+                self.unit.set_death_state(DeathState::Corpse);
+            }
+            DeathState::JustRespawned => {
+                self.unit.set_health(self.unit.data().max_health);
+                self.clear_tap_list();
+                self.player_damage_req = 0;
+                self.cannot_reach_target = false;
+                self.cannot_reach_timer = 0;
+                self.respawn_time = 0;
+                self.corpse_remove_time = 0;
+                self.reset_pickpocket_loot_restore();
+                self.reset_loot_mode();
+                self.trigger_just_appeared = true;
+                self.runtime_state.ai_reset_requested = true;
+                self.runtime_state.visibility_update_requested = true;
+                plan.extend([
+                    CreatureRuntimeAction::ClearTapList,
+                    CreatureRuntimeAction::ResetPlayerDamageReq,
+                    CreatureRuntimeAction::ResetCannotReachTarget,
+                    CreatureRuntimeAction::UpdateMovementFlags,
+                    CreatureRuntimeAction::ClearErasableUnitState,
+                    CreatureRuntimeAction::InitializeMotion,
+                    CreatureRuntimeAction::ResetAi,
+                    CreatureRuntimeAction::LoadAddonAndSparring,
+                ]);
+                self.unit.set_death_state(DeathState::Alive);
+            }
+            _ => {}
+        }
+
+        plan
+    }
+
+    pub fn remove_corpse_runtime(
+        &mut self,
+        now: i64,
+        set_spawn_time: bool,
+        destroy_for_nearby_players: bool,
+    ) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+        if self.unit.death_state() != DeathState::Corpse {
+            return plan;
+        }
+
+        self.runtime_state.remove_corpse_requested = true;
+        self.runtime_state.corpse_removed_count =
+            self.runtime_state.corpse_removed_count.saturating_add(1);
+        self.runtime_state.loot_removed_count =
+            self.runtime_state.loot_removed_count.saturating_add(1);
+        self.corpse_remove_time = now;
+        plan.extend([
+            CreatureRuntimeAction::RemoveAllAuras,
+            CreatureRuntimeAction::RemoveLoot,
+            CreatureRuntimeAction::CorpseRemovedAiHook,
+        ]);
+
+        if destroy_for_nearby_players {
+            self.runtime_state.visibility_destroy_requested = true;
+            plan.push(CreatureRuntimeAction::DestroyVisibility);
+        }
+
+        if set_spawn_time {
+            self.respawn_time = self
+                .respawn_time
+                .max(now.saturating_add(self.respawn_delay as i64));
+            self.runtime_state.save_respawn_requested = !self.respawn_compatibility_mode;
+            if !self.respawn_compatibility_mode {
+                plan.push(CreatureRuntimeAction::SaveRespawnTime);
+            }
+        }
+
+        if self.respawn_compatibility_mode {
+            self.unit.set_death_state(DeathState::Dead);
+            plan.push(CreatureRuntimeAction::RelocateToRespawnPosition);
+        } else {
+            self.runtime_state.object_remove_requested = true;
+            plan.push(CreatureRuntimeAction::RequestObjectRemove);
+        }
+
+        plan
+    }
+
+    pub fn respawn_runtime(&mut self, force: bool, now: i64) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+        if force {
+            if self.unit.is_alive() {
+                plan.extend(
+                    self.set_death_state_runtime(DeathState::JustDied, now)
+                        .actions()
+                        .iter()
+                        .copied(),
+                );
+            } else if self.unit.death_state() != DeathState::Corpse {
+                self.unit.set_death_state(DeathState::Corpse);
+            }
+        }
+
+        if self.respawn_compatibility_mode {
+            self.runtime_state.visibility_destroy_requested = true;
+            plan.push(CreatureRuntimeAction::DestroyVisibility);
+            plan.extend(
+                self.remove_corpse_runtime(now, false, false)
+                    .actions()
+                    .iter()
+                    .copied(),
+            );
+            if self.unit.death_state() == DeathState::Dead {
+                self.respawn_time = 0;
+                self.reset_pickpocket_loot_restore();
+                self.runtime_state.loot_removed_count =
+                    self.runtime_state.loot_removed_count.saturating_add(1);
+                plan.extend([
+                    CreatureRuntimeAction::ResetPickpocketLoot,
+                    CreatureRuntimeAction::RemoveLoot,
+                    CreatureRuntimeAction::RestoreOriginalEntry,
+                    CreatureRuntimeAction::SelectLevel,
+                ]);
+                plan.extend(
+                    self.set_death_state_runtime(DeathState::JustRespawned, now)
+                        .actions()
+                        .iter()
+                        .copied(),
+                );
+                plan.extend([
+                    CreatureRuntimeAction::ResetDisplay,
+                    CreatureRuntimeAction::ResetReactState,
+                    CreatureRuntimeAction::UpdatePool,
+                ]);
+            }
+            self.runtime_state.visibility_update_requested = true;
+            plan.push(CreatureRuntimeAction::UpdateVisibility);
+        } else if self.spawn_id != 0 {
+            self.runtime_state.map_respawn_requested = true;
+            self.runtime_state.respawn_requested = true;
+            plan.push(CreatureRuntimeAction::RequestMapRespawn);
+        }
+
+        plan
+    }
+
+    pub fn forced_despawn_runtime(
+        &mut self,
+        time_ms_to_despawn: u32,
+        force_respawn_timer_secs: u32,
+        now: i64,
+    ) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+        if time_ms_to_despawn > 0 {
+            self.runtime_state.forced_despawn_pending = true;
+            plan.push(CreatureRuntimeAction::RequestDelayedForcedDespawn);
+            return plan;
+        }
+
+        if self.respawn_compatibility_mode {
+            let corpse_delay = self.corpse_delay;
+            let respawn_delay = self.respawn_delay;
+            let mut override_respawn_time = false;
+            self.runtime_state.visibility_destroy_requested = true;
+            plan.push(CreatureRuntimeAction::DestroyVisibility);
+
+            if self.unit.is_alive() {
+                if force_respawn_timer_secs > 0 {
+                    self.corpse_delay = 0;
+                    self.respawn_delay = force_respawn_timer_secs;
+                    override_respawn_time = true;
+                }
+                plan.extend(
+                    self.set_death_state_runtime(DeathState::JustDied, now)
+                        .actions()
+                        .iter()
+                        .copied(),
+                );
+            }
+
+            plan.extend(
+                self.remove_corpse_runtime(now, !override_respawn_time, false)
+                    .actions()
+                    .iter()
+                    .copied(),
+            );
+            self.corpse_delay = corpse_delay;
+            self.respawn_delay = respawn_delay;
+        } else {
+            if force_respawn_timer_secs > 0 {
+                self.respawn_time = now.saturating_add(force_respawn_timer_secs as i64);
+            } else {
+                self.respawn_time = now.saturating_add(self.respawn_delay as i64);
+            }
+            self.runtime_state.save_respawn_requested = true;
+            self.runtime_state.object_remove_requested = true;
+            plan.extend([
+                CreatureRuntimeAction::SaveRespawnTime,
+                CreatureRuntimeAction::RequestObjectRemove,
+            ]);
+        }
+
+        plan
+    }
+
+    pub fn all_loot_removed_from_corpse(
+        &mut self,
+        now: i64,
+        decay_rate: f32,
+        is_fully_skinned: bool,
+    ) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+        if self.corpse_remove_time <= now {
+            return plan;
+        }
+
+        let effective_decay_rate = if self.ignore_corpse_decay_ratio {
+            1.0
+        } else {
+            decay_rate.max(0.0)
+        };
+        self.corpse_remove_time = if is_fully_skinned {
+            now
+        } else {
+            now.saturating_add((self.corpse_delay as f32 * effective_decay_rate) as i64)
+        };
+        self.respawn_time = self.respawn_time.max(
+            self.corpse_remove_time
+                .saturating_add(self.respawn_delay as i64),
+        );
+        self.runtime_state.remove_corpse_requested = is_fully_skinned;
+        plan.push(CreatureRuntimeAction::UpdateLoot);
+        plan
+    }
+
+    pub fn runtime_update_plan(
+        &mut self,
+        diff_ms: u32,
+        now: i64,
+        context: CreatureRuntimeUpdateContext,
+    ) -> CreatureRuntimePlan {
+        let mut plan = CreatureRuntimePlan::new();
+
+        if context.ai_enabled
+            && self.trigger_just_appeared
+            && self.unit.death_state() != DeathState::Dead
+        {
+            self.trigger_just_appeared = false;
+            self.runtime_state.appeared_notified = true;
+            plan.push(CreatureRuntimeAction::NotifyJustAppeared);
+        }
+
+        match self.unit.death_state() {
+            DeathState::Dead => {
+                if self.respawn_compatibility_mode && self.respawn_time <= now {
+                    self.runtime_state.respawn_requested = true;
+                    plan.extend(self.respawn_runtime(false, now).actions().iter().copied());
+                }
+            }
+            DeathState::Corpse => {
+                if context.has_loot || context.has_personal_loot {
+                    self.runtime_state.loot_updated_count =
+                        self.runtime_state.loot_updated_count.saturating_add(1);
+                    plan.push(CreatureRuntimeAction::UpdateLoot);
+                }
+                if self.corpse_remove_time <= now {
+                    plan.extend(
+                        self.remove_corpse_runtime(now, false, true)
+                            .actions()
+                            .iter()
+                            .copied(),
+                    );
+                }
+            }
+            DeathState::Alive => {
+                if context.ai_enabled && !context.in_evade_mode && context.is_engaged {
+                    if consume_timer(&mut self.boundary_check_time, diff_ms) {
+                        plan.push(CreatureRuntimeAction::BoundaryCheck);
+                        self.boundary_check_time = DEFAULT_BOUNDARY_CHECK_TIME_MS;
+                    }
+                }
+
+                if self.combat_pulse_delay > 0 && context.is_engaged && context.is_dungeon {
+                    if consume_timer(&mut self.combat_pulse_time, diff_ms) {
+                        if context.has_map_players {
+                            plan.push(CreatureRuntimeAction::CombatPulse);
+                        }
+                        self.combat_pulse_time = self.combat_pulse_delay.saturating_mul(1_000);
+                    }
+                }
+
+                plan.push(CreatureRuntimeAction::AiUpdateTick);
+                plan.push(CreatureRuntimeAction::MeleeAttackIfReady);
+
+                if consume_timer(&mut self.regen_timer, diff_ms) {
+                    let can_regen_health = !context.in_evade_mode
+                        && (!context.is_engaged
+                            || context.is_polymorphed
+                            || (context.cannot_reach_target
+                                && (context.allow_cannot_reach_regen || !context.is_raid)));
+                    if self.regenerate_health && can_regen_health {
+                        plan.push(CreatureRuntimeAction::RegenerateHealth);
+                    }
+                    plan.push(CreatureRuntimeAction::RegeneratePower);
+                    self.regen_timer = CREATURE_REGEN_INTERVAL_MS;
+                }
+
+                if context.cannot_reach_target && !context.in_evade_mode && !context.is_raid {
+                    self.cannot_reach_target = true;
+                    self.cannot_reach_timer = self.cannot_reach_timer.saturating_add(diff_ms);
+                    if self.cannot_reach_timer >= CREATURE_NOPATH_EVADE_TIME_MS {
+                        self.runtime_state.evade_requested =
+                            Some(CreatureRuntimeEvadeReason::NoPath);
+                        plan.push(CreatureRuntimeAction::Evade(
+                            CreatureRuntimeEvadeReason::NoPath,
+                        ));
+                    }
+                } else {
+                    self.cannot_reach_timer = 0;
+                }
+            }
+            _ => {}
+        }
+
+        plan
+    }
+}
+
+fn consume_timer(timer: &mut u32, diff_ms: u32) -> bool {
+    if *timer == 0 {
+        return true;
+    }
+    if diff_ms >= *timer {
+        *timer = 0;
+        true
+    } else {
+        *timer -= diff_ms;
+        false
+    }
 }
 
 fn power_type_from_u8(power: u8) -> PowerType {
@@ -1285,5 +1909,220 @@ mod tests {
             0
         );
         assert_eq!(creature.spawn_id(), 44_000);
+    }
+
+    #[test]
+    fn creature_runtime_just_died_sets_corpse_respawn_and_clears_combat_bridge_state() {
+        let now = 10_000;
+        let victim = ObjectGuid::new(1, 2);
+        let player = ObjectGuid::new(1, 3);
+        let mut creature = Creature::new(false);
+        creature.set_respawn_compatibility_mode(true);
+        creature.set_respawn_delay(45);
+        creature.set_corpse_delay(15, false);
+        creature.unit_mut().set_target(victim);
+        creature.unit_mut().set_attacking(Some(victim));
+        creature.set_tapped_by_player(player, &[]);
+
+        let plan = creature.set_death_state_runtime(DeathState::JustDied, now);
+
+        assert_eq!(creature.unit().death_state(), DeathState::Corpse);
+        assert_eq!(creature.corpse_remove_time(), now + 15);
+        assert_eq!(creature.respawn_time(), now + 45 + 15);
+        assert_eq!(creature.unit().data().target, ObjectGuid::EMPTY);
+        assert_eq!(creature.unit().attacking(), None);
+        assert!(creature.runtime_state().save_respawn_requested);
+        assert!(plan.contains(CreatureRuntimeAction::SaveRespawnTime));
+        assert!(plan.contains(CreatureRuntimeAction::ClearTarget));
+
+        let mut non_compat = Creature::new(false);
+        non_compat.set_respawn_compatibility_mode(false);
+        non_compat.set_respawn_delay(45);
+        non_compat.set_corpse_delay(15, false);
+        non_compat.set_death_state_runtime(DeathState::JustDied, now);
+        assert_eq!(non_compat.respawn_time(), now + 45);
+        assert_eq!(non_compat.corpse_remove_time(), now + 15);
+        assert_eq!(non_compat.unit().death_state(), DeathState::Corpse);
+    }
+
+    #[test]
+    fn creature_runtime_just_respawned_resets_represented_runtime_state() {
+        let player = ObjectGuid::new(1, 3);
+        let mut creature = Creature::new(false);
+        creature.unit_mut().set_max_health(250);
+        creature.unit_mut().set_health(1);
+        creature.unit_mut().set_death_state(DeathState::Corpse);
+        creature.player_damage_req = 42;
+        creature.cannot_reach_target = true;
+        creature.cannot_reach_timer = 900;
+        creature.set_respawn_time(123);
+        creature.corpse_remove_time = 99;
+        creature.set_pickpocket_loot_restore(777);
+        creature.loot_mode = 0x4;
+        creature.set_tapped_by_player(player, &[]);
+
+        let plan = creature.set_death_state_runtime(DeathState::JustRespawned, 5_000);
+
+        assert_eq!(creature.unit().death_state(), DeathState::Alive);
+        assert_eq!(creature.unit().data().health, 250);
+        assert!(creature.tap_list().is_empty());
+        assert_eq!(creature.player_damage_req(), 0);
+        assert!(!creature.cannot_reach_target());
+        assert_eq!(creature.cannot_reach_timer(), 0);
+        assert_eq!(creature.respawn_time(), 0);
+        assert_eq!(creature.corpse_remove_time(), 0);
+        assert_eq!(creature.pickpocket_loot_restore(), 0);
+        assert_eq!(creature.loot_mode(), LOOT_MODE_DEFAULT);
+        assert!(creature.trigger_just_appeared());
+        assert!(plan.contains(CreatureRuntimeAction::ClearTapList));
+        assert!(plan.contains(CreatureRuntimeAction::ResetAi));
+    }
+
+    #[test]
+    fn creature_runtime_forced_despawn_immediate_matches_compat_and_noncompat_bridges() {
+        let now = 20_000;
+        let mut compat = Creature::new(false);
+        compat.set_respawn_compatibility_mode(true);
+        compat.set_respawn_delay(300);
+        compat.set_corpse_delay(60, false);
+
+        let plan = compat.forced_despawn_runtime(0, 42, now);
+
+        assert_eq!(compat.unit().death_state(), DeathState::Dead);
+        assert_eq!(compat.respawn_delay(), 300);
+        assert_eq!(compat.corpse_delay(), 60);
+        assert_eq!(compat.respawn_time(), now + 42);
+        assert_eq!(compat.corpse_remove_time(), now);
+        assert!(plan.contains(CreatureRuntimeAction::DestroyVisibility));
+        assert!(plan.contains(CreatureRuntimeAction::RelocateToRespawnPosition));
+
+        let mut delayed = Creature::new(false);
+        let delayed_plan = delayed.forced_despawn_runtime(500, 0, now);
+        assert!(delayed.runtime_state().forced_despawn_pending);
+        assert!(delayed_plan.contains(CreatureRuntimeAction::RequestDelayedForcedDespawn));
+
+        let mut non_compat = Creature::new(false);
+        non_compat.set_respawn_compatibility_mode(false);
+        non_compat.set_respawn_delay(55);
+        let non_compat_plan = non_compat.forced_despawn_runtime(0, 0, now);
+        assert_eq!(non_compat.respawn_time(), now + 55);
+        assert!(non_compat.runtime_state().save_respawn_requested);
+        assert!(non_compat.runtime_state().object_remove_requested);
+        assert!(non_compat_plan.contains(CreatureRuntimeAction::SaveRespawnTime));
+        assert!(non_compat_plan.contains(CreatureRuntimeAction::RequestObjectRemove));
+    }
+
+    #[test]
+    fn creature_runtime_all_loot_removed_updates_corpse_and_respawn_like_trinity() {
+        let now = 1_000;
+        let mut creature = Creature::new(false);
+        creature.set_corpse_delay(60, false);
+        creature.set_respawn_delay(300);
+        creature.corpse_remove_time = now + 600;
+        creature.set_respawn_time(now + 100);
+
+        let plan = creature.all_loot_removed_from_corpse(now, 0.5, false);
+
+        assert_eq!(creature.corpse_remove_time(), now + 30);
+        assert_eq!(creature.respawn_time(), now + 330);
+        assert!(plan.contains(CreatureRuntimeAction::UpdateLoot));
+
+        creature.corpse_remove_time = now + 600;
+        creature.set_respawn_time(now + 1_000);
+        creature.all_loot_removed_from_corpse(now, 0.5, true);
+        assert_eq!(creature.corpse_remove_time(), now);
+        assert_eq!(creature.respawn_time(), now + 1_000);
+
+        creature.set_corpse_delay(60, true);
+        creature.corpse_remove_time = now + 600;
+        creature.set_respawn_time(0);
+        creature.all_loot_removed_from_corpse(now, 0.01, false);
+        assert_eq!(creature.corpse_remove_time(), now + 60);
+    }
+
+    #[test]
+    fn creature_runtime_tap_list_group_soft_cap_and_evade_clear_rules() {
+        let player = ObjectGuid::new(1, 1);
+        let group = [
+            ObjectGuid::new(1, 2),
+            ObjectGuid::new(1, 3),
+            ObjectGuid::new(1, 4),
+            ObjectGuid::new(1, 5),
+            ObjectGuid::new(1, 6),
+        ];
+        let mut creature = Creature::new(false);
+
+        creature.set_tapped_by_player(player, &group);
+
+        assert_eq!(creature.tap_list().len(), CREATURE_TAPPERS_SOFT_CAP);
+        assert!(creature.is_tapped_by(player));
+        assert!(creature.is_tapped_by(group[0]));
+        assert!(!creature.is_tapped_by(group[4]));
+        assert!(creature.has_loot_recipient());
+
+        creature.set_dont_clear_tap_list_on_evade(true);
+        assert!(creature.dont_clear_tap_list_on_evade());
+        creature.clear_tap_list_for_evade();
+        assert_eq!(creature.tap_list().len(), CREATURE_TAPPERS_SOFT_CAP);
+        creature.clear_tap_list();
+        assert!(creature.tap_list().is_empty());
+
+        let mut spawned_creature = Creature::new(false);
+        spawned_creature.set_spawn_id(99);
+        spawned_creature.set_dont_clear_tap_list_on_evade(true);
+        assert!(!spawned_creature.dont_clear_tap_list_on_evade());
+    }
+
+    #[test]
+    fn creature_runtime_update_plan_covers_dead_corpse_and_alive_branches() {
+        let now = 50_000;
+        let mut dead = Creature::new(false);
+        dead.set_respawn_compatibility_mode(true);
+        dead.set_respawn_time(now);
+        dead.unit_mut().set_death_state(DeathState::Dead);
+        let dead_plan = dead.runtime_update_plan(1, now, CreatureRuntimeUpdateContext::default());
+        assert!(dead_plan.contains(CreatureRuntimeAction::ResetAi));
+        assert_eq!(dead.unit().death_state(), DeathState::Alive);
+
+        let mut corpse = Creature::new(false);
+        corpse.set_respawn_compatibility_mode(true);
+        corpse.unit_mut().set_death_state(DeathState::Corpse);
+        corpse.corpse_remove_time = now;
+        let corpse_plan = corpse.runtime_update_plan(
+            1,
+            now,
+            CreatureRuntimeUpdateContext {
+                has_loot: true,
+                ..CreatureRuntimeUpdateContext::default()
+            },
+        );
+        assert!(corpse_plan.contains(CreatureRuntimeAction::UpdateLoot));
+        assert!(corpse_plan.contains(CreatureRuntimeAction::RelocateToRespawnPosition));
+        assert_eq!(corpse.unit().death_state(), DeathState::Dead);
+
+        let mut alive = Creature::new(false);
+        alive.boundary_check_time = 10;
+        alive.combat_pulse_delay = 2;
+        alive.combat_pulse_time = 1;
+        alive.regen_timer = 1;
+        alive.cannot_reach_timer = CREATURE_NOPATH_EVADE_TIME_MS - 5;
+        let alive_plan = alive.runtime_update_plan(
+            10,
+            now,
+            CreatureRuntimeUpdateContext {
+                is_engaged: true,
+                is_dungeon: true,
+                has_map_players: true,
+                cannot_reach_target: true,
+                ..CreatureRuntimeUpdateContext::default()
+            },
+        );
+        assert!(alive_plan.contains(CreatureRuntimeAction::NotifyJustAppeared));
+        assert!(alive_plan.contains(CreatureRuntimeAction::BoundaryCheck));
+        assert!(alive_plan.contains(CreatureRuntimeAction::CombatPulse));
+        assert!(alive_plan.contains(CreatureRuntimeAction::RegeneratePower));
+        assert!(alive_plan.contains(CreatureRuntimeAction::Evade(
+            CreatureRuntimeEvadeReason::NoPath
+        )));
     }
 }
