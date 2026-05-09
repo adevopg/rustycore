@@ -329,6 +329,16 @@ impl WorldSession {
             return;
         }
 
+        let lock_id = self.item_template_lock_id(item.entry_id).unwrap_or(0);
+        let item_is_locked = self
+            .inventory_item_objects
+            .get(&item.guid)
+            .is_some_and(|item_object| item_object.is_locked());
+        if lock_id != 0 && item_is_locked {
+            self.send_equip_error(InventoryResult::ItemLocked, Some(item.guid), None, 0, 0);
+            return;
+        }
+
         if !self.loot_table.contains_key(&item.guid) {
             let stored_money = self.load_stored_item_money_like_cpp(item.guid).await;
             let stored_items = self.load_stored_item_items_like_cpp(item.guid).await;

@@ -1050,6 +1050,14 @@ impl WorldSession {
             .is_some_and(|flags| flags.contains(ItemFlags::IS_BOUND_TO_ACCOUNT))
     }
 
+    /// Resolve C++ `ItemTemplate::GetLockID()` (`ItemSparseEntry::LockID`).
+    pub fn item_template_lock_id(&self, item_id: u32) -> Option<u16> {
+        self.item_stats_store
+            .as_ref()
+            .and_then(|store| store.sparse_template(item_id))
+            .map(|template| template.lock_id)
+    }
+
     /// Resolve the C++ `ItemTemplate` subset used by storage validation.
     pub fn item_storage_template(&self, item_id: u32) -> Option<ItemStorageTemplate> {
         let basic = self.item_store.as_ref()?.get(item_id)?;
@@ -4168,7 +4176,7 @@ mod tests {
     use super::*;
     use wow_constants::{
         BagFamilyMask, EnchantmentSlot, InventoryResult, InventoryType, ItemBondingType,
-        ItemClass, ItemContext, ItemFlags, ItemFlags2, ItemUpdateState, ServerOpcodes,
+        ItemClass, ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ServerOpcodes,
         SpellItemEnchantmentFlags,
     };
     use wow_core::Position;
@@ -4225,6 +4233,7 @@ mod tests {
                 bag_family: 0,
                 stackable: max_stack_size,
                 max_count: 0,
+                lock_id: 0,
                 required_reputation_rank: 0,
                 sell_price: 0,
                 max_durability: 0,
@@ -4725,6 +4734,7 @@ mod tests {
                 bag_family: BagFamilyMask::HERBS.bits(),
                 stackable: i32::MAX,
                 max_count: 3,
+                lock_id: 0,
                 required_reputation_rank: 0,
                 sell_price: 99,
                 max_durability: 88,
@@ -4785,6 +4795,14 @@ mod tests {
     }
 
     fn install_open_item_has_loot_template(session: &mut WorldSession, entry: u32) {
+        install_open_item_has_loot_template_with_lock(session, entry, 0);
+    }
+
+    fn install_open_item_has_loot_template_with_lock(
+        session: &mut WorldSession,
+        entry: u32,
+        lock_id: u16,
+    ) {
         session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([(
             entry,
             ItemSparseTemplateEntry {
@@ -4792,6 +4810,7 @@ mod tests {
                 bag_family: 0,
                 stackable: 1,
                 max_count: 0,
+                lock_id,
                 required_reputation_rank: 0,
                 sell_price: 0,
                 max_durability: 0,
@@ -4803,6 +4822,56 @@ mod tests {
                 inventory_type: InventoryType::NonEquip as i8,
             },
         )])));
+    }
+
+    fn insert_open_item_top_level(
+        session: &mut WorldSession,
+        player_guid: ObjectGuid,
+        slot: u8,
+        item_guid: ObjectGuid,
+        entry: u32,
+        unlocked: bool,
+    ) {
+        session.inventory_items.insert(slot, InventoryItem {
+            guid: item_guid,
+            entry_id: entry,
+            db_guid: item_guid.counter() as u64,
+            inventory_type: None,
+        });
+        let mut item = session.make_inventory_item_object(
+            item_guid, entry, player_guid, 1, 0, ItemContext::None, slot,
+        );
+        if unlocked {
+            item.set_item_flag(ItemFieldFlags::UNLOCKED);
+        }
+        session.insert_inventory_item_object(item);
+    }
+
+    #[test]
+    fn item_template_lock_id_uses_item_sparse_lock_id_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_sparse_templates([(
+            700,
+            ItemSparseTemplateEntry {
+                flags: [0, 0, 0, 0],
+                bag_family: 0,
+                stackable: 1,
+                max_count: 0,
+                lock_id: 99,
+                required_reputation_rank: 0,
+                sell_price: 0,
+                max_durability: 0,
+                limit_category: 0,
+                required_reputation_faction: 0,
+                allowable_class: -1,
+                bonding: ItemBondingType::None as u8,
+                container_slots: 0,
+                inventory_type: InventoryType::NonEquip as i8,
+            },
+        )])));
+
+        assert_eq!(session.item_template_lock_id(700), Some(99));
+        assert_eq!(session.item_template_lock_id(701), None);
     }
 
     #[test]
@@ -4974,6 +5043,59 @@ mod tests {
             .await;
     }
 
+    #[tokio::test]
+    async fn open_item_locked_container_returns_item_locked_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 900);
+        session.set_player_guid(Some(player_guid));
+        install_open_item_has_loot_template_with_lock(&mut session, 700, 123);
+        insert_open_item_top_level(&mut session, player_guid, 23, item_guid, 700, false);
+
+        session
+            .handle_open_item(WorldPacket::from_bytes(&[INVENTORY_SLOT_BAG_0, 23]))
+            .await;
+
+        let sent = send_rx.try_recv().unwrap();
+        assert_eq!(
+            sent,
+            InventoryChangeFailure::new(InventoryResult::ItemLocked, item_guid, ObjectGuid::EMPTY)
+                .to_bytes()
+        );
+        assert!(!session.loot_table.contains_key(&item_guid));
+        assert!(
+            session
+                .inventory_item_objects
+                .get(&item_guid)
+                .is_some_and(|item| !item.loot_generated())
+        );
+    }
+
+    #[tokio::test]
+    async fn open_item_unlocked_locked_template_continues_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 901);
+        session.set_player_guid(Some(player_guid));
+        install_open_item_has_loot_template_with_lock(&mut session, 700, 123);
+        insert_open_item_top_level(&mut session, player_guid, 23, item_guid, 700, true);
+
+        session
+            .handle_open_item(WorldPacket::from_bytes(&[INVENTORY_SLOT_BAG_0, 23]))
+            .await;
+
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::LootResponse as u16);
+        assert!(session.loot_table.contains_key(&item_guid));
+        assert!(
+            session
+                .inventory_item_objects
+                .get(&item_guid)
+                .is_some_and(|item| item.loot_generated())
+        );
+    }
+
     fn assert_open_item_release_destroy_nested_item_leaves_container_in_place(bag_slot: u8) {
         let (mut session, _, _) = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
@@ -5036,6 +5158,7 @@ mod tests {
                     bag_family: 0,
                     stackable: 1,
                     max_count: 0,
+                    lock_id: 0,
                     required_reputation_rank: 0,
                     sell_price: 0,
                     max_durability: 0,
@@ -5054,6 +5177,7 @@ mod tests {
                     bag_family: 0,
                     stackable: 1,
                     max_count: 0,
+                    lock_id: 0,
                     required_reputation_rank: 0,
                     sell_price: 0,
                     max_durability: 0,
@@ -5170,6 +5294,7 @@ mod tests {
                 bag_family: 0,
                 stackable: 1,
                 max_count: 0,
+                lock_id: 0,
                 required_reputation_rank: 0,
                 sell_price: 0,
                 max_durability: 55,
@@ -5297,6 +5422,7 @@ mod tests {
                 bag_family: 0,
                 stackable: 20,
                 max_count: 0,
+                lock_id: 0,
                 required_reputation_rank: 0,
                 sell_price: 0,
                 max_durability: 0,

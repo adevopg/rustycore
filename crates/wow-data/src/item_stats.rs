@@ -68,6 +68,7 @@ pub struct ItemSparseTemplateEntry {
     pub bag_family: u32,
     pub stackable: i32,
     pub max_count: i32,
+    pub lock_id: u16,
     pub required_reputation_rank: i32,
     pub sell_price: u32,
     pub max_durability: u32,
@@ -331,6 +332,7 @@ impl ItemStatsStore {
             let mut bag_family_offset: usize = 0;
             let mut stackable_offset: usize = 0;
             let mut max_count_offset: usize = 0;
+            let mut lock_id_offset: usize = 0;
             let mut required_reputation_rank_offset: usize = 0;
             let mut sell_price_offset: usize = 0;
             let mut flags_offset: usize = 0;
@@ -354,6 +356,9 @@ impl ItemStatsStore {
                 }
                 if fi == 15 {
                     max_count_offset = pos;
+                }
+                if fi == 39 {
+                    lock_id_offset = pos;
                 }
                 if fi == 16 {
                     required_reputation_rank_offset = pos;
@@ -430,6 +435,7 @@ impl ItemStatsStore {
             if bag_family_offset + 4 <= record.len()
                 && stackable_offset + 4 <= record.len()
                 && max_count_offset + 4 <= record.len()
+                && lock_id_offset + 2 <= record.len()
                 && required_reputation_rank_offset + 4 <= record.len()
                 && sell_price_offset + 4 <= record.len()
                 && flags_offset + 16 <= record.len()
@@ -448,6 +454,7 @@ impl ItemStatsStore {
                         bag_family: read_u32(record, bag_family_offset),
                         stackable: read_i32(record, stackable_offset),
                         max_count: read_i32(record, max_count_offset),
+                        lock_id: read_u16(record, lock_id_offset),
                         required_reputation_rank: read_i32(
                             record,
                             required_reputation_rank_offset,
@@ -637,6 +644,7 @@ mod tests {
             bag_family: 0x20,
             stackable: 20,
             max_count: 5,
+            lock_id: 456,
             required_reputation_rank: 0,
             sell_price: 123,
             max_durability: 77,
@@ -652,6 +660,7 @@ mod tests {
         let loaded = store.sparse_template(1).unwrap();
         assert_eq!(loaded.max_stack_size(), 20);
         assert_eq!(loaded.max_count, 5);
+        assert_eq!(loaded.lock_id, 456);
         assert_eq!(loaded.required_reputation_rank, 0);
         assert_eq!(loaded.required_reputation_faction, 0);
         assert_eq!(loaded.sell_price, 123);
