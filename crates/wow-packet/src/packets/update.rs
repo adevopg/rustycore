@@ -83,6 +83,9 @@ pub struct ItemCreateData {
     pub stack_count: u32,
     pub durability: u32,
     pub max_durability: u32,
+    pub random_properties_seed: i32,
+    pub random_properties_id: i32,
+    pub context: u8,
 }
 
 // ── PlayerStatChanges ──────────────────────────────────────────────
@@ -2277,8 +2280,8 @@ fn write_item_create_block(
     }
 
     // PropertySeed, RandomPropertiesID
-    val_buf.write_int32(0);
-    val_buf.write_int32(0);
+    val_buf.write_int32(data.random_properties_seed);
+    val_buf.write_int32(data.random_properties_id);
 
     // Owner conditional block 2
     val_buf.write_int32(data.durability as i32);  // Durability
@@ -2286,7 +2289,7 @@ fn write_item_create_block(
 
     // CreatePlayedTime, Context, CreateTime
     val_buf.write_int32(0);
-    val_buf.write_int32(0);
+    val_buf.write_int32(i32::from(data.context));
     val_buf.write_int64(0);
 
     // Owner conditional block 3
@@ -2968,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn item_create_serializes_runtime_count_and_durability() {
+    fn item_create_serializes_random_properties_and_context() {
         let item_guid = ObjectGuid::create_item(1, 900);
         let owner_guid = ObjectGuid::create_player(1, 42);
         let pkt = UpdateObject::create_items(
@@ -2980,6 +2983,9 @@ mod tests {
                 stack_count: 7,
                 durability: 12,
                 max_durability: 20,
+                random_properties_seed: 456,
+                random_properties_id: -77,
+                context: 2,
             }],
             0,
         );
@@ -2989,6 +2995,9 @@ mod tests {
         assert!(bytes.windows(4).any(|window| window == 7i32.to_le_bytes()));
         assert!(bytes.windows(4).any(|window| window == 12i32.to_le_bytes()));
         assert!(bytes.windows(4).any(|window| window == 20i32.to_le_bytes()));
+        assert!(bytes.windows(4).any(|window| window == 456i32.to_le_bytes()));
+        assert!(bytes.windows(4).any(|window| window == (-77i32).to_le_bytes()));
+        assert!(bytes.windows(4).any(|window| window == 2i32.to_le_bytes()));
     }
 
     #[test]

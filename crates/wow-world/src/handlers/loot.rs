@@ -642,6 +642,9 @@ impl WorldSession {
                     stack_count: stack.count,
                     durability: stack.max_durability,
                     max_durability: stack.max_durability,
+                    random_properties_seed: stack.random_properties_seed,
+                    random_properties_id: stack.random_properties_id,
+                    context: stack.item_context,
                 })
                 .collect();
             self.send_packet(&UpdateObject::create_items(item_creates, map_id));

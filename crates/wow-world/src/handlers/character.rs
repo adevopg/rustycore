@@ -2288,6 +2288,9 @@ impl WorldSession {
                                 stack_count: item_count,
                                 durability: item_durability,
                                 max_durability: item_max_durability,
+                                random_properties_seed: 0,
+                                random_properties_id: 0,
+                                context: 0,
                             });
                             let inventory_type = self
                                 .item_template_inventory_type(item_entry)
@@ -5123,6 +5126,9 @@ impl WorldSession {
                     stack_count,
                     durability: max_durability,
                     max_durability,
+                    random_properties_seed: 0,
+                    random_properties_id: 0,
+                    context: 0,
                 })
                 .collect();
             self.send_packet(&UpdateObject::create_items(item_creates, map_id));
@@ -5660,6 +5666,9 @@ impl WorldSession {
                     stack_count,
                     durability,
                     max_durability,
+                    random_properties_seed: 0,
+                    random_properties_id: 0,
+                    context: 0,
                 }],
                 map_id,
             ));
@@ -6136,6 +6145,9 @@ impl WorldSession {
                     stack_count: stack.count,
                     durability: stack.max_durability,
                     max_durability: stack.max_durability,
+                    random_properties_seed: 0,
+                    random_properties_id: 0,
+                    context: 0,
                 })
                 .collect();
             self.send_packet(&UpdateObject::create_items(item_creates, map_id));
