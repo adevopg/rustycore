@@ -146,7 +146,7 @@ impl WorldCreature {
         }
     }
 
-    fn now_ms(&self) -> u64 {
+    pub(crate) fn now_ms(&self) -> u64 {
         self.clock_started_at
             .elapsed()
             .as_millis()

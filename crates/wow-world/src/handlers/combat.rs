@@ -92,10 +92,11 @@ impl WorldSession {
             return;
         }
 
-        // Start combat with the creature.
-        if let Some(creature) = self.creatures.get_mut(&swing.victim) {
+        // Start combat with the creature and immediately mirror the legacy
+        // compatibility cache into canonical map state when available.
+        let _ = self.mutate_legacy_creature_and_sync(swing.victim, |creature| {
             creature.enter_combat(player_guid.clone());
-        }
+        });
 
         // Set the player's current combat target.
         self.combat_target = Some(swing.victim);
@@ -121,12 +122,12 @@ impl WorldSession {
         if let Some(target) = self.combat_target.take() {
             self.in_combat = false;
 
-            // Reset creature combat if it was fighting us.
-            if let Some(creature) = self.creatures.get_mut(&target) {
+            // Reset creature combat if it was fighting us and sync canonical map state.
+            let _ = self.mutate_legacy_creature_and_sync(target, |creature| {
                 if creature.state == wow_ai::CreatureState::InCombat {
                     creature.reset_combat();
                 }
-            }
+            });
 
             let stop = SAttackStop {
                 attacker: player_guid.clone(),

@@ -726,16 +726,123 @@ impl WorldSession {
     }
 
     pub(crate) fn sync_legacy_creature_to_map(&mut self, guid: ObjectGuid) {
-        let (Some(manager), Some(legacy)) = (&self.map_manager, self.creatures.get(&guid)) else {
+        let (Some(manager), Some(legacy)) =
+            (self.map_manager.clone(), self.creatures.get(&guid).cloned())
+        else {
             return;
         };
         let mut manager = manager
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if manager
+            .find_creature(self.current_map_id, 0, guid)
+            .is_none()
+        {
+            let (grid_x, grid_y) = crate::map_manager::world_to_grid_coords(
+                legacy.current_pos.x,
+                legacy.current_pos.y,
+            );
+            let world_creature = Self::world_creature_from_legacy(self.current_map_id, &legacy);
+            manager.add_creature(self.current_map_id, 0, grid_x, grid_y, world_creature);
+        }
+
         let Some(world_creature) = manager.find_creature_mut(self.current_map_id, 0, guid) else {
             return;
         };
+        Self::sync_legacy_creature_to_world_creature(world_creature, &legacy);
+    }
+
+    pub(crate) fn mutate_legacy_creature_and_sync<F, R>(
+        &mut self,
+        guid: ObjectGuid,
+        f: F,
+    ) -> Option<R>
+    where
+        F: FnOnce(&mut wow_ai::CreatureAI) -> R,
+    {
+        let result = {
+            let creature = self.creatures.get_mut(&guid)?;
+            f(creature)
+        };
+        self.sync_legacy_creature_to_map(guid);
+        Some(result)
+    }
+
+    fn world_creature_from_legacy(
+        map_id: u16,
+        legacy: &wow_ai::CreatureAI,
+    ) -> crate::map_manager::WorldCreature {
+        let mut creature = wow_entities::Creature::new(false);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(legacy.guid);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .set_entry(legacy.entry);
+        let _ = creature.unit_mut().world_mut().set_map(map_id as u32, 0);
+        creature.unit_mut().world_mut().relocate(legacy.current_pos);
+        creature.set_ai_home_position(legacy.home_pos);
+        creature.unit_mut().set_level(legacy.level);
+        creature.unit_mut().set_max_health(u64::from(legacy.max_hp));
+        creature.unit_mut().set_health(u64::from(legacy.hp));
+        creature.set_ai_identity_runtime(
+            legacy.display_id,
+            legacy.faction,
+            legacy.npc_flags,
+            legacy.unit_flags,
+        );
+        creature.configure_ai_runtime(
+            legacy.home_pos,
+            legacy.aggro_radius,
+            legacy.wander_radius,
+            legacy.respawn_time_secs,
+        );
+        {
+            let ai = creature.ai_ownership_mut();
+            ai.min_damage = legacy.min_dmg;
+            ai.max_damage = legacy.max_dmg;
+            ai.swing_timer_ms = legacy.swing_timer_ms;
+            ai.spline_id = legacy.spline_id;
+        }
+
+        let create_data = wow_packet::packets::update::CreatureCreateData {
+            guid: legacy.guid,
+            entry: legacy.entry,
+            display_id: legacy.display_id,
+            native_display_id: legacy.display_id,
+            health: legacy.max_hp as i64,
+            max_health: legacy.max_hp as i64,
+            level: legacy.level,
+            faction_template: legacy.faction as i32,
+            npc_flags: legacy.npc_flags as u64,
+            unit_flags: legacy.unit_flags,
+            unit_flags2: 0,
+            unit_flags3: 0,
+            scale: 1.0,
+            unit_class: 1,
+            base_attack_time: 2000,
+            ranged_attack_time: 0,
+            zone_id: 0,
+            speed_walk_rate: 1.0,
+            speed_run_rate: 1.14286,
+        };
+
+        crate::map_manager::WorldCreature::from_canonical(creature, create_data)
+    }
+
+    fn sync_legacy_creature_to_world_creature(
+        world_creature: &mut crate::map_manager::WorldCreature,
+        legacy: &wow_ai::CreatureAI,
+    ) {
         world_creature.creature.set_ai_position(legacy.current_pos);
+        world_creature
+            .creature
+            .set_ai_home_position(legacy.home_pos);
         world_creature
             .creature
             .unit_mut()
@@ -754,11 +861,62 @@ impl WorldSession {
             wow_ai::CreatureState::Dead => wow_entities::CreatureAiState::Dead,
             wow_ai::CreatureState::Returning => wow_entities::CreatureAiState::Returning,
         };
-        world_creature.creature.ai_ownership_mut().move_target = legacy.move_target;
-        world_creature.creature.ai_ownership_mut().combat_target = legacy.combat_target;
+        let now_ms = world_creature.now_ms();
+        let move_start_ms = now_ms.saturating_sub(
+            legacy
+                .move_start
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        );
+        let last_swing_ms = now_ms.saturating_sub(
+            legacy
+                .last_swing
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        );
+        {
+            let ai = world_creature.creature.ai_ownership_mut();
+            ai.move_target = legacy.move_target;
+            ai.move_start_ms = move_start_ms;
+            ai.move_duration_ms = legacy.move_duration_ms;
+            ai.combat_target = legacy.combat_target;
+            ai.last_swing_ms = last_swing_ms;
+            ai.min_damage = legacy.min_dmg;
+            ai.max_damage = legacy.max_dmg;
+            ai.aggro_radius = legacy.aggro_radius;
+            ai.wander_radius = legacy.wander_radius;
+            ai.respawn_time_secs = legacy.respawn_time_secs;
+            ai.npc_flags = legacy.npc_flags;
+            ai.unit_flags = legacy.unit_flags;
+            ai.display_id = legacy.display_id;
+            ai.faction = legacy.faction;
+            ai.spline_id = legacy.spline_id;
+            ai.swing_timer_ms = legacy.swing_timer_ms;
+        }
         world_creature.set_corpse_despawn_at(legacy.corpse_despawn_at);
         if !legacy.is_alive {
-            world_creature.creature.mark_ai_dead(0);
+            let legacy_death_ms = legacy.death_time.map(|death_time| {
+                now_ms.saturating_sub(
+                    death_time.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+                )
+            });
+            let death_time_ms = world_creature
+                .creature
+                .ai_ownership()
+                .death_time_ms
+                .or(legacy_death_ms)
+                .unwrap_or(now_ms);
+            world_creature.creature.mark_ai_dead(death_time_ms);
+        } else {
+            let ai = world_creature.creature.ai_ownership_mut();
+            ai.death_time_ms = None;
+            ai.corpse_despawn_at_ms = None;
+            world_creature
+                .creature
+                .unit_mut()
+                .set_death_state(wow_constants::unit::DeathState::Alive);
         }
     }
 
@@ -3681,56 +3839,66 @@ impl WorldSession {
         // ──────────────────────────────────────────────────────────────────
 
         for guid in guids {
-            let creature = match self.creatures.get_mut(&guid) {
-                Some(c) => c,
-                None => continue,
-            };
+            let mut changed = false;
+            {
+                let creature = match self.creatures.get_mut(&guid) {
+                    Some(c) => c,
+                    None => continue,
+                };
 
-            if !creature.is_alive {
-                if creature.should_respawn() {
-                    creature.respawn();
+                if !creature.is_alive {
+                    if creature.should_respawn() {
+                        creature.respawn();
+                        changed = true;
+                    }
+                } else {
+                    match creature.state {
+                        wow_ai::CreatureState::Idle => {
+                            if creature.movement_finished() {
+                                if creature.move_target.is_some() {
+                                    creature.finish_move();
+                                    changed = true;
+                                }
+                                if creature.should_wander() {
+                                    let dst = creature.pick_wander_destination();
+                                    let from = creature.current_pos;
+                                    let sid = creature.spline_id;
+                                    let dist = from.distance(&dst);
+                                    let dur = ((dist / 2.5) * 1000.0) as u32;
+                                    creature.begin_move(dst);
+                                    creature.state = wow_ai::CreatureState::WalkingRandom;
+                                    creature.reset_wander_timer();
+                                    changed = true;
+                                    // TODO: verify MonsterMove wire format before enabling
+                                    // let pkt = MonsterMove { ... };
+                                    // to_send.push(pkt.to_bytes());
+                                    let _ = (guid, from, sid, dur, dst);
+                                }
+                            }
+                        }
+                        wow_ai::CreatureState::WalkingRandom => {
+                            if creature.movement_finished() {
+                                creature.finish_move();
+                                creature.state = wow_ai::CreatureState::Idle;
+                                creature.reset_wander_timer();
+                                changed = true;
+                            }
+                        }
+                        wow_ai::CreatureState::Returning => {
+                            if creature.movement_finished() {
+                                creature.finish_move();
+                                creature.state = wow_ai::CreatureState::Idle;
+                                changed = true;
+                            }
+                        }
+                        wow_ai::CreatureState::InCombat
+                        | wow_ai::CreatureState::Dead
+                        | wow_ai::CreatureState::WalkingWaypoint => {}
+                    }
                 }
-                continue;
             }
-
-            match creature.state {
-                wow_ai::CreatureState::Idle => {
-                    if creature.movement_finished() {
-                        if creature.move_target.is_some() {
-                            creature.finish_move();
-                        }
-                        if creature.should_wander() {
-                            let dst = creature.pick_wander_destination();
-                            let from = creature.current_pos;
-                            let sid = creature.spline_id;
-                            let dist = from.distance(&dst);
-                            let dur = ((dist / 2.5) * 1000.0) as u32;
-                            creature.begin_move(dst);
-                            creature.state = wow_ai::CreatureState::WalkingRandom;
-                            creature.reset_wander_timer();
-                            // TODO: verify MonsterMove wire format before enabling
-                        // let pkt = MonsterMove { ... };
-                        // to_send.push(pkt.to_bytes());
-                        let _ = (guid, from, sid, dur, dst);
-                        }
-                    }
-                }
-                wow_ai::CreatureState::WalkingRandom => {
-                    if creature.movement_finished() {
-                        creature.finish_move();
-                        creature.state = wow_ai::CreatureState::Idle;
-                        creature.reset_wander_timer();
-                    }
-                }
-                wow_ai::CreatureState::Returning => {
-                    if creature.movement_finished() {
-                        creature.finish_move();
-                        creature.state = wow_ai::CreatureState::Idle;
-                    }
-                }
-                wow_ai::CreatureState::InCombat
-                | wow_ai::CreatureState::Dead
-                | wow_ai::CreatureState::WalkingWaypoint => {}
+            if changed {
+                self.sync_legacy_creature_to_map(guid);
             }
         }
 
@@ -3797,30 +3965,29 @@ impl WorldSession {
             return;
         }
 
-        // Gather combat data, mutate creature state
-        let (dmg, target_level, now_dead, was_alive) = {
-            let creature = self.creatures.get_mut(&combat_target).unwrap();
-            if !creature.is_alive {
-                return;
-            }
-            if creature.state != wow_ai::CreatureState::InCombat {
-                creature.enter_combat(player_guid);
-            }
-            if !creature.can_swing() {
-                return;
-            }
-            let dmg = creature.roll_damage().max(1);
-            let level = creature.level;
-            let died = creature.take_damage(dmg);
-            creature.record_swing();
-            (dmg, level, died, true)
-        };
-
-        self.sync_legacy_creature_to_map(combat_target);
-
-        if !was_alive {
+        // Gather combat data, mutate legacy compatibility cache, then mirror it
+        // into the canonical shared map state before emitting combat packets.
+        let Some((dmg, target_level, now_dead)) = self
+            .mutate_legacy_creature_and_sync(combat_target, |creature| {
+                if !creature.is_alive {
+                    return None;
+                }
+                if creature.state != wow_ai::CreatureState::InCombat {
+                    creature.enter_combat(player_guid);
+                }
+                if !creature.can_swing() {
+                    return None;
+                }
+                let dmg = creature.roll_damage().max(1);
+                let level = creature.level;
+                let died = creature.take_damage(dmg);
+                creature.record_swing();
+                Some((dmg, level, died))
+            })
+            .flatten()
+        else {
             return;
-        }
+        };
 
         let over_damage = if now_dead { 0i32 } else { -1i32 };
 
@@ -4192,31 +4359,28 @@ impl WorldSession {
     /// Helper: apply damage to target creature.
     async fn apply_damage(&mut self, target_guid: ObjectGuid, damage_amount: u32) -> Result<(), &'static str> {
         let _player_guid = self.player_guid.ok_or("No player GUID")?;
+        let account_id = self.account_id;
 
-        // Si target es otra criatura — end mutable borrow before calling async methods
-        let kill_info: Option<(u32, wow_core::ObjectGuid)> = {
-            if let Some(creature) = self.creatures.get_mut(&target_guid) {
+        // Si target es otra criatura — mutate legacy compatibility cache and
+        // immediately mirror health/death into canonical shared map state.
+        let kill_info = self
+            .mutate_legacy_creature_and_sync(target_guid, |creature| {
                 info!(
-                    account = self.account_id,
+                    account = account_id,
                     creature = ?target_guid,
                     damage = damage_amount,
                     "Dealt damage to creature"
                 );
 
-                creature.hp = creature.hp.saturating_sub(damage_amount);
-
-                if creature.hp == 0 {
+                let died = creature.take_damage(damage_amount);
+                if died {
                     info!("Creature {} (entry={}) killed", target_guid, creature.entry);
-                    creature.state = wow_ai::CreatureState::Dead;
-                    creature.is_alive = false;
                     Some((creature.entry, target_guid))
                 } else {
                     None
                 }
-            } else {
-                return Err("Target creature not found");
-            }
-        };
+            })
+            .ok_or("Target creature not found")?;
 
         // Process creature death outside the mutable borrow
         if let Some((entry, guid)) = kill_info {
@@ -4330,6 +4494,60 @@ mod tests {
         (session, pkt_tx, send_rx)
     }
 
+    fn shared_map_manager() -> crate::map_manager::SharedMapManager {
+        Arc::new(std::sync::RwLock::new(crate::map_manager::MapManager::new()))
+    }
+
+    fn test_creature_guid(counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(wow_core::guid::HighGuid::Creature, 0, 1, 0, 0, 1, counter)
+    }
+
+    fn test_creature_create_data(
+        guid: ObjectGuid,
+        entry: u32,
+        hp: u32,
+    ) -> wow_packet::packets::update::CreatureCreateData {
+        wow_packet::packets::update::CreatureCreateData {
+            guid,
+            entry,
+            display_id: 100,
+            native_display_id: 100,
+            health: hp as i64,
+            max_health: hp as i64,
+            level: 2,
+            faction_template: 14,
+            npc_flags: 0,
+            unit_flags: 0,
+            unit_flags2: 0,
+            unit_flags3: 0,
+            scale: 1.0,
+            unit_class: 1,
+            base_attack_time: 2000,
+            ranged_attack_time: 0,
+            zone_id: 0,
+            speed_walk_rate: 1.0,
+            speed_run_rate: 1.14286,
+        }
+    }
+
+    fn register_test_creature(
+        session: &mut WorldSession,
+        manager: crate::map_manager::SharedMapManager,
+        guid: ObjectGuid,
+        hp: u32,
+    ) {
+        session.set_map_manager(manager);
+        session.current_map_id = 0;
+        session.register_world_creature(
+            0,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            test_creature_create_data(guid, 9001, hp),
+            3,
+            5,
+            20.0,
+        );
+    }
+
     fn install_stackable_test_item_template(
         session: &mut WorldSession,
         entry: u32,
@@ -4422,6 +4640,115 @@ mod tests {
     fn session_starts_authed() {
         let (session, _, _) = make_session();
         assert_eq!(session.state(), SessionState::Authed);
+    }
+
+    #[test]
+    fn death_sync_preserves_existing_canonical_death_time_ms() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_001);
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+
+        {
+            let mut manager = manager.write().unwrap();
+            let world_creature = manager.find_creature_mut(0, 0, guid).unwrap();
+            world_creature.creature.mark_ai_dead(1_234);
+        }
+        session.creatures.get_mut(&guid).unwrap().take_damage(40);
+
+        session.sync_legacy_creature_to_map(guid);
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert_eq!(
+            world_creature.creature.ai_ownership().death_time_ms,
+            Some(1_234)
+        );
+        assert_eq!(world_creature.current_hp(), 0);
+    }
+
+    #[tokio::test]
+    async fn spell_damage_syncs_canonical_creature_health() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_002);
+        session.player_guid = Some(ObjectGuid::create_player(1, 42));
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+
+        session.apply_damage(guid, 7).await.unwrap();
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert_eq!(world_creature.current_hp(), 33);
+    }
+
+    #[test]
+    fn combat_tick_damage_syncs_canonical_creature_health() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_003);
+        let player = ObjectGuid::create_player(1, 43);
+        session.player_guid = Some(player);
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        let legacy = session.creatures.get_mut(&guid).unwrap();
+        legacy.enter_combat(player);
+        legacy.last_swing = Instant::now() - std::time::Duration::from_secs(5);
+
+        session.tick_combat_sync();
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert!(world_creature.current_hp() < 40);
+    }
+
+    #[tokio::test]
+    async fn attack_stop_resets_canonical_combat_state() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_004);
+        let player = ObjectGuid::create_player(1, 44);
+        session.player_guid = Some(player);
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_legacy_creature_and_sync(guid, |creature| creature.enter_combat(player))
+            .unwrap();
+
+        session
+            .handle_attack_stop(WorldPacket::from_bytes(&[]))
+            .await;
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert_eq!(
+            world_creature.creature.ai_state(),
+            wow_entities::CreatureAiState::Returning
+        );
+        assert_eq!(world_creature.creature.ai_ownership().combat_target, None);
+    }
+
+    #[test]
+    fn corpse_despawn_syncs_canonical_corpse_timer() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_005);
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        let despawn_at = Instant::now() + std::time::Duration::from_secs(30);
+
+        session
+            .mutate_legacy_creature_and_sync(guid, |creature| {
+                creature.take_damage(40);
+                creature.corpse_despawn_at = Some(despawn_at);
+            })
+            .unwrap();
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert!(world_creature.corpse_despawn_at().is_some());
+        assert_eq!(world_creature.current_hp(), 0);
     }
 
     #[test]

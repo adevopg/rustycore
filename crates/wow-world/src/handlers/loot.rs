@@ -367,16 +367,24 @@ impl WorldSession {
         // C# uses `RateCorpseDecayLooted` config × `m_corpseDelay` (default 60s).
         // We use a simple 30s fixed decay.
         if fully_looted {
-            if let Some(creature) = self.creatures.get_mut(&req.unit) {
-                if !creature.is_alive && creature.corpse_despawn_at.is_none() {
-                    const CORPSE_DECAY_SECS: u64 = 30;
-                    creature.corpse_despawn_at =
-                        Some(Instant::now() + Duration::from_secs(CORPSE_DECAY_SECS));
-                    info!(
-                        "Creature {:?} (entry {}) fully looted — despawning in {}s",
-                        req.unit, creature.entry, CORPSE_DECAY_SECS
-                    );
-                }
+            let marked = self
+                .mutate_legacy_creature_and_sync(req.unit, |creature| {
+                    if !creature.is_alive && creature.corpse_despawn_at.is_none() {
+                        const CORPSE_DECAY_SECS: u64 = 30;
+                        creature.corpse_despawn_at =
+                            Some(Instant::now() + Duration::from_secs(CORPSE_DECAY_SECS));
+                        Some((creature.entry, CORPSE_DECAY_SECS))
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+
+            if let Some((entry, corpse_decay_secs)) = marked {
+                info!(
+                    "Creature {:?} (entry {}) fully looted — despawning in {}s",
+                    req.unit, entry, corpse_decay_secs
+                );
             }
         }
 
