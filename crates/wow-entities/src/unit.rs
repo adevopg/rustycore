@@ -233,6 +233,18 @@ impl Unit {
         self.weapon_damage[attack as usize]
     }
 
+    pub fn set_weapon_damage(
+        &mut self,
+        attack: WeaponAttackType,
+        min_damage: f32,
+        max_damage: f32,
+    ) {
+        let slot = attack as usize;
+        if slot < MAX_ATTACK {
+            self.weapon_damage[slot] = [min_damage, max_damage];
+        }
+    }
+
     pub const fn speed_rate(&self) -> [f32; MAX_MOVE_TYPE] {
         self.speed_rate
     }

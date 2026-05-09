@@ -1,7 +1,7 @@
-use wow_constants::{PowerType, TypeId, TypeMask};
+use wow_constants::{PowerType, TypeId, TypeMask, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
 
-use crate::Unit;
+use crate::{BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit};
 
 pub const CREATURE_REGEN_INTERVAL_MS: u32 = 2_000;
 pub const MAX_CREATURE_SPELLS: usize = 8;
@@ -50,8 +50,8 @@ impl CreatureLifecycleStats {
             power_type: PowerType::Mana,
             max_mana,
             mana,
-            min_damage: 0.0,
-            max_damage: 0.0,
+            min_damage: BASE_MINDAMAGE,
+            max_damage: BASE_MAXDAMAGE,
         }
     }
 }
@@ -441,6 +441,7 @@ impl Creature {
             .map(|spawn| spawn.movement_type)
             .unwrap_or(template.movement_type);
         self.set_corpse_delay(record.corpse_delay, record.ignore_corpse_decay_ratio);
+        self.set_respawn_compatibility_mode(!record.dynamic);
         if let Some(spawn) = spawn {
             self.apply_spawn_lifecycle(spawn);
         }
@@ -452,6 +453,11 @@ impl Creature {
         self.unit
             .set_max_power(PowerType::Mana, record.stats.max_mana);
         self.unit.set_power(PowerType::Mana, record.stats.mana);
+        self.unit.set_weapon_damage(
+            WeaponAttackType::BaseAttack,
+            record.stats.min_damage,
+            record.stats.max_damage,
+        );
 
         self.lifecycle_metadata = CreatureLifecycleMetadata {
             template_entry: template.entry,
@@ -1141,13 +1147,47 @@ mod tests {
         assert_eq!(creature.unit().data().health, 4_500);
         assert_eq!(creature.unit().get_max_power(PowerType::Mana), 1_000);
         assert_eq!(creature.unit().get_power(PowerType::Mana), 750);
+        assert_eq!(
+            creature.unit().weapon_damage(WeaponAttackType::BaseAttack),
+            [BASE_MINDAMAGE, BASE_MAXDAMAGE]
+        );
         assert_eq!(creature.corpse_delay(), 90);
         assert!(creature.ignore_corpse_decay_ratio());
+        assert!(creature.respawn_compatibility_mode());
         assert_eq!(creature.lifecycle_metadata().template_entry, 1001);
         assert_eq!(creature.lifecycle_metadata().original_entry, 9001);
         assert_eq!(creature.lifecycle_metadata().difficulty_id, 2);
         assert_eq!(creature.lifecycle_metadata().classification, 3);
         assert_eq!(creature.unit().changed_object_type_mask(), 0);
+    }
+
+    #[test]
+    fn creature_lifecycle_create_without_spawn_applies_dynamic_respawn_compatibility() {
+        let mut record = creature_lifecycle_create_record();
+        record.dynamic = false;
+        record.spawn = None;
+        let static_creature = Creature::create_from_lifecycle(record);
+        assert!(static_creature.respawn_compatibility_mode());
+
+        let mut record = creature_lifecycle_create_record();
+        record.dynamic = true;
+        record.spawn = None;
+        let dynamic_creature = Creature::create_from_lifecycle(record);
+        assert!(!dynamic_creature.respawn_compatibility_mode());
+    }
+
+    #[test]
+    fn creature_lifecycle_create_applies_resolved_base_weapon_damage() {
+        let mut record = creature_lifecycle_create_record();
+        record.stats.min_damage = 3.5;
+        record.stats.max_damage = 7.25;
+
+        let creature = Creature::create_from_lifecycle(record);
+
+        assert_eq!(
+            creature.unit().weapon_damage(WeaponAttackType::BaseAttack),
+            [3.5, 7.25]
+        );
     }
 
     #[test]
