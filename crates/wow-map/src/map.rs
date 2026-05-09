@@ -141,6 +141,10 @@ where
         self.grid_unload
     }
 
+    pub const fn visibility_range(&self) -> f32 {
+        self.visible_distance
+    }
+
     pub fn terrain(&self) -> &Terrain {
         &self.terrain
     }
@@ -509,6 +513,7 @@ mod tests {
         assert_eq!(map.spawn_mode(), 1);
         assert_eq!(map.grid_expiry_ms(), 1000);
         assert!(map.grid_unload());
+        assert_eq!(map.visibility_range(), 100.0);
         assert_eq!(map.grids.len(), GRID_SLOT_COUNT);
         assert!(map.grids.iter().all(Option::is_none));
     }
