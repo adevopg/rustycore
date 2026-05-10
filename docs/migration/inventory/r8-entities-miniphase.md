@@ -1235,6 +1235,11 @@
   Rust targets: `crates/wow-world/src/handlers/loot.rs`, docs.
   Acceptance: represented personal encounter chest items are no longer marked lootable by every tapper. After represented generation, each generated item is assigned to one eligible tapper, FFA state is rebuilt for that tapper, and `unlooted_count` follows the C++ `FillNotNormalLootFor` counting split between normal and FFA items. Remaining gaps: exact `ProcessPersonalLoot` reference/group looter-selection loops in `wow-loot`, per-tapper condition evaluation for non-current players, canonical per-player `Loot` objects and canonical `GameObject::m_personalLoot`.
 
+- [x] **#NEXT.R8.ENTITIES.318** Port reusable personal loot template processing.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Loot/LootMgr.cpp` (`LootTemplate::ProcessPersonalLoot`, `LootTemplate::HasDropForPlayer`, `LootGroup::HasDropForPlayer`, reference got-loot cycling).
+  Rust targets: `crates/wow-loot/src/lib.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: `wow-loot` now exposes a pure `fill_personal_loot_with_context_like_cpp` path that rolls non-grouped entries, references and groups using the C++ personal-loot looter-selection shape, including reference max-count cycling across eligible looters before repeating. Represented personal encounter gameobject loot uses that path instead of generating shared gameobject loot and assigning afterwards. Remaining gaps: per-tapper condition evaluation still uses the represented current-session subset until canonical Player/ConditionMgr data for remote tappers exists; canonical per-player `Loot` objects and canonical `GameObject::m_personalLoot` remain pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

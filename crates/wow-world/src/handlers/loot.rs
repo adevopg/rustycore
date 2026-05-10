@@ -3117,19 +3117,23 @@ impl WorldSession {
                 player_guid,
             );
         let loot_id = source.open_loot_id_like_cpp();
-        let items = self
-            .generate_represented_gameobject_loot_items_like_cpp(loot_id)
-            .await
-            .unwrap_or_else(|| {
-                if loot_id != 0 {
-                    debug!(
-                        loot_id,
-                        gameobject = ?gameobject_guid,
-                        "gameobject loot template unavailable for represented chest"
-                    );
-                }
-                Vec::new()
-            });
+        let personal_encounter = source.is_personal_encounter_loot_like_cpp();
+        let items = if personal_encounter {
+            Vec::new()
+        } else {
+            self.generate_represented_gameobject_loot_items_like_cpp(loot_id)
+                .await
+                .unwrap_or_else(|| {
+                    if loot_id != 0 {
+                        debug!(
+                            loot_id,
+                            gameobject = ?gameobject_guid,
+                            "gameobject loot template unavailable for represented chest"
+                        );
+                    }
+                    Vec::new()
+                })
+        };
         let (min_money, max_money) = self
             .load_gameobject_template_addon_money_loot_like_cpp(gameobject_guid.entry())
             .await;
@@ -3156,7 +3160,7 @@ impl WorldSession {
             looted_by_player: false,
         };
 
-        if source.is_personal_encounter_loot_like_cpp() {
+        if personal_encounter {
             loot.coins = 0;
             self.represented_personal_loot_owners
                 .insert(gameobject_guid);
@@ -3181,11 +3185,23 @@ impl WorldSession {
                 self.represented_personal_loot_money
                     .insert((gameobject_guid, *tapper), tapper_money);
             }
-            assign_represented_personal_loot_items_like_cpp(
-                &mut loot,
-                &represented_tappers,
-                &mut rand::thread_rng(),
-            );
+            loot.items = self
+                .generate_represented_gameobject_personal_loot_items_like_cpp(
+                    loot_id,
+                    &represented_tappers,
+                )
+                .await
+                .unwrap_or_else(|| {
+                    if loot_id != 0 {
+                        debug!(
+                            loot_id,
+                            gameobject = ?gameobject_guid,
+                            "gameobject personal loot template unavailable for represented chest"
+                        );
+                    }
+                    Vec::new()
+                });
+            rebuild_represented_personal_loot_counts_like_cpp(&mut loot);
             if represented_tappers.is_empty() {
                 self.represented_personal_loot_owners
                     .remove(&gameobject_guid);
@@ -3349,6 +3365,95 @@ impl WorldSession {
                         .copied()
                         .unwrap_or_default();
                     generated_creature_loot_item_to_entry_like_cpp(item, metadata)
+                })
+                .collect(),
+        )
+    }
+
+    async fn generate_represented_gameobject_personal_loot_items_like_cpp(
+        &self,
+        loot_id: u32,
+        tappers: &[ObjectGuid],
+    ) -> Option<Vec<LootEntry>> {
+        if loot_id == 0 || tappers.is_empty() {
+            return Some(Vec::new());
+        }
+
+        let stores = self.loot_stores()?;
+        let store = stores.get(&LootStoreKind::Gameobject)?;
+        let rates = self.loot_drop_rates_like_cpp();
+        let condition_ids =
+            store.condition_ids_for_fill_like_cpp(loot_id, LootStoreKind::Gameobject, stores);
+        let condition_rows = self
+            .load_represented_creature_loot_condition_rows_like_cpp(&condition_ids)
+            .await;
+        let condition_references = self
+            .load_represented_creature_loot_condition_reference_rows_like_cpp(&condition_rows)
+            .await;
+        let addon_metadata = self
+            .load_item_template_addon_loot_metadata_for_item_ids_like_cpp(
+                condition_ids.iter().map(|id| id.source_entry),
+            )
+            .await;
+        let generated = {
+            let mut rng = rand::thread_rng();
+            store
+                .fill_personal_loot_with_context_like_cpp(
+                    loot_id,
+                    LootStoreKind::Gameobject,
+                    stores,
+                    LootFillOptions {
+                        loot_mode: LOOT_MODE_DEFAULT_LIKE_CPP,
+                        rates_allowed: true,
+                        referenced_amount_rate: rates.item_referenced_amount,
+                        item_context: ItemContext::None as u8,
+                    },
+                    tappers,
+                    &mut rng,
+                    |item_id| {
+                        self.item_storage_template(item_id).map(|template| {
+                            LootItemTemplateMetadata {
+                                max_stack: template.max_stack_size.max(1),
+                                has_multi_drop_flag: template.flags.contains(ItemFlags::MULTI_DROP),
+                                has_follow_loot_rules_flag: false,
+                            }
+                        })
+                    },
+                    |item| self.item_drop_rate_like_cpp(item.item_id),
+                    |context, _looter| {
+                        self.represented_creature_loot_item_allowed_like_cpp(
+                            context,
+                            &condition_rows,
+                            &condition_references,
+                            &addon_metadata,
+                        )
+                    },
+                    |item_id| {
+                        let random_properties =
+                            self.generate_loot_store_random_properties_like_cpp(item_id);
+                        LootItemRandomProperties {
+                            id: random_properties.id,
+                            seed: random_properties.seed,
+                        }
+                    },
+                )
+                .ok()?
+        };
+
+        Some(
+            generated
+                .into_iter()
+                .map(|personal_item| {
+                    let metadata = addon_metadata
+                        .get(&personal_item.item.item_id)
+                        .copied()
+                        .unwrap_or_default();
+                    let mut entry = generated_creature_loot_item_to_entry_like_cpp(
+                        personal_item.item,
+                        metadata,
+                    );
+                    entry.add_allowed_looter_like_cpp(personal_item.looter);
+                    entry
                 })
                 .collect(),
         )
@@ -4871,6 +4976,7 @@ fn mark_loot_allowed_for_player_like_cpp(loot: &mut CreatureLoot, player_guid: O
     }
 }
 
+#[cfg(test)]
 fn assign_represented_personal_loot_items_like_cpp<R: Rng + ?Sized>(
     loot: &mut CreatureLoot,
     tappers: &[ObjectGuid],
@@ -4885,32 +4991,45 @@ fn assign_represented_personal_loot_items_like_cpp<R: Rng + ?Sized>(
 
     for entry in &mut loot.items {
         entry.allowed_looters.clear();
-        entry.ffa_looted_by.clear();
         entry.flags.counted = false;
 
         let chosen_tapper = tappers[rng.gen_range(0..tappers.len())];
         entry.add_allowed_looter_like_cpp(chosen_tapper);
+    }
+
+    rebuild_represented_personal_loot_counts_like_cpp(loot);
+}
+
+fn rebuild_represented_personal_loot_counts_like_cpp(loot: &mut CreatureLoot) {
+    loot.unlooted_count = 0;
+    loot.player_ffa_items.clear();
+
+    for entry in &mut loot.items {
+        entry.ffa_looted_by.clear();
+        entry.flags.counted = false;
 
         if entry.flags.freeforall {
-            match loot
-                .player_ffa_items
-                .iter_mut()
-                .find(|(player, _)| *player == chosen_tapper)
-            {
-                Some((_, existing)) => existing.push(NotNormalLootItem {
-                    loot_list_id: entry.loot_list_id,
-                    is_looted: false,
-                }),
-                None => loot.player_ffa_items.push((
-                    chosen_tapper,
-                    vec![NotNormalLootItem {
+            for looter in &entry.allowed_looters {
+                match loot
+                    .player_ffa_items
+                    .iter_mut()
+                    .find(|(player, _)| player == looter)
+                {
+                    Some((_, existing)) => existing.push(NotNormalLootItem {
                         loot_list_id: entry.loot_list_id,
                         is_looted: false,
-                    }],
-                )),
+                    }),
+                    None => loot.player_ffa_items.push((
+                        *looter,
+                        vec![NotNormalLootItem {
+                            loot_list_id: entry.loot_list_id,
+                            is_looted: false,
+                        }],
+                    )),
+                }
+                loot.unlooted_count = loot.unlooted_count.saturating_add(1);
             }
-            loot.unlooted_count = loot.unlooted_count.saturating_add(1);
-        } else if !entry.flags.counted {
+        } else if !entry.allowed_looters.is_empty() {
             entry.flags.counted = true;
             loot.unlooted_count = loot.unlooted_count.saturating_add(1);
         }
