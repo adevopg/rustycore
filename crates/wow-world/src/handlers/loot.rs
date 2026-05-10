@@ -5287,6 +5287,7 @@ mod tests {
             0,
             0,
             0,
+            None,
             0,
         );
         creature.is_alive = is_alive;

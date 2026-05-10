@@ -3011,6 +3011,7 @@ impl WorldSession {
                 loot_id,
                 gold_min,
                 gold_max,
+                None,
                 0,
             );
 
@@ -3204,6 +3205,7 @@ impl WorldSession {
                         loot_id,
                         gold_min,
                         gold_max,
+                        None,
                         0,
                     );
                 }

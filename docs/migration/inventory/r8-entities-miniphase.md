@@ -1170,6 +1170,11 @@
   Rust targets: `crates/wow-instances/src/lib.rs`, docs.
   Acceptance: `wow-instances` now exposes a minimal `BossAiLikeCpp` contract and `BossAiRef` value for future script/AI adapters, and `InstanceScriptBase::boss_dungeon_encounter_for_boss_ai` mirrors the C++ creature overload after `dynamic_cast<BossAI const*>`: `None` returns no encounter, and a boss-AI source resolves by `boss_id()` through the already-ported boss/difficulty lookup. Tests cover both success and failed-cast branches. Remaining gaps: real `CreatureAI`/script instances do not yet implement this contract, and no runtime creature registration consumes it yet.
 
+- [x] **#NEXT.R8.ENTITIES.305** Preserve represented C++ `BossAI::_bossId` on creature AI state.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/AI/ScriptedAI/ScriptedCreature.h` (`BossAI::_bossId`, `GetBossId`), `/home/server/woltk-trinity-legacy/src/server/game/AI/ScriptedAI/ScriptedCreature.cpp` (`BossAI::BossAI`), `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceScript.cpp` (`GetBossDungeonEncounter(Creature const*)`).
+  Rust targets: `crates/wow-ai/src/lib.rs`, `crates/wow-ai/Cargo.toml`, `crates/wow-world/src/session.rs`, `crates/wow-world/src/handlers/character.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: represented `CreatureAI` now carries `boss_id: Option<u32>` separately from `dungeon_encounter_id`, exposes `boss_ai_like_cpp()` only when that script-provided boss identity exists, and returns `None` for plain creatures to match the failed C++ `dynamic_cast<BossAI const*>` branch. `WorldSession::register_world_creature` accepts the optional boss id and pending respawns preserve it. Current DB-spawn/visibility callsites pass `None` because C++ obtains this value from script constructors, not from creature spawn rows. Unit coverage asserts both the plain-creature and boss-creature branches. Remaining gaps: real scripts still do not instantiate BossAI-backed Rust creatures, and no runtime instance script yet uses `boss_ai_like_cpp()` to derive `dungeon_encounter_id`.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

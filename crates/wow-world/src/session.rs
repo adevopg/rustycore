@@ -620,6 +620,7 @@ pub struct PendingRespawn {
     pub loot_id: u32,
     pub gold_min: u32,
     pub gold_max: u32,
+    pub boss_id: Option<u32>,
     pub dungeon_encounter_id: u32,
 }
 
@@ -797,6 +798,7 @@ impl WorldSession {
         loot_id: u32,
         gold_min: u32,
         gold_max: u32,
+        boss_id: Option<u32>,
         dungeon_encounter_id: u32,
     ) {
         let guid = create_data.guid;
@@ -859,6 +861,7 @@ impl WorldSession {
                 loot_id,
                 gold_min,
                 gold_max,
+                boss_id,
                 dungeon_encounter_id,
             ),
         );
@@ -4500,6 +4503,7 @@ impl WorldSession {
                         loot_id: c.loot_id,
                         gold_min: c.gold_min,
                         gold_max: c.gold_max,
+                        boss_id: c.boss_id,
                         dungeon_encounter_id: c.dungeon_encounter_id,
                     });
                     tracing::info!(
@@ -4564,6 +4568,7 @@ impl WorldSession {
                 r.loot_id,
                 r.gold_min,
                 r.gold_max,
+                r.boss_id,
                 r.dungeon_encounter_id,
             );
             self.visible_creatures.insert(guid);
@@ -5451,6 +5456,7 @@ mod tests {
             0,
             0,
             0,
+            None,
             0,
         );
     }
