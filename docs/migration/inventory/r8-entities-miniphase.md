@@ -1120,6 +1120,11 @@
   Rust targets: `crates/wow-packet/src/packets/loot.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
   Acceptance: represented `CreatureLoot` now carries a per-player FFA item list matching C++ `NotNormalLootItem { LootListId, is_looted }`. Opening represented loot fills one FFA row per eligible player instead of treating FFA visibility as global, `LootResponse` and represented `CMSG_LOOT_ITEM` slot lookup consume that per-player row like `GetPlayerFFAItems()`, and FFA pickup marks only that player's row looted while preserving the item for other eligible players. Remaining gaps: this is still a represented/session bridge; canonical shared `Loot`, full `LootItem::AllowedForPlayer`, `_allowedLooters` ownership, `unlootedCount` and cross-session loot views remain pending.
 
+- [x] **#NEXT.R8.ENTITIES.295** Split represented C++ `PlayersLooting` from `_allowedLooters`.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp` (`Player::SendLoot`, `Player::StoreLootItem` FFA/non-FFA removal notification split), `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp` (`Loot::OnLootOpened`, `Loot::NotifyItemRemoved`, `Loot::NotifyMoneyRemoved`), `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.h` (`Loot::RemoveLooter`, `PlayersLooting`).
+  Rust targets: `crates/wow-packet/src/packets/loot.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: represented `CreatureLoot` now tracks active `players_looting` separately from eligible `allowed_looters`. Opening represented loot adds the player to `players_looting` like C++ `OnLootOpened`, release removes only that active viewer like `RemoveLooter`, non-FFA item removal and coin removal notify active viewers rather than every eligible player, and FFA item removal keeps the C++ one-player notification behavior. Remaining gaps: this is still represented/session-backed state; canonical shared `Loot`, exact disconnected-player pruning and full cross-session ownership remain pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

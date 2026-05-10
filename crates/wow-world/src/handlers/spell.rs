@@ -436,6 +436,7 @@ impl WorldSession {
                     loot_master: ObjectGuid::EMPTY,
                     round_robin_player: ObjectGuid::EMPTY,
                     player_ffa_items: Vec::new(),
+                    players_looting: Vec::new(),
                     allowed_looters: vec![player_guid],
                     items,
                     looted_by_player: false,

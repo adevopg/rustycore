@@ -573,6 +573,7 @@ pub struct CreatureLoot {
     pub loot_master: ObjectGuid,
     pub round_robin_player: ObjectGuid,
     pub player_ffa_items: Vec<(ObjectGuid, Vec<NotNormalLootItem>)>,
+    pub players_looting: Vec<ObjectGuid>,
     pub allowed_looters: Vec<ObjectGuid>,
     pub items: Vec<LootEntry>,
     pub looted_by_player: bool,

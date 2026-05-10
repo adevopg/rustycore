@@ -7131,6 +7131,7 @@ mod tests {
                 loot_master: ObjectGuid::EMPTY,
                 round_robin_player: ObjectGuid::EMPTY,
                 player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
                 allowed_looters: Vec::new(),
                 items: vec![LootEntry {
                     loot_list_id: 1,
@@ -7169,6 +7170,7 @@ mod tests {
                 loot_master: ObjectGuid::EMPTY,
                 round_robin_player: ObjectGuid::EMPTY,
                 player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
                 allowed_looters: Vec::new(),
                 items: Vec::new(),
                 looted_by_player: false,
@@ -7183,6 +7185,7 @@ mod tests {
                 loot_master: ObjectGuid::EMPTY,
                 round_robin_player: ObjectGuid::EMPTY,
                 player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
                 allowed_looters: Vec::new(),
                 items: vec![LootEntry {
                     loot_list_id: 0,
@@ -7389,6 +7392,7 @@ mod tests {
                 loot_master: ObjectGuid::EMPTY,
                 round_robin_player: ObjectGuid::EMPTY,
                 player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
                 allowed_looters: Vec::new(),
                 items: vec![LootEntry {
                     loot_list_id: 0,
