@@ -315,7 +315,9 @@ impl WorldSession {
             );
         }
 
-        if let Some(loot) = self.loot_table.get_mut(&gameobject_guid) {
+        if !source.is_personal_encounter_loot_like_cpp()
+            && let Some(loot) = self.loot_table.get_mut(&gameobject_guid)
+        {
             mark_loot_allowed_for_player_like_cpp(loot, player_guid);
         }
 
@@ -3096,23 +3098,38 @@ impl WorldSession {
             looted_by_player: false,
         };
 
-        if source.loot_id == 0 && source.personal_loot_id != 0 && source.dungeon_encounter_id != 0 {
-            for tapper in self.represented_gameobject_tappers_like_cpp(gameobject_guid, player_guid)
-            {
+        if source.is_personal_encounter_loot_like_cpp() {
+            let mut allowed_tappers = 0usize;
+            for tapper in self.represented_gameobject_personal_encounter_tappers_like_cpp(
+                gameobject_guid,
+                player_guid,
+                source.dungeon_encounter_id,
+            ) {
                 mark_loot_allowed_for_player_like_cpp(&mut loot, tapper);
+                allowed_tappers += 1;
+            }
+            if allowed_tappers == 0 {
+                loot.coins = 0;
             }
         }
 
         loot
     }
 
-    fn represented_gameobject_tappers_like_cpp(
+    fn represented_gameobject_personal_encounter_tappers_like_cpp(
         &self,
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
+        dungeon_encounter_id: u32,
     ) -> Vec<ObjectGuid> {
         let Some(tappers) = self.represented_gameobject_tap_lists.get(&gameobject_guid) else {
-            return vec![player_guid];
+            return self
+                .represented_player_unlocked_for_dungeon_encounter_like_cpp(
+                    player_guid,
+                    dungeon_encounter_id,
+                )
+                .into_iter()
+                .collect();
         };
         let mut represented_tappers = tappers
             .iter()
@@ -3124,7 +3141,35 @@ impl WorldSession {
         if represented_tappers.is_empty() {
             represented_tappers.push(player_guid);
         }
+        represented_tappers.retain(|guid| {
+            self.represented_player_is_unlocked_for_dungeon_encounter_like_cpp(
+                *guid,
+                dungeon_encounter_id,
+            )
+        });
         represented_tappers
+    }
+
+    fn represented_player_unlocked_for_dungeon_encounter_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+        dungeon_encounter_id: u32,
+    ) -> Option<ObjectGuid> {
+        self.represented_player_is_unlocked_for_dungeon_encounter_like_cpp(
+            player_guid,
+            dungeon_encounter_id,
+        )
+        .then_some(player_guid)
+    }
+
+    fn represented_player_is_unlocked_for_dungeon_encounter_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+        dungeon_encounter_id: u32,
+    ) -> bool {
+        !self
+            .represented_locked_dungeon_encounters
+            .contains(&(player_guid, dungeon_encounter_id))
     }
 
     fn represented_gameobject_chest_group_state_like_cpp(
@@ -6273,6 +6318,82 @@ mod tests {
             loot.items
                 .iter()
                 .all(|entry| entry.allowed_looters == vec![first_tapper, second_tapper])
+        );
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_loot_skips_locked_tappers_like_cpp() {
+        let mut session = make_session();
+        let locked_tapper = ObjectGuid::create_player(1, 42);
+        let open_tapper = ObjectGuid::create_player(1, 77);
+        let gameobject_guid = test_gameobject_guid(91_010);
+        session
+            .represented_gameobject_tap_lists
+            .insert(gameobject_guid, vec![locked_tapper, open_tapper]);
+        session
+            .represented_locked_dungeon_encounters
+            .insert((locked_tapper, 733));
+        let source = GameObjectLootSource {
+            loot_id: 0,
+            use_group_loot_rules: false,
+            dungeon_encounter_id: 733,
+            personal_loot_id: 10_001,
+            push_loot_id: 0,
+            triggered_event_id: 0,
+            linked_trap_entry: 0,
+        };
+
+        let loot = session
+            .generate_represented_gameobject_chest_loot_like_cpp(
+                gameobject_guid,
+                locked_tapper,
+                source,
+            )
+            .await;
+
+        assert_eq!(loot.allowed_looters, vec![open_tapper]);
+        assert!(
+            loot.items
+                .iter()
+                .all(|entry| entry.allowed_looters == vec![open_tapper])
+        );
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_open_does_not_auto_allow_non_tapper_like_cpp()
+     {
+        let (mut session, send_rx) = make_session_with_send();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let other_tapper = ObjectGuid::create_player(1, 77);
+        let gameobject_guid = test_gameobject_guid(91_011);
+        session.set_player_guid(Some(player_guid));
+        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .represented_gameobject_tap_lists
+            .insert(gameobject_guid, vec![other_tapper]);
+        let source = GameObjectLootSource {
+            loot_id: 0,
+            use_group_loot_rules: false,
+            dungeon_encounter_id: 733,
+            personal_loot_id: 10_001,
+            push_loot_id: 0,
+            triggered_event_id: 0,
+            linked_trap_entry: 0,
+        };
+
+        session
+            .open_represented_gameobject_chest_like_cpp(gameobject_guid, source)
+            .await;
+
+        assert!(send_rx.try_recv().is_err());
+        assert!(!session.is_active_loot_guid(gameobject_guid));
+        assert_eq!(
+            session
+                .loot_table
+                .get(&gameobject_guid)
+                .unwrap()
+                .allowed_looters,
+            vec![other_tapper]
         );
     }
 

@@ -87,6 +87,10 @@ impl GameObjectLootSource {
         self.open_loot_id_like_cpp() != 0
     }
 
+    pub const fn is_personal_encounter_loot_like_cpp(&self) -> bool {
+        self.loot_id == 0 && self.personal_loot_id != 0 && self.dungeon_encounter_id != 0
+    }
+
     pub const fn should_autostore_push_loot_like_cpp(&self) -> bool {
         self.loot_id == 0 && self.push_loot_id != 0
     }
@@ -717,6 +721,7 @@ mod tests {
         assert!(!source.is_empty());
         assert_eq!(source.open_loot_id_like_cpp(), 10);
         assert!(source.has_open_loot_like_cpp());
+        assert!(!source.is_personal_encounter_loot_like_cpp());
         assert!(!source.should_autostore_push_loot_like_cpp());
 
         data[GAMEOBJECT_DATA_CHEST_LOOT] = 0;
@@ -726,7 +731,16 @@ mod tests {
             .expect("chest templates expose a chest loot source");
         assert!(!push_source.is_empty());
         assert!(!push_source.has_open_loot_like_cpp());
+        assert!(!push_source.is_personal_encounter_loot_like_cpp());
         assert!(push_source.should_autostore_push_loot_like_cpp());
+
+        data[GAMEOBJECT_DATA_CHEST_PERSONAL_LOOT] = 25;
+        let personal_encounter_source = GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+            .chest_loot_source_like_cpp()
+            .expect("chest templates expose a chest loot source");
+        assert_eq!(personal_encounter_source.open_loot_id_like_cpp(), 25);
+        assert!(personal_encounter_source.has_open_loot_like_cpp());
+        assert!(personal_encounter_source.is_personal_encounter_loot_like_cpp());
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_FISHING_HOLE, data)
                 .chest_loot_source_like_cpp(),
