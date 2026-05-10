@@ -325,6 +325,117 @@ impl WorldSession {
         self.represented_on_loot_opened_like_cpp(gameobject_guid, player_guid);
     }
 
+    pub(crate) async fn open_represented_fishing_hole_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        loot_id: u32,
+    ) {
+        self.open_represented_gameobject_personal_loot_like_cpp(
+            gameobject_guid,
+            loot_id,
+            LOOT_TYPE_FISHINGHOLE_LIKE_CPP,
+            true,
+        )
+        .await;
+    }
+
+    pub(crate) async fn open_represented_gathering_node_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        loot_id: u32,
+    ) {
+        self.open_represented_gameobject_personal_loot_like_cpp(
+            gameobject_guid,
+            loot_id,
+            LOOT_TYPE_CHEST_LIKE_CPP,
+            false,
+        )
+        .await;
+    }
+
+    async fn open_represented_gameobject_personal_loot_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        loot_id: u32,
+        loot_type: u8,
+        replace_existing: bool,
+    ) {
+        let Some(player_guid) = self.player_guid else {
+            return;
+        };
+        if loot_id == 0 || !self.player_is_alive_like_cpp() {
+            return;
+        }
+        if !gameobject_guid.is_game_object() || !self.visible_gameobjects.contains(&gameobject_guid)
+        {
+            return;
+        }
+
+        if replace_existing || !self.loot_table.contains_key(&gameobject_guid) {
+            let items = self
+                .generate_represented_gameobject_loot_items_like_cpp(loot_id)
+                .await
+                .unwrap_or_else(|| {
+                    debug!(
+                        loot_id,
+                        gameobject = ?gameobject_guid,
+                        "gameobject personal loot template unavailable"
+                    );
+                    Vec::new()
+                });
+            self.loot_table.insert(
+                gameobject_guid,
+                CreatureLoot {
+                    loot_guid: represented_loot_object_guid_like_cpp(gameobject_guid),
+                    coins: 0,
+                    unlooted_count: 0,
+                    loot_type,
+                    dungeon_encounter_id: 0,
+                    loot_method: 0,
+                    loot_master: ObjectGuid::EMPTY,
+                    round_robin_player: ObjectGuid::EMPTY,
+                    player_ffa_items: Vec::new(),
+                    players_looting: Vec::new(),
+                    allowed_looters: Vec::new(),
+                    items,
+                    looted_by_player: false,
+                },
+            );
+        }
+
+        if let Some(loot) = self.loot_table.get_mut(&gameobject_guid) {
+            mark_loot_allowed_for_player_like_cpp(loot, player_guid);
+        }
+
+        let Some(loot) = self.loot_table.get(&gameobject_guid) else {
+            return;
+        };
+        if !loot_can_be_opened_by_player_like_cpp(loot, player_guid) {
+            return;
+        }
+
+        let response = LootResponse {
+            owner: gameobject_guid,
+            loot_obj: loot.loot_guid,
+            failure_reason: 0,
+            acquire_reason: loot_type_for_client_like_cpp(loot.loot_type),
+            loot_method: loot.loot_method,
+            threshold: 2,
+            coins: loot.coins,
+            items: represented_loot_response_items_like_cpp(loot, player_guid),
+            currencies: vec![],
+            acquired: true,
+            ae_looting: false,
+        };
+
+        if !self.active_loot_guid.is_empty() && !self.active_loot_guid.is_item() {
+            self.do_loot_release_all_like_cpp(player_guid).await;
+        }
+        self.set_active_loot_guid(gameobject_guid);
+        self.send_packet(&response);
+        self.represented_on_loot_opened_like_cpp(gameobject_guid, player_guid);
+    }
+
     /// CMSG_LOOT_ITEM — player clicks to take a specific item from the loot.
     pub async fn handle_loot_item(&mut self, mut pkt: wow_packet::WorldPacket) {
         let req = match LootItemPkt::read(&mut pkt) {

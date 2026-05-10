@@ -10,7 +10,10 @@
 use tracing::{debug, info, warn};
 use wow_constants::{ClientOpcodes, ItemExtendedCostFlags};
 use wow_database::WorldStatements;
-use wow_entities::{GameObjectTemplateData, MAX_GAMEOBJECT_DATA};
+use wow_entities::{
+    GAMEOBJECT_TYPE_FISHING_HOLE, GAMEOBJECT_TYPE_GATHERING_NODE, GameObjectTemplateData,
+    MAX_GAMEOBJECT_DATA,
+};
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
 use wow_packet::packets::item::{
@@ -810,21 +813,35 @@ impl crate::session::WorldSession {
         }
 
         let template = GameObjectTemplateData::new(go_type, data);
-        let Some(source) = template.chest_loot_source_like_cpp() else {
-            debug!(
-                account = self.account_id,
-                guid = ?gameobject_guid,
-                go_type,
-                "GameObjUse: represented non-chest gameobject use is not ported yet"
-            );
-            return;
-        };
-        if source.is_empty() {
+        if let Some(source) = template.chest_loot_source_like_cpp() {
+            if source.is_empty() {
+                return;
+            }
+
+            self.open_represented_gameobject_chest_like_cpp(gameobject_guid, source)
+                .await;
             return;
         }
 
-        self.open_represented_gameobject_chest_like_cpp(gameobject_guid, source)
-            .await;
+        let loot_id = template.get_loot_id_like_cpp();
+        match go_type {
+            GAMEOBJECT_TYPE_FISHING_HOLE if loot_id != 0 => {
+                self.open_represented_fishing_hole_like_cpp(gameobject_guid, loot_id)
+                    .await;
+            }
+            GAMEOBJECT_TYPE_GATHERING_NODE if loot_id != 0 => {
+                self.open_represented_gathering_node_like_cpp(gameobject_guid, loot_id)
+                    .await;
+            }
+            _ => {
+                debug!(
+                    account = self.account_id,
+                    guid = ?gameobject_guid,
+                    go_type,
+                    "GameObjUse: represented gameobject use type is not ported yet"
+                );
+            }
+        }
     }
 
     /// CMSG_GAME_OBJ_REPORT_USE — client reports a game object use event.

@@ -1195,6 +1195,11 @@
   Rust targets: `crates/wow-entities/src/game_object.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
   Acceptance: the represented chest source now captures Data33, distinguishes open loot (`chestLoot`/`chestPersonalLoot`) from push-only loot, and for the C++ `!GetLootId()` branch generates `LootTemplates_Gameobject` push loot with `LOOT_CHEST` semantics and stores eligible rows directly through the existing represented direct-inventory bridge without creating a loot window or money. A session-local unique-use guard prevents repeated represented push autostore for the same gameobject. Remaining gaps: canonical `GameObject::m_unique_users`, triggered events, linked traps, loot state transitions, restock/despawn and canonical shared `GameObject::m_loot` ownership are still pending.
 
+- [x] **#NEXT.R8.ENTITIES.310** Add represented fishing-hole and gathering-node loot opens.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp` (`GAMEOBJECT_TYPE_FISHINGHOLE`, `GAMEOBJECT_TYPE_GATHERING_NODE`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h` (`GetLootId` switch).
+  Rust targets: `crates/wow-world/src/handlers/misc.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: `CMSG_GAME_OBJ_USE` now routes non-chest `GetLootId` gameobjects for fishing holes and gathering nodes: fishing holes generate personal `LootTemplates_Gameobject` with `LOOT_FISHINGHOLE`, while gathering nodes generate per-session personal `LootTemplates_Gameobject` with `LOOT_CHEST` like C++. Both use the represented loot response/open path and avoid claiming side effects not yet ported. Remaining gaps: fishing criteria, gathering triggered events, linked traps, XP reward, spell cast, max-loot/despawn/dynamic-flag transitions and canonical per-player `m_personalLoot` ownership remain pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
