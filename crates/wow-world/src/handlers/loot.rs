@@ -2079,7 +2079,7 @@ impl WorldSession {
 
         let mut result = Vec::new();
         for owner_guid in candidates {
-            let Some((level, entry, loot_id, gold_min, gold_max)) =
+            let Some((level, entry, loot_id, gold_min, gold_max, dungeon_encounter_id)) =
                 self.creatures.get(&owner_guid).map(|creature| {
                     (
                         creature.level,
@@ -2087,6 +2087,7 @@ impl WorldSession {
                         creature.loot_id,
                         creature.gold_min,
                         creature.gold_max,
+                        creature.dungeon_encounter_id,
                     )
                 })
             else {
@@ -2101,6 +2102,7 @@ impl WorldSession {
                 loot_id,
                 gold_min,
                 gold_max,
+                dungeon_encounter_id,
             )
             .await;
             if let Some(loot) = self.loot_table.get_mut(&owner_guid) {
@@ -2125,7 +2127,7 @@ impl WorldSession {
         player_guid: ObjectGuid,
         ae_looting: bool,
     ) -> Option<LootResponse> {
-        let (level, entry, loot_id, gold_min, gold_max) =
+        let (level, entry, loot_id, gold_min, gold_max, dungeon_encounter_id) =
             self.creatures.get(&owner_guid).map(|creature| {
                 (
                     creature.level,
@@ -2133,6 +2135,7 @@ impl WorldSession {
                     creature.loot_id,
                     creature.gold_min,
                     creature.gold_max,
+                    creature.dungeon_encounter_id,
                 )
             })?;
         self.ensure_represented_creature_loot_like_cpp(
@@ -2143,6 +2146,7 @@ impl WorldSession {
             loot_id,
             gold_min,
             gold_max,
+            dungeon_encounter_id,
         )
         .await;
 
@@ -2661,6 +2665,7 @@ impl WorldSession {
         loot_id: u32,
         gold_min: u32,
         gold_max: u32,
+        dungeon_encounter_id: u32,
     ) {
         if !self.loot_table.contains_key(&creature_guid) {
             let loot = self
@@ -2672,6 +2677,7 @@ impl WorldSession {
                     loot_id,
                     gold_min,
                     gold_max,
+                    dungeon_encounter_id,
                 )
                 .await;
             self.loot_table.insert(creature_guid, loot);
@@ -2687,6 +2693,7 @@ impl WorldSession {
         loot_id: u32,
         gold_min: u32,
         gold_max: u32,
+        dungeon_encounter_id: u32,
     ) -> CreatureLoot {
         let (loot_method, loot_master, round_robin_player) =
             self.represented_creature_loot_group_state_like_cpp(loot_owner_guid);
@@ -2719,7 +2726,7 @@ impl WorldSession {
             coins,
             unlooted_count: 0,
             loot_type: LOOT_TYPE_CORPSE_LIKE_CPP,
-            dungeon_encounter_id: 0,
+            dungeon_encounter_id,
             loot_method,
             loot_master,
             round_robin_player,
@@ -5280,6 +5287,7 @@ mod tests {
             0,
             0,
             0,
+            0,
         );
         creature.is_alive = is_alive;
         creature
@@ -5515,11 +5523,32 @@ mod tests {
                 0,
                 100,
                 100,
+                0,
             )
             .await;
 
         assert_eq!(loot.coins, 250);
         assert!(loot.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn represented_creature_loot_generation_carries_cpp_dungeon_encounter_id() {
+        let session = make_session();
+
+        let loot = session
+            .generate_represented_creature_loot_like_cpp(
+                test_creature_guid(19_097),
+                ObjectGuid::create_player(1, 42),
+                10,
+                25,
+                0,
+                0,
+                0,
+                615,
+            )
+            .await;
+
+        assert_eq!(loot.dungeon_encounter_id, 615);
     }
 
     #[tokio::test]
@@ -5531,7 +5560,16 @@ mod tests {
         install_master_loot_group(&mut session, master_guid, candidate_guid);
 
         let loot = session
-            .generate_represented_creature_loot_like_cpp(owner_guid, master_guid, 10, 25, 0, 0, 0)
+            .generate_represented_creature_loot_like_cpp(
+                owner_guid,
+                master_guid,
+                10,
+                25,
+                0,
+                0,
+                0,
+                0,
+            )
             .await;
 
         assert_eq!(loot.loot_method, LOOT_METHOD_MASTER_LIKE_CPP);

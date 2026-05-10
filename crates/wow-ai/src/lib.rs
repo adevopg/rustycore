@@ -114,6 +114,8 @@ pub struct CreatureAI {
     pub gold_min: u32,
     /// C++ `CreatureDifficulty::GoldMax`.
     pub gold_max: u32,
+    /// Represented C++ `Loot::_dungeonEncounterId` source for corpse loot.
+    pub dungeon_encounter_id: u32,
 }
 
 impl CreatureAI {
@@ -134,6 +136,7 @@ impl CreatureAI {
         loot_id: u32,
         gold_min: u32,
         gold_max: u32,
+        dungeon_encounter_id: u32,
     ) -> Self {
         let now = Instant::now();
         // Derive rough damage if zero
@@ -176,6 +179,7 @@ impl CreatureAI {
             loot_id,
             gold_min,
             gold_max,
+            dungeon_encounter_id,
         }
     }
 

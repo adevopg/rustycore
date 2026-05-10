@@ -616,6 +616,7 @@ pub struct PendingRespawn {
     pub loot_id: u32,
     pub gold_min: u32,
     pub gold_max: u32,
+    pub dungeon_encounter_id: u32,
 }
 
 fn is_represented_bag_slot(slot: u8) -> bool {
@@ -791,6 +792,7 @@ impl WorldSession {
         loot_id: u32,
         gold_min: u32,
         gold_max: u32,
+        dungeon_encounter_id: u32,
     ) {
         let guid = create_data.guid;
         let entry = create_data.entry;
@@ -852,6 +854,7 @@ impl WorldSession {
                 loot_id,
                 gold_min,
                 gold_max,
+                dungeon_encounter_id,
             ),
         );
     }
@@ -4482,6 +4485,7 @@ impl WorldSession {
                         loot_id: c.loot_id,
                         gold_min: c.gold_min,
                         gold_max: c.gold_max,
+                        dungeon_encounter_id: c.dungeon_encounter_id,
                     });
                     tracing::info!(
                         "Corpse despawned: {:?} (entry {}) — respawn in {}s",
@@ -4545,6 +4549,7 @@ impl WorldSession {
                 r.loot_id,
                 r.gold_min,
                 r.gold_max,
+                r.dungeon_encounter_id,
             );
             self.visible_creatures.insert(guid);
         }
@@ -5428,6 +5433,7 @@ mod tests {
             3,
             5,
             20.0,
+            0,
             0,
             0,
             0,

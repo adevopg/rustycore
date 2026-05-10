@@ -3011,6 +3011,7 @@ impl WorldSession {
                 loot_id,
                 gold_min,
                 gold_max,
+                0,
             );
 
             if !result.next_row() {
@@ -3203,6 +3204,7 @@ impl WorldSession {
                         loot_id,
                         gold_min,
                         gold_max,
+                        0,
                     );
                 }
 
