@@ -23,11 +23,12 @@ use wow_constants::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTriggerStore, ChrSpecializationStore, CurrencyTypesEntry, CurrencyTypesStore,
-    HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
-    ItemDisenchantLootStore, ItemExtendedCostStore, ItemModifiedAppearanceStore,
-    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
-    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore,
-    PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    DungeonEncounterStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore,
+    ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
+    ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
+    ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
+    ItemStatsStore, ItemStore, LockStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
+    SpellItemEnchantmentStore, SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -251,6 +252,9 @@ pub struct WorldSession {
 
     // ChrSpecialization store (loot specialization validation)
     chr_specialization_store: Option<Arc<ChrSpecializationStore>>,
+
+    // DungeonEncounter store (instance encounter lock/loot metadata)
+    dungeon_encounter_store: Option<Arc<DungeonEncounterStore>>,
 
     // Shared player registry for broadcasting to nearby sessions
     player_registry: Option<Arc<PlayerRegistry>>,
@@ -683,6 +687,7 @@ impl WorldSession {
             skill_store: None,
             area_trigger_store: None,
             chr_specialization_store: None,
+            dungeon_encounter_store: None,
             player_registry: None,
             object_accessor: None,
             group_registry: None,
@@ -2332,6 +2337,16 @@ impl WorldSession {
     /// Get the ChrSpecialization store reference.
     pub fn chr_specialization_store(&self) -> Option<&Arc<ChrSpecializationStore>> {
         self.chr_specialization_store.as_ref()
+    }
+
+    /// Set the DungeonEncounter store for this session.
+    pub fn set_dungeon_encounter_store(&mut self, store: Arc<DungeonEncounterStore>) {
+        self.dungeon_encounter_store = Some(store);
+    }
+
+    /// Get the DungeonEncounter store reference.
+    pub fn dungeon_encounter_store(&self) -> Option<&Arc<DungeonEncounterStore>> {
+        self.dungeon_encounter_store.as_ref()
     }
 
     /// Set the skill store for this session.

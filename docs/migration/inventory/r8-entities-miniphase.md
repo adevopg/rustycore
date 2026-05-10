@@ -1155,6 +1155,11 @@
   Rust targets: `crates/wow-data/src/dungeon_encounter.rs`, `crates/wow-data/src/lib.rs`, `docs/migration/inventory/r3-database-registry.tsv`, docs.
   Acceptance: `wow-data` now exposes `DungeonEncounterEntry`/`DungeonEncounterStore` with the C++ field layout needed by encounter lock/loot parity: `ID`, `MapID`, `DifficultyID`, `OrderIndex`, `Bit`, `Flags` and `Faction`. The localized `Name` column remains intentionally skipped because no current runtime parity path consumes it. Unit coverage asserts C++ store-style lookup by ID, and the fixture-backed test loads `DungeonEncounter.db2` when present. Remaining gaps: startup/session injection, hotfix SQL overlay, script-provided boss-to-encounter arrays, `InstanceScript::GetBossDungeonEncounter`, player lock checks and criteria/LFG delivery remain pending.
 
+- [x] **#NEXT.R8.ENTITIES.302** Wire `DungeonEncounterStore` into world startup and sessions.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Stores.cpp` (`LOAD_DB2(sDungeonEncounterStore)`), `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceScript.cpp` (`sDungeonEncounterStore.LookupEntry`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp` (`IsLockedToDungeonEncounter` lookup).
+  Rust targets: `crates/world-server/src/main.rs`, `crates/wow-network/src/accept.rs`, `crates/wow-world/src/session.rs`, docs.
+  Acceptance: `world-server` now loads `DungeonEncounter.db2` at startup beside the other DB2 stores, carries the shared store through `SessionResources`, and exposes it on `WorldSession` through setter/getter plumbing. This prepares canonical `InstanceScript` and player lock/criteria code to consume a real DB2 store instead of hardcoded encounter metadata. Remaining gaps: the store is not yet used by represented creature registration, boss script arrays or lockout checks; hotfix SQL overlay is still pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
