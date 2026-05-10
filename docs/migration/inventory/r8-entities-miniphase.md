@@ -1130,6 +1130,11 @@
   Rust targets: `crates/wow-packet/src/packets/loot.rs`, `crates/wow-world/src/handlers/loot.rs`, `crates/wow-world/src/handlers/spell.rs`, tests and docs.
   Acceptance: represented `CreatureLoot` now stores `unlooted_count`, `loot_is_looted_like_cpp` mirrors C++ `gold == 0 && unlootedCount == 0`, represented open-time `FillNotNormalLootFor` increments one shared non-FFA count via `flags.counted` and one FFA count per eligible player, pickup decrements exactly on unlooted-to-looted transitions, and stored/opened item-container loot initializes the count from remaining item rows like `LootItemStorage`. Remaining gaps: this is still represented/session-backed state; canonical `Loot` ownership, roll-loss/master-loot decrement paths and cross-session persistence remain under full loot closure.
 
+- [x] **#NEXT.R8.ENTITIES.297** Apply represented C++ master-loot/roll-winner `unlootedCount` decrement.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Handlers/LootHandler.cpp` (`HandleLootMasterGiveOpcode`: mark item looted, `NotifyItemRemoved`, `--unlootedCount`), `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp` (`LootRoll::Finish` winner routes through store/removal).
+  Rust targets: `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: represented master-loot and represented loot-roll winner removal now decrement `CreatureLoot.unlooted_count` only when the target transition was still unlooted, matching the C++ removal branch after a successful store. Unit coverage asserts self-target master-loot removal clears both item state and the represented unlooted counter. Remaining gaps: canonical shared `Loot`, full DB-backed remote success validation, roll-loss/mail fallback semantics and real criteria/news/script side effects remain pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

@@ -504,7 +504,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - **Loot in containers persists across server restart** via `LootItemStorage`. If you forget the persistence, players who close their bag with rolling items mid-progress lose them at restart.
 - **`TC LootItem(LootStoreItem)` ctor generates the random property/suffix** — this happens once at draw, not at view. Multiple viewers see the same suffix.
 - **`AELootResult`** — modern auto-loot batches multiple corpses into one window; deduping by item GUID matters because the same dungeon-encounter ID may attribute the same drop to multiple kills.
-- **`is_counted`** — internal flag preventing double-counting/decrement of `unlootedCount`; represented open/pickup bridge semantics are covered by #NEXT.R8.ENTITIES.296, while roll-loss/master-loot decrement paths remain canonical loot work.
+- **`is_counted`** — internal flag preventing double-counting/decrement of `unlootedCount`; represented open/pickup bridge semantics are covered by #NEXT.R8.ENTITIES.296 and represented master-loot/roll-winner decrement by #NEXT.R8.ENTITIES.297, while canonical roll-loss/mail fallback paths remain loot work.
 - **`is_blocked`** — set while a roll is pending; once roll concludes it clears regardless of winner. Don't auto-loot blocked items.
 - **`creature_template.skinloot = 0`** still allows skinning if `creature_template.type_flags & CREATURE_TYPEFLAGS_SKINNABLE` is set (skinning skill produces leather scraps from a default fallback).
 - **Conditions on loot are LIVE** — condition fulfilment is checked at `Loot::FillLoot` time AND at view time. A player whose quest expires mid-loot-window sees the item disappear.

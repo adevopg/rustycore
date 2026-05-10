@@ -1917,12 +1917,14 @@ impl WorldSession {
             return;
         };
 
-        if entry.is_looted_for_player_like_cpp(target) {
+        let was_unlooted = !entry.is_looted_for_player_like_cpp(target);
+        if !was_unlooted {
             return;
         }
 
         entry.quantity = 0;
         entry.mark_looted_for_player_like_cpp(target);
+        loot.unlooted_count = loot.unlooted_count.saturating_sub(1);
         self.send_packet(&LootRemoved {
             owner: owner_guid,
             loot_obj,
@@ -5786,7 +5788,7 @@ mod tests {
             CreatureLoot {
                 loot_guid: loot_object,
                 coins: 0,
-                unlooted_count: 0,
+                unlooted_count: 1,
                 loot_method: LOOT_METHOD_MASTER_LIKE_CPP,
                 loot_master: master_guid,
                 round_robin_player: ObjectGuid::EMPTY,
@@ -8416,6 +8418,7 @@ mod tests {
         let loot = session.loot_table.get(&loot_owner).unwrap();
         assert_eq!(loot.items[0].quantity, 0);
         assert!(loot.items[0].is_looted_for_player_like_cpp(master_guid));
+        assert_eq!(loot.unlooted_count, 0);
 
         let sent = send_rx.try_recv().unwrap();
         let mut sent = WorldPacket::from_bytes(&sent);
