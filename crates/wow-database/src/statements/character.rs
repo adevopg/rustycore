@@ -98,6 +98,33 @@ pub enum CharStatements {
 
     /// UPDATE characters SET totaltime = ?, leveltime = ? WHERE guid = ?
     UPD_CHAR_PLAYED_TIME,
+
+    /// SELECT instanceId, releaseTime FROM account_instance_times WHERE accountId = ?
+    SEL_ACCOUNT_INSTANCELOCKTIMES,
+    /// DELETE FROM account_instance_times WHERE accountId = ?
+    DEL_ACCOUNT_INSTANCE_LOCK_TIMES,
+    /// INSERT INTO account_instance_times (accountId, instanceId, releaseTime) VALUES (?, ?, ?)
+    INS_ACCOUNT_INSTANCE_LOCK_TIMES,
+
+    /// SELECT instance rows used by C++ InstanceLockMgr::Load.
+    SEL_INSTANCE,
+    /// SELECT character_instance_lock rows used by C++ InstanceLockMgr::Load.
+    SEL_CHARACTER_INSTANCE_LOCK,
+    /// DELETE FROM character_instance_lock WHERE guid = ? AND mapId = ? AND lockId = ?
+    DEL_CHARACTER_INSTANCE_LOCK,
+    /// DELETE FROM character_instance_lock WHERE guid = ?
+    DEL_CHARACTER_INSTANCE_LOCK_BY_GUID,
+    /// INSERT INTO character_instance_lock C++ lock persistence row.
+    INS_CHARACTER_INSTANCE_LOCK,
+    /// UPDATE character_instance_lock SET extended = ? WHERE guid = ? AND mapId = ? AND lockId = ?
+    UPD_CHARACTER_INSTANCE_LOCK_EXTENSION,
+    /// UPDATE character_instance_lock SET expiryTime = ?, extended = 0 WHERE guid = ? AND mapId = ? AND lockId = ?
+    UPD_CHARACTER_INSTANCE_LOCK_FORCE_EXPIRE,
+    /// DELETE FROM instance WHERE instanceId = ?
+    DEL_INSTANCE,
+    /// INSERT INTO instance (instanceId, data, completedEncountersMask, entranceWorldSafeLocId) VALUES (?, ?, ?, ?)
+    INS_INSTANCE,
+
     // Quest status
     SEL_CHAR_QUEST_STATUS,
     INS_CHAR_QUEST_STATUS,
@@ -272,6 +299,43 @@ impl StatementDef for CharStatements {
             Self::UPD_CHAR_PLAYED_TIME => {
                 "UPDATE characters SET totaltime = ?, leveltime = ? WHERE guid = ?"
             }
+            Self::SEL_ACCOUNT_INSTANCELOCKTIMES => {
+                "SELECT instanceId, releaseTime FROM account_instance_times WHERE accountId = ?"
+            }
+            Self::DEL_ACCOUNT_INSTANCE_LOCK_TIMES => {
+                "DELETE FROM account_instance_times WHERE accountId = ?"
+            }
+            Self::INS_ACCOUNT_INSTANCE_LOCK_TIMES => {
+                "INSERT INTO account_instance_times (accountId, instanceId, releaseTime) VALUES (?, ?, ?)"
+            }
+            Self::SEL_INSTANCE => {
+                "SELECT instanceId, data, completedEncountersMask, entranceWorldSafeLocId FROM instance"
+            }
+            Self::SEL_CHARACTER_INSTANCE_LOCK => {
+                "SELECT guid, mapId, lockId, instanceId, difficulty, data, completedEncountersMask, \
+                 entranceWorldSafeLocId, expiryTime, extended FROM character_instance_lock ORDER BY instanceId"
+            }
+            Self::DEL_CHARACTER_INSTANCE_LOCK => {
+                "DELETE FROM character_instance_lock WHERE guid = ? AND mapId = ? AND lockId = ?"
+            }
+            Self::DEL_CHARACTER_INSTANCE_LOCK_BY_GUID => {
+                "DELETE FROM character_instance_lock WHERE guid = ?"
+            }
+            Self::INS_CHARACTER_INSTANCE_LOCK => {
+                "INSERT INTO character_instance_lock \
+                 (guid, mapId, lockId, instanceId, difficulty, data, completedEncountersMask, \
+                  entranceWorldSafeLocId, expiryTime, extended) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            }
+            Self::UPD_CHARACTER_INSTANCE_LOCK_EXTENSION => {
+                "UPDATE character_instance_lock SET extended = ? WHERE guid = ? AND mapId = ? AND lockId = ?"
+            }
+            Self::UPD_CHARACTER_INSTANCE_LOCK_FORCE_EXPIRE => {
+                "UPDATE character_instance_lock SET expiryTime = ?, extended = 0 WHERE guid = ? AND mapId = ? AND lockId = ?"
+            }
+            Self::DEL_INSTANCE => "DELETE FROM instance WHERE instanceId = ?",
+            Self::INS_INSTANCE => {
+                "INSERT INTO instance (instanceId, data, completedEncountersMask, entranceWorldSafeLocId) VALUES (?, ?, ?, ?)"
+            }
             Self::UPD_CHAR_XP => "UPDATE characters SET xp = ? WHERE guid = ?",
             Self::UPD_CHAR_LEVEL => "UPDATE characters SET level = ?, xp = ? WHERE guid = ?",
             Self::UPD_CHAR_MONEY => "UPDATE characters SET money = ? WHERE guid = ?",
@@ -394,6 +458,9 @@ mod tests {
         assert!(!CharStatements::UPD_PLAYER_CURRENCY.sql().is_empty());
         assert!(!CharStatements::REP_PLAYER_CURRENCY.sql().is_empty());
         assert!(!CharStatements::UPD_CHAR_PLAYED_TIME.sql().is_empty());
+        assert!(!CharStatements::SEL_CHARACTER_INSTANCE_LOCK.sql().is_empty());
+        assert!(!CharStatements::INS_CHARACTER_INSTANCE_LOCK.sql().is_empty());
+        assert!(!CharStatements::INS_INSTANCE.sql().is_empty());
     }
 
     #[test]
@@ -406,6 +473,17 @@ mod tests {
                 .contains("character_customizations")
         );
         assert!(CharStatements::DEL_CHARACTER.sql().contains("characters"));
+        assert!(
+            CharStatements::SEL_CHARACTER_INSTANCE_LOCK
+                .sql()
+                .contains("character_instance_lock")
+        );
+        assert!(CharStatements::SEL_INSTANCE.sql().contains("instance"));
+        assert!(
+            CharStatements::SEL_ACCOUNT_INSTANCELOCKTIMES
+                .sql()
+                .contains("account_instance_times")
+        );
     }
 
     #[test]
@@ -580,5 +658,71 @@ mod tests {
                 .count(),
             4
         );
+        assert_eq!(
+            CharStatements::SEL_ACCOUNT_INSTANCELOCKTIMES
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::DEL_ACCOUNT_INSTANCE_LOCK_TIMES
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::INS_ACCOUNT_INSTANCE_LOCK_TIMES
+                .sql()
+                .matches('?')
+                .count(),
+            3
+        );
+        assert_eq!(CharStatements::SEL_INSTANCE.sql().matches('?').count(), 0);
+        assert_eq!(
+            CharStatements::SEL_CHARACTER_INSTANCE_LOCK
+                .sql()
+                .matches('?')
+                .count(),
+            0
+        );
+        assert_eq!(
+            CharStatements::DEL_CHARACTER_INSTANCE_LOCK
+                .sql()
+                .matches('?')
+                .count(),
+            3
+        );
+        assert_eq!(
+            CharStatements::DEL_CHARACTER_INSTANCE_LOCK_BY_GUID
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::INS_CHARACTER_INSTANCE_LOCK
+                .sql()
+                .matches('?')
+                .count(),
+            10
+        );
+        assert_eq!(
+            CharStatements::UPD_CHARACTER_INSTANCE_LOCK_EXTENSION
+                .sql()
+                .matches('?')
+                .count(),
+            4
+        );
+        assert_eq!(
+            CharStatements::UPD_CHARACTER_INSTANCE_LOCK_FORCE_EXPIRE
+                .sql()
+                .matches('?')
+                .count(),
+            4
+        );
+        assert_eq!(CharStatements::DEL_INSTANCE.sql().matches('?').count(), 1);
+        assert_eq!(CharStatements::INS_INSTANCE.sql().matches('?').count(), 4);
     }
 }

@@ -10,8 +10,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use wow_core::ObjectGuid;
+use wow_core::{ObjectGuid, guid::HighGuid};
 use wow_data::{DungeonEncounterEntry, DungeonEncounterStore};
+use wow_database::{CharStatements, PreparedStatement, StatementDef};
 
 /// C++ `MAX_DUNGEON_ENCOUNTERS_PER_BOSS`.
 pub const MAX_DUNGEON_ENCOUNTERS_PER_BOSS: usize = 4;
@@ -214,6 +215,38 @@ pub struct InstanceLockUpdateEvent {
     pub entrance_world_safe_loc_id: Option<u32>,
 }
 
+/// Row shape loaded from C++ `instance` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedInstanceLockRow {
+    pub instance_id: u32,
+    pub data: String,
+    pub completed_encounters_mask: u32,
+    pub entrance_world_safe_loc_id: u32,
+}
+
+/// Row shape loaded from C++ `character_instance_lock` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharacterInstanceLockRow {
+    pub player_guid_counter: u64,
+    pub map_id: u32,
+    pub lock_id: u32,
+    pub instance_id: u32,
+    pub difficulty_id: u8,
+    pub data: String,
+    pub completed_encounters_mask: u32,
+    pub entrance_world_safe_loc_id: u32,
+    pub expiry_time: InstanceResetTime,
+    pub extended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceLockLoadIssue {
+    MissingSharedInstanceData {
+        player_guid_counter: u64,
+        instance_id: u32,
+    },
+}
+
 /// C++ `InstanceLocksStatistics`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InstanceLocksStatistics {
@@ -237,6 +270,90 @@ pub struct InstanceLockMgr {
 }
 
 impl InstanceLockMgr {
+    pub fn load_from_rows_like_cpp(
+        &mut self,
+        shared_rows: impl IntoIterator<Item = SharedInstanceLockRow>,
+        character_rows: impl IntoIterator<Item = CharacterInstanceLockRow>,
+        mut entries_for: impl FnMut(u32, u8) -> Option<MapDb2Entries>,
+    ) -> Vec<InstanceLockLoadIssue> {
+        self.temporary_instance_locks_by_player.clear();
+        self.instance_locks_by_player.clear();
+        self.instance_lock_data_by_id.clear();
+
+        for row in shared_rows {
+            self.instance_lock_data_by_id.insert(
+                row.instance_id,
+                Arc::new(RwLock::new(SharedInstanceLockData {
+                    instance_id: row.instance_id,
+                    data: InstanceLockData {
+                        data: row.data,
+                        completed_encounters_mask: row.completed_encounters_mask,
+                        entrance_world_safe_loc_id: row.entrance_world_safe_loc_id,
+                    },
+                })),
+            );
+        }
+
+        let mut issues = Vec::new();
+        for row in character_rows {
+            let entries = entries_for(row.map_id, row.difficulty_id).unwrap_or(MapDb2Entries {
+                map_id: row.map_id,
+                difficulty_id: row.difficulty_id,
+                lock_id: row.lock_id,
+                reset_interval: MapDifficultyResetInterval::Anytime,
+                is_flex_locking: true,
+                is_using_encounter_locks: true,
+            });
+            let player_guid =
+                ObjectGuid::create_global(HighGuid::Player, 0, row.player_guid_counter as i64);
+            let data = InstanceLockData {
+                data: row.data,
+                completed_encounters_mask: row.completed_encounters_mask,
+                entrance_world_safe_loc_id: row.entrance_world_safe_loc_id,
+            };
+
+            let mut lock = if entries.is_instance_id_bound() {
+                let Some(shared_data) = self.instance_lock_data_by_id.get(&row.instance_id) else {
+                    issues.push(InstanceLockLoadIssue::MissingSharedInstanceData {
+                        player_guid_counter: row.player_guid_counter,
+                        instance_id: row.instance_id,
+                    });
+                    continue;
+                };
+                InstanceLock::new_shared(
+                    row.map_id,
+                    row.difficulty_id,
+                    row.expiry_time,
+                    row.instance_id,
+                    Arc::clone(shared_data),
+                )
+            } else {
+                InstanceLock::new(
+                    row.map_id,
+                    row.difficulty_id,
+                    row.expiry_time,
+                    row.instance_id,
+                )
+            };
+            lock.data = data;
+            lock.extended = row.extended;
+
+            self.instance_locks_by_player
+                .entry(player_guid)
+                .or_default()
+                .insert((row.map_id, row.lock_id), lock);
+        }
+
+        issues
+    }
+
+    pub fn get_instance_locks_for_player(&self, player_guid: ObjectGuid) -> Vec<&InstanceLock> {
+        self.instance_locks_by_player
+            .get(&player_guid)
+            .map(|locks| locks.values().collect())
+            .unwrap_or_default()
+    }
+
     pub fn find_active_instance_lock_at(
         &self,
         player_guid: ObjectGuid,
@@ -526,6 +643,108 @@ impl InstanceLockMgr {
         }
     }
 
+    pub fn delete_character_instance_lock_statement(
+        player_guid: ObjectGuid,
+        entries: &MapDb2Entries,
+    ) -> PreparedStatement {
+        let mut stmt = PreparedStatement::new(CharStatements::DEL_CHARACTER_INSTANCE_LOCK.sql());
+        stmt.set_u64(0, player_guid.counter() as u64);
+        stmt.set_u32(1, entries.map_id);
+        stmt.set_u32(2, entries.lock_id);
+        stmt
+    }
+
+    pub fn delete_character_instance_locks_by_guid_statement(
+        player_guid: ObjectGuid,
+    ) -> PreparedStatement {
+        let mut stmt =
+            PreparedStatement::new(CharStatements::DEL_CHARACTER_INSTANCE_LOCK_BY_GUID.sql());
+        stmt.set_u64(0, player_guid.counter() as u64);
+        stmt
+    }
+
+    pub fn insert_character_instance_lock_statement(
+        player_guid: ObjectGuid,
+        entries: &MapDb2Entries,
+        lock: &InstanceLock,
+    ) -> PreparedStatement {
+        let mut stmt = PreparedStatement::new(CharStatements::INS_CHARACTER_INSTANCE_LOCK.sql());
+        stmt.set_u64(0, player_guid.counter() as u64);
+        stmt.set_u32(1, entries.map_id);
+        stmt.set_u32(2, entries.lock_id);
+        stmt.set_u32(3, lock.instance_id);
+        stmt.set_u8(4, entries.difficulty_id);
+        stmt.set_string(5, &lock.data.data);
+        stmt.set_u32(6, lock.data.completed_encounters_mask);
+        stmt.set_u32(7, lock.data.entrance_world_safe_loc_id);
+        stmt.set_u64(8, lock.expiry_time);
+        stmt.set_u8(9, u8::from(lock.extended));
+        stmt
+    }
+
+    pub fn update_character_instance_lock_extension_statement(
+        player_guid: ObjectGuid,
+        entries: &MapDb2Entries,
+        extended: bool,
+    ) -> PreparedStatement {
+        let mut stmt =
+            PreparedStatement::new(CharStatements::UPD_CHARACTER_INSTANCE_LOCK_EXTENSION.sql());
+        stmt.set_u8(0, u8::from(extended));
+        stmt.set_u64(1, player_guid.counter() as u64);
+        stmt.set_u32(2, entries.map_id);
+        stmt.set_u32(3, entries.lock_id);
+        stmt
+    }
+
+    pub fn force_expire_character_instance_lock_statement(
+        player_guid: ObjectGuid,
+        entries: &MapDb2Entries,
+        expiry_time: InstanceResetTime,
+    ) -> PreparedStatement {
+        let mut stmt =
+            PreparedStatement::new(CharStatements::UPD_CHARACTER_INSTANCE_LOCK_FORCE_EXPIRE.sql());
+        stmt.set_u64(0, expiry_time);
+        stmt.set_u64(1, player_guid.counter() as u64);
+        stmt.set_u32(2, entries.map_id);
+        stmt.set_u32(3, entries.lock_id);
+        stmt
+    }
+
+    pub fn delete_instance_statement(instance_id: u32) -> PreparedStatement {
+        let mut stmt = PreparedStatement::new(CharStatements::DEL_INSTANCE.sql());
+        stmt.set_u32(0, instance_id);
+        stmt
+    }
+
+    pub fn insert_instance_statement(shared_data: &SharedInstanceLockData) -> PreparedStatement {
+        let mut stmt = PreparedStatement::new(CharStatements::INS_INSTANCE.sql());
+        stmt.set_u32(0, shared_data.instance_id);
+        stmt.set_string(1, &shared_data.data.data);
+        stmt.set_u32(2, shared_data.data.completed_encounters_mask);
+        stmt.set_u32(3, shared_data.data.entrance_world_safe_loc_id);
+        stmt
+    }
+
+    pub fn delete_account_instance_lock_times_statement(account_id: u32) -> PreparedStatement {
+        let mut stmt =
+            PreparedStatement::new(CharStatements::DEL_ACCOUNT_INSTANCE_LOCK_TIMES.sql());
+        stmt.set_u32(0, account_id);
+        stmt
+    }
+
+    pub fn insert_account_instance_lock_time_statement(
+        account_id: u32,
+        instance_id: u32,
+        release_time: InstanceResetTime,
+    ) -> PreparedStatement {
+        let mut stmt =
+            PreparedStatement::new(CharStatements::INS_ACCOUNT_INSTANCE_LOCK_TIMES.sql());
+        stmt.set_u32(0, account_id);
+        stmt.set_u32(1, instance_id);
+        stmt.set_u64(2, release_time);
+        stmt
+    }
+
     fn find_active_instance_lock_inner(
         &self,
         player_guid: ObjectGuid,
@@ -744,6 +963,7 @@ impl InstanceScriptBase {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_database::SqlParam;
 
     fn player(counter: i64) -> ObjectGuid {
         ObjectGuid::new(0x10, counter)
@@ -990,6 +1210,171 @@ mod tests {
 
         assert_eq!(new_lock.instance_id, 200);
         assert_eq!(new_lock.data.completed_encounters_mask, 0b100);
+    }
+
+    #[test]
+    fn load_from_rows_reconstructs_shared_and_character_locks_like_cpp() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+
+        let issues = mgr.load_from_rows_like_cpp(
+            [SharedInstanceLockRow {
+                instance_id: 9001,
+                data: "shared".to_string(),
+                completed_encounters_mask: 0b1010,
+                entrance_world_safe_loc_id: 77,
+            }],
+            [CharacterInstanceLockRow {
+                player_guid_counter: 55,
+                map_id: entries.map_id,
+                lock_id: entries.lock_id,
+                instance_id: 9001,
+                difficulty_id: entries.difficulty_id,
+                data: "player".to_string(),
+                completed_encounters_mask: 0b0010,
+                entrance_world_safe_loc_id: 11,
+                expiry_time: 500,
+                extended: true,
+            }],
+            |_, _| Some(entries),
+        );
+
+        assert!(issues.is_empty());
+        let locks =
+            mgr.get_instance_locks_for_player(ObjectGuid::create_global(HighGuid::Player, 0, 55));
+        assert_eq!(locks.len(), 1);
+        assert_eq!(locks[0].data.data, "player");
+        assert_eq!(locks[0].instance_initialization_data().data, "shared");
+        assert!(locks[0].extended);
+        assert_eq!(mgr.statistics().instance_count, 1);
+        assert_eq!(mgr.statistics().player_count, 1);
+    }
+
+    #[test]
+    fn load_from_rows_skips_missing_shared_instance_data_like_cpp() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+
+        let issues = mgr.load_from_rows_like_cpp(
+            [],
+            [CharacterInstanceLockRow {
+                player_guid_counter: 55,
+                map_id: entries.map_id,
+                lock_id: entries.lock_id,
+                instance_id: 9001,
+                difficulty_id: entries.difficulty_id,
+                data: "player".to_string(),
+                completed_encounters_mask: 0,
+                entrance_world_safe_loc_id: 0,
+                expiry_time: 500,
+                extended: false,
+            }],
+            |_, _| Some(entries),
+        );
+
+        assert_eq!(
+            issues,
+            vec![InstanceLockLoadIssue::MissingSharedInstanceData {
+                player_guid_counter: 55,
+                instance_id: 9001
+            }]
+        );
+        assert!(
+            mgr.get_instance_locks_for_player(ObjectGuid::create_global(HighGuid::Player, 0, 55))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn prepared_statement_builders_bind_cxx_parameters_in_order() {
+        let entries = raid_entries();
+        let guid = player(77);
+        let mut lock = InstanceLock::new(entries.map_id, entries.difficulty_id, 500, 9001);
+        lock.data.data = "player".to_string();
+        lock.data.completed_encounters_mask = 0b11;
+        lock.data.entrance_world_safe_loc_id = 42;
+        lock.extended = true;
+
+        let del = InstanceLockMgr::delete_character_instance_lock_statement(guid, &entries);
+        assert_eq!(del.sql(), CharStatements::DEL_CHARACTER_INSTANCE_LOCK.sql());
+        assert!(matches!(
+            del.params(),
+            [SqlParam::U64(77), SqlParam::U32(631), SqlParam::U32(7)]
+        ));
+
+        let ins = InstanceLockMgr::insert_character_instance_lock_statement(guid, &entries, &lock);
+        assert_eq!(ins.sql(), CharStatements::INS_CHARACTER_INSTANCE_LOCK.sql());
+        assert!(matches!(ins.params()[0], SqlParam::U64(77)));
+        assert!(matches!(ins.params()[3], SqlParam::U32(9001)));
+        assert!(matches!(ins.params()[4], SqlParam::U8(4)));
+        assert!(matches!(&ins.params()[5], SqlParam::String(s) if s == "player"));
+        assert!(matches!(ins.params()[6], SqlParam::U32(0b11)));
+        assert!(matches!(ins.params()[7], SqlParam::U32(42)));
+        assert!(matches!(ins.params()[8], SqlParam::U64(500)));
+        assert!(matches!(ins.params()[9], SqlParam::U8(1)));
+
+        let shared = SharedInstanceLockData {
+            instance_id: 9001,
+            data: InstanceLockData {
+                data: "shared".to_string(),
+                completed_encounters_mask: 0b101,
+                entrance_world_safe_loc_id: 99,
+            },
+        };
+        let ins_instance = InstanceLockMgr::insert_instance_statement(&shared);
+        assert_eq!(ins_instance.sql(), CharStatements::INS_INSTANCE.sql());
+        assert!(matches!(ins_instance.params()[0], SqlParam::U32(9001)));
+        assert!(matches!(&ins_instance.params()[1], SqlParam::String(s) if s == "shared"));
+
+        let extension = InstanceLockMgr::update_character_instance_lock_extension_statement(
+            guid, &entries, true,
+        );
+        assert_eq!(
+            extension.sql(),
+            CharStatements::UPD_CHARACTER_INSTANCE_LOCK_EXTENSION.sql()
+        );
+        assert!(matches!(
+            extension.params(),
+            [
+                SqlParam::U8(1),
+                SqlParam::U64(77),
+                SqlParam::U32(631),
+                SqlParam::U32(7)
+            ]
+        ));
+
+        let force_expire =
+            InstanceLockMgr::force_expire_character_instance_lock_statement(guid, &entries, 1234);
+        assert_eq!(
+            force_expire.sql(),
+            CharStatements::UPD_CHARACTER_INSTANCE_LOCK_FORCE_EXPIRE.sql()
+        );
+        assert!(matches!(
+            force_expire.params(),
+            [
+                SqlParam::U64(1234),
+                SqlParam::U64(77),
+                SqlParam::U32(631),
+                SqlParam::U32(7)
+            ]
+        ));
+
+        let del_times = InstanceLockMgr::delete_account_instance_lock_times_statement(22);
+        assert_eq!(
+            del_times.sql(),
+            CharStatements::DEL_ACCOUNT_INSTANCE_LOCK_TIMES.sql()
+        );
+        assert!(matches!(del_times.params(), [SqlParam::U32(22)]));
+
+        let ins_time = InstanceLockMgr::insert_account_instance_lock_time_statement(22, 9001, 5555);
+        assert_eq!(
+            ins_time.sql(),
+            CharStatements::INS_ACCOUNT_INSTANCE_LOCK_TIMES.sql()
+        );
+        assert!(matches!(
+            ins_time.params(),
+            [SqlParam::U32(22), SqlParam::U32(9001), SqlParam::U64(5555)]
+        ));
     }
 
     #[test]
