@@ -262,6 +262,18 @@ pub struct InstanceLockResetResult {
     pub failed_to_reset: Vec<InstanceLock>,
 }
 
+/// C++ `WorldPackets::Instance::InstanceLock` data produced by `Player::SendRaidInfo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceRaidInfoLock {
+    pub instance_id: u64,
+    pub map_id: u32,
+    pub difficulty_id: u32,
+    pub time_remaining: i32,
+    pub completed_mask: u32,
+    pub locked: bool,
+    pub extended: bool,
+}
+
 /// In-memory C++ `InstanceLockMgr` core. DB persistence is intentionally left to
 /// the later database wiring step; lock semantics mirror the C++ methods here.
 #[derive(Debug, Default)]
@@ -420,6 +432,40 @@ impl InstanceLockMgr {
             .get(&player_guid)
             .map(|locks| locks.values().collect())
             .unwrap_or_default()
+    }
+
+    pub fn get_raid_info_locks_for_player_at(
+        &self,
+        player_guid: ObjectGuid,
+        now: InstanceResetTime,
+        schedule: ResetSchedule,
+        mut entries_for: impl FnMut(u32, u8) -> Option<MapDb2Entries>,
+    ) -> Vec<InstanceRaidInfoLock> {
+        self.get_instance_locks_for_player(player_guid)
+            .into_iter()
+            .map(|lock| {
+                let effective_expiry_time = if lock.extended {
+                    entries_for(lock.map_id, lock.difficulty_id)
+                        .map(|entries| lock.effective_expiry_time_at(&entries, schedule, now))
+                        .unwrap_or(lock.expiry_time)
+                } else {
+                    lock.expiry_time
+                };
+                let seconds_remaining = effective_expiry_time
+                    .saturating_sub(now)
+                    .min(i32::MAX as u64);
+
+                InstanceRaidInfoLock {
+                    instance_id: u64::from(lock.instance_id),
+                    map_id: lock.map_id,
+                    difficulty_id: u32::from(lock.difficulty_id),
+                    time_remaining: seconds_remaining as i32,
+                    completed_mask: lock.data.completed_encounters_mask,
+                    locked: !lock.is_expired_at(now),
+                    extended: lock.extended,
+                }
+            })
+            .collect()
     }
 
     pub fn find_active_instance_lock_at(
@@ -1328,6 +1374,96 @@ mod tests {
         assert!(locks[0].extended);
         assert_eq!(mgr.statistics().instance_count, 1);
         assert_eq!(mgr.statistics().player_count, 1);
+    }
+
+    #[test]
+    fn raid_info_locks_for_player_match_cpp_send_raid_info_fields() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+
+        mgr.load_from_rows_like_cpp(
+            [SharedInstanceLockRow {
+                instance_id: 9001,
+                data: String::new(),
+                completed_encounters_mask: 0,
+                entrance_world_safe_loc_id: 0,
+            }],
+            [CharacterInstanceLockRow {
+                player_guid_counter: 55,
+                map_id: entries.map_id,
+                lock_id: entries.lock_id,
+                instance_id: 9001,
+                difficulty_id: entries.difficulty_id,
+                data: "player".to_string(),
+                completed_encounters_mask: 0b101,
+                entrance_world_safe_loc_id: 0,
+                expiry_time: 500,
+                extended: false,
+            }],
+            |_, _| Some(entries),
+        );
+
+        let views = mgr.get_raid_info_locks_for_player_at(
+            ObjectGuid::create_global(HighGuid::Player, 0, 55),
+            100,
+            ResetSchedule::default(),
+            |_, _| Some(entries),
+        );
+
+        assert_eq!(
+            views,
+            vec![InstanceRaidInfoLock {
+                instance_id: 9001,
+                map_id: entries.map_id,
+                difficulty_id: u32::from(entries.difficulty_id),
+                time_remaining: 400,
+                completed_mask: 0b101,
+                locked: true,
+                extended: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn raid_info_locks_extend_effective_expiry_like_cpp() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+
+        mgr.load_from_rows_like_cpp(
+            [SharedInstanceLockRow {
+                instance_id: 9001,
+                data: String::new(),
+                completed_encounters_mask: 0,
+                entrance_world_safe_loc_id: 0,
+            }],
+            [CharacterInstanceLockRow {
+                player_guid_counter: 55,
+                map_id: entries.map_id,
+                lock_id: entries.lock_id,
+                instance_id: 9001,
+                difficulty_id: entries.difficulty_id,
+                data: String::new(),
+                completed_encounters_mask: 0,
+                entrance_world_safe_loc_id: 0,
+                expiry_time: 500,
+                extended: true,
+            }],
+            |_, _| Some(entries),
+        );
+
+        let views = mgr.get_raid_info_locks_for_player_at(
+            ObjectGuid::create_global(HighGuid::Player, 0, 55),
+            100,
+            ResetSchedule::default(),
+            |_, _| Some(entries),
+        );
+
+        assert_eq!(
+            views[0].time_remaining as u64,
+            400 + entries.reset_interval.raid_duration_secs()
+        );
+        assert!(views[0].locked);
+        assert!(views[0].extended);
     }
 
     #[test]
