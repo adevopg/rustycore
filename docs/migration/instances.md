@@ -223,12 +223,12 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 
 **What's implemented:**
 - `crates/wow-world/src/map_manager.rs` (per the active WIP commits) provides a `MapManager` global stub with placeholder for `GenerateInstanceId` (must verify), but no lock store and no script dispatch. (See WIP commit `f83c48d82`.)
-- World/character DB pool layer can run queries; `wow-database` now registers the C++ `instance`, `character_instance_lock`, and `account_instance_times` statements, but runtime session/map wiring has not called them yet.
+- World/character DB pool layer can run queries; `wow-database` now registers the C++ `instance`, `character_instance_lock`, and `account_instance_times` statements, but startup DB2-backed lock loading has not invoked them yet.
 
 **What's missing vs C++:**
-- `InstanceLockMgr` global singleton plumbing, real world/map call-sites, and transactional execution from the runtime call-sites.
+- `InstanceLockMgr` startup DB2 resolver/loading, real world/map call-sites, and transactional execution from the runtime call-sites.
 - Everything below `InstanceScript` — boss-state machine, door/minion linking, encounter packets, persistent values, JSON save blob.
-- Instance ID allocation policy + free-id reuse, ID masks (`0x1F440000`, `0x00000001`, `0x00010000`).
+- Instance ID startup max scan/register/free integration with persisted locks; pure allocator/free-id reuse is ported and C++ in this fork does not OR the mask constants.
 - Reset cron caller in `MapManager::Update`; pure `GetNextResetTime` is now ported/tested in `wow-instances`.
 - All wire packets (Section 7).
 - Group-leader-as-lock-owner rule.
@@ -311,7 +311,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [~] **#INST.4** Define `InstanceLockKey = (u32 mapId, u32 lockId)` and `EncounterState`, `EncounterDoorBehavior`, `EncounterFrameType` enums in `wow-constants` (L) — `InstanceLockKey`, `EncounterState`, and instance-id masks are in `wow-instances`; door/frame enums still pending.
 - [x] **#INST.5** Implement `InstanceLockMgr` skeleton: temporary/permanent player lock maps plus shared data map (M)
 - [x] **#INST.6** Register prepared statements for `instance`, `character_instance_lock` in `wow-database` (SEL/REP/DEL) (M) — also includes C++ `account_instance_times` statements.
-- [~] **#INST.7** Implement `InstanceLockMgr::load()` — async load all rows + reconstruct shared map (H) — DB query + row reconstruction done; DB2 resolver and startup wiring pending.
+- [~] **#INST.7** Implement `InstanceLockMgr::load()` — async load all rows + reconstruct shared map (H) — DB query + row reconstruction and shared runtime injection done; DB2 resolver/startup load invocation pending.
 - [x] **#INST.8** Implement `CanJoinInstanceLock` returning `TransferAbortReason` enum mirror (M)
 - [x] **#INST.9** Implement `FindActiveInstanceLock` honoring extended-but-expired (M) — group-leader owner selection remains a caller responsibility until group/map wiring.
 - [x] **#INST.10** Implement `CreateInstanceLockForNewInstance` → temporary map (L)
@@ -339,7 +339,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] **#INST.32** Implement `MarkAreaTriggerDone` / `IsAreaTriggerDone` set tracking (L)
 - [ ] **#INST.33** Implement `UpdateLfgEncounterState` integration (depends on `wow-lfg` doc) (M)
 - [ ] **#INST.34** Implement `UpdatePhasing` integration (depends on `phasing.md`) (M)
-- [~] **#INST.35** Implement `Player::SendRaidInfo` → `SMSG_INSTANCE_INFO` builder (M) — C++ packet layout, empty `CMSG_REQUEST_RAID_INFO` response, and pure `InstanceLockMgr` raid-info view done; runtime session wiring/DB2 resolver population pending.
+- [~] **#INST.35** Implement `Player::SendRaidInfo` → `SMSG_INSTANCE_INFO` builder (M) — C++ packet layout, empty `CMSG_REQUEST_RAID_INFO` fallback, pure `InstanceLockMgr` raid-info view, and session/shared-manager read path done; DB2 resolver/startup population pending.
 - [ ] **#INST.36** Implement `WorldSession::HandleResetInstancesOpcode` (`CMSG_RESET_INSTANCES`) → call `ResetInstanceLocksForPlayer` or `Group::ResetInstances` (M)
 - [ ] **#INST.37** Implement `SMSG_INSTANCE_RESET` / `_FAILED` / `SMSG_RAID_INSTANCE_MESSAGE` packet senders (M)
 - [ ] **#INST.38** Implement `SMSG_PENDING_RAID_LOCK` + `CMSG_INSTANCE_LOCK_RESPONSE` round-trip (M)
@@ -460,8 +460,8 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 **Hallazgos clave:**
 - `crates/wow-instances/` existe y contiene las constantes `INSTANCE_ID_HIGH_MASK`, `_LFG_MASK`, `_NORMAL_MASK`; `MapManager::GenerateInstanceId` fue contrastado y en C++ no usa esas máscaras.
 - Los 2 únicos call-sites de `add_creature(0,0,0,0,…)` están en tests del propio `map_manager.rs` (líneas 761, 774). Sin caller real, todavía falta conectar el allocator a la creación real de instancias.
-- `InstanceLockMgr` análogo: core in-memory creado en `#NEXT.R8.INSTANCES.001`; statements, builders, async load glue y weak-ref cleanup creados en `#NEXT.R8.INSTANCES.002`; global/runtime wiring sigue pendiente.
-- `CMSG_REQUEST_RAID_INFO` registrado y responde `SMSG_INSTANCE_INFO` vacío; `wow-instances` ya expone la vista pura de raid-info desde locks permanentes, pero falta conectarla al runtime. 0 handlers para `CMSG_RESET_INSTANCES`, `CMSG_INSTANCE_LOCK_RESPONSE`. 0 builders para `SMSG_PENDING_RAID_LOCK`, `SMSG_INSTANCE_ENCOUNTER_*`, `SMSG_INSTANCE_RESET*`.
+- `InstanceLockMgr` análogo: core in-memory creado en `#NEXT.R8.INSTANCES.001`; statements, builders, async load glue y weak-ref cleanup creados en `#NEXT.R8.INSTANCES.002`; shared manager inyectado en world-server/session; startup DB2 resolver/load y call-sites de gameplay siguen pendientes.
+- `CMSG_REQUEST_RAID_INFO` registrado y responde `SMSG_INSTANCE_INFO`; lee el shared `InstanceLockMgr` cuando exista player GUID y mantiene fallback vacío. 0 handlers para `CMSG_RESET_INSTANCES`, `CMSG_INSTANCE_LOCK_RESPONSE`. 0 builders para `SMSG_PENDING_RAID_LOCK`, `SMSG_INSTANCE_ENCOUNTER_*`, `SMSG_INSTANCE_RESET*`.
 
 **Riesgo de UI hang silencioso:**
 - `CMSG_REQUEST_RAID_INFO` ya no queda silencioso: responde `SMSG_INSTANCE_INFO` vacío. La prueba de cliente puede validar que la pestaña no queda cargando indefinidamente, pero todavía no valida locks reales.

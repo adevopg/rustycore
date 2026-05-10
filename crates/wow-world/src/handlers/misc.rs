@@ -16,7 +16,7 @@ use wow_entities::{
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
-use wow_packet::packets::instance::InstanceInfo;
+use wow_packet::packets::instance::{InstanceInfo, InstanceLockInfo};
 use wow_packet::packets::item::{
     GetItemPurchaseData, ItemPurchaseContents, ItemPurchaseRefundCurrency, ItemPurchaseRefundItem,
     SetItemPurchaseData,
@@ -729,7 +729,41 @@ impl crate::session::WorldSession {
     pub async fn handle_battle_pet_request_journal(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_arena_team_roster(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_request_raid_info(&mut self, _pkt: wow_packet::WorldPacket) {
-        self.send_packet(&InstanceInfo::default());
+        let locks = match (self.player_guid, self.instance_lock_mgr.as_ref()) {
+            (Some(player_guid), Some(instance_lock_mgr)) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                instance_lock_mgr
+                    .read()
+                    .map(|mgr| {
+                        mgr.get_raid_info_locks_for_player_at(
+                            player_guid,
+                            now,
+                            wow_instances::ResetSchedule::default(),
+                            |_, _| None,
+                        )
+                    })
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+
+        self.send_packet(&InstanceInfo {
+            locks: locks
+                .into_iter()
+                .map(|lock| InstanceLockInfo {
+                    instance_id: lock.instance_id,
+                    map_id: lock.map_id,
+                    difficulty_id: lock.difficulty_id,
+                    time_remaining: lock.time_remaining,
+                    completed_mask: lock.completed_mask,
+                    locked: lock.locked,
+                    extended: lock.extended,
+                })
+                .collect(),
+        });
     }
     pub async fn handle_request_conquest_formula_constants(
         &mut self,

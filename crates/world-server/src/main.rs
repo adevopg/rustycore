@@ -23,6 +23,7 @@ use wow_database::{
     CharStatements, CharacterDatabase, HotfixDatabase, LoginDatabase, LoginStatements,
     WorldDatabase, WorldStatements, build_connection_string,
 };
+use wow_instances::InstanceLockMgr;
 use wow_loot::{
     LootConditionId, LootConditionLinkReport, LootConditionReferenceUseLikeCpp,
     LootReferenceCheckReport, LootStore, LootStoreKind, LootStores, LootTemplateRow,
@@ -717,6 +718,7 @@ async fn main() -> Result<()> {
     // Shared world state (creatures/grids visible to every session on the same map).
     // Each session gets a clone of this Arc on creation.
     let shared_map: SharedMapManager = Arc::new(std::sync::RwLock::new(LegacyMapManager::new()));
+    let instance_lock_mgr = Arc::new(std::sync::RwLock::new(InstanceLockMgr::default()));
 
     let canonical_map_manager = Arc::new(Mutex::new(create_canonical_map_manager(&world_configs)));
 
@@ -726,6 +728,7 @@ async fn main() -> Result<()> {
         login_db: Some(Arc::clone(&login_db)),
         world_db: Some(Arc::clone(&world_db)),
         guid_generator: Some(Arc::clone(&guid_generator)),
+        instance_lock_mgr: Some(Arc::clone(&instance_lock_mgr)),
         currency_types_store: Some(Arc::clone(&currency_types_store)),
         import_price_stores: Some(Arc::clone(&import_price_stores)),
         item_class_store: Some(Arc::clone(&item_class_store)),
@@ -1335,6 +1338,9 @@ async fn create_session(
     }
     if let Some(ref generator) = resources.guid_generator {
         session.set_guid_generator(Arc::clone(generator));
+    }
+    if let Some(ref mgr) = resources.instance_lock_mgr {
+        session.set_instance_lock_mgr(Arc::clone(mgr));
     }
     if let Some(ref db) = resources.world_db {
         session.set_world_db(Arc::clone(db));

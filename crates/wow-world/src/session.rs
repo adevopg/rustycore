@@ -447,6 +447,8 @@ pub struct WorldSession {
     /// route through here so all sessions on the same map see the same world.
     /// `None` until the world server injects the manager (see `set_map_manager`).
     pub(crate) map_manager: Option<crate::map_manager::SharedMapManager>,
+    /// Shared C++ `InstanceLockMgr` analogue used by raid-info and instance entry paths.
+    pub(crate) instance_lock_mgr: Option<Arc<std::sync::RwLock<wow_instances::InstanceLockMgr>>>,
 
     // ── Combat state ─────────────────────────────────────────────
     /// Current auto-attack target (None if not in combat).
@@ -838,6 +840,7 @@ impl WorldSession {
             active_area_trigger: None,
             pending_teleport: None,
             creature_query_cache: std::collections::HashSet::new(),
+            instance_lock_mgr: None,
         }
     }
 
@@ -849,6 +852,14 @@ impl WorldSession {
     /// Inject the shared map manager. Call once at session creation, before login.
     pub fn set_map_manager(&mut self, mgr: crate::map_manager::SharedMapManager) {
         self.map_manager = Some(mgr);
+    }
+
+    /// Inject the shared C++ `InstanceLockMgr` analogue.
+    pub fn set_instance_lock_mgr(
+        &mut self,
+        mgr: Arc<std::sync::RwLock<wow_instances::InstanceLockMgr>>,
+    ) {
+        self.instance_lock_mgr = Some(mgr);
     }
 
     /// Set the realm ID for GUID creation.

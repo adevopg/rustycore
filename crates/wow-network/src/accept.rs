@@ -63,6 +63,7 @@ pub struct SessionResources {
     pub login_db: Option<Arc<wow_database::LoginDatabase>>,
     pub world_db: Option<Arc<wow_database::WorldDatabase>>,
     pub guid_generator: Option<Arc<wow_core::ObjectGuidGenerator>>,
+    pub instance_lock_mgr: Option<Arc<std::sync::RwLock<wow_instances::InstanceLockMgr>>>,
     pub currency_types_store: Option<Arc<wow_data::CurrencyTypesStore>>,
     pub import_price_stores: Option<Arc<wow_data::ImportPriceStores>>,
     pub item_class_store: Option<Arc<wow_data::ItemClassStore>>,

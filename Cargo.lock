@@ -2960,6 +2960,7 @@ dependencies = [
  "wow-data",
  "wow-database",
  "wow-handler",
+ "wow-instances",
  "wow-logging",
  "wow-loot",
  "wow-map",
@@ -3182,6 +3183,7 @@ dependencies = [
  "wow-crypto",
  "wow-data",
  "wow-database",
+ "wow-instances",
  "wow-loot",
  "wow-packet",
 ]
@@ -3282,6 +3284,7 @@ dependencies = [
  "wow-ecs",
  "wow-entities",
  "wow-handler",
+ "wow-instances",
  "wow-logging",
  "wow-loot",
  "wow-network",
