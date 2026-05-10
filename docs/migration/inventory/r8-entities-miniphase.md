@@ -1225,6 +1225,11 @@
   Rust targets: `crates/wow-entities/src/game_object.rs`, `crates/wow-world/src/session.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
   Acceptance: `GameObjectLootSource` now exposes the C++ personal-encounter branch predicate, represented session state can mark `(player, dungeonEncounterId)` lockouts, represented personal encounter generation skips locked tappers like `GenerateDungeonEncounterPersonalLoot`, and `open_represented_gameobject_chest_like_cpp` no longer auto-adds the current player for personal encounter loot. A non-tapper current player therefore receives no represented loot window, matching `GetLootForPlayer == nullptr`. Remaining gaps: real `InstanceLockMgr`/completed-encounter mask derivation, `DungeonEncounterStore` bit lookup in runtime lock checks, actual per-player `Loot` objects/money instances, `ProcessPersonalLoot`, `FillNotNormalLootFor` on canonical personal loot and canonical `GameObject::m_personalLoot`.
 
+- [x] **#NEXT.R8.ENTITIES.316** Represent personal encounter per-player money.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Loot/LootMgr.cpp` (`GenerateDungeonEncounterPersonalLoot`, per-tapper `Loot::generateMoneyLoot`, `ProcessPersonalLoot`, `FillNotNormalLootFor`), `/home/server/woltk-trinity-legacy/src/server/game/Handlers/LootHandler.cpp` (`HandleLootMoneyOpcode`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp` (`GetLootForPlayer`).
+  Rust targets: `crates/wow-world/src/session.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: represented personal encounter chest generation now treats the shared `CreatureLoot.coins` as zero and records session-local money by `(gameobject, player)` for each eligible tapper, matching the C++ shape where each tapper gets its own `Loot`. `LootResponse` and `CMSG_LOOT_MONEY` read the current player's personal money, and money pickup zeroes only that player's represented personal-money entry while preserving other tappers' entries. Remaining gaps: canonical per-player `Loot` objects/items, `LootTemplate::ProcessPersonalLoot`, `FillNotNormalLootFor`, map-difficulty loot mode, persistence and canonical `GameObject::m_personalLoot`.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.

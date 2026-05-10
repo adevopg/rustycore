@@ -324,7 +324,11 @@ impl WorldSession {
         let Some(loot) = self.loot_table.get(&gameobject_guid) else {
             return;
         };
-        if !loot_can_be_opened_by_player_like_cpp(loot, player_guid) {
+        if !self.represented_loot_can_be_opened_by_player_like_cpp(
+            gameobject_guid,
+            loot,
+            player_guid,
+        ) {
             return;
         }
 
@@ -335,7 +339,11 @@ impl WorldSession {
             acquire_reason: loot_type_for_client_like_cpp(loot.loot_type),
             loot_method: loot.loot_method,
             threshold: 2,
-            coins: loot.coins,
+            coins: self.represented_loot_money_for_player_like_cpp(
+                gameobject_guid,
+                loot,
+                player_guid,
+            ),
             items: represented_loot_response_items_like_cpp(loot, player_guid),
             currencies: vec![],
             acquired: true,
@@ -574,7 +582,11 @@ impl WorldSession {
         let Some(loot) = self.loot_table.get(&gameobject_guid) else {
             return;
         };
-        if !loot_can_be_opened_by_player_like_cpp(loot, player_guid) {
+        if !self.represented_loot_can_be_opened_by_player_like_cpp(
+            gameobject_guid,
+            loot,
+            player_guid,
+        ) {
             return;
         }
 
@@ -808,9 +820,17 @@ impl WorldSession {
         let money_by_loot: Vec<(ObjectGuid, ObjectGuid, u32)> = active_owners
             .into_iter()
             .filter_map(|loot_guid| {
-                self.loot_table
-                    .get(&loot_guid)
-                    .map(|loot| (loot_guid, loot.loot_guid, loot.coins))
+                self.loot_table.get(&loot_guid).map(|loot| {
+                    (
+                        loot_guid,
+                        loot.loot_guid,
+                        self.represented_loot_money_for_player_like_cpp(
+                            loot_guid,
+                            loot,
+                            player_guid,
+                        ),
+                    )
+                })
             })
             .collect();
 
@@ -847,8 +867,14 @@ impl WorldSession {
                 }
             }
 
+            let personal_money_owner = self.represented_personal_loot_owners.contains(loot_guid);
             if let Some(loot) = self.loot_table.get_mut(loot_guid) {
-                loot.coins = 0;
+                if personal_money_owner {
+                    self.represented_personal_loot_money
+                        .insert((*loot_guid, player_guid), 0);
+                } else {
+                    loot.coins = 0;
+                }
 
                 if loot_guid.is_item() && loot_is_looted_like_cpp(loot) {
                     item_release.push(*loot_guid);
@@ -930,6 +956,36 @@ impl WorldSession {
         }
 
         recipients
+    }
+
+    fn represented_loot_money_for_player_like_cpp(
+        &self,
+        loot_guid: ObjectGuid,
+        loot: &CreatureLoot,
+        player_guid: ObjectGuid,
+    ) -> u32 {
+        if self.represented_personal_loot_owners.contains(&loot_guid) {
+            return self
+                .represented_personal_loot_money
+                .get(&(loot_guid, player_guid))
+                .copied()
+                .unwrap_or(0);
+        }
+
+        loot.coins
+    }
+
+    fn represented_loot_can_be_opened_by_player_like_cpp(
+        &self,
+        loot_guid: ObjectGuid,
+        loot: &CreatureLoot,
+        player_guid: ObjectGuid,
+    ) -> bool {
+        if self.represented_loot_money_for_player_like_cpp(loot_guid, loot, player_guid) > 0 {
+            return true;
+        }
+
+        loot_can_be_opened_by_player_like_cpp(loot, player_guid)
     }
 
     fn represented_loot_money_allowed_for_member_like_cpp(
@@ -2454,11 +2510,13 @@ impl WorldSession {
                 mark_loot_allowed_for_player_like_cpp(loot, player_guid);
             }
 
-            if self
-                .loot_table
-                .get(&owner_guid)
-                .is_some_and(|loot| loot_can_be_opened_by_player_like_cpp(loot, player_guid))
-            {
+            if self.loot_table.get(&owner_guid).is_some_and(|loot| {
+                self.represented_loot_can_be_opened_by_player_like_cpp(
+                    owner_guid,
+                    loot,
+                    player_guid,
+                )
+            }) {
                 result.push(owner_guid);
             }
         }
@@ -2500,7 +2558,7 @@ impl WorldSession {
         }
 
         let loot = self.loot_table.get(&owner_guid)?;
-        if !loot_can_be_opened_by_player_like_cpp(loot, player_guid) {
+        if !self.represented_loot_can_be_opened_by_player_like_cpp(owner_guid, loot, player_guid) {
             return None;
         }
 
@@ -2511,7 +2569,7 @@ impl WorldSession {
             acquire_reason: loot_type_for_client_like_cpp(loot.loot_type),
             loot_method: loot.loot_method,
             threshold: 2,
-            coins: loot.coins,
+            coins: self.represented_loot_money_for_player_like_cpp(owner_guid, loot, player_guid),
             items: represented_loot_response_items_like_cpp(loot, player_guid),
             currencies: vec![],
             acquired: true,
@@ -3048,7 +3106,7 @@ impl WorldSession {
     }
 
     async fn generate_represented_gameobject_chest_loot_like_cpp(
-        &self,
+        &mut self,
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
         source: GameObjectLootSource,
@@ -3099,6 +3157,11 @@ impl WorldSession {
         };
 
         if source.is_personal_encounter_loot_like_cpp() {
+            loot.coins = 0;
+            self.represented_personal_loot_owners
+                .insert(gameobject_guid);
+            self.represented_personal_loot_money
+                .retain(|(owner, _), _| *owner != gameobject_guid);
             let mut allowed_tappers = 0usize;
             for tapper in self.represented_gameobject_personal_encounter_tappers_like_cpp(
                 gameobject_guid,
@@ -3106,10 +3169,19 @@ impl WorldSession {
                 source.dungeon_encounter_id,
             ) {
                 mark_loot_allowed_for_player_like_cpp(&mut loot, tapper);
+                let tapper_money = generate_money_loot_with_rate_like_cpp(
+                    min_money,
+                    max_money,
+                    self.loot_drop_rates_like_cpp().money,
+                    &mut rand::thread_rng(),
+                );
+                self.represented_personal_loot_money
+                    .insert((gameobject_guid, tapper), tapper_money);
                 allowed_tappers += 1;
             }
             if allowed_tappers == 0 {
-                loot.coins = 0;
+                self.represented_personal_loot_owners
+                    .remove(&gameobject_guid);
             }
         }
 
@@ -6223,7 +6295,7 @@ mod tests {
 
     #[tokio::test]
     async fn represented_gameobject_chest_loot_carries_cpp_source_metadata() {
-        let session = make_session();
+        let mut session = make_session();
         let source = GameObjectLootSource {
             loot_id: 0,
             use_group_loot_rules: false,
@@ -6250,7 +6322,7 @@ mod tests {
     #[tokio::test]
     async fn represented_gameobject_personal_encounter_loot_uses_current_player_when_no_tap_list_like_cpp()
      {
-        let session = make_session();
+        let mut session = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_008);
         let source = GameObjectLootSource {
@@ -6276,6 +6348,17 @@ mod tests {
             loot.items
                 .iter()
                 .all(|entry| entry.allowed_looters == vec![player_guid])
+        );
+        assert_eq!(loot.coins, 0);
+        assert!(
+            session
+                .represented_personal_loot_owners
+                .contains(&gameobject_guid)
+        );
+        assert!(
+            session
+                .represented_personal_loot_money
+                .contains_key(&(gameobject_guid, player_guid))
         );
     }
 
@@ -6318,6 +6401,22 @@ mod tests {
             loot.items
                 .iter()
                 .all(|entry| entry.allowed_looters == vec![first_tapper, second_tapper])
+        );
+        assert_eq!(loot.coins, 0);
+        assert!(
+            session
+                .represented_personal_loot_owners
+                .contains(&gameobject_guid)
+        );
+        assert!(
+            session
+                .represented_personal_loot_money
+                .contains_key(&(gameobject_guid, first_tapper))
+        );
+        assert!(
+            session
+                .represented_personal_loot_money
+                .contains_key(&(gameobject_guid, second_tapper))
         );
     }
 
@@ -6395,6 +6494,121 @@ mod tests {
                 .allowed_looters,
             vec![other_tapper]
         );
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_open_reads_player_money_like_cpp() {
+        let (mut session, send_rx) = make_session_with_send_capacity(4);
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_012);
+        let loot_object = represented_loot_object_guid_like_cpp(gameobject_guid);
+        session.set_player_guid(Some(player_guid));
+        session.visible_gameobjects.insert(gameobject_guid);
+        session.loot_table.insert(
+            gameobject_guid,
+            CreatureLoot {
+                loot_guid: loot_object,
+                coins: 999,
+                unlooted_count: 0,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 733,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
+                allowed_looters: vec![player_guid],
+                items: Vec::new(),
+                looted_by_player: false,
+            },
+        );
+        session
+            .represented_personal_loot_owners
+            .insert(gameobject_guid);
+        session
+            .represented_personal_loot_money
+            .insert((gameobject_guid, player_guid), 123);
+        let source = GameObjectLootSource {
+            loot_id: 0,
+            use_group_loot_rules: false,
+            dungeon_encounter_id: 733,
+            personal_loot_id: 10_001,
+            push_loot_id: 0,
+            triggered_event_id: 0,
+            linked_trap_entry: 0,
+        };
+
+        session
+            .open_represented_gameobject_chest_like_cpp(gameobject_guid, source)
+            .await;
+
+        let mut response =
+            recv_packet_with_opcode(&send_rx, wow_constants::ServerOpcodes::LootResponse);
+        assert_eq!(response.read_packed_guid().unwrap(), gameobject_guid);
+        assert_eq!(response.read_packed_guid().unwrap(), loot_object);
+        assert_eq!(response.read_uint8().unwrap(), 0);
+        assert_eq!(response.read_uint8().unwrap(), LOOT_TYPE_CHEST_LIKE_CPP);
+        assert_eq!(response.read_uint8().unwrap(), 0);
+        assert_eq!(response.read_uint8().unwrap(), 2);
+        assert_eq!(response.read_uint32().unwrap(), 123);
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_money_pickup_consumes_only_player_like_cpp()
+    {
+        let (mut session, send_rx) = make_session_with_send_capacity(4);
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let other_tapper = ObjectGuid::create_player(1, 77);
+        let gameobject_guid = test_gameobject_guid(91_013);
+        let loot_object = represented_loot_object_guid_like_cpp(gameobject_guid);
+        session.set_player_guid(Some(player_guid));
+        session.set_active_loot_guid(gameobject_guid);
+        session.loot_table.insert(
+            gameobject_guid,
+            CreatureLoot {
+                loot_guid: loot_object,
+                coins: 999,
+                unlooted_count: 0,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 733,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
+                allowed_looters: vec![player_guid, other_tapper],
+                items: Vec::new(),
+                looted_by_player: false,
+            },
+        );
+        session
+            .represented_personal_loot_owners
+            .insert(gameobject_guid);
+        session
+            .represented_personal_loot_money
+            .insert((gameobject_guid, player_guid), 123);
+        session
+            .represented_personal_loot_money
+            .insert((gameobject_guid, other_tapper), 456);
+
+        session.handle_loot_money(loot_money_packet()).await;
+
+        let mut notify =
+            recv_packet_with_opcode(&send_rx, wow_constants::ServerOpcodes::LootMoneyNotify);
+        assert_eq!(notify.read_uint64().unwrap(), 123);
+        assert_eq!(
+            session
+                .represented_personal_loot_money
+                .get(&(gameobject_guid, player_guid)),
+            Some(&0)
+        );
+        assert_eq!(
+            session
+                .represented_personal_loot_money
+                .get(&(gameobject_guid, other_tapper)),
+            Some(&456)
+        );
+        assert_eq!(session.loot_table.get(&gameobject_guid).unwrap().coins, 999);
     }
 
     #[tokio::test]

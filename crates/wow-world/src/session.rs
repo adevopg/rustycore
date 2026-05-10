@@ -513,6 +513,11 @@ pub struct WorldSession {
     /// Session-local representation of `Player::IsLockedToDungeonEncounter` for encounter loot.
     pub(crate) represented_locked_dungeon_encounters:
         std::collections::HashSet<(wow_core::ObjectGuid, u32)>,
+    /// Session-local per-player money for represented personal encounter loot.
+    pub(crate) represented_personal_loot_money:
+        std::collections::HashMap<(wow_core::ObjectGuid, wow_core::ObjectGuid), u32>,
+    /// Owners whose money must be read from `represented_personal_loot_money`.
+    pub(crate) represented_personal_loot_owners: std::collections::HashSet<wow_core::ObjectGuid>,
 
     // ── Dynamic visibility tracking ───────────────────────────────
     /// GUIDs of all creatures currently visible to this client.
@@ -823,6 +828,8 @@ impl WorldSession {
             represented_gameobject_use_states: std::collections::HashMap::new(),
             represented_gameobject_tap_lists: std::collections::HashMap::new(),
             represented_locked_dungeon_encounters: std::collections::HashSet::new(),
+            represented_personal_loot_money: std::collections::HashMap::new(),
+            represented_personal_loot_owners: std::collections::HashSet::new(),
             visible_creatures: std::collections::HashSet::new(),
             visible_gameobjects: std::collections::HashSet::new(),
             last_visibility_pos: None,
