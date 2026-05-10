@@ -92,9 +92,9 @@ pub use game_object::{
     GAMEOBJECT_DATA_GATHERING_NODE_MAX_LOOTS, GAMEOBJECT_DATA_GATHERING_NODE_SPELL,
     GAMEOBJECT_DATA_GATHERING_NODE_TRIGGERED_EVENT, GAMEOBJECT_DATA_GATHERING_NODE_XP_DIFFICULTY,
     GAMEOBJECT_LOOT_MODE_DEFAULT, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_FISHING_HOLE,
-    GAMEOBJECT_TYPE_GATHERING_NODE, GameObject, GameObjectDataUpdate, GameObjectDataValues,
-    GameObjectLootSource, GameObjectTemplateData, GameObjectValuesUpdate, GatheringNodeUseSource,
-    GoState, LootState, MAX_GAMEOBJECT_DATA,
+    GAMEOBJECT_TYPE_GATHERING_NODE, GO_DYNFLAG_LO_NO_INTERACT, GameObject, GameObjectDataUpdate,
+    GameObjectDataValues, GameObjectLootSource, GameObjectTemplateData, GameObjectValuesUpdate,
+    GatheringNodeUseSource, GoState, LootState, MAX_GAMEOBJECT_DATA,
 };
 pub use item::{
     APPEARANCE_MODIFIER_SLOT_BY_SPEC, ArtifactPower, BOP_TRADEABLE_DURATION_SECS,

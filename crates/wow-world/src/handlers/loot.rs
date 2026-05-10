@@ -25,8 +25,9 @@ use wow_core::{ObjectGuid, guid::HighGuid};
 use wow_data::{ItemRandomEnchantmentTemplateEntry, ItemRandomPropertyTemplateEntry};
 use wow_database::{CharStatements, SqlTransaction, WorldStatements};
 use wow_entities::{
-    GameObjectLootSource, GatheringNodeUseSource, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0,
-    INVENTORY_SLOT_ITEM_END, INVENTORY_SLOT_ITEM_START, Item, ItemPosCount, make_item_pos,
+    GO_DYNFLAG_LO_NO_INTERACT, GameObjectLootSource, GatheringNodeUseSource, GoState,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_ITEM_END,
+    INVENTORY_SLOT_ITEM_START, Item, ItemPosCount, LootState, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_loot::{
@@ -292,6 +293,7 @@ impl WorldSession {
                 source.linked_trap_entry,
             );
         }
+        self.set_represented_gameobject_loot_state_activated_like_cpp(gameobject_guid, player_guid);
         if !source.has_open_loot_like_cpp() {
             return;
         }
@@ -402,6 +404,73 @@ impl WorldSession {
                 player_guid,
                 source.triggered_event_id,
                 source.linked_trap_entry,
+            );
+        }
+        self.record_represented_gathering_node_runtime_state_like_cpp(
+            gameobject_guid,
+            player_guid,
+            source,
+            is_first_represented_use,
+        );
+    }
+
+    fn set_represented_gameobject_loot_state_activated_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    ) -> bool {
+        let state = self
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default();
+        if state.loot_state == Some(LootState::Activated) {
+            return false;
+        }
+
+        state.loot_state = Some(LootState::Activated);
+        state.loot_state_unit_guid = player_guid;
+        true
+    }
+
+    fn record_represented_gathering_node_runtime_state_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: GatheringNodeUseSource,
+        is_first_represented_use: bool,
+    ) {
+        {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            if is_first_represented_use {
+                state.personal_loot_uses = state.personal_loot_uses.saturating_add(1);
+            }
+            if state.personal_loot_uses >= source.max_loots {
+                state.go_state = Some(GoState::Active);
+                state.dynamic_flags |= GO_DYNFLAG_LO_NO_INTERACT;
+            }
+        }
+
+        let activated_now = self
+            .set_represented_gameobject_loot_state_activated_like_cpp(gameobject_guid, player_guid);
+        if activated_now && source.despawn_delay_secs != 0 {
+            if let Some(state) = self
+                .represented_gameobject_use_states
+                .get_mut(&gameobject_guid)
+            {
+                state.despawn_delay_secs = Some(source.despawn_delay_secs);
+            }
+        }
+
+        if is_first_represented_use && source.spell_id != 0 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::CastSpell {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: source.spell_id,
+                },
             );
         }
     }
@@ -5265,7 +5334,8 @@ mod tests {
     };
     use wow_database::{CharStatements, StatementDef};
     use wow_entities::{
-        GameObjectLootSource, GatheringNodeUseSource, Item, ItemCreateInfo, MAX_ITEM_SPELLS,
+        GO_DYNFLAG_LO_NO_INTERACT, GameObjectLootSource, GatheringNodeUseSource, GoState, Item,
+        ItemCreateInfo, LootState, MAX_ITEM_SPELLS,
     };
     use wow_loot::{GeneratedLootItem, LOOT_SLOT_TYPE_OWNER_LIKE_CPP, LootStoreItem};
     use wow_network::{
@@ -6229,6 +6299,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn represented_gameobject_chest_use_sets_activated_loot_state_like_cpp() {
+        let mut session = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_006);
+        session.set_player_guid(Some(player_guid));
+        session.visible_gameobjects.insert(gameobject_guid);
+
+        session
+            .open_represented_gameobject_chest_like_cpp(
+                gameobject_guid,
+                GameObjectLootSource::default(),
+            )
+            .await;
+
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .expect("represented chest use records GO loot state");
+        assert_eq!(state.loot_state, Some(LootState::Activated));
+        assert_eq!(state.loot_state_unit_guid, player_guid);
+    }
+
+    #[tokio::test]
     async fn represented_gathering_node_first_use_records_effects_like_cpp() {
         let mut session = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
@@ -6267,6 +6360,54 @@ mod tests {
                     trap_entry: 456,
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn represented_gathering_node_runtime_state_matches_cpp_side_effects() {
+        let mut session = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_007);
+        session.set_player_guid(Some(player_guid));
+        session.visible_gameobjects.insert(gameobject_guid);
+
+        let source = GatheringNodeUseSource {
+            loot_id: 0,
+            despawn_delay_secs: 15,
+            triggered_event_id: 0,
+            xp_difficulty: 0,
+            spell_id: 777,
+            max_loots: 1,
+            linked_trap_entry: 0,
+        };
+
+        session
+            .open_represented_gathering_node_like_cpp(gameobject_guid, source)
+            .await;
+        session
+            .open_represented_gathering_node_like_cpp(gameobject_guid, source)
+            .await;
+
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .expect("represented gathering use records GO state");
+        assert_eq!(state.personal_loot_uses, 1);
+        assert_eq!(state.go_state, Some(GoState::Active));
+        assert_eq!(
+            state.dynamic_flags & GO_DYNFLAG_LO_NO_INTERACT,
+            GO_DYNFLAG_LO_NO_INTERACT
+        );
+        assert_eq!(state.loot_state, Some(LootState::Activated));
+        assert_eq!(state.loot_state_unit_guid, player_guid);
+        assert_eq!(state.despawn_delay_secs, Some(15));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::CastSpell {
+                gameobject_guid,
+                player_guid,
+                spell_id: 777,
+            }]
         );
     }
 

@@ -88,6 +88,34 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         player_guid: ObjectGuid,
         trap_entry: u32,
     },
+    CastSpell {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        spell_id: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RepresentedGameObjectUseState {
+    pub loot_state: Option<wow_entities::LootState>,
+    pub loot_state_unit_guid: wow_core::ObjectGuid,
+    pub go_state: Option<wow_entities::GoState>,
+    pub dynamic_flags: u32,
+    pub despawn_delay_secs: Option<u32>,
+    pub personal_loot_uses: u32,
+}
+
+impl Default for RepresentedGameObjectUseState {
+    fn default() -> Self {
+        Self {
+            loot_state: None,
+            loot_state_unit_guid: wow_core::ObjectGuid::EMPTY,
+            go_state: None,
+            dynamic_flags: 0,
+            despawn_delay_secs: None,
+            personal_loot_uses: 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -476,6 +504,9 @@ pub struct WorldSession {
     pub(crate) represented_unique_gameobject_uses: std::collections::HashSet<wow_core::ObjectGuid>,
     /// Represented C++ `GameEvents::Trigger` and `TriggeringLinkedGameObject` hook points.
     pub(crate) represented_gameobject_use_effects: Vec<RepresentedGameObjectUseEffect>,
+    /// Session-local represented `GameObject` use state until canonical GO runtime ownership lands.
+    pub(crate) represented_gameobject_use_states:
+        std::collections::HashMap<wow_core::ObjectGuid, RepresentedGameObjectUseState>,
 
     // ── Dynamic visibility tracking ───────────────────────────────
     /// GUIDs of all creatures currently visible to this client.
@@ -783,6 +814,7 @@ impl WorldSession {
             enable_ae_loot_like_cpp: false,
             represented_unique_gameobject_uses: std::collections::HashSet::new(),
             represented_gameobject_use_effects: Vec::new(),
+            represented_gameobject_use_states: std::collections::HashMap::new(),
             visible_creatures: std::collections::HashSet::new(),
             visible_gameobjects: std::collections::HashSet::new(),
             last_visibility_pos: None,
