@@ -738,11 +738,31 @@ impl crate::session::WorldSession {
                 instance_lock_mgr
                     .read()
                     .map(|mgr| {
+                        let map_store = self.map_store().map(|store| store.as_ref());
+                        let map_difficulty_store =
+                            self.map_difficulty_store().map(|store| store.as_ref());
                         mgr.get_raid_info_locks_for_player_at(
                             player_guid,
                             now,
                             wow_instances::ResetSchedule::default(),
-                            |_, _| None,
+                            |map_id, difficulty_id| {
+                                let map = map_store?.get(map_id)?;
+                                let map_difficulty =
+                                    map_difficulty_store?.get(map_id, difficulty_id)?;
+                                Some(wow_instances::MapDb2Entries {
+                                    map_id,
+                                    difficulty_id,
+                                    lock_id: u32::from(map_difficulty.lock_id),
+                                    reset_interval: match map_difficulty.reset_interval {
+                                        1 => wow_instances::MapDifficultyResetInterval::Daily,
+                                        2 => wow_instances::MapDifficultyResetInterval::Weekly,
+                                        _ => wow_instances::MapDifficultyResetInterval::Anytime,
+                                    },
+                                    is_flex_locking: map.is_flex_locking(),
+                                    is_using_encounter_locks: map_difficulty
+                                        .is_using_encounter_locks(),
+                                })
+                            },
                         )
                     })
                     .unwrap_or_default()

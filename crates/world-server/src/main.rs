@@ -16,14 +16,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 use wow_config::{DatabaseInfo, LoadReport, WorldConfigSet};
 use wow_core::{ObjectGuidGenerator, guid::HighGuid};
 use wow_database::{
     CharStatements, CharacterDatabase, HotfixDatabase, LoginDatabase, LoginStatements,
     WorldDatabase, WorldStatements, build_connection_string,
 };
-use wow_instances::InstanceLockMgr;
+use wow_instances::{InstanceLockMgr, MapDb2Entries, MapDifficultyResetInterval};
 use wow_loot::{
     LootConditionId, LootConditionLinkReport, LootConditionReferenceUseLikeCpp,
     LootReferenceCheckReport, LootStore, LootStoreKind, LootStores, LootTemplateRow,
@@ -437,6 +437,22 @@ async fn main() -> Result<()> {
         dungeon_encounter_store.len()
     );
 
+    // Load Map.db2 + MapDifficulty.db2 for C++ InstanceLockMgr MapDb2Entries resolution.
+    let map_store = Arc::new(
+        wow_data::MapStore::load(&data_dir, &locale)
+            .context("Failed to load Map.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!("Loaded {} maps from Map.db2", map_store.len());
+
+    let map_difficulty_store = Arc::new(
+        wow_data::MapDifficultyStore::load(&data_dir, &locale)
+            .context("Failed to load MapDifficulty.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} map difficulties from MapDifficulty.db2",
+        map_difficulty_store.len()
+    );
+
     // Load ItemAppearance.db2 for item display-info resolution.
     let item_appearance_store = Arc::new(
         wow_data::ItemAppearanceStore::load(&data_dir, &locale)
@@ -718,7 +734,24 @@ async fn main() -> Result<()> {
     // Shared world state (creatures/grids visible to every session on the same map).
     // Each session gets a clone of this Arc on creation.
     let shared_map: SharedMapManager = Arc::new(std::sync::RwLock::new(LegacyMapManager::new()));
-    let instance_lock_mgr = Arc::new(std::sync::RwLock::new(InstanceLockMgr::default()));
+    let mut loaded_instance_lock_mgr = InstanceLockMgr::default();
+    let instance_lock_load_issues = loaded_instance_lock_mgr
+        .load_from_database_like_cpp(&char_db, |map_id, difficulty_id| {
+            map_db2_entries_from_stores(&map_store, &map_difficulty_store, map_id, difficulty_id)
+        })
+        .await
+        .context("Failed to load instance locks from character database")?;
+    for issue in &instance_lock_load_issues {
+        warn!("Instance lock load issue: {issue:?}");
+    }
+    let instance_lock_stats = loaded_instance_lock_mgr.statistics();
+    info!(
+        "Loaded instance locks: {} shared instances, {} players, {} issues",
+        instance_lock_stats.instance_count,
+        instance_lock_stats.player_count,
+        instance_lock_load_issues.len()
+    );
+    let instance_lock_mgr = Arc::new(std::sync::RwLock::new(loaded_instance_lock_mgr));
 
     let canonical_map_manager = Arc::new(Mutex::new(create_canonical_map_manager(&world_configs)));
 
@@ -756,6 +789,8 @@ async fn main() -> Result<()> {
         area_trigger_store: Some(Arc::clone(&area_trigger_store)),
         chr_specialization_store: Some(Arc::clone(&chr_specialization_store)),
         dungeon_encounter_store: Some(Arc::clone(&dungeon_encounter_store)),
+        map_store: Some(Arc::clone(&map_store)),
+        map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
         quest_store: Some(Arc::clone(&quest_store)),
         quest_xp_store: Some(Arc::clone(&quest_xp_store)),
         player_xp_table: Some(Arc::clone(&player_xp_table)),
@@ -1195,6 +1230,29 @@ fn create_canonical_map_manager(configs: &WorldConfigSet) -> wow_map::MapManager
     manager
 }
 
+fn map_db2_entries_from_stores(
+    map_store: &wow_data::MapStore,
+    map_difficulty_store: &wow_data::MapDifficultyStore,
+    map_id: u32,
+    difficulty_id: u8,
+) -> Option<MapDb2Entries> {
+    let map = map_store.get(map_id)?;
+    let map_difficulty = map_difficulty_store.get(map_id, difficulty_id)?;
+
+    Some(MapDb2Entries {
+        map_id,
+        difficulty_id,
+        lock_id: u32::from(map_difficulty.lock_id),
+        reset_interval: match map_difficulty.reset_interval {
+            1 => MapDifficultyResetInterval::Daily,
+            2 => MapDifficultyResetInterval::Weekly,
+            _ => MapDifficultyResetInterval::Anytime,
+        },
+        is_flex_locking: map.is_flex_locking(),
+        is_using_encounter_locks: map_difficulty.is_using_encounter_locks(),
+    })
+}
+
 fn spawn_canonical_map_update_loop(
     map_manager: SharedCanonicalMapManager,
     tick_interval_ms: u32,
@@ -1419,6 +1477,12 @@ async fn create_session(
     }
     if let Some(ref store) = resources.dungeon_encounter_store {
         session.set_dungeon_encounter_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.map_store {
+        session.set_map_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.map_difficulty_store {
+        session.set_map_difficulty_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.quest_store {
         session.set_quest_store(Arc::clone(store));

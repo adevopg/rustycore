@@ -27,8 +27,8 @@ use wow_data::{
     ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
     ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
     ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
-    SpellItemEnchantmentStore, SpellStore,
+    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PlayerStatsStore,
+    RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -297,6 +297,10 @@ pub struct WorldSession {
 
     // DungeonEncounter store (instance encounter lock/loot metadata)
     dungeon_encounter_store: Option<Arc<DungeonEncounterStore>>,
+
+    // Map stores (Map.db2 + MapDifficulty.db2)
+    map_store: Option<Arc<MapStore>>,
+    map_difficulty_store: Option<Arc<MapDifficultyStore>>,
 
     // Shared player registry for broadcasting to nearby sessions
     player_registry: Option<Arc<PlayerRegistry>>,
@@ -751,6 +755,8 @@ impl WorldSession {
             area_trigger_store: None,
             chr_specialization_store: None,
             dungeon_encounter_store: None,
+            map_store: None,
+            map_difficulty_store: None,
             player_registry: None,
             object_accessor: None,
             group_registry: None,
@@ -2450,6 +2456,22 @@ impl WorldSession {
     /// Get the DungeonEncounter store reference.
     pub fn dungeon_encounter_store(&self) -> Option<&Arc<DungeonEncounterStore>> {
         self.dungeon_encounter_store.as_ref()
+    }
+
+    pub fn set_map_store(&mut self, store: Arc<MapStore>) {
+        self.map_store = Some(store);
+    }
+
+    pub(crate) fn map_store(&self) -> Option<&Arc<MapStore>> {
+        self.map_store.as_ref()
+    }
+
+    pub fn set_map_difficulty_store(&mut self, store: Arc<MapDifficultyStore>) {
+        self.map_difficulty_store = Some(store);
+    }
+
+    pub(crate) fn map_difficulty_store(&self) -> Option<&Arc<MapDifficultyStore>> {
+        self.map_difficulty_store.as_ref()
     }
 
     /// Set the skill store for this session.
