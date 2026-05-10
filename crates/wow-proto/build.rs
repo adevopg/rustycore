@@ -23,8 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|f| format!("{proto_dir}/{f}"))
         .collect();
 
-    prost_build::Config::new()
-        .compile_protos(&proto_paths, &[proto_dir])?;
+    prost_build::Config::new().compile_protos(&proto_paths, &[proto_dir])?;
 
     Ok(())
 }

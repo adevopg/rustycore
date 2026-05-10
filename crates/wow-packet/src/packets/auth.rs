@@ -763,8 +763,8 @@ mod tests {
         // Verify key = 12345
         assert_eq!(
             i64::from_le_bytes([
-                data[270], data[271], data[272], data[273],
-                data[274], data[275], data[276], data[277],
+                data[270], data[271], data[272], data[273], data[274], data[275], data[276],
+                data[277],
             ]),
             12345
         );
@@ -796,9 +796,6 @@ mod tests {
             ConnectToSerial::WorldAttempt1.next(),
             Some(ConnectToSerial::WorldAttempt2)
         );
-        assert_eq!(
-            ConnectToSerial::WorldAttempt5.next(),
-            None
-        );
+        assert_eq!(ConnectToSerial::WorldAttempt5.next(), None);
     }
 }

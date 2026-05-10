@@ -17,38 +17,38 @@ use crate::{ClientPacket, ServerPacket};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ChatMsg {
-    Say         = 1,
-    Party       = 2,
-    Raid        = 3,
-    Guild       = 4,
-    Officer     = 5,
-    Yell        = 6,
-    Whisper     = 7,
+    Say = 1,
+    Party = 2,
+    Raid = 3,
+    Guild = 4,
+    Officer = 5,
+    Yell = 6,
+    Whisper = 7,
     WhisperForeign = 8,
     WhisperInform = 9,
-    Emote       = 10,
-    TextEmote   = 11,
-    System      = 12,
-    Monster     = 13,  // creature say
+    Emote = 10,
+    TextEmote = 11,
+    System = 12,
+    Monster = 13, // creature say
     MonsterParty = 14,
     MonsterYell = 15,
     MonsterWhisper = 16,
     MonsterEmote = 17,
-    Channel     = 18,
+    Channel = 18,
     ChannelJoin = 19,
     ChannelLeave = 20,
     ChannelList = 21,
     ChannelNotice = 22,
     ChannelNoticeUser = 23,
-    Afk         = 24,
-    Dnd         = 25,
-    Ignored     = 26,
-    Skill       = 27,
-    Loot        = 28,
-    Money       = 29,
-    Opening     = 30,
+    Afk = 24,
+    Dnd = 25,
+    Ignored = 26,
+    Skill = 27,
+    Loot = 28,
+    Money = 29,
+    Opening = 30,
     Tradeskills = 31,
-    PetInfo     = 32,
+    PetInfo = 32,
     CombatMiscInfo = 33,
     CombatXpGain = 34,
     CombatHonorGain = 35,
@@ -56,21 +56,21 @@ pub enum ChatMsg {
     BgSystemNeutral = 37,
     BgSystemAlliance = 38,
     BgSystemHorde = 39,
-    RaidLeader  = 40,
+    RaidLeader = 40,
     RaidWarning = 41,
     RaidBossEmote = 42,
     RaidBossWhisper = 43,
-    Filtered    = 44,
+    Filtered = 44,
     Battleground = 45,
     BattlegroundLeader = 46,
-    Restricted  = 47,
-    BattleNet   = 48,
+    Restricted = 47,
+    BattleNet = 48,
     Achievement = 49,
     GuildAchievement = 50,
     ArenaPoints = 51,
     PartyLeader = 52,
     Targeticons = 53,
-    BnWhisper   = 54,
+    BnWhisper = 54,
     BnWhisperInform = 55,
     BnInlineToast = 56,
     BnInlineToastAlert = 57,
@@ -79,7 +79,7 @@ pub enum ChatMsg {
     BnInlineToastConversation = 60,
     BnWhisperPlayerOffline = 61,
     CombatGuildXpGain = 62,
-    Currency    = 63,
+    Currency = 63,
     QuestBossEmote = 64,
     PetBattleCombatLog = 65,
     PetBattleInfo = 66,
@@ -118,7 +118,11 @@ impl ClientPacket for ChatMessage {
         };
         // bit reader auto-resets on next byte read
         let text = pkt.read_string(len)?;
-        Ok(Self { language, text, is_secure })
+        Ok(Self {
+            language,
+            text,
+            is_secure,
+        })
     }
 }
 
@@ -141,7 +145,11 @@ impl ClientPacket for ChatMessageWhisper {
         // bit reader auto-resets on next byte read
         let target = pkt.read_string(target_len)?;
         let text = pkt.read_string(text_len)?;
-        Ok(Self { language, target, text })
+        Ok(Self {
+            language,
+            target,
+            text,
+        })
     }
 }
 
@@ -222,11 +230,11 @@ impl ServerPacket for ChatPkt {
         pkt.write_packed_guid(&ObjectGuid::EMPTY); // sender_guild_guid
         pkt.write_packed_guid(&ObjectGuid::EMPTY); // sender_account_guid
         pkt.write_packed_guid(&self.target_guid);
-        pkt.write_uint32(self.virtual_realm);   // target_virtual_address
-        pkt.write_uint32(self.virtual_realm);   // sender_virtual_address
-        pkt.write_int32(0i32);   // achievement_id
+        pkt.write_uint32(self.virtual_realm); // target_virtual_address
+        pkt.write_uint32(self.virtual_realm); // sender_virtual_address
+        pkt.write_int32(0i32); // achievement_id
         pkt.write_float(0.0f32); // display_time
-        pkt.write_int32(0i32);   // spell_id
+        pkt.write_int32(0i32); // spell_id
 
         let sender_bytes = self.sender_name.len() as u32;
         let target_bytes = self.target_name.len() as u32;

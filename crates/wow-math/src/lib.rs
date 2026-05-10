@@ -123,10 +123,7 @@ pub fn grid_to_cell(grid_x: u32, grid_y: u32, x: f32, y: f32) -> (u32, u32) {
 /// Returns `true` if `(x, y)` falls inside the valid map area.
 #[inline]
 pub fn is_valid_map_coord(x: f32, y: f32) -> bool {
-    x.is_finite()
-        && y.is_finite()
-        && x.abs() <= MAP_HALFSIZE
-        && y.abs() <= MAP_HALFSIZE
+    x.is_finite() && y.is_finite() && x.abs() <= MAP_HALFSIZE && y.abs() <= MAP_HALFSIZE
 }
 
 /// Returns `true` if `(x, y, z)` falls inside the valid map area and `z` is
@@ -213,10 +210,7 @@ mod tests {
     fn normalize_angle_negative() {
         let a = normalize_angle(-FRAC_PI_2);
         let expected = TAU - FRAC_PI_2;
-        assert!(
-            (a - expected).abs() < 1e-5,
-            "expected {expected}, got {a}"
-        );
+        assert!((a - expected).abs() < 1e-5, "expected {expected}, got {a}");
     }
 
     #[test]
@@ -229,10 +223,7 @@ mod tests {
     fn normalize_angle_large_negative() {
         let a = normalize_angle(-TAU * 2.0 - PI);
         let expected = PI;
-        assert!(
-            (a - expected).abs() < 1e-4,
-            "expected {expected}, got {a}"
-        );
+        assert!((a - expected).abs() < 1e-4, "expected {expected}, got {a}");
     }
 
     // -- distance ----------------------------------------------------------
@@ -248,10 +239,7 @@ mod tests {
         let a = Vec3::new(0.0, 0.0, 0.0);
         let b = Vec3::new(3.0, 999.0, 4.0);
         let d = distance_2d(a, b);
-        assert!(
-            (d - 5.0).abs() < 1e-5,
-            "expected 5.0, got {d}"
-        );
+        assert!((d - 5.0).abs() < 1e-5, "expected 5.0, got {d}");
     }
 
     #[test]
@@ -260,10 +248,7 @@ mod tests {
         let b = Vec3::new(4.0, 6.0, 3.0);
         // (3^2 + 4^2 + 0^2) = 25
         let d = distance_sq(a, b);
-        assert!(
-            (d - 25.0).abs() < 1e-5,
-            "expected 25.0, got {d}"
-        );
+        assert!((d - 25.0).abs() < 1e-5, "expected 25.0, got {d}");
     }
 
     // -- world_to_grid / grid_to_cell --------------------------------------

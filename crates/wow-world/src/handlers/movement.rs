@@ -17,8 +17,10 @@ use tracing::{trace, warn};
 
 use wow_constants::ClientOpcodes;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
-use wow_packet::packets::movement::{ClientPlayerMovement, MoveUpdate, SetActiveMover, MoveInitActiveMoverComplete};
 use wow_packet::ServerPacket;
+use wow_packet::packets::movement::{
+    ClientPlayerMovement, MoveInitActiveMoverComplete, MoveUpdate, SetActiveMover,
+};
 
 use crate::session::WorldSession;
 
@@ -78,7 +80,10 @@ impl WorldSession {
         let info = match ClientPlayerMovement::read(&mut pkt) {
             Ok(m) => m,
             Err(e) => {
-                warn!(account = self.account_id, "Failed to parse movement packet: {e}");
+                warn!(
+                    account = self.account_id,
+                    "Failed to parse movement packet: {e}"
+                );
                 return;
             }
         };
@@ -88,9 +93,7 @@ impl WorldSession {
             if info.info.guid != *player_guid && !info.info.guid.is_empty() {
                 warn!(
                     account = self.account_id,
-                    "Movement GUID mismatch: expected {:?}, got {:?}",
-                    player_guid,
-                    info.info.guid
+                    "Movement GUID mismatch: expected {:?}, got {:?}", player_guid, info.info.guid
                 );
                 return;
             }
@@ -99,7 +102,10 @@ impl WorldSession {
         // Validate: position must be finite (anti-cheat sanity check).
         let pos = &info.info.position;
         if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
-            warn!(account = self.account_id, "Invalid movement position: {pos:?}");
+            warn!(
+                account = self.account_id,
+                "Invalid movement position: {pos:?}"
+            );
             return;
         }
 
@@ -109,7 +115,9 @@ impl WorldSession {
         self.update_registry_position();
         trace!(
             account = self.account_id,
-            x = pos.x, y = pos.y, z = pos.z,
+            x = pos.x,
+            y = pos.y,
+            z = pos.z,
             "Player moved"
         );
 
@@ -133,8 +141,12 @@ impl WorldSession {
 
             for entry in registry.iter() {
                 let (other_guid, other_info): (&ObjectGuid, &PlayerBroadcastInfo) = entry.pair();
-                if *other_guid == guid { continue; }
-                if other_info.map_id != self.current_map_id { continue; }
+                if *other_guid == guid {
+                    continue;
+                }
+                if other_info.map_id != self.current_map_id {
+                    continue;
+                }
                 let _ = other_info.send_tx.send(bytes.clone());
             }
         }
@@ -170,7 +182,10 @@ impl WorldSession {
     ///
     /// In C# this updates transport timing flags and triggers visibility update.
     /// For now we just log receipt; transport timing is not yet implemented.
-    pub async fn handle_move_init_active_mover_complete(&mut self, pkt: MoveInitActiveMoverComplete) {
+    pub async fn handle_move_init_active_mover_complete(
+        &mut self,
+        pkt: MoveInitActiveMoverComplete,
+    ) {
         trace!(
             account = self.account_id,
             ticks = pkt.ticks,

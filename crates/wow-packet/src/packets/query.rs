@@ -8,8 +8,8 @@
 use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_core::ObjectGuid;
 
-use crate::{ClientPacket, ServerPacket, WorldPacket};
 use crate::world_packet::PacketError;
+use crate::{ClientPacket, ServerPacket, WorldPacket};
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -52,14 +52,14 @@ pub struct CreatureDisplayStats {
 
 /// Full creature template stats for query response.
 pub struct CreatureStats {
-    pub title: String,       // SubName in DB
+    pub title: String, // SubName in DB
     pub title_alt: String,
     pub cursor_name: String, // IconName in DB
     pub civilian: bool,
-    pub leader: bool,        // RacialLeader
+    pub leader: bool, // RacialLeader
     pub names: [String; MAX_CREATURE_NAMES],
     pub name_alts: [String; MAX_CREATURE_NAMES],
-    pub flags: [u32; 2],     // TypeFlags, TypeFlags2
+    pub flags: [u32; 2], // TypeFlags, TypeFlags2
     pub creature_type: i32,
     pub creature_family: i32,
     pub classification: i32,
@@ -138,9 +138,21 @@ impl ServerPacket for QueryCreatureResponse {
 
         // ── Bit-packed string lengths ────────────────────────────
         // Must match C# QueryCreatureResponse.Write() EXACTLY.
-        let title_len = if stats.title.is_empty() { 0u32 } else { stats.title.len() as u32 + 1 };
-        let title_alt_len = if stats.title_alt.is_empty() { 0u32 } else { stats.title_alt.len() as u32 + 1 };
-        let cursor_name_len = if stats.cursor_name.is_empty() { 0u32 } else { stats.cursor_name.len() as u32 + 1 };
+        let title_len = if stats.title.is_empty() {
+            0u32
+        } else {
+            stats.title.len() as u32 + 1
+        };
+        let title_alt_len = if stats.title_alt.is_empty() {
+            0u32
+        } else {
+            stats.title_alt.len() as u32 + 1
+        };
+        let cursor_name_len = if stats.cursor_name.is_empty() {
+            0u32
+        } else {
+            stats.cursor_name.len() as u32 + 1
+        };
 
         pkt.write_bits(title_len, 11);
         pkt.write_bits(title_alt_len, 11);
@@ -150,8 +162,16 @@ impl ServerPacket for QueryCreatureResponse {
 
         // C# interleaves Name[i] and NameAlt[i] lengths in one loop
         for i in 0..MAX_CREATURE_NAMES {
-            let name_len = if stats.names[i].is_empty() { 0u32 } else { stats.names[i].len() as u32 + 1 };
-            let alt_len = if stats.name_alts[i].is_empty() { 0u32 } else { stats.name_alts[i].len() as u32 + 1 };
+            let name_len = if stats.names[i].is_empty() {
+                0u32
+            } else {
+                stats.names[i].len() as u32 + 1
+            };
+            let alt_len = if stats.name_alts[i].is_empty() {
+                0u32
+            } else {
+                stats.name_alts[i].len() as u32 + 1
+            };
             pkt.write_bits(name_len, 11);
             pkt.write_bits(alt_len, 11);
         }
@@ -246,7 +266,10 @@ impl ClientPacket for QueryGameObject {
     fn read(packet: &mut WorldPacket) -> Result<Self, PacketError> {
         let game_object_id = packet.read_uint32()?;
         let guid = packet.read_packed_guid()?;
-        Ok(Self { game_object_id, guid })
+        Ok(Self {
+            game_object_id,
+            guid,
+        })
     }
 }
 
@@ -390,7 +413,11 @@ mod tests {
         };
         let bytes = resp.to_bytes();
         // Should be a reasonable size (name + fields)
-        assert!(bytes.len() > 50, "Response too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 50,
+            "Response too small: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]
@@ -448,7 +475,11 @@ mod tests {
             }],
         };
         let bytes = resp.to_bytes();
-        assert!(bytes.len() > 20, "Response too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 20,
+            "Response too small: {} bytes",
+            bytes.len()
+        );
     }
 }
 
@@ -579,7 +610,9 @@ impl ClientPacket for QueryRealmName {
 
     fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
         let virtual_realm_address = pkt.read_uint32()?;
-        Ok(Self { virtual_realm_address })
+        Ok(Self {
+            virtual_realm_address,
+        })
     }
 }
 

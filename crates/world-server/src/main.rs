@@ -21,11 +21,19 @@ use wow_config::{DatabaseInfo, LoadReport, WorldConfigSet};
 use wow_core::{ObjectGuidGenerator, guid::HighGuid};
 use wow_database::{
     CharStatements, CharacterDatabase, HotfixDatabase, LoginDatabase, LoginStatements,
-    WorldDatabase, build_connection_string,
+    WorldDatabase, WorldStatements, build_connection_string,
+};
+use wow_loot::{
+    LootConditionId, LootConditionLinkReport, LootConditionReferenceUseLikeCpp,
+    LootReferenceCheckReport, LootStore, LootStoreKind, LootStores, LootTemplateRow,
+    check_loot_condition_links_like_cpp, check_loot_condition_references_like_cpp,
+    check_loot_references_like_cpp,
 };
 use wow_network::session_mgr::SessionManager;
 use wow_network::world_socket::{AccountInfo, AccountLookup};
-use wow_network::{GroupRegistry, PendingInvites, PlayerRegistry, SessionResources};
+use wow_network::{
+    GroupRegistry, LootDropRatesLikeCpp, PendingInvites, PlayerRegistry, SessionResources,
+};
 use wow_world::{MapManager as LegacyMapManager, SharedMapManager, WorldSession};
 
 type SharedCanonicalMapManager = Arc<Mutex<wow_map::MapManager>>;
@@ -359,10 +367,33 @@ async fn main() -> Result<()> {
         currency_types_store.len()
     );
 
+    let import_price_stores = Arc::new(
+        wow_data::ImportPriceStores::load(&data_dir, &locale)
+            .context("Failed to load ImportPrice*.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!("Loaded ImportPrice*.db2 stores");
+
+    let item_class_store = Arc::new(
+        wow_data::ItemClassStore::load(&data_dir, &locale)
+            .context("Failed to load ItemClass.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} item classes from ItemClass.db2",
+        item_class_store.len()
+    );
+
+    let item_currency_cost_store = Arc::new(
+        wow_data::ItemCurrencyCostStore::load(&data_dir, &locale)
+            .context("Failed to load ItemCurrencyCost.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} item currency costs from ItemCurrencyCost.db2",
+        item_currency_cost_store.len()
+    );
+
     let item_extended_cost_store = Arc::new(
-        wow_data::ItemExtendedCostStore::load(&data_dir, &locale).context(
-            "Failed to load ItemExtendedCost.db2 — check DataDir and DBC.Locale config",
-        )?,
+        wow_data::ItemExtendedCostStore::load(&data_dir, &locale)
+            .context("Failed to load ItemExtendedCost.db2 — check DataDir and DBC.Locale config")?,
     );
     info!(
         "Loaded {} item extended costs from ItemExtendedCost.db2",
@@ -374,6 +405,26 @@ async fn main() -> Result<()> {
             .context("Failed to load Item.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} items from Item.db2", item_store.len());
+
+    let item_price_base_store = Arc::new(
+        wow_data::ItemPriceBaseStore::load(&data_dir, &locale)
+            .context("Failed to load ItemPriceBase.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} item price base rows from ItemPriceBase.db2",
+        item_price_base_store.len()
+    );
+
+    // Load ChrSpecialization.db2 for C++ loot-specialization validation.
+    let chr_specialization_store = Arc::new(
+        wow_data::ChrSpecializationStore::load(&data_dir, &locale).context(
+            "Failed to load ChrSpecialization.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    info!(
+        "Loaded {} chr specializations from ChrSpecialization.db2",
+        chr_specialization_store.len()
+    );
 
     // Load ItemAppearance.db2 for item display-info resolution.
     let item_appearance_store = Arc::new(
@@ -414,6 +465,13 @@ async fn main() -> Result<()> {
         item_stats_store.len()
     );
 
+    // Load Lock.db2 for C++ sLockStore existence checks during CMSG_OPEN_ITEM.
+    let lock_store = Arc::new(
+        wow_data::LockStore::load(&data_dir, &locale)
+            .context("Failed to load Lock.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!("Loaded {} locks from Lock.db2", lock_store.len());
+
     // Load ItemRandomSuffix.db2 for C++ ApplyEnchantment random suffix amount resolution.
     let item_random_suffix_store = Arc::new(
         wow_data::ItemRandomSuffixStore::load(&data_dir, &locale)
@@ -422,6 +480,48 @@ async fn main() -> Result<()> {
     info!(
         "Loaded {} item random suffixes from ItemRandomSuffix.db2",
         item_random_suffix_store.len()
+    );
+
+    // Load ItemRandomProperties.db2 and RandPropPoints.db2 plus the world-table
+    // random enchantment groups for C++ ItemEnchantmentMgr::GenerateRandomProperties.
+    let item_random_properties_store = Arc::new(
+        wow_data::ItemRandomPropertiesStore::load(&data_dir, &locale).context(
+            "Failed to load ItemRandomProperties.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    info!(
+        "Loaded {} item random properties from ItemRandomProperties.db2",
+        item_random_properties_store.len()
+    );
+
+    let rand_prop_points_store = Arc::new(
+        wow_data::RandPropPointsStore::load(&data_dir, &locale)
+            .context("Failed to load RandPropPoints.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} random property point rows from RandPropPoints.db2",
+        rand_prop_points_store.len()
+    );
+
+    // Load ItemDisenchantLoot.db2 for C++ sItemDisenchantLootStore lookup.
+    let item_disenchant_loot_store = Arc::new(
+        wow_data::ItemDisenchantLootStore::load(&data_dir, &locale).context(
+            "Failed to load ItemDisenchantLoot.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    info!(
+        "Loaded {} item disenchant loot rows from ItemDisenchantLoot.db2",
+        item_disenchant_loot_store.len()
+    );
+
+    let item_random_enchantment_template_store = Arc::new(
+        wow_data::ItemRandomEnchantmentTemplateStore::load_validated(
+            &world_db,
+            &item_random_properties_store,
+            &item_random_suffix_store,
+        )
+        .await
+        .context("Failed to load item_random_enchantment_template")?,
     );
 
     // Load SpellItemEnchantment.db2 for ApplyEnchantment and arena enchantment checks.
@@ -502,9 +602,44 @@ async fn main() -> Result<()> {
             .context("Failed to load quest store")?,
     );
 
+    let loaded_loot_stores = load_loot_stores_like_cpp(&world_db, &item_store)
+        .await
+        .context("Failed to load C++ LootTemplates_* foundation stores")?;
+    let loot_reference_report = check_loot_references_like_cpp(&loaded_loot_stores);
+    log_loot_reference_report_like_cpp(&loot_reference_report);
+    let loot_condition_ids = load_loot_condition_ids_like_cpp(&world_db)
+        .await
+        .context("Failed to load C++ loot-template condition IDs")?;
+    let mut loot_condition_report =
+        check_loot_condition_links_like_cpp(&loaded_loot_stores, loot_condition_ids, |item_id| {
+            item_store.get(item_id).is_some()
+        });
+    let loot_condition_reference_uses = load_loot_condition_reference_uses_like_cpp(&world_db)
+        .await
+        .context("Failed to load C++ loot-template condition reference uses")?;
+    let condition_reference_template_ids =
+        load_condition_reference_template_ids_like_cpp(&world_db)
+            .await
+            .context("Failed to load C++ condition reference template IDs")?;
+    check_loot_condition_references_like_cpp(
+        &mut loot_condition_report,
+        loot_condition_reference_uses,
+        condition_reference_template_ids,
+    );
+    log_loot_condition_link_report_like_cpp(&loot_condition_report);
+    let loot_stores = Arc::new(loaded_loot_stores);
+    let loaded_loot_templates: usize = loot_stores
+        .values()
+        .map(|store| store.templates().len())
+        .sum();
+    info!(
+        "Loaded {} C++ loot-template stores with {} template IDs",
+        loot_stores.len(),
+        loaded_loot_templates
+    );
+
     // Load player_xp_for_level table
     let player_xp_table = {
-        use wow_database::WorldStatements;
         let mut stmt = world_db.prepare(WorldStatements::SEL_PLAYER_XP_FOR_LEVEL);
         let mut table = vec![0u32; 82]; // index = level, 0=unused, 81=max
         if let Ok(result) = world_db.query(&stmt).await {
@@ -582,24 +717,39 @@ async fn main() -> Result<()> {
         world_db: Some(Arc::clone(&world_db)),
         guid_generator: Some(Arc::clone(&guid_generator)),
         currency_types_store: Some(Arc::clone(&currency_types_store)),
+        import_price_stores: Some(Arc::clone(&import_price_stores)),
+        item_class_store: Some(Arc::clone(&item_class_store)),
+        item_currency_cost_store: Some(Arc::clone(&item_currency_cost_store)),
         item_extended_cost_store: Some(Arc::clone(&item_extended_cost_store)),
         item_store: Some(Arc::clone(&item_store)),
         item_appearance_store: Some(Arc::clone(&item_appearance_store)),
         item_modified_appearance_store: Some(Arc::clone(&item_modified_appearance_store)),
+        item_price_base_store: Some(Arc::clone(&item_price_base_store)),
         player_stats: Some(Arc::clone(&player_stats)),
         item_stats_store: Some(Arc::clone(&item_stats_store)),
         item_random_suffix_store: Some(Arc::clone(&item_random_suffix_store)),
+        item_random_properties_store: Some(Arc::clone(&item_random_properties_store)),
+        rand_prop_points_store: Some(Arc::clone(&rand_prop_points_store)),
+        item_random_enchantment_template_store: Some(Arc::clone(
+            &item_random_enchantment_template_store,
+        )),
+        item_disenchant_loot_store: Some(Arc::clone(&item_disenchant_loot_store)),
+        loot_stores: Some(Arc::clone(&loot_stores)),
+        lock_store: Some(Arc::clone(&lock_store)),
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
         skill_store: Some(Arc::clone(&skill_store)),
         spell_store: Some(Arc::clone(&spell_store)),
         area_trigger_store: Some(Arc::clone(&area_trigger_store)),
+        chr_specialization_store: Some(Arc::clone(&chr_specialization_store)),
         quest_store: Some(Arc::clone(&quest_store)),
         quest_xp_store: Some(Arc::clone(&quest_xp_store)),
         player_xp_table: Some(Arc::clone(&player_xp_table)),
         player_registry: Some(Arc::clone(&player_registry)),
         group_registry: Some(Arc::clone(&group_registry)),
         pending_invites: Some(Arc::clone(&pending_invites)),
+        loot_drop_rates: loot_drop_rates_like_cpp(&world_configs),
+        enable_ae_loot: world_config_bool(&world_configs, "CONFIG_ENABLE_AE_LOOT", false),
         realm_id,
         realm_external_address,
         realm_local_address,
@@ -739,6 +889,273 @@ fn world_config_u32(configs: &WorldConfigSet, enum_name: &str, default: u32) -> 
         .get_int(enum_name)
         .and_then(|value| u32::try_from(value).ok())
         .unwrap_or(default)
+}
+
+fn world_config_f32(configs: &WorldConfigSet, enum_name: &str, default: f32) -> f32 {
+    configs.get_float(enum_name).unwrap_or(default)
+}
+
+fn world_config_bool(configs: &WorldConfigSet, enum_name: &str, default: bool) -> bool {
+    configs.get_bool(enum_name).unwrap_or(default)
+}
+
+fn loot_drop_rates_like_cpp(configs: &WorldConfigSet) -> LootDropRatesLikeCpp {
+    LootDropRatesLikeCpp {
+        item_poor: world_config_f32(configs, "RATE_DROP_ITEM_POOR", 1.0),
+        item_normal: world_config_f32(configs, "RATE_DROP_ITEM_NORMAL", 1.0),
+        item_uncommon: world_config_f32(configs, "RATE_DROP_ITEM_UNCOMMON", 1.0),
+        item_rare: world_config_f32(configs, "RATE_DROP_ITEM_RARE", 1.0),
+        item_epic: world_config_f32(configs, "RATE_DROP_ITEM_EPIC", 1.0),
+        item_legendary: world_config_f32(configs, "RATE_DROP_ITEM_LEGENDARY", 1.0),
+        item_artifact: world_config_f32(configs, "RATE_DROP_ITEM_ARTIFACT", 1.0),
+        item_referenced: world_config_f32(configs, "RATE_DROP_ITEM_REFERENCED", 1.0),
+        item_referenced_amount: world_config_f32(configs, "RATE_DROP_ITEM_REFERENCED_AMOUNT", 1.0),
+        money: world_config_f32(configs, "RATE_DROP_MONEY", 1.0),
+    }
+}
+
+async fn load_loot_stores_like_cpp(
+    world_db: &WorldDatabase,
+    item_store: &wow_data::ItemStore,
+) -> Result<LootStores> {
+    let mut stores = LootStores::new();
+
+    for kind in LootStoreKind::ALL_LIKE_CPP {
+        let rows = load_loot_template_rows_like_cpp(world_db, kind).await?;
+        let mut store = LootStore::for_kind_like_cpp(kind);
+        let accepted = store
+            .load_rows_like_cpp(rows, |item_id| item_store.get(item_id).is_some())
+            .map_err(|err| anyhow::anyhow!("invalid loot row in {:?}: {:?}", kind, err))?;
+        info!(
+            table = store.definition().table_name,
+            entry_name = store.definition().entry_name,
+            rates_allowed = store.definition().rates_allowed,
+            accepted_rows = accepted,
+            template_ids = store.templates().len(),
+            "Loaded C++ loot template store foundation"
+        );
+        stores.insert(kind, store);
+    }
+
+    Ok(stores)
+}
+
+fn log_loot_reference_report_like_cpp(report: &LootReferenceCheckReport) {
+    if report.is_clean() {
+        info!("C++ loot reference verification completed with no gaps");
+        return;
+    }
+
+    for reference_use in &report.missing_references {
+        let store_definition = reference_use.store_kind.definition_like_cpp();
+        tracing::warn!(
+            table = store_definition.table_name,
+            entry = reference_use.entry,
+            item_id = reference_use.item_id,
+            reference = reference_use.reference,
+            "C++ loot reference verification found missing reference_loot_template entry"
+        );
+    }
+
+    for reference_id in &report.unused_reference_ids {
+        tracing::warn!(
+            table = LootStoreKind::Reference.definition_like_cpp().table_name,
+            entry = *reference_id,
+            "C++ loot reference verification found unused reference_loot_template entry"
+        );
+    }
+}
+
+fn log_loot_condition_link_report_like_cpp(report: &LootConditionLinkReport) {
+    if report.is_clean() {
+        info!(
+            linked_conditions = report.linked,
+            "C++ loot condition structural linking completed with no gaps"
+        );
+        return;
+    }
+
+    for condition_id in &report.unsupported_source_types {
+        tracing::warn!(
+            source_type = condition_id.source_type,
+            source_group = condition_id.source_group,
+            source_entry = condition_id.source_entry,
+            "C++ loot condition structural linking found unsupported loot condition source type"
+        );
+    }
+
+    for missing in &report.missing_templates {
+        let store_definition = missing.store_kind.definition_like_cpp();
+        tracing::warn!(
+            table = store_definition.table_name,
+            source_type = missing.condition_id.source_type,
+            source_group = missing.condition_id.source_group,
+            source_entry = missing.condition_id.source_entry,
+            "C++ loot condition structural linking found missing loot template"
+        );
+    }
+
+    for missing in &report.missing_item_templates {
+        let store_definition = missing.store_kind.definition_like_cpp();
+        tracing::warn!(
+            table = store_definition.table_name,
+            source_type = missing.condition_id.source_type,
+            source_group = missing.condition_id.source_group,
+            source_entry = missing.condition_id.source_entry,
+            "C++ loot condition structural linking found missing item template for SourceEntry"
+        );
+    }
+
+    for missing in &report.missing_template_items {
+        let store_definition = missing.store_kind.definition_like_cpp();
+        tracing::warn!(
+            table = store_definition.table_name,
+            source_type = missing.condition_id.source_type,
+            source_group = missing.condition_id.source_group,
+            source_entry = missing.condition_id.source_entry,
+            "C++ loot condition structural linking found SourceEntry absent from loot template"
+        );
+    }
+
+    for missing in &report.missing_reference_templates {
+        tracing::warn!(
+            source_type = missing.condition_id.source_type,
+            source_group = missing.condition_id.source_group,
+            source_entry = missing.condition_id.source_entry,
+            reference_id = missing.reference_id,
+            "C++ loot condition structural linking found missing condition reference template"
+        );
+    }
+}
+
+async fn load_loot_condition_ids_like_cpp(
+    world_db: &WorldDatabase,
+) -> Result<Vec<LootConditionId>> {
+    let stmt = world_db.prepare(WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_IDS);
+    let mut result = world_db.query(&stmt).await?;
+    let mut condition_ids = Vec::new();
+
+    if result.is_empty() {
+        return Ok(condition_ids);
+    }
+
+    loop {
+        condition_ids.push(LootConditionId {
+            source_type: result.try_read::<i32>(0).unwrap_or(0),
+            source_group: result.try_read::<u32>(1).unwrap_or(0),
+            source_entry: result.try_read::<u32>(2).unwrap_or(0),
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(condition_ids)
+}
+
+async fn load_loot_condition_reference_uses_like_cpp(
+    world_db: &WorldDatabase,
+) -> Result<Vec<LootConditionReferenceUseLikeCpp>> {
+    let stmt = world_db.prepare(WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES);
+    let mut result = world_db.query(&stmt).await?;
+    let mut reference_uses = Vec::new();
+
+    if result.is_empty() {
+        return Ok(reference_uses);
+    }
+
+    loop {
+        reference_uses.push(LootConditionReferenceUseLikeCpp {
+            condition_id: LootConditionId {
+                source_type: result.try_read::<i32>(0).unwrap_or(0),
+                source_group: result.try_read::<u32>(1).unwrap_or(0),
+                source_entry: result.try_read::<u32>(2).unwrap_or(0),
+            },
+            reference_id: result.try_read::<u32>(3).unwrap_or(0),
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(reference_uses)
+}
+
+async fn load_condition_reference_template_ids_like_cpp(
+    world_db: &WorldDatabase,
+) -> Result<Vec<u32>> {
+    let stmt = world_db.prepare(WorldStatements::SEL_CONDITION_REFERENCE_TEMPLATE_IDS);
+    let mut result = world_db.query(&stmt).await?;
+    let mut template_ids = Vec::new();
+
+    if result.is_empty() {
+        return Ok(template_ids);
+    }
+
+    loop {
+        template_ids.push(result.try_read::<u32>(0).unwrap_or(0));
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(template_ids)
+}
+
+async fn load_loot_template_rows_like_cpp(
+    world_db: &WorldDatabase,
+    kind: LootStoreKind,
+) -> Result<Vec<LootTemplateRow>> {
+    let statement = loot_store_all_rows_statement_like_cpp(kind);
+    let stmt = world_db.prepare(statement);
+    let mut result = world_db.query(&stmt).await?;
+    let mut rows = Vec::new();
+
+    if result.is_empty() {
+        return Ok(rows);
+    }
+
+    loop {
+        rows.push(LootTemplateRow {
+            entry: result.try_read::<u32>(0).unwrap_or(0),
+            item: wow_loot::LootStoreItem {
+                item_id: result.try_read::<u32>(1).unwrap_or(0),
+                reference: result.try_read::<u32>(2).unwrap_or(0),
+                chance: result.try_read::<f32>(3).unwrap_or(0.0),
+                needs_quest: result.try_read::<u8>(4).unwrap_or(0) != 0,
+                loot_mode: result.try_read::<u16>(5).unwrap_or(0),
+                group_id: result.try_read::<u8>(6).unwrap_or(0),
+                min_count: result.try_read::<u8>(7).unwrap_or(0),
+                max_count: result.try_read::<u8>(8).unwrap_or(0),
+            },
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(rows)
+}
+
+fn loot_store_all_rows_statement_like_cpp(kind: LootStoreKind) -> WorldStatements {
+    match kind {
+        LootStoreKind::Creature => WorldStatements::SEL_CREATURE_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Disenchant => WorldStatements::SEL_DISENCHANT_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Fishing => WorldStatements::SEL_FISHING_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Gameobject => WorldStatements::SEL_GAMEOBJECT_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Item => WorldStatements::SEL_ITEM_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Mail => WorldStatements::SEL_MAIL_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Milling => WorldStatements::SEL_MILLING_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Pickpocketing => WorldStatements::SEL_PICKPOCKETING_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Prospecting => WorldStatements::SEL_PROSPECTING_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Reference => WorldStatements::SEL_REFERENCE_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Skinning => WorldStatements::SEL_SKINNING_LOOT_TEMPLATE_ALL_ROWS,
+        LootStoreKind::Spell => WorldStatements::SEL_SPELL_LOOT_TEMPLATE_ALL_ROWS,
+    }
 }
 
 fn create_canonical_map_manager(configs: &WorldConfigSet) -> wow_map::MapManager {
@@ -914,6 +1331,15 @@ async fn create_session(
     if let Some(ref store) = resources.currency_types_store {
         session.set_currency_types_store(Arc::clone(store));
     }
+    if let Some(ref stores) = resources.import_price_stores {
+        session.set_import_price_stores(Arc::clone(stores));
+    }
+    if let Some(ref store) = resources.item_class_store {
+        session.set_item_class_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.item_currency_cost_store {
+        session.set_item_currency_cost_store(Arc::clone(store));
+    }
     if let Some(ref store) = resources.item_extended_cost_store {
         session.set_item_extended_cost_store(Arc::clone(store));
     }
@@ -926,6 +1352,9 @@ async fn create_session(
     if let Some(ref store) = resources.item_modified_appearance_store {
         session.set_item_modified_appearance_store(Arc::clone(store));
     }
+    if let Some(ref store) = resources.item_price_base_store {
+        session.set_item_price_base_store(Arc::clone(store));
+    }
     if let Some(ref store) = resources.player_stats {
         session.set_player_stats(Arc::clone(store));
     }
@@ -934,6 +1363,24 @@ async fn create_session(
     }
     if let Some(ref store) = resources.item_random_suffix_store {
         session.set_item_random_suffix_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.item_random_properties_store {
+        session.set_item_random_properties_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.rand_prop_points_store {
+        session.set_rand_prop_points_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.item_random_enchantment_template_store {
+        session.set_item_random_enchantment_template_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.item_disenchant_loot_store {
+        session.set_item_disenchant_loot_store(Arc::clone(store));
+    }
+    if let Some(ref stores) = resources.loot_stores {
+        session.set_loot_stores(Arc::clone(stores));
+    }
+    if let Some(ref store) = resources.lock_store {
+        session.set_lock_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.spell_item_enchantment_store {
         session.set_spell_item_enchantment_store(Arc::clone(store));
@@ -950,6 +1397,9 @@ async fn create_session(
     if let Some(ref store) = resources.area_trigger_store {
         session.set_area_trigger_store(Arc::clone(store));
     }
+    if let Some(ref store) = resources.chr_specialization_store {
+        session.set_chr_specialization_store(Arc::clone(store));
+    }
     if let Some(ref store) = resources.quest_store {
         session.set_quest_store(Arc::clone(store));
     }
@@ -962,6 +1412,8 @@ async fn create_session(
     if let Some(ref registry) = resources.player_registry {
         session.set_player_registry(Arc::clone(registry));
     }
+    session.set_loot_drop_rates_like_cpp(resources.loot_drop_rates);
+    session.set_enable_ae_loot_like_cpp(resources.enable_ae_loot);
     session.set_object_accessor(object_accessor);
     if let (Some(greg), Some(pinv)) = (&resources.group_registry, &resources.pending_invites) {
         session.set_group_registry(Arc::clone(greg), Arc::clone(pinv));
@@ -1008,7 +1460,9 @@ async fn create_session(
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     }
-    session.cleanup_shared_runtime_state();
+    session
+        .cleanup_shared_runtime_state_on_disconnect_like_cpp()
+        .await;
 }
 
 /// Load realm external and local addresses from the `realmlist` table.
@@ -1109,7 +1563,10 @@ fn locale_id_to_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_world_config_from, world_config_u8, world_config_u16};
+    use super::{
+        load_world_config_from, loot_drop_rates_like_cpp, world_config_bool, world_config_u8,
+        world_config_u16,
+    };
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -1161,6 +1618,39 @@ Expansion = 9
             4465
         );
         assert_eq!(world_config_u8(&configs, "CONFIG_EXPANSION", 2), 9);
+    }
+
+    #[test]
+    fn loot_drop_rates_use_cpp_world_config_keys() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str(
+            r#"
+Rate.Drop.Item.Poor = 0.5
+Rate.Drop.Item.Rare = 3
+Rate.Drop.Item.Referenced = 4
+Rate.Drop.Item.ReferencedAmount = 2
+Rate.Drop.Money = 6
+"#,
+        )
+        .expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        let rates = loot_drop_rates_like_cpp(&configs);
+        assert_eq!(rates.item_poor, 0.5);
+        assert_eq!(rates.item_normal, 1.0);
+        assert_eq!(rates.item_rare, 3.0);
+        assert_eq!(rates.item_referenced, 4.0);
+        assert_eq!(rates.item_referenced_amount, 2.0);
+        assert_eq!(rates.money, 6.0);
+    }
+
+    #[test]
+    fn enable_ae_loot_uses_cpp_world_config_key() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str("EnableAELoot = 1\n").expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        assert!(world_config_bool(&configs, "CONFIG_ENABLE_AE_LOOT", false));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

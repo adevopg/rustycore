@@ -13,17 +13,17 @@ use wow_core::ObjectGuid;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum FriendsResult {
-    DbError      = 0x00,
-    ListFull     = 0x01,
-    Online       = 0x02,
-    Offline      = 0x03,
-    NotFound     = 0x04,
-    Removed      = 0x05,
-    AddedOnline  = 0x06,
+    DbError = 0x00,
+    ListFull = 0x01,
+    Online = 0x02,
+    Offline = 0x03,
+    NotFound = 0x04,
+    Removed = 0x05,
+    AddedOnline = 0x06,
     AddedOffline = 0x07,
-    Already      = 0x08,
-    Self_        = 0x09,
-    Enemy        = 0x0A,
+    Already = 0x08,
+    Self_ = 0x09,
+    Enemy = 0x0A,
 }
 
 /// SMSG_FRIEND_STATUS (0x278d)

@@ -152,11 +152,12 @@ LIMIT 10000
             }
         }
 
-        info!("Loaded {} spells from hotfixes database", store.spells.len());
+        info!(
+            "Loaded {} spells from hotfixes database",
+            store.spells.len()
+        );
         Ok(store)
     }
-
-
 
     /// Look up a spell by ID.
     pub fn get(&self, spell_id: i32) -> Option<&SpellInfo> {

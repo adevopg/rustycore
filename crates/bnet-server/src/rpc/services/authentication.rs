@@ -9,9 +9,9 @@ use wow_proto::bgs::protocol::challenge::v1::ChallengeExternalRequest;
 use wow_proto::service_hash;
 
 use crate::rpc::session::RpcSession;
-use tokio::io::{AsyncRead, AsyncWrite};
 use crate::state::{AccountInfo, GameAccountInfo, LastPlayedCharInfo};
 use std::collections::HashMap;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 pub async fn handle<S: AsyncRead + AsyncWrite + Unpin>(
     session: &mut RpcSession<S>,
@@ -58,9 +58,7 @@ async fn handle_logon<S: AsyncRead + AsyncWrite + Unpin>(
     // Extract timezone offset from DeviceId JSON
     if let Some(device_id) = &request.device_id {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(device_id) {
-            session.timezone_offset = json.get("UTCO")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0) as i32;
+            session.timezone_offset = json.get("UTCO").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         }
     }
 
@@ -84,11 +82,13 @@ async fn handle_logon<S: AsyncRead + AsyncWrite + Unpin>(
         ..Default::default()
     };
 
-    session.send_request(
-        service_hash::CHALLENGE_LISTENER,
-        3, // OnExternalChallenge
-        &challenge.encode_to_vec(),
-    ).await?;
+    session
+        .send_request(
+            service_hash::CHALLENGE_LISTENER,
+            3, // OnExternalChallenge
+            &challenge.encode_to_vec(),
+        )
+        .await?;
 
     Ok(None)
 }
@@ -100,7 +100,8 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<Option<Vec<u8>>> {
     let request = VerifyWebCredentialsRequest::decode(payload)?;
 
-    let ticket = request.web_credentials
+    let ticket = request
+        .web_credentials
         .map(|b| String::from_utf8_lossy(&b).to_string())
         .unwrap_or_default();
 
@@ -116,7 +117,9 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
     //   Columns 8-12: Game account (one row per game account)
     //     8: a.id, 9: a.username, 10: ab.unbandate, 11: ab.permanently_banned, 12: aa.SecurityLevel
     let state = session.state();
-    let mut stmt = state.login_db.prepare(LoginStatements::SEL_BNET_ACCOUNT_INFO);
+    let mut stmt = state
+        .login_db
+        .prepare(LoginStatements::SEL_BNET_ACCOUNT_INFO);
     stmt.set_string(0, &ticket);
     let mut result = state.login_db.query(&stmt).await?;
 
@@ -151,17 +154,20 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
                 .map(|(_, n)| format!("WoW{n}"))
                 .unwrap_or_else(|| ga_name.clone());
 
-            game_accounts.insert(ga_id, GameAccountInfo {
-                id: ga_id,
-                name: ga_name,
-                display_name,
-                unban_date: ga_unban,
-                is_permanently_banned: ga_perma_banned,
-                is_banned: ga_perma_banned || ga_unban > 0,
-                security_level: ga_security,
-                char_counts: HashMap::new(),
-                last_played_chars: HashMap::new(),
-            });
+            game_accounts.insert(
+                ga_id,
+                GameAccountInfo {
+                    id: ga_id,
+                    name: ga_name,
+                    display_name,
+                    unban_date: ga_unban,
+                    is_permanently_banned: ga_perma_banned,
+                    is_banned: ga_perma_banned || ga_unban > 0,
+                    security_level: ga_security,
+                    char_counts: HashMap::new(),
+                    last_played_chars: HashMap::new(),
+                },
+            );
         }
 
         if !result.next_row() {
@@ -170,7 +176,9 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
     }
 
     // Load character counts: acctid(0), numchars(1), realm_id(2), Region(3), Battlegroup(4)
-    let mut stmt = state.login_db.prepare(LoginStatements::SEL_BNET_CHARACTER_COUNTS_BY_BNET_ID);
+    let mut stmt = state
+        .login_db
+        .prepare(LoginStatements::SEL_BNET_CHARACTER_COUNTS_BY_BNET_ID);
     stmt.set_u32(0, account_id);
     let mut cc_result = state.login_db.query(&stmt).await?;
 
@@ -193,7 +201,9 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
     // Load last played characters:
     //   accountId(0), region(1), battlegroup(2), realmId(3),
     //   characterName(4), characterGUID(5), lastPlayedTime(6)
-    let mut stmt = state.login_db.prepare(LoginStatements::SEL_BNET_LAST_PLAYER_CHARACTERS);
+    let mut stmt = state
+        .login_db
+        .prepare(LoginStatements::SEL_BNET_LAST_PLAYER_CHARACTERS);
     stmt.set_u32(0, account_id);
     let mut lp_result = state.login_db.query(&stmt).await?;
 
@@ -210,12 +220,15 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
             let sub_region = format!("{region}-{battlegroup}-0");
 
             if let Some(ga) = game_accounts.get_mut(&ga_id) {
-                ga.last_played_chars.insert(sub_region, LastPlayedCharInfo {
-                    realm_address: realm_id,
-                    character_name: char_name,
-                    character_guid: char_guid,
-                    last_played_time: last_played,
-                });
+                ga.last_played_chars.insert(
+                    sub_region,
+                    LastPlayedCharInfo {
+                        realm_address: realm_id,
+                        character_name: char_name,
+                        character_guid: char_guid,
+                        last_played_time: last_played,
+                    },
+                );
             }
 
             if !lp_result.next_row() {
@@ -280,11 +293,13 @@ async fn handle_verify_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
     });
 
     // Send LogonResult to AuthenticationListener method 5
-    session.send_request(
-        service_hash::AUTHENTICATION_LISTENER,
-        5, // OnLogonComplete
-        &logon_result.encode_to_vec(),
-    ).await?;
+    session
+        .send_request(
+            service_hash::AUTHENTICATION_LISTENER,
+            5, // OnLogonComplete
+            &logon_result.encode_to_vec(),
+        )
+        .await?;
 
     tracing::info!("Account {account_id} authenticated successfully");
     Ok(None)
@@ -301,11 +316,16 @@ async fn handle_generate_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
         return Ok(None);
     }
 
-    let account = session.account_info.as_ref()
+    let account = session
+        .account_info
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No account info"))?;
 
     // Query existing login ticket by account ID
-    let mut stmt = session.state().login_db.prepare(LoginStatements::SEL_BNET_EXISTING_AUTHENTICATION_BY_ID);
+    let mut stmt = session
+        .state()
+        .login_db
+        .prepare(LoginStatements::SEL_BNET_EXISTING_AUTHENTICATION_BY_ID);
     stmt.set_u32(0, account.id);
     let result = session.state().login_db.query(&stmt).await?;
 
@@ -321,17 +341,22 @@ async fn handle_generate_web_credentials<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 /// Send a LogonResult with an error code to the client.
-async fn send_logon_error<S: AsyncRead + AsyncWrite + Unpin>(session: &mut RpcSession<S>, error_code: u32) -> Result<Option<Vec<u8>>> {
+async fn send_logon_error<S: AsyncRead + AsyncWrite + Unpin>(
+    session: &mut RpcSession<S>,
+    error_code: u32,
+) -> Result<Option<Vec<u8>>> {
     let logon_result = LogonResult {
         error_code,
         ..Default::default()
     };
 
-    session.send_request(
-        service_hash::AUTHENTICATION_LISTENER,
-        5,
-        &logon_result.encode_to_vec(),
-    ).await?;
+    session
+        .send_request(
+            service_hash::AUTHENTICATION_LISTENER,
+            5,
+            &logon_result.encode_to_vec(),
+        )
+        .await?;
 
     Ok(None)
 }

@@ -68,10 +68,10 @@ impl PlayerLevelStats {
         let str = self.strength as i32;
         let agi = self.agility as i32;
         let ap = match class {
-            1 | 2 | 6 => str * 2 - 20,        // Warrior, Paladin, DK
-            3 | 4 => str + agi - 20,            // Hunter, Rogue
-            7 | 11 => str * 2 - 20,             // Shaman, Druid
-            _ => (str - 10).max(0),              // Casters
+            1 | 2 | 6 => str * 2 - 20, // Warrior, Paladin, DK
+            3 | 4 => str + agi - 20,   // Hunter, Rogue
+            7 | 11 => str * 2 - 20,    // Shaman, Druid
+            _ => (str - 10).max(0),    // Casters
         };
         ap.max(0)
     }
@@ -80,8 +80,8 @@ impl PlayerLevelStats {
     pub fn ranged_attack_power(&self, class: u8) -> i32 {
         let agi = self.agility as i32;
         let rap = match class {
-            3 => agi * 2 - 20,       // Hunter: 2 RAP per AGI
-            1 | 4 => agi - 10,       // Warrior, Rogue
+            3 => agi * 2 - 20, // Hunter: 2 RAP per AGI
+            1 | 4 => agi - 10, // Warrior, Rogue
             _ => 0,
         };
         rap.max(0)
@@ -117,20 +117,24 @@ impl PlayerLevelStats {
         let agi = self.agility as f32;
         // AGI per 1% dodge at level 80 (approximate WotLK values)
         let (base, agi_per_pct) = match class {
-            1 => (3.66, 59.88),     // Warrior
-            2 => (3.49, 59.88),     // Paladin
-            3 => (0.0, 33.56),      // Hunter
-            4 => (2.09, 47.85),     // Rogue
-            5 => (3.42, 66.75),     // Priest
-            6 => (3.66, 59.88),     // DK
-            7 => (2.11, 59.88),     // Shaman
-            8 => (3.66, 82.0),      // Mage
-            9 => (2.01, 66.75),     // Warlock
-            11 => (5.61, 47.85),    // Druid
+            1 => (3.66, 59.88),  // Warrior
+            2 => (3.49, 59.88),  // Paladin
+            3 => (0.0, 33.56),   // Hunter
+            4 => (2.09, 47.85),  // Rogue
+            5 => (3.42, 66.75),  // Priest
+            6 => (3.66, 59.88),  // DK
+            7 => (2.11, 59.88),  // Shaman
+            8 => (3.66, 82.0),   // Mage
+            9 => (2.01, 66.75),  // Warlock
+            11 => (5.61, 47.85), // Druid
             _ => (3.0, 60.0),
         };
         // Scale agi_per_pct for low levels (lower levels need less AGI)
-        let level_factor = if level >= 80 { 1.0 } else { (level as f32 / 80.0).max(0.1) };
+        let level_factor = if level >= 80 {
+            1.0
+        } else {
+            (level as f32 / 80.0).max(0.1)
+        };
         let scaled_agi_per_pct = agi_per_pct * level_factor;
         (base + agi / scaled_agi_per_pct.max(1.0)).max(0.0)
     }
@@ -138,10 +142,10 @@ impl PlayerLevelStats {
     /// Base parry percentage (melee classes only).
     pub fn parry_pct(&self, class: u8) -> f32 {
         match class {
-            1 | 2 | 6 => 5.0,   // Warrior, Paladin, DK
-            4 => 5.0,            // Rogue
-            7 | 11 => 5.0,       // Shaman, Druid
-            _ => 0.0,            // Casters don't parry by default
+            1 | 2 | 6 => 5.0, // Warrior, Paladin, DK
+            4 => 5.0,         // Rogue
+            7 | 11 => 5.0,    // Shaman, Druid
+            _ => 0.0,         // Casters don't parry by default
         }
     }
 
@@ -150,16 +154,20 @@ impl PlayerLevelStats {
         let agi = self.agility as f32;
         // AGI per 1% crit at level 80
         let agi_per_pct = match class {
-            1 => 62.22,   // Warrior
-            2 => 62.22,   // Paladin
-            3 => 83.33,   // Hunter
-            4 => 51.02,   // Rogue
-            6 => 62.22,   // DK
-            7 => 62.22,   // Shaman
-            11 => 51.02,  // Druid
-            _ => 80.0,    // Casters
+            1 => 62.22,  // Warrior
+            2 => 62.22,  // Paladin
+            3 => 83.33,  // Hunter
+            4 => 51.02,  // Rogue
+            6 => 62.22,  // DK
+            7 => 62.22,  // Shaman
+            11 => 51.02, // Druid
+            _ => 80.0,   // Casters
         };
-        let level_factor = if level >= 80 { 1.0 } else { (level as f32 / 80.0).max(0.1) };
+        let level_factor = if level >= 80 {
+            1.0
+        } else {
+            (level as f32 / 80.0).max(0.1)
+        };
         let scaled = agi_per_pct * level_factor;
         5.0 + agi / scaled.max(1.0) // base 5% + AGI contribution
     }
@@ -178,7 +186,11 @@ impl PlayerLevelStats {
             11 => 166.67, // Druid
             _ => 200.0,   // Non-casters
         };
-        let level_factor = if level >= 80 { 1.0 } else { (level as f32 / 80.0).max(0.1) };
+        let level_factor = if level >= 80 {
+            1.0
+        } else {
+            (level as f32 / 80.0).max(0.1)
+        };
         let scaled = int_per_pct * level_factor;
         int / scaled.max(1.0) // no base spell crit
     }
@@ -259,8 +271,13 @@ mod tests {
     #[test]
     fn max_health_low_stamina() {
         let stats = PlayerLevelStats {
-            strength: 20, agility: 20, stamina: 15,
-            intellect: 20, spirit: 20, base_health: 28, base_mana: 0,
+            strength: 20,
+            agility: 20,
+            stamina: 15,
+            intellect: 20,
+            spirit: 20,
+            base_health: 28,
+            base_mana: 0,
         };
         // STA <= 20: bonus = STA = 15
         assert_eq!(stats.max_health(), 28 + 15);
@@ -269,8 +286,13 @@ mod tests {
     #[test]
     fn max_health_high_stamina() {
         let stats = PlayerLevelStats {
-            strength: 20, agility: 20, stamina: 50,
-            intellect: 20, spirit: 20, base_health: 100, base_mana: 0,
+            strength: 20,
+            agility: 20,
+            stamina: 50,
+            intellect: 20,
+            spirit: 20,
+            base_health: 100,
+            base_mana: 0,
         };
         // STA > 20: bonus = 20 + (50 - 20) * 10 = 20 + 300 = 320
         assert_eq!(stats.max_health(), 100 + 320);
@@ -279,8 +301,13 @@ mod tests {
     #[test]
     fn max_mana_low_intellect() {
         let stats = PlayerLevelStats {
-            strength: 20, agility: 20, stamina: 20,
-            intellect: 18, spirit: 20, base_health: 50, base_mana: 60,
+            strength: 20,
+            agility: 20,
+            stamina: 20,
+            intellect: 18,
+            spirit: 20,
+            base_health: 50,
+            base_mana: 60,
         };
         // INT <= 20: bonus = INT = 18
         assert_eq!(stats.max_mana(), 60 + 18);
@@ -289,8 +316,13 @@ mod tests {
     #[test]
     fn max_mana_high_intellect() {
         let stats = PlayerLevelStats {
-            strength: 20, agility: 20, stamina: 20,
-            intellect: 40, spirit: 20, base_health: 50, base_mana: 100,
+            strength: 20,
+            agility: 20,
+            stamina: 20,
+            intellect: 40,
+            spirit: 20,
+            base_health: 50,
+            base_mana: 100,
         };
         // INT > 20: bonus = 20 + (40 - 20) * 15 = 20 + 300 = 320
         assert_eq!(stats.max_mana(), 100 + 320);
@@ -299,8 +331,13 @@ mod tests {
     #[test]
     fn base_armor_from_agility() {
         let stats = PlayerLevelStats {
-            strength: 20, agility: 35, stamina: 20,
-            intellect: 20, spirit: 20, base_health: 50, base_mana: 0,
+            strength: 20,
+            agility: 35,
+            stamina: 20,
+            intellect: 20,
+            spirit: 20,
+            base_health: 50,
+            base_mana: 0,
         };
         assert_eq!(stats.base_armor(), 70);
     }

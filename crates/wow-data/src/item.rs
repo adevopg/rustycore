@@ -31,6 +31,10 @@ pub struct ItemRecord {
     pub inventory_type: i8,
     /// Sheathe display type
     pub sheathe_type: u8,
+    /// C++ `ItemEntry::RandomSelect`.
+    pub random_select: u16,
+    /// C++ `ItemEntry::ItemRandomSuffixGroupID`.
+    pub random_suffix_group_id: u16,
 }
 
 /// In-memory store of all items loaded from Item.db2.
@@ -42,7 +46,10 @@ impl ItemStore {
     /// Build an item store from already parsed records.
     pub fn from_records(records: impl IntoIterator<Item = ItemRecord>) -> Self {
         Self {
-            items: records.into_iter().map(|record| (record.id, record)).collect(),
+            items: records
+                .into_iter()
+                .map(|record| (record.id, record))
+                .collect(),
         }
     }
 
@@ -66,6 +73,8 @@ impl ItemStore {
                 material: reader.get_field_u8(idx, 2),
                 inventory_type: reader.get_field_i8(idx, 3),
                 sheathe_type: reader.get_field_u8(idx, 5),
+                random_select: reader.get_field_u16(idx, 6),
+                random_suffix_group_id: reader.get_field_u16(idx, 7),
             };
             items.insert(id, record);
         }
@@ -92,6 +101,20 @@ impl ItemStore {
             .filter(|&inventory_type| inventory_type != 0)
     }
 
+    pub fn random_select(&self, entry_id: u32) -> u16 {
+        self.items
+            .get(&entry_id)
+            .map(|record| record.random_select)
+            .unwrap_or(0)
+    }
+
+    pub fn random_suffix_group_id(&self, entry_id: u32) -> u16 {
+        self.items
+            .get(&entry_id)
+            .map(|record| record.random_suffix_group_id)
+            .unwrap_or(0)
+    }
+
     /// Number of items in the store.
     pub fn len(&self) -> usize {
         self.items.len()
@@ -111,19 +134,29 @@ mod tests {
     fn test_load_item_store() {
         let data_dir = "/home/server/woltk-server-core/Data";
         let locale = "esES";
-        let path = Path::new(data_dir).join("dbc").join(locale).join("Item.db2");
+        let path = Path::new(data_dir)
+            .join("dbc")
+            .join(locale)
+            .join("Item.db2");
         if !path.exists() {
             eprintln!("Skipping test: Item.db2 not found at {}", path.display());
             return;
         }
 
         let store = ItemStore::load(data_dir, locale).expect("failed to load ItemStore");
-        assert!(store.len() > 20000, "expected >20k items, got {}", store.len());
+        assert!(
+            store.len() > 20000,
+            "expected >20k items, got {}",
+            store.len()
+        );
 
         // Thunderfury, Blessed Blade of the Windseeker (entry 19019)
         if let Some(tf) = store.get(19019) {
             assert_eq!(tf.class_id, 2, "Thunderfury should be Weapon class");
-            assert_eq!(tf.inventory_type, 13, "Thunderfury should be One-Hand Weapon");
+            assert_eq!(
+                tf.inventory_type, 13,
+                "Thunderfury should be One-Hand Weapon"
+            );
         }
 
         // Hearthstone (entry 6948) — not equippable
@@ -145,6 +178,8 @@ mod tests {
                         material: 0,
                         inventory_type: -1,
                         sheathe_type: 0,
+                        random_select: 0,
+                        random_suffix_group_id: 0,
                     },
                 ),
                 (
@@ -156,6 +191,8 @@ mod tests {
                         material: 0,
                         inventory_type: 0,
                         sheathe_type: 0,
+                        random_select: 0,
+                        random_suffix_group_id: 0,
                     },
                 ),
                 (
@@ -167,6 +204,8 @@ mod tests {
                         material: 1,
                         inventory_type: 13,
                         sheathe_type: 3,
+                        random_select: 0,
+                        random_suffix_group_id: 0,
                     },
                 ),
             ]),

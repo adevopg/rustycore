@@ -200,12 +200,8 @@ impl StatementDef for CharStatements {
                  LEFT JOIN guild_member AS gm ON c.guid = gm.guid \
                  WHERE c.account = ? AND c.deleteInfos_Name IS NULL"
             }
-            Self::SEL_CHECK_NAME => {
-                "SELECT name FROM characters WHERE name = ?"
-            }
-            Self::SEL_SUM_CHARS => {
-                "SELECT COUNT(*) FROM characters WHERE account = ?"
-            }
+            Self::SEL_CHECK_NAME => "SELECT name FROM characters WHERE name = ?",
+            Self::SEL_SUM_CHARS => "SELECT COUNT(*) FROM characters WHERE account = ?",
             Self::INS_CHARACTER => {
                 "INSERT INTO characters (guid, account, name, race, class, gender, level, money, \
                  zone, map, position_x, position_y, position_z, orientation, \
@@ -217,27 +213,19 @@ impl StatementDef for CharStatements {
                 "INSERT INTO character_customizations (guid, chrCustomizationOptionID, \
                  chrCustomizationChoiceID) VALUES (?,?,?)"
             }
-            Self::DEL_CHARACTER => {
-                "DELETE FROM characters WHERE guid = ?"
-            }
+            Self::DEL_CHARACTER => "DELETE FROM characters WHERE guid = ?",
             Self::SEL_CHARACTER => {
                 "SELECT guid, account, name, race, class, gender, level, zone, map, \
                  position_x, position_y, position_z, orientation, playerFlags, at_login, \
                  totaltime, leveltime, money, xp \
                  FROM characters WHERE guid = ?"
             }
-            Self::UPD_CHAR_ONLINE => {
-                "UPDATE characters SET online = 1 WHERE guid = ?"
-            }
-            Self::UPD_CHAR_OFFLINE => {
-                "UPDATE characters SET online = 0 WHERE guid = ?"
-            }
+            Self::UPD_CHAR_ONLINE => "UPDATE characters SET online = 1 WHERE guid = ?",
+            Self::UPD_CHAR_OFFLINE => "UPDATE characters SET online = 0 WHERE guid = ?",
             Self::SEL_CHAR_DEL_CHECK => {
                 "SELECT guid, account FROM characters WHERE guid = ? AND account = ?"
             }
-            Self::SEL_MAX_GUID => {
-                "SELECT MAX(guid) FROM characters"
-            }
+            Self::SEL_MAX_GUID => "SELECT MAX(guid) FROM characters",
             Self::SEL_CHAR_EQUIPMENT => {
                 "SELECT ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context, \
                  ii.flags, ii.playedTime, ir.paidMoney, ir.paidExtendedCost \
@@ -253,9 +241,7 @@ impl StatementDef for CharStatements {
             Self::DEL_CHAR_INVENTORY_ITEM => {
                 "DELETE FROM character_inventory WHERE guid = ? AND item = ?"
             }
-            Self::SEL_CHARACTER_SKILLS => {
-                "SELECT skill FROM character_skills WHERE guid = ?"
-            }
+            Self::SEL_CHARACTER_SKILLS => "SELECT skill FROM character_skills WHERE guid = ?",
             Self::SEL_CHARACTER_SPELL => {
                 "SELECT spell, active, disabled FROM character_spell WHERE guid = ?"
             }
@@ -286,18 +272,10 @@ impl StatementDef for CharStatements {
             Self::UPD_CHAR_PLAYED_TIME => {
                 "UPDATE characters SET totaltime = ?, leveltime = ? WHERE guid = ?"
             }
-            Self::UPD_CHAR_XP => {
-                "UPDATE characters SET xp = ? WHERE guid = ?"
-            }
-            Self::UPD_CHAR_LEVEL => {
-                "UPDATE characters SET level = ?, xp = ? WHERE guid = ?"
-            }
-            Self::UPD_CHAR_MONEY => {
-                "UPDATE characters SET money = ? WHERE guid = ?"
-            }
-            Self::SEL_MAX_ITEM_GUID => {
-                "SELECT MAX(guid) FROM item_instance"
-            }
+            Self::UPD_CHAR_XP => "UPDATE characters SET xp = ? WHERE guid = ?",
+            Self::UPD_CHAR_LEVEL => "UPDATE characters SET level = ?, xp = ? WHERE guid = ?",
+            Self::UPD_CHAR_MONEY => "UPDATE characters SET money = ? WHERE guid = ?",
+            Self::SEL_MAX_ITEM_GUID => "SELECT MAX(guid) FROM item_instance",
             Self::INS_ITEM_INSTANCE => {
                 "INSERT INTO item_instance \
                  (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, \
@@ -319,27 +297,19 @@ impl StatementDef for CharStatements {
                   randomPropertiesSeed, context) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             }
-            Self::UPD_ITEM_INSTANCE_COUNT => {
-                "UPDATE item_instance SET count = ? WHERE guid = ?"
-            }
-            Self::UPD_ITEM_INSTANCE_FLAGS => {
-                "UPDATE item_instance SET flags = ? WHERE guid = ?"
-            }
+            Self::UPD_ITEM_INSTANCE_COUNT => "UPDATE item_instance SET count = ? WHERE guid = ?",
+            Self::UPD_ITEM_INSTANCE_FLAGS => "UPDATE item_instance SET flags = ? WHERE guid = ?",
             Self::SEL_CHARACTER_GIFT_BY_ITEM => {
                 "SELECT entry, flags FROM character_gifts WHERE item_guid = ?"
             }
-            Self::DEL_GIFT => {
-                "DELETE FROM character_gifts WHERE item_guid = ?"
-            }
+            Self::DEL_GIFT => "DELETE FROM character_gifts WHERE item_guid = ?",
             Self::UPD_ITEM_INSTANCE_OPEN_GIFT => {
                 "UPDATE item_instance SET itemEntry = ?, giftCreatorGuid = 0, flags = ?, durability = ? WHERE guid = ?"
             }
             Self::INS_CHAR_INVENTORY => {
                 "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)"
             }
-            Self::DEL_ITEM_INSTANCE => {
-                "DELETE FROM item_instance WHERE guid = ?"
-            }
+            Self::DEL_ITEM_INSTANCE => "DELETE FROM item_instance WHERE guid = ?",
             Self::SEL_CHAR_BAG_CONTENTS => {
                 "SELECT bag_ci.slot, ci.slot, ii.itemEntry, ci.item, ii.count, ii.durability, ii.context, \
                  ii.flags, ii.playedTime, ir.paidMoney, ir.paidExtendedCost \
@@ -360,12 +330,8 @@ impl StatementDef for CharStatements {
             Self::DEL_ITEM_REFUND_INSTANCE => {
                 "DELETE FROM item_refund_instance WHERE item_guid = ?"
             }
-            Self::DEL_ITEMCONTAINER_MONEY => {
-                "DELETE FROM item_loot_money WHERE container_id = ?"
-            }
-            Self::DEL_ITEMCONTAINER_ITEMS => {
-                "DELETE FROM item_loot_items WHERE container_id = ?"
-            }
+            Self::DEL_ITEMCONTAINER_MONEY => "DELETE FROM item_loot_money WHERE container_id = ?",
+            Self::DEL_ITEMCONTAINER_ITEMS => "DELETE FROM item_loot_items WHERE container_id = ?",
             Self::DEL_ITEMCONTAINER_ITEM => {
                 "DELETE FROM item_loot_items WHERE container_id = ? AND item_id = ? AND item_count = ? AND item_index = ?"
             }
@@ -434,7 +400,11 @@ mod tests {
     fn char_sql_contains_expected_tables() {
         assert!(CharStatements::SEL_ENUM.sql().contains("characters"));
         assert!(CharStatements::INS_CHARACTER.sql().contains("characters"));
-        assert!(CharStatements::INS_CHAR_CUSTOMIZATION.sql().contains("character_customizations"));
+        assert!(
+            CharStatements::INS_CHAR_CUSTOMIZATION
+                .sql()
+                .contains("character_customizations")
+        );
         assert!(CharStatements::DEL_CHARACTER.sql().contains("characters"));
     }
 
@@ -452,34 +422,163 @@ mod tests {
         // INS_CHARACTER has 22 placeholders
         assert_eq!(CharStatements::INS_CHARACTER.sql().matches('?').count(), 22);
         // INS_CHAR_CUSTOMIZATION has 3 placeholders
-        assert_eq!(CharStatements::INS_CHAR_CUSTOMIZATION.sql().matches('?').count(), 3);
+        assert_eq!(
+            CharStatements::INS_CHAR_CUSTOMIZATION
+                .sql()
+                .matches('?')
+                .count(),
+            3
+        );
         // DEL_CHARACTER has 1 placeholder
         assert_eq!(CharStatements::DEL_CHARACTER.sql().matches('?').count(), 1);
         // SEL_CHARACTER has 1 placeholder
         assert_eq!(CharStatements::SEL_CHARACTER.sql().matches('?').count(), 1);
         // SEL_CHAR_DEL_CHECK has 2 placeholders
-        assert_eq!(CharStatements::SEL_CHAR_DEL_CHECK.sql().matches('?').count(), 2);
+        assert_eq!(
+            CharStatements::SEL_CHAR_DEL_CHECK
+                .sql()
+                .matches('?')
+                .count(),
+            2
+        );
         // Player currency save/load statements mirror C++ CharacterDatabase.cpp.
-        assert_eq!(CharStatements::SEL_PLAYER_CURRENCY.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::UPD_PLAYER_CURRENCY.sql().matches('?').count(), 8);
-        assert_eq!(CharStatements::REP_PLAYER_CURRENCY.sql().matches('?').count(), 8);
-        assert_eq!(CharStatements::SEL_CHAR_EQUIPMENT.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::INS_ITEM_INSTANCE_WITH_RANDOM_CONTEXT.sql().matches('?').count(), 8);
-        assert_eq!(CharStatements::INS_ITEM_INSTANCE_CLONE.sql().matches('?').count(), 14);
-        assert_eq!(CharStatements::UPD_ITEM_INSTANCE_FLAGS.sql().matches('?').count(), 2);
-        assert_eq!(CharStatements::SEL_CHARACTER_GIFT_BY_ITEM.sql().matches('?').count(), 1);
+        assert_eq!(
+            CharStatements::SEL_PLAYER_CURRENCY
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::UPD_PLAYER_CURRENCY
+                .sql()
+                .matches('?')
+                .count(),
+            8
+        );
+        assert_eq!(
+            CharStatements::REP_PLAYER_CURRENCY
+                .sql()
+                .matches('?')
+                .count(),
+            8
+        );
+        assert_eq!(
+            CharStatements::SEL_CHAR_EQUIPMENT
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::INS_ITEM_INSTANCE_WITH_RANDOM_CONTEXT
+                .sql()
+                .matches('?')
+                .count(),
+            8
+        );
+        assert_eq!(
+            CharStatements::INS_ITEM_INSTANCE_CLONE
+                .sql()
+                .matches('?')
+                .count(),
+            14
+        );
+        assert_eq!(
+            CharStatements::UPD_ITEM_INSTANCE_FLAGS
+                .sql()
+                .matches('?')
+                .count(),
+            2
+        );
+        assert_eq!(
+            CharStatements::SEL_CHARACTER_GIFT_BY_ITEM
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
         assert_eq!(CharStatements::DEL_GIFT.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::UPD_ITEM_INSTANCE_OPEN_GIFT.sql().matches('?').count(), 4);
-        assert_eq!(CharStatements::SEL_ITEM_REFUNDS.sql().matches('?').count(), 2);
-        assert_eq!(CharStatements::SEL_CHAR_BAG_CONTENTS.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::DEL_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::DEL_ITEMCONTAINER_MONEY.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::DEL_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::DEL_ITEMCONTAINER_ITEM.sql().matches('?').count(), 4);
-        assert_eq!(CharStatements::SEL_ITEMCONTAINER_MONEY.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::INS_ITEMCONTAINER_MONEY.sql().matches('?').count(), 2);
-        assert_eq!(CharStatements::SEL_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 1);
-        assert_eq!(CharStatements::INS_ITEMCONTAINER_ITEMS.sql().matches('?').count(), 13);
-        assert_eq!(CharStatements::INS_ITEM_REFUND_INSTANCE.sql().matches('?').count(), 4);
+        assert_eq!(
+            CharStatements::UPD_ITEM_INSTANCE_OPEN_GIFT
+                .sql()
+                .matches('?')
+                .count(),
+            4
+        );
+        assert_eq!(
+            CharStatements::SEL_ITEM_REFUNDS.sql().matches('?').count(),
+            2
+        );
+        assert_eq!(
+            CharStatements::SEL_CHAR_BAG_CONTENTS
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::DEL_ITEM_REFUND_INSTANCE
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::DEL_ITEMCONTAINER_MONEY
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::DEL_ITEMCONTAINER_ITEMS
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::DEL_ITEMCONTAINER_ITEM
+                .sql()
+                .matches('?')
+                .count(),
+            4
+        );
+        assert_eq!(
+            CharStatements::SEL_ITEMCONTAINER_MONEY
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::INS_ITEMCONTAINER_MONEY
+                .sql()
+                .matches('?')
+                .count(),
+            2
+        );
+        assert_eq!(
+            CharStatements::SEL_ITEMCONTAINER_ITEMS
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            CharStatements::INS_ITEMCONTAINER_ITEMS
+                .sql()
+                .matches('?')
+                .count(),
+            13
+        );
+        assert_eq!(
+            CharStatements::INS_ITEM_REFUND_INSTANCE
+                .sql()
+                .matches('?')
+                .count(),
+            4
+        );
     }
 }

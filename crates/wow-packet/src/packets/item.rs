@@ -393,7 +393,11 @@ impl ClientPacket for SwapInvItem {
         let inv_update = InvUpdate::read(packet)?;
         let dst_slot = packet.read_uint8()?;
         let src_slot = packet.read_uint8()?;
-        Ok(Self { inv_update, dst_slot, src_slot })
+        Ok(Self {
+            inv_update,
+            dst_slot,
+            src_slot,
+        })
     }
 }
 
@@ -415,7 +419,11 @@ impl ClientPacket for AutoEquipItem {
         let inv_update = InvUpdate::read(packet)?;
         let pack_slot = packet.read_uint8()?;
         let slot = packet.read_uint8()?;
-        Ok(Self { inv_update, pack_slot, slot })
+        Ok(Self {
+            inv_update,
+            pack_slot,
+            slot,
+        })
     }
 }
 
@@ -440,7 +448,13 @@ impl ClientPacket for SwapItem {
         let container_slot_a = packet.read_uint8()?;
         let slot_b = packet.read_uint8()?;
         let slot_a = packet.read_uint8()?;
-        Ok(Self { inv_update, container_slot_b, container_slot_a, slot_b, slot_a })
+        Ok(Self {
+            inv_update,
+            container_slot_b,
+            container_slot_a,
+            slot_b,
+            slot_a,
+        })
     }
 }
 
@@ -465,7 +479,12 @@ impl ClientPacket for AutoStoreBagItem {
         let container_slot_a = packet.read_uint8()?;
         let container_slot_b = packet.read_uint8()?;
         let slot_a = packet.read_uint8()?;
-        Ok(Self { inv_update, container_slot_a, container_slot_b, slot_a })
+        Ok(Self {
+            inv_update,
+            container_slot_a,
+            container_slot_b,
+            slot_a,
+        })
     }
 }
 
@@ -486,7 +505,11 @@ impl ClientPacket for DestroyItemPkt {
         let count = packet.read_int32()?;
         let container_id = packet.read_uint8()?;
         let slot_num = packet.read_uint8()?;
-        Ok(Self { count, container_id, slot_num })
+        Ok(Self {
+            count,
+            container_id,
+            slot_num,
+        })
     }
 }
 
@@ -595,27 +618,27 @@ pub fn equip_slot_for_inventory_type(
     }
 
     match inv_type {
-        1 => Some(0),        // Head
-        2 => Some(1),        // Neck
-        3 => Some(2),        // Shoulders
-        4 => Some(3),        // Body (shirt)
-        5 | 20 => Some(4),   // Chest / Robe
-        6 => Some(5),        // Waist
-        7 => Some(6),        // Legs
-        8 => Some(7),        // Feet
-        9 => Some(8),        // Wrists
-        10 => Some(9),       // Hands
-        11 => Some(first_empty(occupied, &[10, 11], 10)), // Finger
-        12 => Some(first_empty(occupied, &[12, 13], 12)), // Trinket
-        13 => Some(first_empty(occupied, &[15, 16], 15)), // 1H Weapon
-        14 => Some(16),      // Shield → OffHand
+        1 => Some(0),                                             // Head
+        2 => Some(1),                                             // Neck
+        3 => Some(2),                                             // Shoulders
+        4 => Some(3),                                             // Body (shirt)
+        5 | 20 => Some(4),                                        // Chest / Robe
+        6 => Some(5),                                             // Waist
+        7 => Some(6),                                             // Legs
+        8 => Some(7),                                             // Feet
+        9 => Some(8),                                             // Wrists
+        10 => Some(9),                                            // Hands
+        11 => Some(first_empty(occupied, &[10, 11], 10)),         // Finger
+        12 => Some(first_empty(occupied, &[12, 13], 12)),         // Trinket
+        13 => Some(first_empty(occupied, &[15, 16], 15)),         // 1H Weapon
+        14 => Some(16),                                           // Shield → OffHand
         15 | 25 | 26 | 28 => Some(17), // Ranged / Thrown / RangedRight (Wand) / Relic
-        16 => Some(14),      // Cloak
-        17 | 21 => Some(15), // 2H Weapon / WeaponMainHand
+        16 => Some(14),                // Cloak
+        17 | 21 => Some(15),           // 2H Weapon / WeaponMainHand
         18 => Some(first_empty(occupied, &[30, 31, 32, 33], 30)), // Bag
-        19 => Some(18),      // Tabard
-        22 => Some(16),      // WeaponOffHand
-        23 => Some(16),      // Holdable → OffHand
+        19 => Some(18),                // Tabard
+        22 => Some(16),                // WeaponOffHand
+        23 => Some(16),                // Holdable → OffHand
         _ => None,
     }
 }
@@ -653,20 +676,12 @@ mod tests {
     #[test]
     fn inventory_change_failure_serializes_bind_confirm_context_like_cpp() {
         let pkt = InventoryChangeFailure::error(InventoryResult::EventAutoequipBindConfirm)
-            .with_bind_confirm_context(
-                ObjectGuid::new(0, 0x0102),
-                37,
-                ObjectGuid::new(0, 0x0506),
-            );
+            .with_bind_confirm_context(ObjectGuid::new(0, 0x0102), 37, ObjectGuid::new(0, 0x0506));
         let bytes = pkt.to_bytes();
 
         assert_eq!(
             &bytes[bytes.len() - 12..],
-            &[
-                0x03, 0x00, 0x02, 0x01,
-                37, 0, 0, 0,
-                0x03, 0x00, 0x06, 0x05,
-            ]
+            &[0x03, 0x00, 0x02, 0x01, 37, 0, 0, 0, 0x03, 0x00, 0x06, 0x05,]
         );
     }
 
@@ -676,12 +691,15 @@ mod tests {
         // InvUpdate: 2 bits = 2 (0x80 = 10_000000), flush, then 2x(container, slot)
         // followed by dst_slot=40 src_slot=36
         let mut pkt = WorldPacket::from_bytes(&[
-            SwapInvItem::OPCODE as u8, (SwapInvItem::OPCODE as u16 >> 8) as u8,
-            0x80,       // 2 bits: count=2, rest padding
-            0xFF, 0x28, // item[0]: container=255, slot=40
-            0xFF, 0x24, // item[1]: container=255, slot=36
-            0x28,       // dst_slot=40
-            0x24,       // src_slot=36
+            SwapInvItem::OPCODE as u8,
+            (SwapInvItem::OPCODE as u16 >> 8) as u8,
+            0x80, // 2 bits: count=2, rest padding
+            0xFF,
+            0x28, // item[0]: container=255, slot=40
+            0xFF,
+            0x24, // item[1]: container=255, slot=36
+            0x28, // dst_slot=40
+            0x24, // src_slot=36
         ]);
         pkt.skip_opcode();
         let swap = SwapInvItem::read(&mut pkt).unwrap();
@@ -694,10 +712,11 @@ mod tests {
     fn swap_inv_item_parses_zero_inv_update() {
         // InvUpdate with 0 items (bits 00 = 0x00)
         let mut pkt = WorldPacket::from_bytes(&[
-            SwapInvItem::OPCODE as u8, (SwapInvItem::OPCODE as u16 >> 8) as u8,
-            0x00,  // 2 bits: count=0
-            15,    // dst
-            35,    // src
+            SwapInvItem::OPCODE as u8,
+            (SwapInvItem::OPCODE as u16 >> 8) as u8,
+            0x00, // 2 bits: count=0
+            15,   // dst
+            35,   // src
         ]);
         pkt.skip_opcode();
         let swap = SwapInvItem::read(&mut pkt).unwrap();
@@ -710,10 +729,11 @@ mod tests {
     fn auto_equip_item_parses() {
         // InvUpdate with 0 items, then pack_slot=255 slot=35
         let mut pkt = WorldPacket::from_bytes(&[
-            AutoEquipItem::OPCODE as u8, (AutoEquipItem::OPCODE as u16 >> 8) as u8,
-            0x00,  // 2 bits: count=0
-            255,   // pack_slot (default backpack)
-            35,    // slot
+            AutoEquipItem::OPCODE as u8,
+            (AutoEquipItem::OPCODE as u16 >> 8) as u8,
+            0x00, // 2 bits: count=0
+            255,  // pack_slot (default backpack)
+            35,   // slot
         ]);
         pkt.skip_opcode();
         let eq = AutoEquipItem::read(&mut pkt).unwrap();
@@ -726,12 +746,13 @@ mod tests {
     fn swap_item_parses() {
         // InvUpdate with 0 items, then containerB=255 containerA=255 slotB=15 slotA=35
         let mut pkt = WorldPacket::from_bytes(&[
-            SwapItem::OPCODE as u8, (SwapItem::OPCODE as u16 >> 8) as u8,
-            0x00,  // 2 bits: count=0
-            255,   // containerSlotB
-            255,   // containerSlotA
-            15,    // slotB
-            35,    // slotA
+            SwapItem::OPCODE as u8,
+            (SwapItem::OPCODE as u16 >> 8) as u8,
+            0x00, // 2 bits: count=0
+            255,  // containerSlotB
+            255,  // containerSlotA
+            15,   // slotB
+            35,   // slotA
         ]);
         pkt.skip_opcode();
         let swap = SwapItem::read(&mut pkt).unwrap();
@@ -746,11 +767,12 @@ mod tests {
     fn auto_store_bag_item_parses() {
         // InvUpdate with 0 items, then containerA=255 containerB=255 slotA=5
         let mut pkt = WorldPacket::from_bytes(&[
-            AutoStoreBagItem::OPCODE as u8, (AutoStoreBagItem::OPCODE as u16 >> 8) as u8,
-            0x00,  // 2 bits: count=0
-            255,   // containerSlotA
-            255,   // containerSlotB
-            5,     // slotA
+            AutoStoreBagItem::OPCODE as u8,
+            (AutoStoreBagItem::OPCODE as u16 >> 8) as u8,
+            0x00, // 2 bits: count=0
+            255,  // containerSlotA
+            255,  // containerSlotB
+            5,    // slotA
         ]);
         pkt.skip_opcode();
         let store = AutoStoreBagItem::read(&mut pkt).unwrap();
@@ -763,10 +785,14 @@ mod tests {
     #[test]
     fn destroy_item_parses() {
         let mut pkt = WorldPacket::from_bytes(&[
-            DestroyItemPkt::OPCODE as u8, (DestroyItemPkt::OPCODE as u16 >> 8) as u8,
-            1, 0, 0, 0, // count=1
-            255,         // containerId
-            35,          // slotNum
+            DestroyItemPkt::OPCODE as u8,
+            (DestroyItemPkt::OPCODE as u16 >> 8) as u8,
+            1,
+            0,
+            0,
+            0,   // count=1
+            255, // containerId
+            35,  // slotNum
         ]);
         pkt.skip_opcode();
         let destroy = DestroyItemPkt::read(&mut pkt).unwrap();
@@ -790,11 +816,7 @@ mod tests {
         assert_eq!(
             pkt.data(),
             &[
-                0x44, 0x33, 0x22, 0x11,
-                0xFE, 0xFF, 0xFF, 0xFF,
-                0x03, 0x00, 0x00, 0x00,
-                0x00,
-                0x00,
+                0x44, 0x33, 0x22, 0x11, 0xFE, 0xFF, 0xFF, 0xFF, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
             ]
         );
     }
@@ -819,17 +841,8 @@ mod tests {
         assert_eq!(
             pkt.data(),
             &[
-                10, 0, 0, 0,
-                20, 0, 0, 0,
-                0xE2, 0xFF, 0xFF, 0xFF,
-                0x80,
-                0x08,
-                0xFB, 0xFF, 0xFF, 0xFF, 3,
-                7, 0, 0, 0, 4,
-                4,
-                2, 0, 0, 0,
-                100, 0, 0, 0,
-                200, 0, 0, 0,
+                10, 0, 0, 0, 20, 0, 0, 0, 0xE2, 0xFF, 0xFF, 0xFF, 0x80, 0x08, 0xFB, 0xFF, 0xFF,
+                0xFF, 3, 7, 0, 0, 0, 4, 4, 2, 0, 0, 0, 100, 0, 0, 0, 200, 0, 0, 0,
             ]
         );
     }
@@ -868,24 +881,10 @@ mod tests {
         assert_eq!(
             pkt.data(),
             &[
-                0x03, 0x00, 0x02, 0x01,
-                4,
-                0xFF, 0xFF, 0xFF, 0xFF,
-                0x09, 0x03, 0x00, 0x00,
-                3, 0, 0, 0,
-                9, 0, 0, 0,
-                0x67, 0x02, 0x00, 0x00,
-                123, 0, 0, 0,
-                188, 0, 0, 0,
-                26, 0, 0, 0,
-                25, 0, 0, 0,
-                0x03, 0x00, 0x06, 0x05,
-                0x92,
-                0x29, 0x23, 0x00, 0x00,
-                12, 0, 0, 0,
-                0xB3, 0xFF, 0xFF, 0xFF,
-                0x00,
-                0x00,
+                0x03, 0x00, 0x02, 0x01, 4, 0xFF, 0xFF, 0xFF, 0xFF, 0x09, 0x03, 0x00, 0x00, 3, 0, 0,
+                0, 9, 0, 0, 0, 0x67, 0x02, 0x00, 0x00, 123, 0, 0, 0, 188, 0, 0, 0, 26, 0, 0, 0, 25,
+                0, 0, 0, 0x03, 0x00, 0x06, 0x05, 0x92, 0x29, 0x23, 0x00, 0x00, 12, 0, 0, 0, 0xB3,
+                0xFF, 0xFF, 0xFF, 0x00, 0x00,
             ]
         );
     }
@@ -901,10 +900,7 @@ mod tests {
 
         assert_eq!(
             pkt.data(),
-            &[
-                0x03, 0x00, 0x02, 0x01,
-                0x2C, 0x01, 0x00, 0x00,
-            ]
+            &[0x03, 0x00, 0x02, 0x01, 0x2C, 0x01, 0x00, 0x00,]
         );
     }
 
@@ -922,10 +918,7 @@ mod tests {
         assert_eq!(
             pkt.data(),
             &[
-                0x03, 0x00, 0x06, 0x05,
-                45, 0, 0, 0,
-                2, 0, 0, 0,
-                0x03, 0x00, 0x02, 0x01,
+                0x03, 0x00, 0x06, 0x05, 45, 0, 0, 0, 2, 0, 0, 0, 0x03, 0x00, 0x02, 0x01,
             ]
         );
     }
@@ -1032,12 +1025,12 @@ mod tests {
     #[test]
     fn equip_slot_mapping() {
         let empty = std::collections::HashMap::new();
-        assert_eq!(equip_slot_for_inventory_type(1, &empty), Some(0));  // Head
-        assert_eq!(equip_slot_for_inventory_type(5, &empty), Some(4));  // Chest
+        assert_eq!(equip_slot_for_inventory_type(1, &empty), Some(0)); // Head
+        assert_eq!(equip_slot_for_inventory_type(5, &empty), Some(4)); // Chest
         assert_eq!(equip_slot_for_inventory_type(16, &empty), Some(14)); // Cloak
         assert_eq!(equip_slot_for_inventory_type(17, &empty), Some(15)); // 2H Weapon
         assert_eq!(equip_slot_for_inventory_type(18, &empty), Some(30)); // Bag
-        assert_eq!(equip_slot_for_inventory_type(0, &empty), None);     // Non-equippable
+        assert_eq!(equip_slot_for_inventory_type(0, &empty), None); // Non-equippable
     }
 
     #[test]

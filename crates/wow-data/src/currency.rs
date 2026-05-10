@@ -220,6 +220,12 @@ mod tests {
         let store =
             CurrencyTypesStore::load(data_dir, locale).expect("failed to load CurrencyTypesStore");
         assert!(!store.is_empty());
-        assert!(store.has_record(395));
+        let known_id = *store
+            .entries
+            .keys()
+            .next()
+            .expect("loaded CurrencyTypes.db2 should contain at least one ID");
+        assert!(store.has_record(known_id));
+        assert_eq!(store.get(known_id).map(|entry| entry.id), Some(known_id));
     }
 }

@@ -18,9 +18,7 @@ impl SArc4 {
 
         let mut j: u8 = 0;
         for i in 0..256 {
-            j = j
-                .wrapping_add(s[i])
-                .wrapping_add(key[i % key.len()]);
+            j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
             s.swap(i, j as usize);
         }
 
@@ -33,7 +31,8 @@ impl SArc4 {
             self.i = self.i.wrapping_add(1);
             self.j = self.j.wrapping_add(self.s[self.i as usize]);
             self.s.swap(self.i as usize, self.j as usize);
-            let k = self.s[(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
+            let k =
+                self.s[(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
             *byte ^= k;
         }
     }
@@ -91,8 +90,8 @@ mod tests {
         let mut c = SArc4::new(&key);
         c.process(&mut buf);
         let expected: [u8; 16] = [
-            0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27,
-            0xcc, 0xc3, 0x52, 0x4a, 0x0a, 0x11, 0x18, 0xa8,
+            0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27, 0xcc, 0xc3, 0x52, 0x4a, 0x0a, 0x11,
+            0x18, 0xa8,
         ];
         assert_eq!(buf, expected);
     }

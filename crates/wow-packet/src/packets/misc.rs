@@ -108,110 +108,110 @@ impl ServerPacket for FeatureSystemStatus {
 
     fn write(&self, pkt: &mut WorldPacket) {
         // ── Fixed-size fields (exact C# order) ──
-        pkt.write_uint8(2);                     // ComplaintStatus
-        pkt.write_uint32(self.cfg_realm_id);    // CfgRealmID
+        pkt.write_uint8(2); // ComplaintStatus
+        pkt.write_uint32(self.cfg_realm_id); // CfgRealmID
         pkt.write_int32(self.cfg_realm_rec_id); // CfgRealmRecID
 
         // RAFSystem (5 fields)
-        pkt.write_uint32(0);     // RAFSystem.MaxRecruits
-        pkt.write_uint32(0);     // RAFSystem.MaxRecruitMonths
-        pkt.write_uint32(0);     // RAFSystem.MaxRecruitmentUses
-        pkt.write_uint32(0);     // RAFSystem.DaysInCycle
-        pkt.write_uint32(0);     // RAFSystem.Unknown1007
+        pkt.write_uint32(0); // RAFSystem.MaxRecruits
+        pkt.write_uint32(0); // RAFSystem.MaxRecruitMonths
+        pkt.write_uint32(0); // RAFSystem.MaxRecruitmentUses
+        pkt.write_uint32(0); // RAFSystem.DaysInCycle
+        pkt.write_uint32(0); // RAFSystem.Unknown1007
 
         // Token/Kiosk/Store
-        pkt.write_uint32(0);     // TokenPollTimeSeconds
-        pkt.write_uint32(0);     // KioskSessionMinutes
-        pkt.write_int64(0);      // TokenBalanceAmount
-        pkt.write_uint32(0);     // BpayStoreProductDeliveryDelay
-        pkt.write_uint32(0);     // ClubsPresenceUpdateTimer
-        pkt.write_uint32(0);     // HiddenUIClubsPresenceUpdateTimer
+        pkt.write_uint32(0); // TokenPollTimeSeconds
+        pkt.write_uint32(0); // KioskSessionMinutes
+        pkt.write_int64(0); // TokenBalanceAmount
+        pkt.write_uint32(0); // BpayStoreProductDeliveryDelay
+        pkt.write_uint32(0); // ClubsPresenceUpdateTimer
+        pkt.write_uint32(0); // HiddenUIClubsPresenceUpdateTimer
 
         // Season/Rules/Query
-        pkt.write_int32(0);      // ActiveSeason
-        pkt.write_int32(0);      // GameRuleValues.Count
-        pkt.write_int16(50);     // MaxPlayerNameQueriesPerPacket
-        pkt.write_int16(0);      // PlayerNameQueryTelemetryInterval
-        pkt.write_uint32(60);    // PlayerNameQueryInterval (seconds)
+        pkt.write_int32(0); // ActiveSeason
+        pkt.write_int32(0); // GameRuleValues.Count
+        pkt.write_int16(50); // MaxPlayerNameQueriesPerPacket
+        pkt.write_int16(0); // PlayerNameQueryTelemetryInterval
+        pkt.write_uint32(60); // PlayerNameQueryInterval (seconds)
 
         // GameRuleValues (empty, count=0)
 
         // ── Bit flags (42 boolean fields — exact C# order) ──
-        pkt.write_bit(false);    // VoiceEnabled
-        pkt.write_bit(false);    // EuropaTicketSystemStatus.HasValue
-        pkt.write_bit(false);    // BpayStoreEnabled
-        pkt.write_bit(false);    // BpayStoreAvailable
-        pkt.write_bit(false);    // BpayStoreDisabledByParentalControls
-        pkt.write_bit(false);    // ItemRestorationButtonEnabled
-        pkt.write_bit(false);    // BrowserEnabled
-        pkt.write_bit(false);    // SessionAlert.HasValue
-        pkt.write_bit(false);    // RAFSystem.Enabled
-        pkt.write_bit(false);    // RAFSystem.RecruitingEnabled
-        pkt.write_bit(false);    // CharUndeleteEnabled
-        pkt.write_bit(false);    // RestrictedAccount
-        pkt.write_bit(false);    // CommerceSystemEnabled
-        pkt.write_bit(true);     // TutorialsEnabled
-        pkt.write_bit(false);    // Unk67
-        pkt.write_bit(false);    // WillKickFromWorld
-        pkt.write_bit(false);    // KioskModeEnabled
-        pkt.write_bit(false);    // CompetitiveModeEnabled
-        pkt.write_bit(false);    // TokenBalanceEnabled
-        pkt.write_bit(false);    // WarModeFeatureEnabled
-        pkt.write_bit(false);    // ClubsEnabled
-        pkt.write_bit(false);    // ClubsBattleNetClubTypeAllowed
-        pkt.write_bit(false);    // ClubsCharacterClubTypeAllowed
-        pkt.write_bit(false);    // ClubsPresenceUpdateEnabled
-        pkt.write_bit(false);    // VoiceChatDisabledByParentalControl
-        pkt.write_bit(false);    // VoiceChatMutedByParentalControl
-        pkt.write_bit(false);    // QuestSessionEnabled
-        pkt.write_bit(false);    // IsMuted
-        pkt.write_bit(false);    // ClubFinderEnabled
-        pkt.write_bit(false);    // Unknown901CheckoutRelated
-        pkt.write_bit(false);    // TextToSpeechFeatureEnabled
-        pkt.write_bit(false);    // ChatDisabledByDefault
-        pkt.write_bit(false);    // ChatDisabledByPlayer
-        pkt.write_bit(false);    // LFGListCustomRequiresAuthenticator
-        pkt.write_bit(false);    // AddonsDisabled
-        pkt.write_bit(false);    // WarGamesEnabled
-        pkt.write_bit(false);    // ContentTrackingEnabled
-        pkt.write_bit(false);    // IsSellAllJunkEnabled
-        pkt.write_bit(false);    // IsGroupFinderEnabled
-        pkt.write_bit(false);    // IsLFDEnabled
-        pkt.write_bit(false);    // IsLFREnabled
-        pkt.write_bit(false);    // IsPremadeGroupEnabled
+        pkt.write_bit(false); // VoiceEnabled
+        pkt.write_bit(false); // EuropaTicketSystemStatus.HasValue
+        pkt.write_bit(false); // BpayStoreEnabled
+        pkt.write_bit(false); // BpayStoreAvailable
+        pkt.write_bit(false); // BpayStoreDisabledByParentalControls
+        pkt.write_bit(false); // ItemRestorationButtonEnabled
+        pkt.write_bit(false); // BrowserEnabled
+        pkt.write_bit(false); // SessionAlert.HasValue
+        pkt.write_bit(false); // RAFSystem.Enabled
+        pkt.write_bit(false); // RAFSystem.RecruitingEnabled
+        pkt.write_bit(false); // CharUndeleteEnabled
+        pkt.write_bit(false); // RestrictedAccount
+        pkt.write_bit(false); // CommerceSystemEnabled
+        pkt.write_bit(true); // TutorialsEnabled
+        pkt.write_bit(false); // Unk67
+        pkt.write_bit(false); // WillKickFromWorld
+        pkt.write_bit(false); // KioskModeEnabled
+        pkt.write_bit(false); // CompetitiveModeEnabled
+        pkt.write_bit(false); // TokenBalanceEnabled
+        pkt.write_bit(false); // WarModeFeatureEnabled
+        pkt.write_bit(false); // ClubsEnabled
+        pkt.write_bit(false); // ClubsBattleNetClubTypeAllowed
+        pkt.write_bit(false); // ClubsCharacterClubTypeAllowed
+        pkt.write_bit(false); // ClubsPresenceUpdateEnabled
+        pkt.write_bit(false); // VoiceChatDisabledByParentalControl
+        pkt.write_bit(false); // VoiceChatMutedByParentalControl
+        pkt.write_bit(false); // QuestSessionEnabled
+        pkt.write_bit(false); // IsMuted
+        pkt.write_bit(false); // ClubFinderEnabled
+        pkt.write_bit(false); // Unknown901CheckoutRelated
+        pkt.write_bit(false); // TextToSpeechFeatureEnabled
+        pkt.write_bit(false); // ChatDisabledByDefault
+        pkt.write_bit(false); // ChatDisabledByPlayer
+        pkt.write_bit(false); // LFGListCustomRequiresAuthenticator
+        pkt.write_bit(false); // AddonsDisabled
+        pkt.write_bit(false); // WarGamesEnabled
+        pkt.write_bit(false); // ContentTrackingEnabled
+        pkt.write_bit(false); // IsSellAllJunkEnabled
+        pkt.write_bit(false); // IsGroupFinderEnabled
+        pkt.write_bit(false); // IsLFDEnabled
+        pkt.write_bit(false); // IsLFREnabled
+        pkt.write_bit(false); // IsPremadeGroupEnabled
         pkt.flush_bits();
 
         // ── QuickJoinConfig ──
-        pkt.write_bit(false);    // QuickJoinConfig.ToastsDisabled
-        pkt.write_float(0.0);    // QuickJoinConfig.ToastDuration
-        pkt.write_float(0.0);    // QuickJoinConfig.DelayDuration
-        pkt.write_float(0.0);    // QuickJoinConfig.QueueMultiplier
-        pkt.write_float(0.0);    // QuickJoinConfig.PlayerMultiplier
-        pkt.write_float(0.0);    // QuickJoinConfig.PlayerFriendValue
-        pkt.write_float(0.0);    // QuickJoinConfig.PlayerGuildValue
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleInitialThreshold
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleDecayTime
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottlePrioritySpike
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleMinThreshold
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottlePvPPriorityNormal
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottlePvPPriorityLow
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottlePvPHonorThreshold
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleLfgListPriorityDefault
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleLfgListPriorityAbove
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleLfgListPriorityBelow
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleLfgListIlvlScalingAbove
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleLfgListIlvlScalingBelow
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleRfPriorityAbove
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleRfIlvlScalingAbove
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleDfMaxItemLevel
-        pkt.write_float(0.0);    // QuickJoinConfig.ThrottleDfBestPriority
+        pkt.write_bit(false); // QuickJoinConfig.ToastsDisabled
+        pkt.write_float(0.0); // QuickJoinConfig.ToastDuration
+        pkt.write_float(0.0); // QuickJoinConfig.DelayDuration
+        pkt.write_float(0.0); // QuickJoinConfig.QueueMultiplier
+        pkt.write_float(0.0); // QuickJoinConfig.PlayerMultiplier
+        pkt.write_float(0.0); // QuickJoinConfig.PlayerFriendValue
+        pkt.write_float(0.0); // QuickJoinConfig.PlayerGuildValue
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleInitialThreshold
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleDecayTime
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottlePrioritySpike
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleMinThreshold
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottlePvPPriorityNormal
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottlePvPPriorityLow
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottlePvPHonorThreshold
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleLfgListPriorityDefault
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleLfgListPriorityAbove
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleLfgListPriorityBelow
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleLfgListIlvlScalingAbove
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleLfgListIlvlScalingBelow
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleRfPriorityAbove
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleRfIlvlScalingAbove
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleDfMaxItemLevel
+        pkt.write_float(0.0); // QuickJoinConfig.ThrottleDfBestPriority
 
         // SessionAlert (optional — not present, bit was false)
 
         // Squelch
-        pkt.write_bit(false);                           // Squelch.IsSquelched
-        pkt.write_packed_guid(&ObjectGuid::EMPTY);      // Squelch.BnetAccountGuid
-        pkt.write_packed_guid(&ObjectGuid::EMPTY);      // Squelch.GuildGuid
+        pkt.write_bit(false); // Squelch.IsSquelched
+        pkt.write_packed_guid(&ObjectGuid::EMPTY); // Squelch.BnetAccountGuid
+        pkt.write_packed_guid(&ObjectGuid::EMPTY); // Squelch.GuildGuid
 
         // EuropaTicketSystemStatus (optional — not present, bit was false)
     }
@@ -240,36 +240,36 @@ impl ServerPacket for FeatureSystemStatusGlueScreen {
 
     fn write(&self, pkt: &mut WorldPacket) {
         // ── 27 bit flags (exact C# order) ──
-        pkt.write_bit(false);    // BpayStoreEnabled
-        pkt.write_bit(false);    // BpayStoreAvailable
-        pkt.write_bit(false);    // BpayStoreDisabledByParentalControls
-        pkt.write_bit(false);    // CharUndeleteEnabled
-        pkt.write_bit(false);    // CommerceSystemEnabled
-        pkt.write_bit(false);    // Unk14
-        pkt.write_bit(false);    // WillKickFromWorld
-        pkt.write_bit(false);    // IsExpansionPreorderInStore
+        pkt.write_bit(false); // BpayStoreEnabled
+        pkt.write_bit(false); // BpayStoreAvailable
+        pkt.write_bit(false); // BpayStoreDisabledByParentalControls
+        pkt.write_bit(false); // CharUndeleteEnabled
+        pkt.write_bit(false); // CommerceSystemEnabled
+        pkt.write_bit(false); // Unk14
+        pkt.write_bit(false); // WillKickFromWorld
+        pkt.write_bit(false); // IsExpansionPreorderInStore
 
-        pkt.write_bit(false);    // KioskModeEnabled
-        pkt.write_bit(false);    // CompetitiveModeEnabled
-        pkt.write_bit(false);    // unused 10.0.2
-        pkt.write_bit(false);    // TrialBoostEnabled
-        pkt.write_bit(false);    // TokenBalanceEnabled
-        pkt.write_bit(false);    // LiveRegionCharacterListEnabled
-        pkt.write_bit(false);    // LiveRegionCharacterCopyEnabled
-        pkt.write_bit(false);    // LiveRegionAccountCopyEnabled
+        pkt.write_bit(false); // KioskModeEnabled
+        pkt.write_bit(false); // CompetitiveModeEnabled
+        pkt.write_bit(false); // unused 10.0.2
+        pkt.write_bit(false); // TrialBoostEnabled
+        pkt.write_bit(false); // TokenBalanceEnabled
+        pkt.write_bit(false); // LiveRegionCharacterListEnabled
+        pkt.write_bit(false); // LiveRegionCharacterCopyEnabled
+        pkt.write_bit(false); // LiveRegionAccountCopyEnabled
 
-        pkt.write_bit(false);    // LiveRegionKeyBindingsCopyEnabled
-        pkt.write_bit(false);    // Unknown901CheckoutRelated
-        pkt.write_bit(false);    // unused 10.0.2
-        pkt.write_bit(true);     // EuropaTicketSystemStatus.HasValue (C# sets this!)
-        pkt.write_bit(false);    // unused 10.0.2
-        pkt.write_bit(false);    // LaunchETA.HasValue
-        pkt.write_bit(false);    // AddonsDisabled
-        pkt.write_bit(false);    // Unused1000
+        pkt.write_bit(false); // LiveRegionKeyBindingsCopyEnabled
+        pkt.write_bit(false); // Unknown901CheckoutRelated
+        pkt.write_bit(false); // unused 10.0.2
+        pkt.write_bit(true); // EuropaTicketSystemStatus.HasValue (C# sets this!)
+        pkt.write_bit(false); // unused 10.0.2
+        pkt.write_bit(false); // LaunchETA.HasValue
+        pkt.write_bit(false); // AddonsDisabled
+        pkt.write_bit(false); // Unused1000
 
-        pkt.write_bit(false);    // AccountSaveDataExportEnabled
-        pkt.write_bit(false);    // AccountLockedByExport
-        pkt.write_bit(false);    // RealmHiddenAlert (not empty = false)
+        pkt.write_bit(false); // AccountSaveDataExportEnabled
+        pkt.write_bit(false); // AccountLockedByExport
+        pkt.write_bit(false); // RealmHiddenAlert (not empty = false)
 
         // No RealmHiddenAlert bits (it's empty)
         pkt.flush_bits();
@@ -278,34 +278,34 @@ impl ServerPacket for FeatureSystemStatusGlueScreen {
         // EuropaTicketConfig.Write():
         //   4 bits (TicketsEnabled, BugsEnabled, ComplaintsEnabled, SuggestionsEnabled)
         //   then SavedThrottleObjectState (4 × u32)
-        pkt.write_bit(false);    // TicketsEnabled (SupportTicketsEnabled config, default false)
-        pkt.write_bit(false);    // BugsEnabled (SupportBugsEnabled config, default false)
-        pkt.write_bit(false);    // ComplaintsEnabled (SupportComplaintsEnabled config, default false)
-        pkt.write_bit(false);    // SuggestionsEnabled (SupportSuggestionsEnabled config, default false)
+        pkt.write_bit(false); // TicketsEnabled (SupportTicketsEnabled config, default false)
+        pkt.write_bit(false); // BugsEnabled (SupportBugsEnabled config, default false)
+        pkt.write_bit(false); // ComplaintsEnabled (SupportComplaintsEnabled config, default false)
+        pkt.write_bit(false); // SuggestionsEnabled (SupportSuggestionsEnabled config, default false)
         // SavedThrottleObjectState — C# hardcodes these in SendFeatureSystemStatusGlueScreen:
-        pkt.write_uint32(10);    // MaxTries
+        pkt.write_uint32(10); // MaxTries
         pkt.write_uint32(60000); // PerMilliseconds
-        pkt.write_uint32(1);     // TryCount
+        pkt.write_uint32(1); // TryCount
         pkt.write_uint32(111111); // LastResetTimeBeforeNow
 
         // ── Sequential numeric fields (exact C# order) ──
-        pkt.write_uint32(0);                             // TokenPollTimeSeconds
-        pkt.write_uint32(0);                             // KioskSessionMinutes
-        pkt.write_int64(0);                              // TokenBalanceAmount
-        pkt.write_int32(self.max_characters_per_realm);  // MaxCharactersPerRealm
-        pkt.write_int32(0);                              // LiveRegionCharacterCopySourceRegions.Count
-        pkt.write_uint32(0);                             // BpayStoreProductDeliveryDelay
-        pkt.write_int32(0);                              // ActiveCharacterUpgradeBoostType
-        pkt.write_int32(0);                              // ActiveClassTrialBoostType
-        pkt.write_int32(0);                              // MinimumExpansionLevel (Classic=0)
-        pkt.write_int32(2);                              // MaximumExpansionLevel (WotLK=2)
-        pkt.write_int32(0);                              // ActiveSeason
-        pkt.write_int32(0);                              // GameRuleValues.Count
-        pkt.write_int16(50);                             // MaxPlayerNameQueriesPerPacket
-        pkt.write_int16(600);                            // PlayerNameQueryTelemetryInterval (C# default=600)
-        pkt.write_uint32(10);                            // PlayerNameQueryInterval (C# default=10 seconds)
-        pkt.write_int32(0);                              // DebugTimeEvents.Count
-        pkt.write_int32(0);                              // Unused1007
+        pkt.write_uint32(0); // TokenPollTimeSeconds
+        pkt.write_uint32(0); // KioskSessionMinutes
+        pkt.write_int64(0); // TokenBalanceAmount
+        pkt.write_int32(self.max_characters_per_realm); // MaxCharactersPerRealm
+        pkt.write_int32(0); // LiveRegionCharacterCopySourceRegions.Count
+        pkt.write_uint32(0); // BpayStoreProductDeliveryDelay
+        pkt.write_int32(0); // ActiveCharacterUpgradeBoostType
+        pkt.write_int32(0); // ActiveClassTrialBoostType
+        pkt.write_int32(0); // MinimumExpansionLevel (Classic=0)
+        pkt.write_int32(2); // MaximumExpansionLevel (WotLK=2)
+        pkt.write_int32(0); // ActiveSeason
+        pkt.write_int32(0); // GameRuleValues.Count
+        pkt.write_int16(50); // MaxPlayerNameQueriesPerPacket
+        pkt.write_int16(600); // PlayerNameQueryTelemetryInterval (C# default=600)
+        pkt.write_uint32(10); // PlayerNameQueryInterval (C# default=10 seconds)
+        pkt.write_int32(0); // DebugTimeEvents.Count
+        pkt.write_int32(0); // Unused1007
 
         // LaunchETA (optional — not present)
         // RealmHiddenAlert (optional — empty)
@@ -651,7 +651,9 @@ pub struct ServerTimeOffset {
 impl ServerTimeOffset {
     /// Current time.
     pub fn now() -> Self {
-        Self { time: unix_timestamp() }
+        Self {
+            time: unix_timestamp(),
+        }
     }
 }
 
@@ -703,23 +705,23 @@ impl ServerPacket for UpdateTalentData {
     const OPCODE: ServerOpcodes = ServerOpcodes::UpdateTalentData;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_int32(0);    // UnspentTalentPoints
-        pkt.write_uint8(0);    // ActiveGroup
-        pkt.write_int32(1);    // TalentGroupInfos.Count (1 spec group)
+        pkt.write_int32(0); // UnspentTalentPoints
+        pkt.write_uint8(0); // ActiveGroup
+        pkt.write_int32(1); // TalentGroupInfos.Count (1 spec group)
 
         // TalentGroupInfo[0] — C# writes count twice (uint8 + uint32):
-        pkt.write_uint8(0);    // (byte)Talents.Count
-        pkt.write_uint32(0);   // (uint)Talents.Count
-        pkt.write_uint8(6);    // (byte)MaxGlyphSlotIndex
-        pkt.write_uint32(6);   // (uint)MaxGlyphSlotIndex
-        pkt.write_uint8(0);    // SpecID = 0 (no spec)
+        pkt.write_uint8(0); // (byte)Talents.Count
+        pkt.write_uint32(0); // (uint)Talents.Count
+        pkt.write_uint8(6); // (byte)MaxGlyphSlotIndex
+        pkt.write_uint32(6); // (uint)MaxGlyphSlotIndex
+        pkt.write_uint8(0); // SpecID = 0 (no spec)
         // 0 talent entries
         // 6 glyph entries (all 0):
         for _ in 0..6 {
             pkt.write_uint16(0);
         }
 
-        pkt.write_bit(false);  // IsPetTalents
+        pkt.write_bit(false); // IsPetTalents
         pkt.flush_bits();
     }
 }
@@ -778,7 +780,7 @@ impl ServerPacket for SendUnlearnSpells {
     const OPCODE: ServerOpcodes = ServerOpcodes::SendUnlearnSpells;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_int32(0);    // Spells.Count
+        pkt.write_int32(0); // Spells.Count
     }
 }
 
@@ -791,7 +793,7 @@ impl ServerPacket for SendSpellHistory {
     const OPCODE: ServerOpcodes = ServerOpcodes::SendSpellHistory;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_int32(0);    // Entries.Count
+        pkt.write_int32(0); // Entries.Count
     }
 }
 
@@ -804,7 +806,7 @@ impl ServerPacket for SendSpellCharges {
     const OPCODE: ServerOpcodes = ServerOpcodes::SendSpellCharges;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_int32(0);    // Entries.Count
+        pkt.write_int32(0); // Entries.Count
     }
 }
 
@@ -867,8 +869,8 @@ impl ServerPacket for InitializeFactions {
     fn write(&self, pkt: &mut WorldPacket) {
         // Interleaved: [flags, standing] per faction
         for _ in 0..1000 {
-            pkt.write_uint16(0);   // FactionFlags
-            pkt.write_int32(0);    // FactionStandings
+            pkt.write_uint16(0); // FactionFlags
+            pkt.write_int32(0); // FactionStandings
         }
         // Then 1000 bits for FactionHasBonus
         for _ in 0..1000 {
@@ -919,11 +921,11 @@ impl ServerPacket for WorldServerInfo {
 
     fn write(&self, pkt: &mut WorldPacket) {
         pkt.write_int32(self.difficulty_id);
-        pkt.write_bit(false);  // IsTournamentRealm
-        pkt.write_bit(false);  // XRealmPvpAlert
-        pkt.write_bit(false);  // RestrictedAccountMaxLevel.HasValue
-        pkt.write_bit(false);  // RestrictedAccountMaxMoney.HasValue
-        pkt.write_bit(false);  // InstanceGroupSize.HasValue
+        pkt.write_bit(false); // IsTournamentRealm
+        pkt.write_bit(false); // XRealmPvpAlert
+        pkt.write_bit(false); // RestrictedAccountMaxLevel.HasValue
+        pkt.write_bit(false); // RestrictedAccountMaxMoney.HasValue
+        pkt.write_bit(false); // InstanceGroupSize.HasValue
         pkt.flush_bits();
         // No optional fields written (all HasValue=false)
     }
@@ -1088,7 +1090,7 @@ impl ServerPacket for AccountMountUpdate {
     fn write(&self, pkt: &mut WorldPacket) {
         pkt.write_bit(true); // IsFullUpdate
         // write_int32 auto-flushes pending bits
-        pkt.write_int32(0);  // Mounts.Count
+        pkt.write_int32(0); // Mounts.Count
         // No mount entries (each would be: i32 SpellID + 4 bits Flags)
         pkt.flush_bits();
     }
@@ -1103,11 +1105,11 @@ impl ServerPacket for AccountToyUpdate {
     const OPCODE: ServerOpcodes = ServerOpcodes::AccountToyUpdate;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_bit(true);  // IsFullUpdate
+        pkt.write_bit(true); // IsFullUpdate
         // write_int32 auto-flushes the pending bit
-        pkt.write_int32(0);   // ToyItemIDs.Count
-        pkt.write_int32(0);   // IsToyFavorite.Count (same)
-        pkt.write_int32(0);   // HasFanfare.Count (same)
+        pkt.write_int32(0); // ToyItemIDs.Count
+        pkt.write_int32(0); // IsToyFavorite.Count (same)
+        pkt.write_int32(0); // HasFanfare.Count (same)
         // No entries — each would have i32 key, then per-item bits
         pkt.flush_bits();
     }
@@ -1212,7 +1214,10 @@ impl ClientPacket for DbQueryBulk {
         for _ in 0..count {
             queries.push(packet.read_int32()?);
         }
-        Ok(Self { table_hash, queries })
+        Ok(Self {
+            table_hash,
+            queries,
+        })
     }
 }
 
@@ -1300,7 +1305,11 @@ impl ClientPacket for HotfixRequest {
         for _ in 0..count {
             hotfixes.push(packet.read_int32()?);
         }
-        Ok(Self { client_build, data_build, hotfixes })
+        Ok(Self {
+            client_build,
+            data_build,
+            hotfixes,
+        })
     }
 }
 
@@ -1313,7 +1322,7 @@ impl ServerPacket for HotfixConnect {
     const OPCODE: ServerOpcodes = ServerOpcodes::HotfixConnect;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_int32(0);  // Hotfixes.Count
+        pkt.write_int32(0); // Hotfixes.Count
         pkt.write_uint32(0); // HotfixContent size
     }
 }
@@ -1631,12 +1640,12 @@ impl ServerPacket for TransferPending {
         pkt.write_bit(self.ship.is_some());
         pkt.write_bit(self.transfer_spell_id.is_some());
         pkt.flush_bits();
-        
+
         if let Some(ref ship) = self.ship {
             pkt.write_uint32(ship.id);
             pkt.write_uint32(ship.origin_map_id);
         }
-        
+
         if let Some(spell_id) = self.transfer_spell_id {
             pkt.write_uint32(spell_id);
         }
@@ -1693,7 +1702,11 @@ impl crate::ClientPacket for ShowTradeSkill {
         let caster_guid = packet.read_packed_guid()?;
         let spell_id = packet.read_int32()?;
         let skill_id = packet.read_int32()? as u16;
-        Ok(Self { caster_guid, spell_id, skill_id })
+        Ok(Self {
+            caster_guid,
+            spell_id,
+            skill_id,
+        })
     }
 }
 
@@ -1735,8 +1748,8 @@ impl ShowTradeSkillResponse {
         buf.write_int32(0); // SkillMaxRanks[0]
 
         buf.write_int32(self.skill_line_id as i32); // SkillLineId
-        buf.write_int32(self.skill_rank);           // SkillRank
-        buf.write_int32(self.skill_max_rank);        // SkillMaxRank
+        buf.write_int32(self.skill_rank); // SkillRank
+        buf.write_int32(self.skill_max_rank); // SkillMaxRank
 
         for spell_id in &self.known_ability_spell_ids {
             buf.write_int32(*spell_id);
@@ -1780,7 +1793,7 @@ impl ServerPacket for PhaseShiftChange {
         pkt.write_packed_guid(&self.player_guid);
         // Phaseshift block: flags + phases count + personal guid
         pkt.write_uint32(0x08); // PhaseShiftFlags::Unphased
-        pkt.write_int32(0);     // Phases.Count = 0
+        pkt.write_int32(0); // Phases.Count = 0
         pkt.write_packed_guid(&ObjectGuid::EMPTY); // PersonalGUID = empty
         // VisibleMapIDs count * 2 (size in bytes)
         pkt.write_int32(0);
@@ -1799,13 +1812,13 @@ impl ServerPacket for PhaseShiftChange {
 /// C#: VendorItemPkt
 #[derive(Debug, Clone)]
 pub struct VendorItem {
-    pub muid: i32,         // slot/muid index
+    pub muid: i32, // slot/muid index
     pub item_id: i32,
-    pub item_type: i32,    // 1 = item, 2 = currency
-    pub quantity: i32,     // max stack on vendor (-1 = unlimited)
-    pub price: u64,        // buy price (copper)
+    pub item_type: i32, // 1 = item, 2 = currency
+    pub quantity: i32,  // max stack on vendor (-1 = unlimited)
+    pub price: u64,     // buy price (copper)
     pub durability: i32,
-    pub stack_count: i32,  // VendorStackCount from item_sparse
+    pub stack_count: i32, // VendorStackCount from item_sparse
     pub extended_cost: i32,
     pub player_condition_failed: i32,
     pub locked: bool,
@@ -1817,7 +1830,7 @@ pub struct VendorItem {
 /// C#: VendorInventory
 pub struct VendorInventory {
     pub vendor_guid: ObjectGuid,
-    pub reason: u8,  // 0 = ok, non-0 = error (no items etc)
+    pub reason: u8, // 0 = ok, non-0 = error (no items etc)
     pub items: Vec<VendorItem>,
 }
 
@@ -1850,7 +1863,7 @@ impl ServerPacket for VendorInventory {
             pkt.write_int32(item.item_id);
             pkt.write_int32(0i32); // RandomPropertiesSeed
             pkt.write_int32(0i32); // RandomPropertiesID
-            pkt.write_bit(false);  // has ItemBonus = false
+            pkt.write_bit(false); // has ItemBonus = false
             pkt.flush_bits();
             pkt.write_bits(0u32, 6); // ItemModList count = 0
             pkt.flush_bits();
@@ -1891,7 +1904,7 @@ impl ClientPacket for BuyItem {
         let mod_count = pkt.read_bits(6)? as u32;
         for _ in 0..mod_count {
             let _val = pkt.read_int32()?;
-            let _ty  = pkt.read_uint8()?;
+            let _ty = pkt.read_uint8()?;
         }
         if has_bonus {
             // ItemBonuses: Context (u8) + BonusListIDs count + entries
@@ -1901,7 +1914,15 @@ impl ClientPacket for BuyItem {
                 let _bid = pkt.read_uint16()?;
             }
         }
-        Ok(Self { vendor_guid, container_guid, quantity, muid, slot, item_type, item_id })
+        Ok(Self {
+            vendor_guid,
+            container_guid,
+            quantity,
+            muid,
+            slot,
+            item_type,
+            item_id,
+        })
     }
 }
 
@@ -1977,7 +1998,11 @@ impl ClientPacket for SellItem {
         let vendor_guid = pkt.read_packed_guid()?;
         let item_guid = pkt.read_packed_guid()?;
         let amount = pkt.read_int32()?;
-        Ok(Self { vendor_guid, item_guid, amount })
+        Ok(Self {
+            vendor_guid,
+            item_guid,
+            amount,
+        })
     }
 }
 
@@ -2077,7 +2102,10 @@ pub struct RequestCemeteryListResponse {
 impl RequestCemeteryListResponse {
     /// Empty response — no graveyards in this zone.
     pub fn empty(is_gossip_triggered: bool) -> Self {
-        Self { is_gossip_triggered, cemetery_ids: vec![] }
+        Self {
+            is_gossip_triggered,
+            cemetery_ids: vec![],
+        }
     }
 }
 
@@ -2116,8 +2144,8 @@ impl AuctionHelloResponse {
     pub fn open(auctioneer_guid: wow_core::ObjectGuid) -> Self {
         Self {
             auctioneer_guid,
-            auction_house_id: 7, // neutral
-            purchased_item_delivery_delay: 3_600_000,  // 1 hour
+            auction_house_id: 7,                      // neutral
+            purchased_item_delivery_delay: 3_600_000, // 1 hour
             cancelled_item_delivery_delay: 3_600_000,
             open_for_business: true,
         }
@@ -2151,7 +2179,11 @@ pub struct NpcInteractionOpenResult {
 
 impl NpcInteractionOpenResult {
     pub fn new(npc: wow_core::ObjectGuid, interaction_type: i32) -> Self {
-        Self { npc, interaction_type, success: true }
+        Self {
+            npc,
+            interaction_type,
+            success: true,
+        }
     }
 }
 
@@ -2230,7 +2262,9 @@ pub struct MailQueryNextTimeResult {
 impl MailQueryNextTimeResult {
     /// Convenience: "no mail pending" response.
     pub fn no_mail() -> Self {
-        Self { next_mail_time: -1.0 }
+        Self {
+            next_mail_time: -1.0,
+        }
     }
 }
 
@@ -2303,7 +2337,9 @@ mod tests {
 
     #[test]
     fn available_hotfixes_empty_serializes() {
-        let pkt = AvailableHotfixes { virtual_realm_address: 1 };
+        let pkt = AvailableHotfixes {
+            virtual_realm_address: 1,
+        };
         let bytes = pkt.to_bytes();
         // opcode(2) + uint32(4) + int32(4) = 10
         assert_eq!(bytes.len(), 10);
@@ -2313,7 +2349,10 @@ mod tests {
 
     #[test]
     fn connection_status_serializes() {
-        let pkt = ConnectionStatus { state: 1, suppress_notification: true };
+        let pkt = ConnectionStatus {
+            state: 1,
+            suppress_notification: true,
+        };
         let bytes = pkt.to_bytes();
         // opcode(2) + 3 bits flushed to 1 byte = 3
         assert_eq!(bytes.len(), 3);
@@ -2480,8 +2519,11 @@ mod tests {
     #[test]
     fn bind_point_update_serializes() {
         let pkt = BindPointUpdate {
-            x: 1.0, y: 2.0, z: 3.0,
-            map_id: 0, area_id: 12,
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+            map_id: 0,
+            area_id: 12,
         };
         let bytes = pkt.to_bytes();
         // opcode(2) + 3*f32(12) + 2*i32(8) = 22
@@ -2533,7 +2575,9 @@ mod tests {
 
     #[test]
     fn active_glyphs_empty() {
-        let pkt = ActiveGlyphs { is_full_update: true };
+        let pkt = ActiveGlyphs {
+            is_full_update: true,
+        };
         let bytes = pkt.to_bytes();
         // opcode(2) + i32(4) + 1 bit flushed to 1 byte = 7
         assert_eq!(bytes.len(), 7);
@@ -2654,8 +2698,8 @@ mod tests {
         let mut writer = WorldPacket::new_server(ServerOpcodes::DbReply);
         // Overwrite opcode with client opcode (we'll skip it anyway)
         // Just append the payload fields after a dummy 2-byte opcode:
-        writer.write_uint32(0xAABBCCDD);  // table_hash
-        writer.write_bits(3, 13);         // count = 3 (13 bits)
+        writer.write_uint32(0xAABBCCDD); // table_hash
+        writer.write_bits(3, 13); // count = 3 (13 bits)
         writer.flush_bits();
         writer.write_int32(100);
         writer.write_int32(200);
@@ -2836,7 +2880,10 @@ mod tests {
         };
         let bytes = pkt.to_bytes();
 
-        assert_eq!(&bytes[bytes.len() - 8..bytes.len() - 4], &0u32.to_le_bytes());
+        assert_eq!(
+            &bytes[bytes.len() - 8..bytes.len() - 4],
+            &0u32.to_le_bytes()
+        );
         assert_eq!(
             &bytes[bytes.len() - 4..],
             &(SellResult::CantSellItem as i32).to_le_bytes()
@@ -2870,9 +2917,9 @@ mod tests {
 /// C# ref: LogXPGain
 pub struct LogXpGain {
     pub victim: ObjectGuid,
-    pub original: i32,   // XP before bonuses
-    pub reason: u8,      // 0=Kill, 1=NoKill(quest/explore)
-    pub amount: i32,     // XP after bonuses (what actually counts)
+    pub original: i32, // XP before bonuses
+    pub reason: u8,    // 0=Kill, 1=NoKill(quest/explore)
+    pub amount: i32,   // XP after bonuses (what actually counts)
     pub group_bonus: f32,
 }
 
@@ -2904,8 +2951,12 @@ impl ServerPacket for LevelUpInfo {
     fn write(&self, pkt: &mut WorldPacket) {
         pkt.write_int32(self.level);
         pkt.write_int32(self.health_delta);
-        for p in &self.power_delta { pkt.write_int32(*p); }
-        for s in &self.stat_delta  { pkt.write_int32(*s); }
+        for p in &self.power_delta {
+            pkt.write_int32(*p);
+        }
+        for s in &self.stat_delta {
+            pkt.write_int32(*s);
+        }
         pkt.write_int32(self.num_new_talents);
     }
 }

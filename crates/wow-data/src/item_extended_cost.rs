@@ -89,7 +89,9 @@ impl ItemExtendedCostStore {
                 id,
                 required_arena_rating: reader.get_field_u16(idx, 0),
                 arena_bracket: reader.get_field_i8(idx, 1),
-                flags: ItemExtendedCostFlags::from_bits_retain(u32::from(reader.get_field_u8(idx, 2))),
+                flags: ItemExtendedCostFlags::from_bits_retain(u32::from(
+                    reader.get_field_u8(idx, 2),
+                )),
                 min_faction_id: reader.get_field_u8(idx, 3),
                 min_reputation: reader.get_field_i32(idx, 4),
                 required_achievement: reader.get_field_u8(idx, 5),

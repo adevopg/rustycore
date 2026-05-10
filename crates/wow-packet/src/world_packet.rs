@@ -193,10 +193,7 @@ impl WorldPacket {
     pub fn read_uint16(&mut self) -> Result<u16, PacketError> {
         self.reset_bit_reader();
         self.ensure_readable(2)?;
-        let v = u16::from_le_bytes([
-            self.data[self.read_pos],
-            self.data[self.read_pos + 1],
-        ]);
+        let v = u16::from_le_bytes([self.data[self.read_pos], self.data[self.read_pos + 1]]);
         self.read_pos += 2;
         Ok(v)
     }
@@ -251,8 +248,7 @@ impl WorldPacket {
     /// Read a length-prefixed string (the length is passed in, not read from packet).
     pub fn read_string(&mut self, len: usize) -> Result<String, PacketError> {
         let bytes = self.read_bytes(len)?;
-        String::from_utf8(bytes)
-            .map_err(|e| PacketError::StringError(e.to_string()))
+        String::from_utf8(bytes).map_err(|e| PacketError::StringError(e.to_string()))
     }
 
     /// Read a null-terminated C string.
@@ -640,7 +636,12 @@ mod tests {
         let mut pkt = WorldPacket::new_empty();
         let guid = ObjectGuid::create_world_object(
             wow_core::guid::HighGuid::Creature,
-            0, 1, 530, 0, 1234, 5678,
+            0,
+            1,
+            530,
+            0,
+            1234,
+            5678,
         );
         pkt.write_packed_guid(&guid);
 

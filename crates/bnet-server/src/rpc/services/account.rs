@@ -32,7 +32,8 @@ async fn handle_get_account_state<S: AsyncRead + AsyncWrite + Unpin>(
     let mut response = GetAccountStateResponse::default();
 
     // Check if privacy info was requested
-    let wants_privacy = request.options
+    let wants_privacy = request
+        .options
         .as_ref()
         .is_some_and(|o| o.field_privacy_info.unwrap_or(false) || o.all_fields.unwrap_or(false));
 
@@ -64,11 +65,14 @@ async fn handle_get_game_account_state<S: AsyncRead + AsyncWrite + Unpin>(
     let mut tags = GameAccountFieldTags::default();
 
     let options = request.options.as_ref();
-    let wants_level = options.is_some_and(|o| o.field_game_level_info.unwrap_or(false) || o.all_fields.unwrap_or(false));
-    let wants_status = options.is_some_and(|o| o.field_game_status.unwrap_or(false) || o.all_fields.unwrap_or(false));
+    let wants_level = options
+        .is_some_and(|o| o.field_game_level_info.unwrap_or(false) || o.all_fields.unwrap_or(false));
+    let wants_status = options
+        .is_some_and(|o| o.field_game_status.unwrap_or(false) || o.all_fields.unwrap_or(false));
 
     // Look up game account info
-    let ga_id = request.game_account_id
+    let ga_id = request
+        .game_account_id
         .as_ref()
         .map(|id| id.low as u32)
         .unwrap_or(0);
@@ -91,13 +95,23 @@ async fn handle_get_game_account_state<S: AsyncRead + AsyncWrite + Unpin>(
     if wants_status {
         let (is_banned, is_suspended, suspension_expires) = account
             .and_then(|a| a.game_accounts.get(&ga_id))
-            .map(|ga| (ga.is_banned, ga.is_banned && !ga.is_permanently_banned, ga.unban_date))
+            .map(|ga| {
+                (
+                    ga.is_banned,
+                    ga.is_banned && !ga.is_permanently_banned,
+                    ga.unban_date,
+                )
+            })
             .unwrap_or_default();
 
         state.game_status = Some(GameStatus {
             is_suspended: Some(is_suspended),
             is_banned: Some(is_banned),
-            suspension_expires: if is_suspended { Some(suspension_expires) } else { None },
+            suspension_expires: if is_suspended {
+                Some(suspension_expires)
+            } else {
+                None
+            },
             program: Some(0x0057_6F57),
         });
         tags.game_status_tag = Some(0x98B7_5F99);

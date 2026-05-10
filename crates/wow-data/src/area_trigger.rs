@@ -8,11 +8,11 @@
 //! Handles all area trigger shapes (Sphere, Box, Cylinder, Polygon, Disk, BoundedPlane)
 //! and supports teleportation destinations.
 
+use anyhow::Result;
 use std::collections::HashMap;
+use tracing::info;
 use wow_core::Position;
 use wow_database::{WorldDatabase, WorldStatements};
-use anyhow::Result;
-use tracing::info;
 
 /// Area trigger shape types (from AreaTriggerShapeType).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,9 +161,7 @@ impl AreaTriggerData {
             let (xi, yi) = self.vertices[i];
             let (xj, yj) = self.vertices[j];
 
-            if ((yi > py) != (yj > py))
-                && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
-            {
+            if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
                 inside = !inside;
             }
             j = i;
@@ -228,11 +226,7 @@ impl AreaTriggerStore {
     }
 
     /// Check which triggers (on a specific map) contain a position.
-    pub fn get_triggers_at_position(
-        &self,
-        map_id: u16,
-        pos: &Position,
-    ) -> Vec<&AreaTriggerData> {
+    pub fn get_triggers_at_position(&self, map_id: u16, pos: &Position) -> Vec<&AreaTriggerData> {
         self.get_triggers_for_map(map_id)
             .into_iter()
             .filter(|t| t.contains(pos))
@@ -304,9 +298,6 @@ pub async fn load_area_triggers(db: &WorldDatabase) -> Result<AreaTriggerStore> 
         store.insert(trigger);
     }
 
-    info!(
-        "Loaded {} area triggers total",
-        store.triggers_by_id.len()
-    );
+    info!("Loaded {} area triggers total", store.triggers_by_id.len());
     Ok(store)
 }

@@ -24,6 +24,7 @@ wow-database = { workspace = true }
 wow-entities = { workspace = true }
 wow-network = { workspace = true }
 wow-logging = { workspace = true }
+wow-loot = { workspace = true }
 wow-packet = { workspace = true }
 wow-handler = { workspace = true }
 sqlx = { workspace = true }

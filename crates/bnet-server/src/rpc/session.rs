@@ -72,7 +72,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
     pub async fn run(&mut self) -> Result<()> {
         loop {
             // Read 2-byte header length (big-endian)
-            let header_len = self.stream.read_u16().await
+            let header_len = self
+                .stream
+                .read_u16()
+                .await
                 .context("Failed to read header length")? as usize;
 
             if header_len == 0 || header_len > 65535 {
@@ -81,7 +84,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
 
             // Read header bytes
             let mut header_buf = vec![0u8; header_len];
-            self.stream.read_exact(&mut header_buf).await
+            self.stream
+                .read_exact(&mut header_buf)
+                .await
                 .context("Failed to read header")?;
 
             let header = Header::decode(header_buf.as_slice())
@@ -91,12 +96,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
             let payload_size = header.size.unwrap_or(0) as usize;
             let mut payload = vec![0u8; payload_size];
             if payload_size > 0 {
-                self.stream.read_exact(&mut payload).await
+                self.stream
+                    .read_exact(&mut payload)
+                    .await
                     .context("Failed to read payload")?;
             }
 
             // Log every incoming message with hex
-            let header_hex = header_buf.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-");
+            let header_hex = header_buf
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join("-");
             tracing::debug!(
                 "[BNET-RECV] service_id={} service_hash=0x{:08X} method={} token={} \
                  HasSize={} Size={} HasStatus={} Status={} \
@@ -105,8 +116,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
                 header.service_hash.unwrap_or(0),
                 header.method_id.unwrap_or(0),
                 header.token,
-                header.size.is_some(), payload_size,
-                header.status.is_some(), header.status.unwrap_or(0),
+                header.size.is_some(),
+                payload_size,
+                header.status.is_some(),
+                header.status.unwrap_or(0),
                 header_len,
                 header_hex,
             );
@@ -114,7 +127,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
             // Dispatch
             if header.service_id == RESPONSE_SERVICE_ID {
                 // Response to a server-initiated request
-                tracing::debug!("RPC: client response for token {} (status={:?})", header.token, header.status);
+                tracing::debug!(
+                    "RPC: client response for token {} (status={:?})",
+                    header.token,
+                    header.status
+                );
                 if let Some(callback) = self.response_callbacks.remove(&header.token) {
                     callback(&payload);
                 }
@@ -206,7 +223,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
             service_hash: Some(service_hash),
             method_id: Some(method_id),
             token,
-            size: if payload.is_empty() { None } else { Some(payload.len() as u32) },
+            size: if payload.is_empty() {
+                None
+            } else {
+                Some(payload.len() as u32)
+            },
             ..Default::default()
         };
 
@@ -224,8 +245,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
         frame.extend_from_slice(&header_bytes);
         frame.extend_from_slice(payload);
 
-        let header_hex = header_bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-");
-        let frame_hex = frame.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join("-");
+        let header_hex = header_bytes
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join("-");
+        let frame_hex = frame
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join("-");
 
         tracing::debug!(
             "[BNET-SEND] service_id={} service_hash=0x{:08X} method={} token={} \
@@ -236,8 +265,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RpcSession<S> {
             header.service_hash.unwrap_or(0),
             header.method_id.unwrap_or(0),
             header.token,
-            header.status.is_some(), header.status.unwrap_or(0),
-            header.size.is_some(), header.size.unwrap_or(0),
+            header.status.is_some(),
+            header.status.unwrap_or(0),
+            header.size.is_some(),
+            header.size.unwrap_or(0),
             header_bytes.len(),
             payload.len(),
             frame.len(),

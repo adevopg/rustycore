@@ -10,8 +10,8 @@
 use wow_constants::ServerOpcodes;
 use wow_core::ObjectGuid;
 
-use crate::world_packet::WorldPacket;
 use crate::ServerPacket;
+use crate::world_packet::WorldPacket;
 
 // ── AuraData ──────────────────────────────────────────────────
 

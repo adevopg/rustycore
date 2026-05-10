@@ -10,8 +10,8 @@
 use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_core::ObjectGuid;
 
-use crate::{ClientPacket, ServerPacket, WorldPacket};
 use crate::world_packet::PacketError;
+use crate::{ClientPacket, ServerPacket, WorldPacket};
 
 // ── CMSG_GOSSIP_HELLO / TalkToGossip (0x3492) ──────────────────────
 
@@ -297,12 +297,18 @@ mod tests {
         let msg = GossipMessage::empty(ObjectGuid::EMPTY, 0, 1);
         let bytes = msg.to_bytes();
         // Should at least have opcode + guid + fields
-        assert!(bytes.len() > 10, "GossipMessage too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 10,
+            "GossipMessage too small: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]
     fn gossip_complete_serializes() {
-        let pkt = GossipComplete { suppress_sound: false };
+        let pkt = GossipComplete {
+            suppress_sound: false,
+        };
         let bytes = pkt.to_bytes();
         // opcode(2) + bit(1 byte flushed)
         assert_eq!(bytes.len(), 3);

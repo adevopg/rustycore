@@ -213,7 +213,10 @@ impl FlagArray {
     /// Panics if `index` is out of range (>= capacity in bits).
     pub fn set(&mut self, index: usize) {
         let (word, bit) = Self::position(index);
-        assert!(word < self.data.len(), "FlagArray index {index} out of range");
+        assert!(
+            word < self.data.len(),
+            "FlagArray index {index} out of range"
+        );
         self.data[word] |= 1u32 << bit;
     }
 
@@ -224,7 +227,10 @@ impl FlagArray {
     /// Panics if `index` is out of range.
     pub fn clear(&mut self, index: usize) {
         let (word, bit) = Self::position(index);
-        assert!(word < self.data.len(), "FlagArray index {index} out of range");
+        assert!(
+            word < self.data.len(),
+            "FlagArray index {index} out of range"
+        );
         self.data[word] &= !(1u32 << bit);
     }
 
@@ -235,7 +241,10 @@ impl FlagArray {
     /// Panics if `index` is out of range.
     pub fn test(&self, index: usize) -> bool {
         let (word, bit) = Self::position(index);
-        assert!(word < self.data.len(), "FlagArray index {index} out of range");
+        assert!(
+            word < self.data.len(),
+            "FlagArray index {index} out of range"
+        );
         (self.data[word] & (1u32 << bit)) != 0
     }
 

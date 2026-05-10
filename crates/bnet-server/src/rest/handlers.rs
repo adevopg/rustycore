@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use wow_crypto::{BnetSrp6, SrpHashFunction, SrpVersion, srp_username};
 use wow_database::LoginStatements;
 
-use crate::state::{AppState, RestSessionState};
 use super::HttpResponse;
 use super::types::*;
+use crate::state::{AppState, RestSessionState};
 
 /// Route an HTTP request to the appropriate handler.
 pub async fn route(
@@ -19,14 +19,10 @@ pub async fn route(
     match (method, path) {
         ("GET", "/bnetserver/login/") => get_form(state),
         ("POST", "/bnetserver/login/") => post_login(state, headers, body).await,
-        ("POST", "/bnetserver/login/srp/") => {
-            post_login_srp_challenge(state, headers, body).await
-        }
+        ("POST", "/bnetserver/login/srp/") => post_login_srp_challenge(state, headers, body).await,
         ("GET", "/bnetserver/gameAccounts/") => get_game_accounts(state, headers).await,
         ("GET", "/bnetserver/portal/") => get_portal(state, headers),
-        ("POST", "/bnetserver/refreshLoginTicket/") => {
-            refresh_login_ticket(state, headers).await
-        }
+        ("POST", "/bnetserver/refreshLoginTicket/") => refresh_login_ticket(state, headers).await,
         _ => {
             tracing::warn!("REST fallback: {method} {path} — no matching route");
             HttpResponse {
@@ -93,10 +89,7 @@ fn get_form(state: &AppState) -> HttpResponse {
         status_text: "OK",
         headers: vec![
             ("Set-Cookie", cookie),
-            (
-                "Content-Type",
-                "application/json;charset=utf-8".to_string(),
-            ),
+            ("Content-Type", "application/json;charset=utf-8".to_string()),
         ],
         body: json,
     }
@@ -232,12 +225,24 @@ async fn post_login(
 
     tracing::info!(
         "SRP login: version={:?}, salt_len={}, verifier_len={}, salt_first8={:02x?}, verifier_first8={:02x?}",
-        version, salt.len(), verifier.len(),
+        version,
+        salt.len(),
+        verifier.len(),
         &salt[..salt.len().min(8)],
         &verifier[..verifier.len().min(8)],
     );
-    let srp = BnetSrp6::new(version, SrpHashFunction::Sha256, &username, &salt, &verifier);
-    tracing::info!("SRP: checking credentials for user={}, password_len={}", &username[..username.len().min(16)], password_for_srp.len());
+    let srp = BnetSrp6::new(
+        version,
+        SrpHashFunction::Sha256,
+        &username,
+        &salt,
+        &verifier,
+    );
+    tracing::info!(
+        "SRP: checking credentials for user={}, password_len={}",
+        &username[..username.len().min(16)],
+        password_for_srp.len()
+    );
     if srp.check_credentials(&username, &password_for_srp) {
         match create_login_ticket(state, account_id).await {
             Ok(ticket) => json_response(AuthResult {
@@ -310,13 +315,23 @@ async fn post_login_srp_challenge(
     } else {
         SrpVersion::V1
     };
-    let srp = BnetSrp6::new(version, SrpHashFunction::Sha256, &username, &salt, &verifier);
+    let srp = BnetSrp6::new(
+        version,
+        SrpHashFunction::Sha256,
+        &username,
+        &salt,
+        &verifier,
+    );
     let challenge = srp.challenge(&email_upper);
 
     let session_id = extract_session_id(headers).unwrap_or_else(generate_session_id);
-    state
-        .rest_sessions
-        .insert(session_id.clone(), RestSessionState { srp: Some(srp), account_id });
+    state.rest_sessions.insert(
+        session_id.clone(),
+        RestSessionState {
+            srp: Some(srp),
+            account_id,
+        },
+    );
 
     let response = SrpLoginChallenge {
         version: challenge.version,
@@ -330,29 +345,22 @@ async fn post_login_srp_challenge(
     };
 
     let body = serde_json::to_string(&response).unwrap_or_default();
-    let cookie = format!(
-        "JSESSIONID={session_id}; Path=/bnetserver; Secure; HttpOnly; SameSite=None"
-    );
+    let cookie =
+        format!("JSESSIONID={session_id}; Path=/bnetserver; Secure; HttpOnly; SameSite=None");
 
     HttpResponse {
         status_code: 200,
         status_text: "OK",
         headers: vec![
             ("Set-Cookie", cookie),
-            (
-                "Content-Type",
-                "application/json;charset=utf-8".to_string(),
-            ),
+            ("Content-Type", "application/json;charset=utf-8".to_string()),
         ],
         body,
     }
 }
 
 /// GET /bnetserver/gameAccounts/
-async fn get_game_accounts(
-    state: &AppState,
-    headers: &HashMap<String, String>,
-) -> HttpResponse {
+async fn get_game_accounts(state: &AppState, headers: &HashMap<String, String>) -> HttpResponse {
     tracing::debug!("REST: GET /bnetserver/gameAccounts/");
     let Some(ticket) = extract_auth_ticket(headers) else {
         return json_error_response(401, "Unauthorized", "Missing ticket");
@@ -421,10 +429,7 @@ fn get_portal(state: &AppState, headers: &HashMap<String, String>) -> HttpRespon
 }
 
 /// POST /bnetserver/refreshLoginTicket/
-async fn refresh_login_ticket(
-    state: &AppState,
-    headers: &HashMap<String, String>,
-) -> HttpResponse {
+async fn refresh_login_ticket(state: &AppState, headers: &HashMap<String, String>) -> HttpResponse {
     let Some(ticket) = extract_auth_ticket(headers) else {
         return json_error_response(401, "Unauthorized", "Missing ticket");
     };
@@ -451,27 +456,17 @@ fn json_response<T: serde::Serialize>(value: T) -> HttpResponse {
     HttpResponse {
         status_code: 200,
         status_text: "OK",
-        headers: vec![(
-            "Content-Type",
-            "application/json;charset=utf-8".to_string(),
-        )],
+        headers: vec![("Content-Type", "application/json;charset=utf-8".to_string())],
         body,
     }
 }
 
-fn json_error_response(
-    status_code: u16,
-    status_text: &'static str,
-    error: &str,
-) -> HttpResponse {
+fn json_error_response(status_code: u16, status_text: &'static str, error: &str) -> HttpResponse {
     let body = serde_json::to_string(&serde_json::json!({"error": error})).unwrap_or_default();
     HttpResponse {
         status_code,
         status_text,
-        headers: vec![(
-            "Content-Type",
-            "application/json;charset=utf-8".to_string(),
-        )],
+        headers: vec![("Content-Type", "application/json;charset=utf-8".to_string())],
         body,
     }
 }
@@ -568,6 +563,9 @@ fn hex_encode(data: &[u8]) -> String {
 fn hex_decode(hex: &str) -> Vec<u8> {
     (0..hex.len())
         .step_by(2)
-        .filter_map(|i| hex.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()))
+        .filter_map(|i| {
+            hex.get(i..i + 2)
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+        })
         .collect()
 }

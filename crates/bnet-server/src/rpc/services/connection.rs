@@ -55,7 +55,9 @@ async fn handle_connect<S: AsyncRead + AsyncWrite + Unpin>(
 }
 
 /// Method 5: KeepAlive
-async fn handle_keep_alive<S: AsyncRead + AsyncWrite + Unpin>(_session: &mut RpcSession<S>) -> Result<Option<Vec<u8>>> {
+async fn handle_keep_alive<S: AsyncRead + AsyncWrite + Unpin>(
+    _session: &mut RpcSession<S>,
+) -> Result<Option<Vec<u8>>> {
     Ok(None) // No response needed
 }
 
@@ -65,18 +67,23 @@ async fn handle_request_disconnect<S: AsyncRead + AsyncWrite + Unpin>(
     payload: &[u8],
 ) -> Result<Option<Vec<u8>>> {
     let request = DisconnectRequest::decode(payload)?;
-    tracing::debug!("ConnectionService: disconnect requested, code={}", request.error_code);
+    tracing::debug!(
+        "ConnectionService: disconnect requested, code={}",
+        request.error_code
+    );
 
     // Send ForceDisconnect notification back (method 4)
     let notification = DisconnectNotification {
         error_code: request.error_code,
         reason: Some("Client requested disconnect".to_string()),
     };
-    let _ = session.send_request(
-        wow_proto::service_hash::CONNECTION_SERVICE,
-        4,
-        &notification.encode_to_vec(),
-    ).await;
+    let _ = session
+        .send_request(
+            wow_proto::service_hash::CONNECTION_SERVICE,
+            4,
+            &notification.encode_to_vec(),
+        )
+        .await;
 
     // The session will be dropped when the caller detects the closed connection
     Ok(None)

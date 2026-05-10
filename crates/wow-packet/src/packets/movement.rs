@@ -8,8 +8,8 @@
 //! Handles all CMSG_MOVE_* client packets (player movement) and server-side
 //! movement packets (MoveUpdate, OnMonsterMove).
 
-use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_constants::movement::{MovementFlag, MovementFlag2, MovementFlags3};
+use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_core::{ObjectGuid, Position};
 
 use crate::world_packet::{PacketError, WorldPacket};
@@ -154,12 +154,23 @@ impl MovementInfo {
             let has_vehicle_id = pkt.has_bit()?;
             // bit reader auto-resets on next byte read
 
-            let prev_time = if has_prev { Some(pkt.read_uint32()?) } else { None };
-            let vehicle_id = if has_vehicle_id { Some(pkt.read_int32()?) } else { None };
+            let prev_time = if has_prev {
+                Some(pkt.read_uint32()?)
+            } else {
+                None
+            };
+            let vehicle_id = if has_vehicle_id {
+                Some(pkt.read_int32()?)
+            } else {
+                None
+            };
 
             Some(TransportInfo {
                 guid: tguid,
-                x: tx, y: ty, z: tz, o: to_,
+                x: tx,
+                y: ty,
+                z: tz,
+                o: to_,
                 seat,
                 time: ttime,
                 prev_time,
@@ -186,7 +197,10 @@ impl MovementInfo {
         let adv_flying = if has_adv_flying {
             let fwd = pkt.read_float()?;
             let up = pkt.read_float()?;
-            Some(AdvFlyingInfo { forward_velocity: fwd, up_velocity: up })
+            Some(AdvFlyingInfo {
+                forward_velocity: fwd,
+                up_velocity: up,
+            })
         } else {
             None
         };
@@ -201,7 +215,14 @@ impl MovementInfo {
             } else {
                 (0.0, 0.0, 0.0)
             };
-            JumpInfo { fall_time, z_speed, has_direction, sin_angle, cos_angle, xy_speed }
+            JumpInfo {
+                fall_time,
+                z_speed,
+                has_direction,
+                sin_angle,
+                cos_angle,
+                xy_speed,
+            }
         } else {
             JumpInfo::default()
         };
@@ -263,8 +284,12 @@ impl MovementInfo {
             pkt.write_bit(t.prev_time.is_some());
             pkt.write_bit(t.vehicle_id.is_some());
             pkt.flush_bits();
-            if let Some(pt) = t.prev_time { pkt.write_uint32(pt); }
-            if let Some(vid) = t.vehicle_id { pkt.write_int32(vid); }
+            if let Some(pt) = t.prev_time {
+                pkt.write_uint32(pt);
+            }
+            if let Some(vid) = t.vehicle_id {
+                pkt.write_int32(vid);
+            }
         }
 
         if let Some(af) = &self.adv_flying {

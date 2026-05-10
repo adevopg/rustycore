@@ -154,12 +154,8 @@ mod tests {
 
     #[test]
     fn battlenet_response_error_writes_correctly() {
-        let resp = BattlenetResponse::error(
-            0x12345678,
-            1,
-            7,
-            BattlenetRpcErrorCode::RpcNotImplemented,
-        );
+        let resp =
+            BattlenetResponse::error(0x12345678, 1, 7, BattlenetRpcErrorCode::RpcNotImplemented);
         let bytes = resp.to_bytes();
         // opcode(2) + u32 status(4) + u64 type(8) + i64 objectId(8) + u32 token(4) + u32 dataSize(4) = 30
         assert_eq!(bytes.len(), 30);

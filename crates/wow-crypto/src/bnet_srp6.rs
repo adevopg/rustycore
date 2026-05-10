@@ -103,8 +103,8 @@ pub struct BnetSrp6 {
     k: BigUint,
     v: BigUint,
     salt: Vec<u8>,
-    b: BigUint,      // server secret
-    big_b: BigUint,  // server public ephemeral
+    b: BigUint,     // server secret
+    big_b: BigUint, // server public ephemeral
 }
 
 impl BnetSrp6 {
@@ -224,13 +224,28 @@ impl BnetSrp6 {
         {
             let v_stored_bytes = self.v.to_bytes_le();
             let v_computed_bytes = computed_v.to_bytes_le();
-            eprintln!("[SRP-DEBUG] version={:?}, hash_fn={:?}", self.version, self.hash_fn);
+            eprintln!(
+                "[SRP-DEBUG] version={:?}, hash_fn={:?}",
+                self.version, self.hash_fn
+            );
             eprintln!("[SRP-DEBUG] username={username}");
             eprintln!("[SRP-DEBUG] password=<{} chars>", password.len());
-            eprintln!("[SRP-DEBUG] salt ({} bytes): {:02x?}", self.salt.len(), &self.salt[..self.salt.len().min(16)]);
+            eprintln!(
+                "[SRP-DEBUG] salt ({} bytes): {:02x?}",
+                self.salt.len(),
+                &self.salt[..self.salt.len().min(16)]
+            );
             eprintln!("[SRP-DEBUG] x = {} (bits={})", x, x.bits());
-            eprintln!("[SRP-DEBUG] v_stored  ({} bytes): first16={:02x?}", v_stored_bytes.len(), &v_stored_bytes[..v_stored_bytes.len().min(16)]);
-            eprintln!("[SRP-DEBUG] v_computed({} bytes): first16={:02x?}", v_computed_bytes.len(), &v_computed_bytes[..v_computed_bytes.len().min(16)]);
+            eprintln!(
+                "[SRP-DEBUG] v_stored  ({} bytes): first16={:02x?}",
+                v_stored_bytes.len(),
+                &v_stored_bytes[..v_stored_bytes.len().min(16)]
+            );
+            eprintln!(
+                "[SRP-DEBUG] v_computed({} bytes): first16={:02x?}",
+                v_computed_bytes.len(),
+                &v_computed_bytes[..v_computed_bytes.len().min(16)]
+            );
             eprintln!("[SRP-DEBUG] match={matches}");
         }
 
@@ -343,12 +358,7 @@ fn compute_x(version: SrpVersion, username: &str, password: &str, salt: &[u8]) -
             // x = PBKDF2-HMAC-SHA512(username:password, salt, 15000 iterations, 64 bytes)
             let input = format!("{username}:{password}");
             let mut x_bytes = [0u8; 64];
-            pbkdf2::pbkdf2_hmac::<Sha512>(
-                input.as_bytes(),
-                salt,
-                PBKDF2_ITERATIONS,
-                &mut x_bytes,
-            );
+            pbkdf2::pbkdf2_hmac::<Sha512>(input.as_bytes(), salt, PBKDF2_ITERATIONS, &mut x_bytes);
 
             let x_unsigned = BigUint::from_bytes_be(&x_bytes);
             let n = parse_modulus(SrpVersion::V2);
@@ -434,10 +444,7 @@ fn broken_evidence_vector(bn: &BigUint) -> Vec<u8> {
 mod hex {
     /// Uppercase hex, matching C# `b.ToString("X2")`.
     pub fn encode_upper(data: impl AsRef<[u8]>) -> String {
-        data.as_ref()
-            .iter()
-            .map(|b| format!("{b:02X}"))
-            .collect()
+        data.as_ref().iter().map(|b| format!("{b:02X}")).collect()
     }
 }
 

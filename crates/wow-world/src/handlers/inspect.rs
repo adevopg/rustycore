@@ -8,8 +8,8 @@
 use tracing::warn;
 use wow_constants::ClientOpcodes;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
-use wow_packet::packets::inspect::{InspectItem, InspectResult};
 use wow_packet::ServerPacket;
+use wow_packet::packets::inspect::{InspectItem, InspectResult};
 
 use crate::session::WorldSession;
 

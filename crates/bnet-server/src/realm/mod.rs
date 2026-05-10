@@ -3,8 +3,8 @@
 //! Periodically polls the `realmlist` table and provides realm data to clients.
 
 use anyhow::Result;
-use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Write;
@@ -77,11 +77,18 @@ impl RealmManager {
     /// - All realms are included (not filtered by build)
     /// - VersionMismatch flag (0x01) added dynamically if build doesn't match
     /// - PopulationState = 0 if offline, else max(population_level, 1)
-    pub fn get_realm_list_json(&self, build: u32, _sub_region: &str, char_counts: &HashMap<u32, u8>) -> (Vec<u8>, Vec<u8>) {
+    pub fn get_realm_list_json(
+        &self,
+        build: u32,
+        _sub_region: &str,
+        char_counts: &HashMap<u32, u8>,
+    ) -> (Vec<u8>, Vec<u8>) {
         const REALM_FLAG_VERSION_MISMATCH: u8 = 0x01;
         const REALM_FLAG_OFFLINE: u8 = 0x02;
 
-        let updates: Vec<RealmListUpdate> = self.realms.values()
+        let updates: Vec<RealmListUpdate> = self
+            .realms
+            .values()
             .map(|r| {
                 let build_info = self.get_build_info(r.build);
 
@@ -123,17 +130,24 @@ impl RealmManager {
             .collect();
 
         let realm_list = RealmListUpdates { updates };
-        let realm_json = format!("JSONRealmListUpdates:{}\0", serde_json::to_string(&realm_list).unwrap_or_default());
+        let realm_json = format!(
+            "JSONRealmListUpdates:{}\0",
+            serde_json::to_string(&realm_list).unwrap_or_default()
+        );
         let compressed_realms = zlib_compress(realm_json.as_bytes());
 
-        let counts: Vec<RealmCharacterCountEntry> = char_counts.iter()
+        let counts: Vec<RealmCharacterCountEntry> = char_counts
+            .iter()
             .map(|(&realm_id, &count)| RealmCharacterCountEntry {
                 wow_realm_address: realm_id as i32,
                 count: i32::from(count),
             })
             .collect();
         let count_list = RealmCharacterCountList { counts };
-        let count_json = format!("JSONRealmCharacterCountList:{}\0", serde_json::to_string(&count_list).unwrap_or_default());
+        let count_json = format!(
+            "JSONRealmCharacterCountList:{}\0",
+            serde_json::to_string(&count_list).unwrap_or_default()
+        );
         let compressed_counts = zlib_compress(count_json.as_bytes());
 
         (compressed_realms, compressed_counts)
@@ -144,17 +158,26 @@ impl RealmManager {
     /// - loopback (127.x) → local address
     /// - same /24 subnet as local address → local address
     /// - otherwise → external address
-    pub fn get_realm_entry_json(&self, realm: &Realm, client_ip: Option<std::net::IpAddr>) -> Vec<u8> {
-        let selected_ip = select_realm_ip_str(client_ip, &realm.external_address, &realm.local_address);
+    pub fn get_realm_entry_json(
+        &self,
+        realm: &Realm,
+        client_ip: Option<std::net::IpAddr>,
+    ) -> Vec<u8> {
+        let selected_ip =
+            select_realm_ip_str(client_ip, &realm.external_address, &realm.local_address);
         let addresses = RealmListServerIpAddresses {
             families: vec![AddressFamily {
                 family: 1,
-                addresses: vec![
-                    IpAddress { ip: selected_ip, port: i32::from(realm.port) },
-                ],
+                addresses: vec![IpAddress {
+                    ip: selected_ip,
+                    port: i32::from(realm.port),
+                }],
             }],
         };
-        let json = format!("JSONRealmListServerIPAddresses:{}\0", serde_json::to_string(&addresses).unwrap_or_default());
+        let json = format!(
+            "JSONRealmListServerIPAddresses:{}\0",
+            serde_json::to_string(&addresses).unwrap_or_default()
+        );
         zlib_compress(json.as_bytes())
     }
 }
@@ -163,11 +186,7 @@ impl RealmManager {
 /// - loopback → local
 /// - same /24 subnet as local → local
 /// - otherwise → external
-fn select_realm_ip_str(
-    client_ip: Option<std::net::IpAddr>,
-    external: &str,
-    local: &str,
-) -> String {
+fn select_realm_ip_str(client_ip: Option<std::net::IpAddr>, external: &str, local: &str) -> String {
     let client = match client_ip {
         Some(std::net::IpAddr::V4(v4)) => v4.octets(),
         _ => return external.to_string(),
@@ -183,13 +202,22 @@ fn select_realm_ip_str(
     if let Ok(std::net::IpAddr::V4(local_v4)) = local.parse() {
         let loc = local_v4.octets();
         if client[0] == loc[0] && client[1] == loc[1] && client[2] == loc[2] {
-            tracing::debug!("select_realm_ip: client {}.{}.{}.{} on same /24 as local {} → local",
-                client[0], client[1], client[2], client[3], local);
+            tracing::debug!(
+                "select_realm_ip: client {}.{}.{}.{} on same /24 as local {} → local",
+                client[0],
+                client[1],
+                client[2],
+                client[3],
+                local
+            );
             return local.to_string();
         }
     }
 
-    tracing::debug!("select_realm_ip: client is external → external ({})", external);
+    tracing::debug!(
+        "select_realm_ip: client is external → external ({})",
+        external
+    );
     external.to_string()
 }
 
@@ -203,7 +231,8 @@ pub async fn init_realm_manager(state: Arc<AppState>, update_interval_secs: u64)
     // Start periodic update timer
     let state_clone = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(update_interval_secs));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(update_interval_secs));
         loop {
             interval.tick().await;
             if let Err(e) = update_realms(&state_clone).await {
@@ -282,11 +311,24 @@ async fn update_realms(state: &AppState) -> Result<()> {
                 sub_regions.push(sub_region);
             }
 
-            realms.insert(id, Realm {
-                id, name, external_address: address, local_address,
-                port, icon, flag, timezone, allowed_security_level,
-                population, build, region, battlegroup,
-            });
+            realms.insert(
+                id,
+                Realm {
+                    id,
+                    name,
+                    external_address: address,
+                    local_address,
+                    port,
+                    icon,
+                    flag,
+                    timezone,
+                    allowed_security_level,
+                    population,
+                    build,
+                    region,
+                    battlegroup,
+                },
+            );
 
             if !result.next_row() {
                 break;

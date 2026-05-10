@@ -38,11 +38,8 @@ pub struct HttpResponse {
 /// After writing the response, the server keeps the TLS connection open
 /// and waits for the client to close it. This matches C#'s SslStream
 /// behavior where the stream stays open after WriteAsync() completes.
-pub async fn handle_rest_connection<S>(
-    stream: S,
-    state: Arc<AppState>,
-    addr: std::net::SocketAddr,
-) where
+pub async fn handle_rest_connection<S>(stream: S, state: Arc<AppState>, addr: std::net::SocketAddr)
+where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buf_stream = BufReader::new(stream);

@@ -156,12 +156,11 @@ impl std::fmt::Display for LogFilter {
 /// wow_logging::init_logging("info").expect("failed to init logging");
 /// ```
 pub fn init_logging(log_level: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use tracing_subscriber::fmt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
 
     // Prefer RUST_LOG env var; fall back to the provided level string.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     let subscriber = fmt()
         .with_env_filter(filter)

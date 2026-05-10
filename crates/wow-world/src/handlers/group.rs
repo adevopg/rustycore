@@ -11,11 +11,11 @@ use wow_core::ObjectGuid;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_network::{GroupInfo, PlayerRegistry};
 use wow_packet::packets::party::{
-    GroupDecline, GroupDestroyed, GroupUninvite, PartyCommandResult, PartyDifficultySettings,
-    PartyInviteServer, PartyLootSettings, PartyMemberFullState, PartyPlayerInfo, PartyUpdate,
-    party_result,
+    GroupDecline, GroupDestroyed, GroupUninvite, OptOutOfLoot, PartyCommandResult,
+    PartyDifficultySettings, PartyInviteServer, PartyLootSettings, PartyMemberFullState,
+    PartyPlayerInfo, PartyUpdate, SetLootMethod, party_result,
 };
-use wow_packet::ServerPacket;
+use wow_packet::{ClientPacket, ServerPacket};
 
 use crate::session::WorldSession;
 
@@ -48,6 +48,24 @@ inventory::submit! {
     }
 }
 
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::SetLootMethod,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_set_loot_method",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::OptOutOfLoot,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_opt_out_of_loot",
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn class_to_power_type(class: u8) -> u8 {
@@ -66,18 +84,22 @@ fn class_to_power_type(class: u8) -> u8 {
 /// every *other* member.
 fn send_party_update(group: &GroupInfo, registry: &PlayerRegistry, _vra: u32) {
     // Pre-build the full PlayerList (ALL members including each receiver)
-    let all_players: Vec<PartyPlayerInfo> = group.members.iter().filter_map(|&guid| {
-        registry.get(&guid).map(|entry| PartyPlayerInfo {
-            guid,
-            name: entry.player_name.clone(),
-            class: entry.class,
-            subgroup: 0,
-            flags: 0,
-            roles_assigned: 0,
-            faction_group: if entry.race <= 5 { 1 } else { 2 },
-            connected: true,
+    let all_players: Vec<PartyPlayerInfo> = group
+        .members
+        .iter()
+        .filter_map(|&guid| {
+            registry.get(&guid).map(|entry| PartyPlayerInfo {
+                guid,
+                name: entry.player_name.clone(),
+                class: entry.class,
+                subgroup: 0,
+                flags: 0,
+                roles_assigned: 0,
+                faction_group: if entry.race <= 5 { 1 } else { 2 },
+                connected: true,
+            })
         })
-    }).collect();
+        .collect();
 
     for (my_idx, &member_guid) in group.members.iter().enumerate() {
         let member_entry = match registry.get(&member_guid) {
@@ -97,7 +119,11 @@ fn send_party_update(group: &GroupInfo, registry: &PlayerRegistry, _vra: u32) {
             player_list: all_players.clone(), // ALL members, receiver included
             loot_settings: Some(PartyLootSettings {
                 method: group.loot_method,
-                loot_master: ObjectGuid::EMPTY,
+                loot_master: if group.loot_method == 2 {
+                    group.master_looter_guid
+                } else {
+                    ObjectGuid::EMPTY
+                },
                 threshold: 2,
             }),
             difficulty_settings: Some(PartyDifficultySettings {
@@ -161,22 +187,34 @@ impl WorldSession {
 
         let name_len = match pkt.read_bits(9) {
             Ok(n) => n as usize,
-            Err(e) => { warn!("PartyInvite: name_len read error: {}", e); return; }
+            Err(e) => {
+                warn!("PartyInvite: name_len read error: {}", e);
+                return;
+            }
         };
         let realm_len = match pkt.read_bits(9) {
             Ok(n) => n as usize,
-            Err(e) => { warn!("PartyInvite: realm_len read error: {}", e); return; }
+            Err(e) => {
+                warn!("PartyInvite: realm_len read error: {}", e);
+                return;
+            }
         };
 
         let _proposed_roles = pkt.read_uint32().unwrap_or(0);
 
         let target_guid = match pkt.read_packed_guid() {
             Ok(g) => g,
-            Err(e) => { warn!("PartyInvite: target_guid read error: {}", e); return; }
+            Err(e) => {
+                warn!("PartyInvite: target_guid read error: {}", e);
+                return;
+            }
         };
         let target_name = match pkt.read_string(name_len) {
             Ok(s) => s,
-            Err(e) => { warn!("PartyInvite: target_name read error: {}", e); return; }
+            Err(e) => {
+                warn!("PartyInvite: target_name read error: {}", e);
+                return;
+            }
         };
         let _realm_name = pkt.read_string(realm_len).unwrap_or_default();
         if has_party_index {
@@ -209,13 +247,17 @@ impl WorldSession {
         };
 
         // Find target by name (case-insensitive), same pattern as whisper handler.
-        let target_entry_opt = registry.iter()
+        let target_entry_opt = registry
+            .iter()
             .find(|e| e.value().player_name.eq_ignore_ascii_case(&target_name));
 
         let real_target_guid = match target_entry_opt {
             Some(ref e) => *e.key(),
             None => {
-                warn!("PartyInvite: target '{}' not found in registry", target_name);
+                warn!(
+                    "PartyInvite: target '{}' not found in registry",
+                    target_name
+                );
                 send_result!(party_result::BAD_PLAYER_NAME);
                 return;
             }
@@ -463,5 +505,222 @@ impl WorldSession {
         // 4. Uninvite self.
         self.send_packet(&GroupUninvite);
         self.group_guid = None;
+    }
+
+    /// CMSG_SET_LOOT_METHOD.
+    ///
+    /// This Trinity branch parses the packet but has the entire mutation block
+    /// disabled with `// not allowed to change`, so represented Rust preserves
+    /// that no-op behavior.
+    pub async fn handle_set_loot_method(&mut self, mut pkt: wow_packet::WorldPacket) {
+        if let Err(e) = SetLootMethod::read(&mut pkt) {
+            warn!("Bad SetLootMethod: {e}");
+        }
+    }
+
+    /// CMSG_OPT_OUT_OF_LOOT — toggle automatic pass on group-loot rolls.
+    pub async fn handle_opt_out_of_loot(&mut self, mut pkt: wow_packet::WorldPacket) {
+        let opt_out = match OptOutOfLoot::read(&mut pkt) {
+            Ok(opt_out) => opt_out,
+            Err(e) => {
+                warn!("Bad OptOutOfLoot: {e}");
+                return;
+            }
+        };
+
+        if self.player_guid.is_none() {
+            if opt_out.pass_on_loot {
+                warn!("CMSG_OPT_OUT_OF_LOOT value<>0 for not-loaded character");
+            }
+            return;
+        }
+
+        self.pass_on_group_loot = opt_out.pass_on_loot;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::send_party_update;
+    use flume::bounded;
+    use std::sync::Arc;
+    use wow_constants::ServerOpcodes;
+    use wow_core::{ObjectGuid, Position};
+    use wow_network::{
+        GroupInfo, GroupRegistry, PendingInvites, PlayerBroadcastInfo, PlayerRegistry,
+    };
+    use wow_packet::WorldPacket;
+
+    use crate::session::WorldSession;
+
+    fn broadcast_info(guid: ObjectGuid, send_tx: flume::Sender<Vec<u8>>) -> PlayerBroadcastInfo {
+        let (command_tx, _command_rx) = flume::bounded(1);
+        PlayerBroadcastInfo {
+            map_id: 0,
+            position: Position::ZERO,
+            send_tx,
+            command_tx,
+            active_loot_rolls: Vec::new(),
+            pass_on_group_loot: false,
+            enchanting_skill: 0,
+            player_name: format!("Player{}", guid.low_value()),
+            account_id: 1,
+            race: 1,
+            class: 1,
+            sex: 0,
+            level: 1,
+            display_id: 49,
+            visible_items: [(0, 0, 0); 19],
+        }
+    }
+
+    fn packed_guid_bytes(guid: ObjectGuid) -> Vec<u8> {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        pkt.into_data()
+    }
+
+    fn set_loot_method_packet(
+        has_party_index: bool,
+        method: u8,
+        master: ObjectGuid,
+        threshold: u32,
+    ) -> WorldPacket {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(has_party_index);
+        pkt.write_uint8(method);
+        pkt.write_packed_guid(&master);
+        pkt.write_uint32(threshold);
+        if has_party_index {
+            pkt.write_uint8(0);
+        }
+        pkt.reset_read();
+        pkt
+    }
+
+    fn opt_out_of_loot_packet(pass_on_loot: bool) -> WorldPacket {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(pass_on_loot);
+        pkt.flush_bits();
+        pkt.reset_read();
+        pkt
+    }
+
+    fn make_session_with_send() -> (WorldSession, flume::Receiver<Vec<u8>>) {
+        let (_pkt_tx, pkt_rx) = bounded::<WorldPacket>(1);
+        let (send_tx, send_rx) = bounded::<Vec<u8>>(4);
+        (
+            WorldSession::new(
+                1,
+                "TestAccount".into(),
+                0,
+                2,
+                9,
+                54261,
+                vec![0u8; 40],
+                "esES".into(),
+                pkt_rx,
+                send_tx,
+            ),
+            send_rx,
+        )
+    }
+
+    #[test]
+    fn party_update_sends_master_looter_only_for_master_loot_like_cpp() {
+        let leader = ObjectGuid::create_player(1, 42);
+        let master = ObjectGuid::create_player(1, 77);
+        let (tx, rx) = bounded(8);
+        let registry = PlayerRegistry::default();
+        registry.insert(leader, broadcast_info(leader, tx));
+        let mut group = GroupInfo::new(leader);
+        group.loot_method = 2;
+        group.master_looter_guid = master;
+        let master_bytes = packed_guid_bytes(master);
+
+        send_party_update(&group, &registry, 0);
+
+        let sent = rx.try_recv().unwrap();
+        let mut pkt = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            pkt.read_uint16().unwrap(),
+            ServerOpcodes::PartyUpdate as u16
+        );
+        assert!(
+            sent.windows(master_bytes.len())
+                .any(|window| window == master_bytes.as_slice())
+        );
+
+        let (tx, rx) = bounded(8);
+        let registry = PlayerRegistry::default();
+        registry.insert(leader, broadcast_info(leader, tx));
+        group.loot_method = 0;
+
+        send_party_update(&group, &registry, 0);
+
+        let sent = rx.try_recv().unwrap();
+        assert!(
+            !sent
+                .windows(master_bytes.len())
+                .any(|window| window == master_bytes.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn set_loot_method_is_represented_noop_like_this_cpp_branch() {
+        let (mut session, send_rx) = make_session_with_send();
+        let leader = ObjectGuid::create_player(1, 42);
+        let requested_master = ObjectGuid::create_player(1, 77);
+        let original_master = ObjectGuid::create_player(1, 88);
+        let group_registry = Arc::new(GroupRegistry::default());
+        let mut group = GroupInfo::new(leader);
+        group.loot_method = 2;
+        group.master_looter_guid = original_master;
+        let group_guid = group.group_guid;
+        group_registry.insert(group_guid, group);
+        session.group_guid = Some(group_guid);
+        session.set_group_registry(group_registry.clone(), Arc::new(PendingInvites::default()));
+
+        session
+            .handle_set_loot_method(set_loot_method_packet(true, 0, requested_master, 4))
+            .await;
+
+        let group = group_registry.get(&group_guid).unwrap();
+        assert_eq!(group.loot_method, 2);
+        assert_eq!(group.master_looter_guid, original_master);
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn opt_out_of_loot_sets_pass_on_group_loot_like_cpp() {
+        let (mut session, send_rx) = make_session_with_send();
+        session.player_guid = Some(ObjectGuid::create_player(1, 42));
+        assert!(!session.pass_on_group_loot);
+
+        session
+            .handle_opt_out_of_loot(opt_out_of_loot_packet(true))
+            .await;
+
+        assert!(session.pass_on_group_loot);
+        assert!(send_rx.try_recv().is_err());
+
+        session
+            .handle_opt_out_of_loot(opt_out_of_loot_packet(false))
+            .await;
+
+        assert!(!session.pass_on_group_loot);
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn opt_out_of_loot_without_loaded_player_is_ignored_like_cpp() {
+        let (mut session, send_rx) = make_session_with_send();
+
+        session
+            .handle_opt_out_of_loot(opt_out_of_loot_packet(true))
+            .await;
+
+        assert!(!session.pass_on_group_loot);
+        assert!(send_rx.try_recv().is_err());
     }
 }

@@ -19,20 +19,20 @@
 use tracing::debug;
 
 use wow_constants::ClientOpcodes;
-use wow_core::guid::HighGuid;
 use wow_core::ObjectGuid;
+use wow_core::guid::HighGuid;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::chat::{
-    ChatMessage, ChatMessageEmote, ChatMessageWhisper, ChatMsg, ChatPkt,
-    CTextEmote, EmoteClient, EmoteMessage, STextEmote,
+    CTextEmote, ChatMessage, ChatMessageEmote, ChatMessageWhisper, ChatMsg, ChatPkt, EmoteClient,
+    EmoteMessage, STextEmote,
 };
 use wow_packet::{ClientPacket, ServerPacket};
 
 use crate::session::WorldSession;
 
 // ── Broadcast range constants (C# WorldCfg defaults) ─────────────
-const RANGE_SAY:   f32 = 25.0;
-const RANGE_YELL:  f32 = 300.0;
+const RANGE_SAY: f32 = 25.0;
+const RANGE_YELL: f32 = 300.0;
 const RANGE_EMOTE: f32 = 25.0;
 
 // ── Handler registrations ─────────────────────────────────────────
@@ -179,7 +179,11 @@ impl WorldSession {
         self.send_packet(&chat);
 
         // Broadcast to nearby players on the same map.
-        let range = if msg_type == ChatMsg::Yell { RANGE_YELL } else { RANGE_SAY };
+        let range = if msg_type == ChatMsg::Yell {
+            RANGE_YELL
+        } else {
+            RANGE_SAY
+        };
         self.broadcast_chat_packet(&chat, range);
     }
 
@@ -327,11 +331,8 @@ impl WorldSession {
         );
 
         let (player_guid, _name) = self.player_name_and_guid();
-        let account_guid = ObjectGuid::create_global(
-            HighGuid::WowAccount,
-            0,
-            self.account_id as i64,
-        );
+        let account_guid =
+            ObjectGuid::create_global(HighGuid::WowAccount, 0, self.account_id as i64);
 
         let text_emote = STextEmote {
             source_guid: player_guid,
@@ -380,9 +381,9 @@ impl WorldSession {
         };
 
         let sender_guid = self.player_guid.unwrap_or(ObjectGuid::EMPTY);
-        let sender_pos  = self.player_position;
-        let sender_map  = self.current_map_id;
-        let range_sq    = range * range;
+        let sender_pos = self.player_position;
+        let sender_map = self.current_map_id;
+        let range_sq = range * range;
 
         for entry in registry.iter() {
             // Skip self.

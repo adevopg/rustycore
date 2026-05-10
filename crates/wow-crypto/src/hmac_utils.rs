@@ -13,8 +13,7 @@ impl HmacSha1 {
     /// Create a new HMAC-SHA1 instance with the given `key`.
     pub fn new(key: &[u8]) -> Self {
         Self {
-            mac: Hmac::<Sha1>::new_from_slice(key)
-                .expect("HMAC-SHA1 accepts any key length"),
+            mac: Hmac::<Sha1>::new_from_slice(key).expect("HMAC-SHA1 accepts any key length"),
         }
     }
 
@@ -46,8 +45,7 @@ impl HmacSha256 {
     /// Create a new HMAC-SHA256 instance with the given `key`.
     pub fn new(key: &[u8]) -> Self {
         Self {
-            mac: Hmac::<Sha256>::new_from_slice(key)
-                .expect("HMAC-SHA256 accepts any key length"),
+            mac: Hmac::<Sha256>::new_from_slice(key).expect("HMAC-SHA256 accepts any key length"),
         }
     }
 
@@ -90,9 +88,8 @@ mod tests {
         let key = [0x0b_u8; 20];
         let data = b"Hi There";
         let result = HmacSha256::digest(&key, data);
-        let expected = hex_to_bytes(
-            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
-        );
+        let expected =
+            hex_to_bytes("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
         assert_eq!(&result[..], &expected[..]);
     }
 

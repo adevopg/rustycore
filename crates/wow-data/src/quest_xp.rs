@@ -7,11 +7,11 @@
 //!
 //! C# ref: QuestXPRecord, Quest::XPValue(), Quest::RoundXPValue()
 
+use crate::wdc4::Wdc4Reader;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
-use anyhow::{Context, Result};
 use tracing::{info, warn};
-use crate::wdc4::Wdc4Reader;
 
 /// One row from QuestXP.db2.
 /// ID = quest level; difficulty[0..9] = XP per difficulty tier.
@@ -74,13 +74,21 @@ impl QuestXpStore {
         }
 
         // quest_level == -1 → use player level
-        let ql = if quest_level == -1 { player_level as i32 } else { quest_level };
+        let ql = if quest_level == -1 {
+            player_level as i32
+        } else {
+            quest_level
+        };
 
         let row = match self.rows.get(&(ql as u32)) {
             Some(r) => r,
             None => {
                 // Grey quest or level out of range → nearest available
-                if let Some(r) = self.nearest(ql as u32) { r } else { return 0; }
+                if let Some(r) = self.nearest(ql as u32) {
+                    r
+                } else {
+                    return 0;
+                }
             }
         };
 
@@ -98,19 +106,25 @@ impl QuestXpStore {
     }
 
     fn nearest(&self, target: u32) -> Option<&QuestXpRow> {
-        self.rows.values().min_by_key(|r| (r.level as i64 - target as i64).unsigned_abs())
+        self.rows
+            .values()
+            .min_by_key(|r| (r.level as i64 - target as i64).unsigned_abs())
     }
 }
 
 /// C# ref: Quest::RoundXPValue — rounds to nearest 5.
 fn round_xp(xp: u32) -> u32 {
-    if xp <= 10 { return xp; }
+    if xp <= 10 {
+        return xp;
+    }
     // Round to nearest 5
     ((xp + 2) / 5) * 5
 }
 
 impl Default for QuestXpStore {
     fn default() -> Self {
-        Self { rows: HashMap::new() }
+        Self {
+            rows: HashMap::new(),
+        }
     }
 }

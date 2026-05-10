@@ -47,35 +47,35 @@ impl ServerPacket for InspectResult {
         // ── InspectItemData.Write() for each equipped item ──
         for item in &self.items {
             w.write_packed_guid(&ObjectGuid::EMPTY); // CreatorGUID
-            w.write_uint8(item.slot);               // Index
-            w.write_int32(0);                       // AzeritePowers.Count
-            w.write_int32(0);                       // AzeriteEssences.Count
+            w.write_uint8(item.slot); // Index
+            w.write_int32(0); // AzeritePowers.Count
+            w.write_int32(0); // AzeriteEssences.Count
             // ItemInstance.Write():
-            w.write_int32(item.item_id);            // ItemID
-            w.write_int32(0);                       // RandomPropertiesSeed
-            w.write_int32(0);                       // RandomPropertiesID
-            w.write_bit(false);                     // ItemBonus != null → false
+            w.write_int32(item.item_id); // ItemID
+            w.write_int32(0); // RandomPropertiesSeed
+            w.write_int32(0); // RandomPropertiesID
+            w.write_bit(false); // ItemBonus != null → false
             w.flush_bits();
             // ItemModList.Write() — empty:
-            w.write_bits(0u32, 6);                  // Values.Count = 0
+            w.write_bits(0u32, 6); // Values.Count = 0
             w.flush_bits();
             // Back to InspectItemData:
-            w.write_bit(true);                      // Usable = true
-            w.write_bits(0u32, 4);                  // Enchants.Count = 0
-            w.write_bits(0u32, 2);                  // Gems.Count = 0
+            w.write_bit(true); // Usable = true
+            w.write_bits(0u32, 4); // Enchants.Count = 0
+            w.write_bits(0u32, 2); // Gems.Count = 0
             w.flush_bits();
             // (no AzeriteEssences, no Enchants, no Gems)
         }
 
         // ── InspectResult.Write() continues ──
-        w.write_int32(0);   // Glyphs.Count
-        w.write_int32(0);   // Talents.Count
-        w.write_int32(0);   // ItemLevel
-        w.write_uint8(0);   // LifetimeMaxRank
-        w.write_uint16(0);  // TodayHK
-        w.write_uint16(0);  // YesterdayHK
-        w.write_int32(0);   // LifetimeHK
-        w.write_int32(0);   // HonorLevel
+        w.write_int32(0); // Glyphs.Count
+        w.write_int32(0); // Talents.Count
+        w.write_int32(0); // ItemLevel
+        w.write_uint8(0); // LifetimeMaxRank
+        w.write_uint16(0); // TodayHK
+        w.write_uint16(0); // YesterdayHK
+        w.write_int32(0); // LifetimeHK
+        w.write_int32(0); // HonorLevel
         // (no glyphs, no talents — loops empty)
         w.write_bit(false); // GuildData.HasValue = false
         w.write_bit(false); // AzeriteLevel.HasValue = false
@@ -84,30 +84,30 @@ impl ServerPacket for InspectResult {
         // 7x PVPBracketData (all empty, bracket index 0..7)
         for bracket in 0u8..7 {
             w.write_uint8(bracket); // Bracket
-            w.write_int32(0);       // Unused3
-            w.write_int32(0);       // Rating
-            w.write_int32(0);       // Rank
-            w.write_int32(0);       // WeeklyPlayed
-            w.write_int32(0);       // WeeklyWon
-            w.write_int32(0);       // SeasonPlayed
-            w.write_int32(0);       // SeasonWon
-            w.write_int32(0);       // WeeklyBestRating
-            w.write_int32(0);       // SeasonBestRating
-            w.write_int32(0);       // PvpTierID
-            w.write_int32(0);       // WeeklyBestWinPvpTierID
-            w.write_int32(0);       // Unused1
-            w.write_int32(0);       // Unused2
-            w.write_int32(0);       // RoundsSeasonPlayed
-            w.write_int32(0);       // RoundsSeasonWon
-            w.write_int32(0);       // RoundsWeeklyPlayed
-            w.write_int32(0);       // RoundsWeeklyWon
-            w.write_bit(false);     // Disqualified
+            w.write_int32(0); // Unused3
+            w.write_int32(0); // Rating
+            w.write_int32(0); // Rank
+            w.write_int32(0); // WeeklyPlayed
+            w.write_int32(0); // WeeklyWon
+            w.write_int32(0); // SeasonPlayed
+            w.write_int32(0); // SeasonWon
+            w.write_int32(0); // WeeklyBestRating
+            w.write_int32(0); // SeasonBestRating
+            w.write_int32(0); // PvpTierID
+            w.write_int32(0); // WeeklyBestWinPvpTierID
+            w.write_int32(0); // Unused1
+            w.write_int32(0); // Unused2
+            w.write_int32(0); // RoundsSeasonPlayed
+            w.write_int32(0); // RoundsSeasonWon
+            w.write_int32(0); // RoundsWeeklyPlayed
+            w.write_int32(0); // RoundsWeeklyWon
+            w.write_bit(false); // Disqualified
             w.flush_bits();
         }
 
         // TraitInspectInfo.Write():
         w.write_int32(self.level as i32); // Level
-        w.write_int32(0);                 // ChrSpecializationID
+        w.write_int32(0); // ChrSpecializationID
         // TraitConfigPacket.Write() — empty (ID=0, Type=0):
         w.write_int32(0); // ID
         w.write_int32(0); // Type = 0 (None — no switch case fires)

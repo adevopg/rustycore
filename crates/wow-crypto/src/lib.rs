@@ -19,15 +19,15 @@ pub mod srp6;
 pub mod world_crypt;
 
 // Re-export the most commonly used types at crate root for convenience.
+pub use bnet_srp6::{
+    BnetSrp6, BnetSrpChallenge, BnetSrpProof, SrpHashFunction, SrpVersion, compute_bnet_verifier,
+    generate_bnet_salt, srp_username,
+};
 pub use hmac_utils::{HmacSha1, HmacSha256};
 pub use sarc4::SArc4;
 pub use session_key::{SessionKeyGenerator, SessionKeyGenerator256};
 pub use srp6::{
     Srp6Params, Srp6ServerProof, compute_session_key, compute_verifier, generate_salt,
     generate_server_ephemeral, verify_client_proof,
-};
-pub use bnet_srp6::{
-    BnetSrp6, BnetSrpChallenge, BnetSrpProof, SrpHashFunction, SrpVersion,
-    compute_bnet_verifier, generate_bnet_salt, srp_username,
 };
 pub use world_crypt::{WorldCrypt, WorldCryptPair};

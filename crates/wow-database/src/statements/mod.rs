@@ -89,8 +89,25 @@ mod tests {
                 .sql()
                 .contains("item_template_addon")
         );
+        assert!(
+            WorldStatements::SEL_ITEM_TEMPLATE_ADDON_LOOT_METADATA
+                .sql()
+                .contains("QuestLogItemId")
+        );
+        assert!(
+            WorldStatements::SEL_QUEST_TEMPLATE
+                .sql()
+                .contains("ItemDrop1")
+        );
         assert_eq!(
             WorldStatements::SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT
+                .sql()
+                .matches('?')
+                .count(),
+            1
+        );
+        assert_eq!(
+            WorldStatements::SEL_ITEM_TEMPLATE_ADDON_LOOT_METADATA
                 .sql()
                 .matches('?')
                 .count(),
@@ -119,6 +136,113 @@ mod tests {
                 .matches('?')
                 .count(),
             1
+        );
+        for statement in [
+            WorldStatements::SEL_CREATURE_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_CREATURE_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_FISHING_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_FISHING_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_GAMEOBJECT_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_GAMEOBJECT_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_MAIL_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_MAIL_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_MILLING_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_MILLING_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_PICKPOCKETING_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_PICKPOCKETING_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_PROSPECTING_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_PROSPECTING_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_SKINNING_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_SKINNING_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_DISENCHANT_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_DISENCHANT_LOOT_TEMPLATE_ALL_ROWS,
+            WorldStatements::SEL_SPELL_LOOT_TEMPLATE_ROWS,
+            WorldStatements::SEL_SPELL_LOOT_TEMPLATE_ALL_ROWS,
+        ] {
+            let sql = statement.sql();
+            assert!(sql.contains("_loot_template"));
+            assert!(sql.contains("GroupId"));
+            assert!(sql.matches('?').count() <= 1);
+        }
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_ROWS
+                .sql()
+                .contains("conditions")
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_ROWS
+                .sql()
+                .contains("SourceTypeOrReferenceId")
+        );
+        assert_eq!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_ROWS
+                .sql()
+                .matches('?')
+                .count(),
+            3
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_IDS
+                .sql()
+                .contains("conditions")
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_IDS
+                .sql()
+                .contains("SourceTypeOrReferenceId BETWEEN 1 AND 12")
+        );
+        assert_eq!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_IDS
+                .sql()
+                .matches('?')
+                .count(),
+            0
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES
+                .sql()
+                .contains("ConditionTypeOrReference < 0")
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES
+                .sql()
+                .contains("ConditionTypeOrReference <> SourceTypeOrReferenceId")
+        );
+        assert!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES
+                .sql()
+                .contains("SourceTypeOrReferenceId < 0")
+        );
+        assert!(
+            WorldStatements::SEL_CONDITION_REFERENCE_TEMPLATE_IDS
+                .sql()
+                .contains("SourceTypeOrReferenceId < 0")
+        );
+        assert_eq!(
+            WorldStatements::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES
+                .sql()
+                .matches('?')
+                .count(),
+            0
+        );
+        assert_eq!(
+            WorldStatements::SEL_CONDITION_REFERENCE_TEMPLATE_IDS
+                .sql()
+                .matches('?')
+                .count(),
+            0
+        );
+        assert!(
+            WorldStatements::SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE
+                .sql()
+                .contains("item_random_enchantment_template")
+        );
+        assert_eq!(
+            WorldStatements::SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE
+                .sql()
+                .matches('?')
+                .count(),
+            0
         );
     }
 

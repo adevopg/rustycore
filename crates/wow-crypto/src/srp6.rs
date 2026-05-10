@@ -105,7 +105,11 @@ fn hex_decode(s: &str) -> Vec<u8> {
 ///
 /// WoW normalises both username and password to uppercase.
 pub fn compute_x(username: &str, password: &str, salt: &[u8]) -> BigUint {
-    let identity = format!("{}:{}", username.to_ascii_uppercase(), password.to_ascii_uppercase());
+    let identity = format!(
+        "{}:{}",
+        username.to_ascii_uppercase(),
+        password.to_ascii_uppercase()
+    );
     let identity_hash = sha1(identity.as_bytes());
 
     let mut buf = Vec::with_capacity(salt.len() + 20);
@@ -263,14 +267,7 @@ pub fn compute_client_evidence(
     let a_bytes = biguint_to_le_fixed(a, 32);
     let b_bytes = biguint_to_le_fixed(b, 32);
 
-    sha1_multi(&[
-        &hn_xor_hg,
-        &h_username,
-        salt,
-        &a_bytes,
-        &b_bytes,
-        k,
-    ])
+    sha1_multi(&[&hn_xor_hg, &h_username, salt, &a_bytes, &b_bytes, k])
 }
 
 // ---------------------------------------------------------------------------
@@ -278,11 +275,7 @@ pub fn compute_client_evidence(
 // ---------------------------------------------------------------------------
 
 /// Compute M2 = SHA1( A || M1 || K )
-pub fn compute_server_evidence(
-    a: &BigUint,
-    m1: &[u8; 20],
-    k: &[u8; 40],
-) -> [u8; 20] {
+pub fn compute_server_evidence(a: &BigUint, m1: &[u8; 20], k: &[u8; 40]) -> [u8; 20] {
     let a_bytes = biguint_to_le_fixed(a, 32);
     sha1_multi(&[&a_bytes, m1, k])
 }

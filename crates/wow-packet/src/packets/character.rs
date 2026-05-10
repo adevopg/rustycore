@@ -124,7 +124,12 @@ impl ServerPacket for EnumCharactersResult {
         pkt.flush_bits();
 
         // Counts
-        let max_level = self.characters.iter().map(|c| c.experience_level).max().unwrap_or(0) as i32;
+        let max_level = self
+            .characters
+            .iter()
+            .map(|c| c.experience_level)
+            .max()
+            .unwrap_or(0) as i32;
         pkt.write_int32(self.characters.len() as i32);
         pkt.write_int32(max_level); // MaxCharacterLevel
         pkt.write_int32(self.race_unlock_data.len() as i32);
@@ -504,7 +509,7 @@ mod tests {
 
         pkt.write_uint8(1); // race: Human
         pkt.write_uint8(1); // class: Warrior
-        pkt.write_int8(0);  // sex: Male
+        pkt.write_int8(0); // sex: Male
         pkt.write_uint32(0); // customization_count
 
         pkt.write_string("Test");
@@ -539,9 +544,13 @@ mod tests {
         let pkt = EnumCharactersResult {
             success: true,
             characters: vec![char_info],
-            race_unlock_data: vec![
-                RaceUnlock { race_id: 1, has_expansion: true, has_achievement: false, has_heritage_armor: false, is_locked: false },
-            ],
+            race_unlock_data: vec![RaceUnlock {
+                race_id: 1,
+                has_expansion: true,
+                has_achievement: false,
+                has_heritage_armor: false,
+                is_locked: false,
+            }],
         };
         let bytes = pkt.to_bytes();
         // Should be a reasonably sized packet

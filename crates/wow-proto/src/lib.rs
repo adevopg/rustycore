@@ -22,7 +22,10 @@ pub mod bgs {
 
         pub mod authentication {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/bgs.protocol.authentication.v1.rs"));
+                include!(concat!(
+                    env!("OUT_DIR"),
+                    "/bgs.protocol.authentication.v1.rs"
+                ));
             }
         }
 
@@ -40,7 +43,10 @@ pub mod bgs {
 
         pub mod game_utilities {
             pub mod v1 {
-                include!(concat!(env!("OUT_DIR"), "/bgs.protocol.game_utilities.v1.rs"));
+                include!(concat!(
+                    env!("OUT_DIR"),
+                    "/bgs.protocol.game_utilities.v1.rs"
+                ));
             }
         }
 
@@ -128,7 +134,10 @@ mod tests {
         assert_eq!(decoded.service_id, 0);
         assert_eq!(decoded.method_id, Some(1));
         assert_eq!(decoded.token, 42);
-        assert_eq!(decoded.service_hash, Some(service_hash::AUTHENTICATION_SERVICE));
+        assert_eq!(
+            decoded.service_hash,
+            Some(service_hash::AUTHENTICATION_SERVICE)
+        );
     }
 
     #[test]
@@ -173,7 +182,10 @@ mod tests {
         use prost::Message;
 
         let req = connection::v1::ConnectRequest {
-            client_id: Some(ProcessId { label: 1, epoch: 100 }),
+            client_id: Some(ProcessId {
+                label: 1,
+                epoch: 100,
+            }),
             use_bindless_rpc: Some(true),
             ..Default::default()
         };
@@ -191,15 +203,13 @@ mod tests {
         use prost::Message;
 
         let req = game_utilities::v1::ClientRequest {
-            attribute: vec![
-                Attribute {
-                    name: "Command_RealmListRequest_v1".to_string(),
-                    value: Variant {
-                        string_value: Some("test".to_string()),
-                        ..Default::default()
-                    },
+            attribute: vec![Attribute {
+                name: "Command_RealmListRequest_v1".to_string(),
+                value: Variant {
+                    string_value: Some("test".to_string()),
+                    ..Default::default()
                 },
-            ],
+            }],
             ..Default::default()
         };
 

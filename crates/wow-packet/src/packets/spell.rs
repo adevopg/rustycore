@@ -62,12 +62,12 @@ impl SpellTargetData {
         // but we also expose a public reset for clarity.
         pkt.reset_bits();
 
-        let flags        = pkt.read_bits(28)?;
-        let has_src      = pkt.has_bit()?;
-        let has_dst      = pkt.has_bit()?;
-        let has_orient   = pkt.has_bit()?;
-        let has_mapid    = pkt.has_bit()?;
-        let name_len     = pkt.read_bits(7)? as usize;
+        let flags = pkt.read_bits(28)?;
+        let has_src = pkt.has_bit()?;
+        let has_dst = pkt.has_bit()?;
+        let has_orient = pkt.has_bit()?;
+        let has_mapid = pkt.has_bit()?;
+        let name_len = pkt.read_bits(7)? as usize;
 
         let unit = pkt.read_packed_guid()?;
         let item = pkt.read_packed_guid()?;
@@ -123,9 +123,9 @@ impl SpellTargetData {
 // ── SpellCraftingReagent helper (read-only, for skipping) ─────────
 
 fn skip_crafting_reagent(pkt: &mut WorldPacket) -> Result<(), PacketError> {
-    let _item_id         = pkt.read_int32()?;
+    let _item_id = pkt.read_int32()?;
     let _data_slot_index = pkt.read_int32()?;
-    let _quantity        = pkt.read_int32()?;
+    let _quantity = pkt.read_int32()?;
     // optional Unknown_1000 byte guarded by a bit
     // NOTE: these optional bytes use the *non-reset* bit reader that was
     // last active when we entered this helper. To be safe, we read the bit
@@ -160,27 +160,27 @@ impl ClientPacket for CastSpellRequest {
     const OPCODE: ClientOpcodes = ClientOpcodes::CastSpell;
 
     fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
-        let cast_id      = pkt.read_packed_guid()?;
-        let _misc0       = pkt.read_int32()?;
-        let _misc1       = pkt.read_int32()?;
-        let spell_id     = pkt.read_int32()?;
-        let visual       = SpellCastVisual::read(pkt)?;
+        let cast_id = pkt.read_packed_guid()?;
+        let _misc0 = pkt.read_int32()?;
+        let _misc1 = pkt.read_int32()?;
+        let spell_id = pkt.read_int32()?;
+        let visual = SpellCastVisual::read(pkt)?;
 
         // MissileTrajectoryRequest: Pitch + Speed (2 floats)
-        let _pitch       = pkt.read_float()?;
-        let _speed       = pkt.read_float()?;
+        let _pitch = pkt.read_float()?;
+        let _speed = pkt.read_float()?;
 
         let _crafting_npc = pkt.read_packed_guid()?;
 
-        let currencies_count  = pkt.read_uint32()? as usize;
-        let reagents_count    = pkt.read_uint32()? as usize;
+        let currencies_count = pkt.read_uint32()? as usize;
+        let reagents_count = pkt.read_uint32()? as usize;
         let removed_mods_count = pkt.read_uint32()? as usize;
 
         // Optional currencies (each: 3 i32 + 1 optional byte via bit)
         for _ in 0..currencies_count {
-            let _item     = pkt.read_int32()?;
-            let _slot     = pkt.read_int32()?;
-            let _qty      = pkt.read_int32()?;
+            let _item = pkt.read_int32()?;
+            let _slot = pkt.read_int32()?;
+            let _qty = pkt.read_int32()?;
             let has_extra = pkt.has_bit()?;
             if has_extra {
                 let _u = pkt.read_uint8()?;
@@ -188,10 +188,10 @@ impl ClientPacket for CastSpellRequest {
         }
 
         // Bit section: SendCastFlags(5), hasMoveUpdate(1), weightCount(2), hasCraftingOrderID(1)
-        let _send_cast_flags    = pkt.read_bits(5)?;
-        let has_move_update     = pkt.has_bit()?;
-        let weight_count        = pkt.read_bits(2)? as usize;
-        let has_crafting_order  = pkt.has_bit()?;
+        let _send_cast_flags = pkt.read_bits(5)?;
+        let has_move_update = pkt.has_bit()?;
+        let weight_count = pkt.read_bits(2)? as usize;
+        let has_crafting_order = pkt.has_bit()?;
 
         // Target — reads its own bit section (SpellTargetData::read calls reset_bits)
         let target = SpellTargetData::read(pkt)?;
@@ -216,18 +216,28 @@ impl ClientPacket for CastSpellRequest {
         if has_move_update {
             // MoveInfo is at the end; anything after target is non-critical for
             // our básicos implementation — just stop early.
-            return Ok(Self { cast_id, spell_id, visual, target });
+            return Ok(Self {
+                cast_id,
+                spell_id,
+                visual,
+                target,
+            });
         }
 
         // SpellWeights (each: ResetBitPos + Type(2 bits) + ID(i32) + Quantity(u32))
         for _ in 0..weight_count {
             pkt.reset_bits();
-            let _ty  = pkt.read_bits(2)?;
-            let _id  = pkt.read_int32()?;
+            let _ty = pkt.read_bits(2)?;
+            let _id = pkt.read_int32()?;
             let _qty = pkt.read_uint32()?;
         }
 
-        Ok(Self { cast_id, spell_id, visual, target })
+        Ok(Self {
+            cast_id,
+            spell_id,
+            visual,
+            target,
+        })
     }
 }
 
@@ -310,11 +320,11 @@ fn write_spell_cast_data(
     pkt.write_bits(hit_targets.len() as u32, 16); // HitTargets
     pkt.write_bits(0, 16); // MissTargets
     pkt.write_bits(0, 16); // MissStatus
-    pkt.write_bits(0, 9);  // RemainingPower
-    pkt.write_bit(false);  // RemainingRunes present?
+    pkt.write_bits(0, 9); // RemainingPower
+    pkt.write_bit(false); // RemainingRunes present?
     pkt.write_bits(0, 16); // TargetPoints
-    pkt.write_bit(false);  // AmmoDisplayID present?
-    pkt.write_bit(false);  // AmmoInventoryType present?
+    pkt.write_bit(false); // AmmoDisplayID present?
+    pkt.write_bit(false); // AmmoInventoryType present?
     pkt.flush_bits();
 
     // Target

@@ -12,8 +12,8 @@
 use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_core::ObjectGuid;
 
-use crate::{ClientPacket, ServerPacket, WorldPacket};
 use crate::world_packet::PacketError;
+use crate::{ClientPacket, ServerPacket, WorldPacket};
 
 // ── CMSG_TRAINER_LIST (0x34ad) ───────────────────────────────────────
 
@@ -47,7 +47,11 @@ impl ClientPacket for TrainerBuySpellRequest {
         let trainer_guid = packet.read_packed_guid()?;
         let trainer_id = packet.read_int32()?;
         let spell_id = packet.read_int32()?;
-        Ok(Self { trainer_guid, trainer_id, spell_id })
+        Ok(Self {
+            trainer_guid,
+            trainer_id,
+            spell_id,
+        })
     }
 }
 
@@ -209,7 +213,11 @@ mod tests {
         };
         let bytes = pkt.to_bytes();
         // At minimum: opcode(2) + packed_guid + i32*3 + bits(11) + flush + empty string
-        assert!(bytes.len() >= 12, "TrainerListPacket too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() >= 12,
+            "TrainerListPacket too small: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]

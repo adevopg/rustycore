@@ -330,6 +330,7 @@ pub enum ClientOpcodes {
     LootRelease = 0x3213,
     LootRoll = 0x3214,
     LootUnit = 0x320f,
+    SetLootSpecialization = 0xbadd,
     LowLevelRaid1 = 0x36a1,
     LowLevelRaid2 = 0x3512,
     MailCreateTextItem = 0x353b,

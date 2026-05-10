@@ -496,9 +496,7 @@ impl PartialOrd for ObjectGuid {
 
 impl Ord for ObjectGuid {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.high
-            .cmp(&other.high)
-            .then(self.low.cmp(&other.low))
+        self.high.cmp(&other.high).then(self.low.cmp(&other.low))
     }
 }
 
@@ -661,10 +659,10 @@ mod tests {
     fn test_create_creature() {
         let guid = ObjectGuid::create_world_object(
             HighGuid::Creature,
-            0,   // sub_type
-            1,   // realm_id
-            530, // map_id (Outland)
-            0,   // server_id
+            0,    // sub_type
+            1,    // realm_id
+            530,  // map_id (Outland)
+            0,    // server_id
             1234, // entry
             5678, // counter
         );
@@ -716,9 +714,8 @@ mod tests {
 
     #[test]
     fn test_raw_bytes_roundtrip() {
-        let original = ObjectGuid::create_world_object(
-            HighGuid::Creature, 0, 1, 571, 0, 9999, 123456,
-        );
+        let original =
+            ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, 9999, 123456);
         let bytes = original.to_raw_bytes();
         let restored = ObjectGuid::from_raw_bytes(&bytes);
         assert_eq!(original, restored);
@@ -747,17 +744,13 @@ mod tests {
         assert!(player.is_some());
         assert_eq!(player.unwrap().counter(), 42);
 
-        let creature_guid = ObjectGuid::create_world_object(
-            HighGuid::Creature, 0, 0, 0, 0, 1, 1,
-        );
+        let creature_guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 0, 0, 0, 1, 1);
         assert!(creature_guid.as_player().is_none());
     }
 
     #[test]
     fn test_typed_guid_creature() {
-        let guid = ObjectGuid::create_world_object(
-            HighGuid::Creature, 0, 0, 0, 0, 100, 50,
-        );
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 0, 0, 0, 100, 50);
         let creature = guid.as_creature();
         assert!(creature.is_some());
         assert_eq!(creature.unwrap().entry(), 100);

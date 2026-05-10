@@ -9,8 +9,8 @@
 //! C# ref: Game/Networking/Packets/NPCPackets.cs (ClientGossipText)
 
 use crate::{ServerPacket, WorldPacket};
-use wow_core::ObjectGuid;
 use wow_constants::ServerOpcodes;
+use wow_core::ObjectGuid;
 
 // Constants matching C# SharedConst
 const QUEST_REWARD_ITEM_COUNT: usize = 4;
@@ -43,12 +43,12 @@ impl ServerPacket for QuestGiverStatus {
 
 // ── Quest giver status constants ──────────────────────────────────────────────
 pub mod quest_giver_status {
-    pub const NONE: u64           = 0;
-    pub const FUTURE: u64         = 2;
-    pub const TRIVIAL: u64        = 4;
-    pub const FAILED_TIMER: u64   = 8;
-    pub const CAN_REWARD: u64     = 16;
-    pub const AVAILABLE: u64      = 32;
+    pub const NONE: u64 = 0;
+    pub const FUTURE: u64 = 2;
+    pub const TRIVIAL: u64 = 4;
+    pub const FAILED_TIMER: u64 = 8;
+    pub const CAN_REWARD: u64 = 16;
+    pub const AVAILABLE: u64 = 32;
     pub const AVAILABLE_DAILY: u64 = 4096;
 }
 
@@ -120,7 +120,7 @@ pub struct QuestObjectiveSimple {
 /// Full reward block for a quest details / offer reward packet.
 /// C# ref: QuestRewards
 pub struct QuestRewardsBlock {
-    pub items: [(u32, u32); QUEST_REWARD_ITEM_COUNT],        // (item_id, qty) — fixed rewards
+    pub items: [(u32, u32); QUEST_REWARD_ITEM_COUNT], // (item_id, qty) — fixed rewards
     pub choice_items: [(u32, u32); QUEST_REWARD_CHOICES_COUNT], // (item_id, qty) — player picks one
     pub money: i32,
     pub xp: i32,
@@ -156,11 +156,11 @@ impl QuestRewardsBlock {
         }
         pkt.write_int32(self.money);
         pkt.write_int32(self.xp);
-        pkt.write_int64(0i64);  // ArtifactXP
-        pkt.write_int32(0);     // ArtifactCategoryID
+        pkt.write_int64(0i64); // ArtifactXP
+        pkt.write_int32(0); // ArtifactCategoryID
         pkt.write_int32(self.honor);
         pkt.write_int32(self.title);
-        pkt.write_uint32(0);    // FactionFlags
+        pkt.write_uint32(0); // FactionFlags
         // RewardFaction (5x4 ints = 20 ints)
         for _ in 0..QUEST_REWARD_REPUTATIONS_COUNT {
             pkt.write_int32(0); // FactionID
@@ -185,11 +185,11 @@ impl QuestRewardsBlock {
         // C# ref: QuestChoiceItem.Write / ItemInstance.Write
         for (item_id, qty) in &self.choice_items {
             pkt.write_int32(*item_id as i32); // Item.ItemID
-            pkt.write_int32(*qty as i32);     // Item.Quantity
-            pkt.write_uint64(0u64);           // Item.Mask (ItemContext bits)
-            pkt.write_uint32(0);              // Item.Bonuses count
-            pkt.write_int32(0);               // DisplayID
-            pkt.write_int32(0);               // Unused (LootItemType 0=Item)
+            pkt.write_int32(*qty as i32); // Item.Quantity
+            pkt.write_uint64(0u64); // Item.Mask (ItemContext bits)
+            pkt.write_uint32(0); // Item.Bonuses count
+            pkt.write_int32(0); // DisplayID
+            pkt.write_int32(0); // Unused (LootItemType 0=Item)
         }
         pkt.write_bit(false); // IsBoostSpell
         pkt.flush_bits();
@@ -217,22 +217,22 @@ impl ServerPacket for QuestGiverQuestDetails {
         pkt.write_packed_guid(&self.giver_guid);
         pkt.write_packed_guid(&ObjectGuid::EMPTY); // InformUnit
         pkt.write_uint32(self.quest_id);
-        pkt.write_int32(0);  // QuestPackageID
-        pkt.write_int32(0);  // PortraitGiver
-        pkt.write_int32(0);  // PortraitGiverMount
-        pkt.write_int32(0);  // PortraitGiverModelSceneID
-        pkt.write_int32(0);  // PortraitTurnIn
+        pkt.write_int32(0); // QuestPackageID
+        pkt.write_int32(0); // PortraitGiver
+        pkt.write_int32(0); // PortraitGiverMount
+        pkt.write_int32(0); // PortraitGiverModelSceneID
+        pkt.write_int32(0); // PortraitTurnIn
         pkt.write_uint32(self.quest_flags[0]);
         pkt.write_uint32(self.quest_flags[1]);
         pkt.write_uint32(self.quest_flags[2]);
         pkt.write_int32(self.suggested_party_members as i32);
-        pkt.write_int32(0);  // LearnSpells count
-        pkt.write_int32(0);  // DescEmotes count
+        pkt.write_int32(0); // LearnSpells count
+        pkt.write_int32(0); // DescEmotes count
         pkt.write_int32(self.objectives.len() as i32);
-        pkt.write_int32(0);  // QuestStartItemID
-        pkt.write_int32(0);  // QuestSessionBonus
-        pkt.write_int32(0);  // QuestGiverCreatureID
-        pkt.write_int32(0);  // ConditionalDescriptionText count
+        pkt.write_int32(0); // QuestStartItemID
+        pkt.write_int32(0); // QuestSessionBonus
+        pkt.write_int32(0); // QuestGiverCreatureID
+        pkt.write_int32(0); // ConditionalDescriptionText count
 
         // Objectives
         for obj in &self.objectives {
@@ -247,9 +247,9 @@ impl ServerPacket for QuestGiverQuestDetails {
         pkt.write_bits(self.description.len() as u32, 12);
         pkt.write_bits(self.log_description.len() as u32, 12);
         pkt.write_bits(0u32, 10); // PortraitGiverText len
-        pkt.write_bits(0u32, 8);  // PortraitGiverName len
+        pkt.write_bits(0u32, 8); // PortraitGiverName len
         pkt.write_bits(0u32, 10); // PortraitTurnInText len
-        pkt.write_bits(0u32, 8);  // PortraitTurnInName len
+        pkt.write_bits(0u32, 8); // PortraitTurnInName len
         pkt.write_bit(self.auto_launched);
         pkt.write_bit(false); // unused
         pkt.write_bit(false); // StartCheat
@@ -349,14 +349,16 @@ impl ServerPacket for QueryQuestInfoResponse {
         pkt.write_bit(self.allow);
         pkt.flush_bits();
 
-        if !self.allow { return; }
+        if !self.allow {
+            return;
+        }
 
         pkt.write_int32(self.quest_id as i32);
         pkt.write_int32(self.quest_type as i32);
         pkt.write_int32(self.quest_level);
-        pkt.write_int32(0);  // QuestScalingFactionGroup
+        pkt.write_int32(0); // QuestScalingFactionGroup
         pkt.write_int32(self.quest_max_scaling_level);
-        pkt.write_int32(0);  // QuestPackageID
+        pkt.write_int32(0); // QuestPackageID
         pkt.write_int32(self.min_level);
         pkt.write_int32(self.quest_sort_id);
         pkt.write_int32(self.quest_info_id as i32);
@@ -364,19 +366,21 @@ impl ServerPacket for QueryQuestInfoResponse {
         pkt.write_int32(self.reward_next_quest as i32);
         pkt.write_int32(self.reward_xp_difficulty as i32);
         pkt.write_float(1.0); // RewardXPMultiplier
-        pkt.write_int32(0);   // RewardMoney (base; not difficulty)
+        pkt.write_int32(0); // RewardMoney (base; not difficulty)
         pkt.write_int32(self.reward_money_difficulty as i32);
         pkt.write_float(1.0); // RewardMoneyMultiplier
-        pkt.write_int32(0);   // RewardBonusMoney
+        pkt.write_int32(0); // RewardBonusMoney
         // RewardDisplaySpell (3)
-        for s in &self.reward_display_spell { pkt.write_int32(*s as i32); }
+        for s in &self.reward_display_spell {
+            pkt.write_int32(*s as i32);
+        }
         pkt.write_int32(self.reward_spell as i32);
-        pkt.write_int32(0);   // RewardHonor
+        pkt.write_int32(0); // RewardHonor
         pkt.write_float(0.0); // RewardKillHonor
-        pkt.write_int32(0);   // RewardArtifactXPDifficulty
+        pkt.write_int32(0); // RewardArtifactXPDifficulty
         pkt.write_float(1.0); // RewardArtifactXPMultiplier
-        pkt.write_int32(0);   // RewardArtifactCategoryID
-        pkt.write_int32(0);   // StartItem
+        pkt.write_int32(0); // RewardArtifactCategoryID
+        pkt.write_int32(0); // StartItem
         pkt.write_uint32(self.flags);
         pkt.write_uint32(self.flags_ex);
         pkt.write_uint32(self.flags_ex2);
@@ -407,13 +411,16 @@ impl ServerPacket for QueryQuestInfoResponse {
         pkt.write_int32(0); // PortraitTurnIn
         // RewardFaction (5x4)
         for _ in 0..QUEST_REWARD_REPUTATIONS_COUNT {
-            pkt.write_int32(0); pkt.write_int32(0);
-            pkt.write_int32(0); pkt.write_int32(0);
+            pkt.write_int32(0);
+            pkt.write_int32(0);
+            pkt.write_int32(0);
+            pkt.write_int32(0);
         }
         pkt.write_uint32(0); // RewardFactionFlags
         // RewardCurrency (4x2)
         for _ in 0..QUEST_REWARD_CURRENCY_COUNT {
-            pkt.write_int32(0); pkt.write_int32(0);
+            pkt.write_int32(0);
+            pkt.write_int32(0);
         }
         pkt.write_int32(0); // AcceptedSoundKitID
         pkt.write_int32(0); // CompleteSoundKitID
@@ -433,9 +440,9 @@ impl ServerPacket for QueryQuestInfoResponse {
         pkt.write_bits(self.quest_description.len() as u32, 12);
         pkt.write_bits(self.area_description.len() as u32, 9);
         pkt.write_bits(0u32, 10); // PortraitGiverText
-        pkt.write_bits(0u32, 8);  // PortraitGiverName
+        pkt.write_bits(0u32, 8); // PortraitGiverName
         pkt.write_bits(0u32, 10); // PortraitTurnInText
-        pkt.write_bits(0u32, 8);  // PortraitTurnInName
+        pkt.write_bits(0u32, 8); // PortraitTurnInName
         pkt.write_bits(self.quest_completion_log.len() as u32, 11);
         pkt.flush_bits();
 
@@ -485,33 +492,33 @@ impl ServerPacket for QuestGiverOfferReward {
     fn write(&self, pkt: &mut WorldPacket) {
         // QuestGiverOfferReward inner block
         pkt.write_packed_guid(&self.giver_guid);
-        pkt.write_int32(0);  // QuestGiverCreatureID
+        pkt.write_int32(0); // QuestGiverCreatureID
         pkt.write_uint32(self.quest_id);
         pkt.write_uint32(self.quest_flags[0]);
         pkt.write_uint32(self.quest_flags[1]);
         pkt.write_uint32(self.quest_flags[2]);
         pkt.write_int32(self.suggested_party_members as i32);
-        pkt.write_int32(0);  // Emotes count
+        pkt.write_int32(0); // Emotes count
         pkt.write_bit(self.auto_launched);
         pkt.write_bit(false); // unused
         pkt.flush_bits();
         self.rewards.write(pkt);
 
         // Outer wrapper fields
-        pkt.write_int32(0);  // QuestPackageID
-        pkt.write_int32(0);  // PortraitGiver
-        pkt.write_int32(0);  // PortraitGiverMount
-        pkt.write_int32(0);  // PortraitGiverModelSceneID
-        pkt.write_int32(0);  // PortraitTurnIn
-        pkt.write_int32(0);  // QuestGiverCreatureID (outer)
-        pkt.write_int32(0);  // ConditionalRewardText count
+        pkt.write_int32(0); // QuestPackageID
+        pkt.write_int32(0); // PortraitGiver
+        pkt.write_int32(0); // PortraitGiverMount
+        pkt.write_int32(0); // PortraitGiverModelSceneID
+        pkt.write_int32(0); // PortraitTurnIn
+        pkt.write_int32(0); // QuestGiverCreatureID (outer)
+        pkt.write_int32(0); // ConditionalRewardText count
 
         pkt.write_bits(self.title.len() as u32, 9);
         pkt.write_bits(self.reward_text.len() as u32, 12);
         pkt.write_bits(0u32, 10); // PortraitGiverText
-        pkt.write_bits(0u32, 8);  // PortraitGiverName
+        pkt.write_bits(0u32, 8); // PortraitGiverName
         pkt.write_bits(0u32, 10); // PortraitTurnInText
-        pkt.write_bits(0u32, 8);  // PortraitTurnInName
+        pkt.write_bits(0u32, 8); // PortraitTurnInName
         pkt.flush_bits();
 
         pkt.write_string(&self.title);

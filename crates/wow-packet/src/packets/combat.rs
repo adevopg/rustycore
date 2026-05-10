@@ -57,7 +57,10 @@ impl ClientPacket for SetSheathed {
     fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
         let current_sheath_state = pkt.read_int32()?;
         let sheathed = pkt.has_bit()?;
-        Ok(Self { current_sheath_state, sheathed })
+        Ok(Self {
+            current_sheath_state,
+            sheathed,
+        })
     }
 }
 
@@ -153,13 +156,13 @@ impl ServerPacket for AttackerStateUpdate {
         info.write_uint8(self.target_level);
         info.write_uint8(self.expansion);
         info.write_int16(0i16); // player_level_delta
-        info.write_int8(0i8);   // target_scaling_level_delta
+        info.write_int8(0i8); // target_scaling_level_delta
         info.write_float(0.0f32); // player_item_level
         info.write_float(0.0f32); // target_item_level
         info.write_uint32(0u32); // scaling_health_item_level_curve_id
         info.write_uint32(0u32); // flags
-        info.write_int32(0i32);  // player_content_tuning_id
-        info.write_int32(0i32);  // target_content_tuning_id
+        info.write_int32(0i32); // player_content_tuning_id
+        info.write_int32(0i32); // target_content_tuning_id
 
         // WriteLogDataBit + FlushBits (CombatLogServerPacket base)
         info.write_bit(false); // has_log_data

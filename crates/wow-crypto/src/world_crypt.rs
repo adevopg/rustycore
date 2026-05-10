@@ -118,7 +118,10 @@ impl WorldCrypt {
         let nonce_bytes = Self::make_nonce(self.server_counter, SERVER_SUFFIX);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let payload = Payload { msg: plaintext, aad };
+        let payload = Payload {
+            msg: plaintext,
+            aad,
+        };
         let result = self
             .cipher
             .encrypt(nonce, payload)
@@ -218,7 +221,13 @@ mod tests {
         let nonce_bytes = WorldCrypt::make_nonce(0, CLIENT_SUFFIX);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let encrypted = cipher
-            .encrypt(nonce, Payload { msg: &plaintext[..], aad })
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: &plaintext[..],
+                    aad,
+                },
+            )
             .unwrap();
 
         // Split into ciphertext + 12-byte tag
@@ -253,7 +262,13 @@ mod tests {
         combined.extend_from_slice(&ct);
         combined.extend_from_slice(&tag);
         let recovered = cipher
-            .decrypt(nonce, Payload { msg: &combined, aad })
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &combined,
+                    aad,
+                },
+            )
             .unwrap();
         assert_eq!(&recovered[..], plaintext.as_slice());
     }
@@ -327,7 +342,13 @@ mod tests {
             combined.extend_from_slice(&ct);
             combined.extend_from_slice(&tag);
             let recovered = cipher
-                .decrypt(nonce, Payload { msg: &combined, aad: b"" })
+                .decrypt(
+                    nonce,
+                    Payload {
+                        msg: &combined,
+                        aad: b"",
+                    },
+                )
                 .unwrap();
             assert_eq!(&recovered[..], msg.as_bytes());
         }

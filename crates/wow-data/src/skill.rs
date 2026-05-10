@@ -121,7 +121,10 @@ impl SkillStore {
                 flags: sla_reader.get_field_i8(idx, 10),
                 num_skill_ups: sla_reader.get_field_i8(idx, 11),
             };
-            abilities_by_skill.entry(skill_line).or_default().push(record);
+            abilities_by_skill
+                .entry(skill_line)
+                .or_default()
+                .push(record);
             total_abilities += 1;
         }
 
@@ -307,7 +310,10 @@ impl SkillStore {
                 // including trainer-learned (acquire_method=0). A level 80 character should
                 // have all ranks of their class spells.
                 // For non-class skills (racials, languages, etc.): only auto-learned (1 or 2).
-                if !is_this_class_skill && ability.acquire_method != 1 && ability.acquire_method != 2 {
+                if !is_this_class_skill
+                    && ability.acquire_method != 1
+                    && ability.acquire_method != 2
+                {
                     continue;
                 }
 
@@ -514,8 +520,16 @@ mod tests {
 
         // Record 320: Smite (spell=585) for Priest (skill_line=56)
         if let Some(idx) = sla.get_record_index(320) {
-            assert_eq!(sla.get_field_i32(idx, 2), 56, "field[2] should be skill_line 56");
-            assert_eq!(sla.get_field_i32(idx, 3), 585, "field[3] should be spell 585");
+            assert_eq!(
+                sla.get_field_i32(idx, 2),
+                56,
+                "field[2] should be skill_line 56"
+            );
+            assert_eq!(
+                sla.get_field_i32(idx, 3),
+                585,
+                "field[3] should be spell 585"
+            );
         }
     }
 

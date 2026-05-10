@@ -1,29 +1,83 @@
 //! Party / Group packets (WoTLK 3.4.3).
 //! C# reference: Source/Game/Networking/Packets/PartyPackets.cs
 
-use crate::{ServerPacket, WorldPacket};
-use wow_constants::ServerOpcodes;
+use crate::{ClientPacket, ServerPacket, WorldPacket};
+use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_core::ObjectGuid;
+
+use crate::world_packet::PacketError;
 
 // ── PartyCommandResult (SMSG_PARTY_COMMAND_RESULT 0x2796) ────────────────────
 
 /// Sent to the inviting player to confirm or reject the operation.
 pub struct PartyCommandResult {
-    pub name: String,     // target name
-    pub command: u8,      // 0=Invite, 1=Leave, 2=OfflineLeave, 4=Uninvite
-    pub result: u8,       // PartyResult enum (see below)
+    pub name: String, // target name
+    pub command: u8,  // 0=Invite, 1=Leave, 2=OfflineLeave, 4=Uninvite
+    pub result: u8,   // PartyResult enum (see below)
     pub result_data: u32,
     pub result_guid: ObjectGuid,
 }
 
 /// PartyResult enum values (result field above)
 pub mod party_result {
-    pub const OK: u8               = 0;
-    pub const BAD_PLAYER_NAME: u8  = 1;
-    pub const WRONG_FACTION: u8    = 7;
+    pub const OK: u8 = 0;
+    pub const BAD_PLAYER_NAME: u8 = 1;
+    pub const WRONG_FACTION: u8 = 7;
     pub const ALREADY_IN_GROUP: u8 = 8;
-    pub const NOT_LEADER: u8       = 14;
-    pub const GROUP_FULL: u8       = 3;
+    pub const NOT_LEADER: u8 = 14;
+    pub const GROUP_FULL: u8 = 3;
+}
+
+// ── SetLootMethod (CMSG_SET_LOOT_METHOD) ─────────────────────────
+
+/// Client request to change party loot method.
+#[derive(Debug, Clone)]
+pub struct SetLootMethod {
+    pub party_index: Option<u8>,
+    pub loot_master_guid: ObjectGuid,
+    pub loot_method: u8,
+    pub loot_threshold: u32,
+}
+
+impl ClientPacket for SetLootMethod {
+    const OPCODE: ClientOpcodes = ClientOpcodes::SetLootMethod;
+
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        let has_party_index = pkt.read_bit()?;
+        let loot_method = pkt.read_uint8()?;
+        let loot_master_guid = pkt.read_packed_guid()?;
+        let loot_threshold = pkt.read_uint32()?;
+        let party_index = if has_party_index {
+            Some(pkt.read_uint8()?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            party_index,
+            loot_master_guid,
+            loot_method,
+            loot_threshold,
+        })
+    }
+}
+
+// ── OptOutOfLoot (CMSG_OPT_OUT_OF_LOOT) ─────────────────────────
+
+/// Client toggles automatic pass on group-loot rolls.
+#[derive(Debug, Clone)]
+pub struct OptOutOfLoot {
+    pub pass_on_loot: bool,
+}
+
+impl ClientPacket for OptOutOfLoot {
+    const OPCODE: ClientOpcodes = ClientOpcodes::OptOutOfLoot;
+
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            pass_on_loot: pkt.read_bit()?,
+        })
+    }
 }
 
 impl ServerPacket for PartyCommandResult {
@@ -60,13 +114,13 @@ impl ServerPacket for PartyInviteServer {
         w.write_bit(false); // MightCRZYou
         w.write_bit(false); // IsXRealm
         w.write_bit(false); // MustBeBNetFriend
-        w.write_bit(true);  // AllowMultipleRoles
+        w.write_bit(true); // AllowMultipleRoles
         w.write_bit(false); // QuestSessionActive
         w.write_bits(name_bytes.len() as u32, 6);
         // VirtualRealmInfo.Write():
         w.write_uint32(self.virtual_realm_address); // RealmAddress
         // VirtualRealmNameInfo.Write():
-        w.write_bit(true);  // IsLocal = true
+        w.write_bit(true); // IsLocal = true
         w.write_bit(false); // IsInternalRealm = false
         let realm_bytes = self.realm_name.as_bytes();
         let realm_norm_bytes = self.realm_name_normalized.as_bytes();
@@ -79,9 +133,9 @@ impl ServerPacket for PartyInviteServer {
         w.write_packed_guid(&self.inviter_guid);
         w.write_packed_guid(&self.inviter_bnet_account_guid);
         w.write_uint16(0); // Unk1
-        w.write_uint8(0);  // ProposedRoles
-        w.write_int32(0);  // LfgSlots.Count
-        w.write_int32(0);  // LfgCompletedMask
+        w.write_uint8(0); // ProposedRoles
+        w.write_int32(0); // LfgSlots.Count
+        w.write_int32(0); // LfgCompletedMask
         w.write_bytes(name_bytes);
         // (no LfgSlots)
     }
@@ -128,7 +182,7 @@ pub struct PartyPlayerInfo {
     pub name: String,
     pub class: u8,
     pub subgroup: u8,
-    pub flags: u8,         // GroupMemberFlags
+    pub flags: u8, // GroupMemberFlags
     pub roles_assigned: u8,
     pub faction_group: u8,
     pub connected: bool,
@@ -184,11 +238,11 @@ impl PartyDifficultySettings {
 }
 
 pub struct PartyUpdate {
-    pub party_flags: u16,    // 0 = normal
-    pub party_index: u8,     // 0
-    pub party_type: u8,      // 1 = Normal group
-    pub my_index: i32,       // index of the receiving player in PlayerList
-    pub party_guid: u64,     // group GUID
+    pub party_flags: u16, // 0 = normal
+    pub party_index: u8,  // 0
+    pub party_type: u8,   // 1 = Normal group
+    pub my_index: i32,    // index of the receiving player in PlayerList
+    pub party_guid: u64,  // group GUID
     pub sequence_num: i32,
     pub leader_guid: ObjectGuid,
     pub leader_faction_group: u8,
@@ -236,7 +290,7 @@ pub struct PartyMemberFullState {
     pub member_guid: ObjectGuid,
     pub for_enemy: bool,
     // Stats
-    pub status: u16,   // GroupMemberOnlineStatus: 0x0001=online
+    pub status: u16, // GroupMemberOnlineStatus: 0x0001=online
     pub power_type: u8,
     pub current_health: i32,
     pub max_health: i32,
@@ -284,7 +338,7 @@ impl ServerPacket for PartyMemberFullState {
 
         // CTROptions.Write() — empty:
         w.write_uint32(0); // ContentTuningConditionMask
-        w.write_int32(0);  // Unused901
+        w.write_int32(0); // Unused901
         w.write_uint32(0); // ExpansionLevelMask
 
         // (no Auras)
@@ -294,9 +348,47 @@ impl ServerPacket for PartyMemberFullState {
         // DungeonScoreSummary.Write() — empty:
         w.write_float(0.0); // OverallScoreCurrentSeason
         w.write_float(0.0); // LadderScoreCurrentSeason
-        w.write_int32(0);   // Runs.Count
+        w.write_int32(0); // Runs.Count
 
         // (no PetStats)
         w.write_packed_guid(&self.member_guid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OptOutOfLoot, SetLootMethod};
+    use crate::{ClientPacket, WorldPacket};
+    use wow_core::ObjectGuid;
+
+    #[test]
+    fn set_loot_method_reads_cpp_bit_method_master_threshold_party_index_order() {
+        let master = ObjectGuid::create_player(1, 77);
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(true);
+        pkt.write_uint8(2);
+        pkt.write_packed_guid(&master);
+        pkt.write_uint32(4);
+        pkt.write_uint8(0);
+        pkt.reset_read();
+
+        let set_loot = SetLootMethod::read(&mut pkt).unwrap();
+
+        assert_eq!(set_loot.party_index, Some(0));
+        assert_eq!(set_loot.loot_method, 2);
+        assert_eq!(set_loot.loot_master_guid, master);
+        assert_eq!(set_loot.loot_threshold, 4);
+    }
+
+    #[test]
+    fn opt_out_of_loot_reads_cpp_pass_on_loot_bit() {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(true);
+        pkt.flush_bits();
+        pkt.reset_read();
+
+        let opt_out = OptOutOfLoot::read(&mut pkt).unwrap();
+
+        assert!(opt_out.pass_on_loot);
     }
 }

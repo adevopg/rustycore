@@ -191,12 +191,9 @@ pub fn decompress_packet(data: &[u8]) -> Result<Vec<u8>, PacketError> {
         ));
     }
 
-    let uncompressed_size =
-        i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let expected_uncompressed_adler =
-        u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    let expected_compressed_adler =
-        u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+    let uncompressed_size = i32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    let expected_uncompressed_adler = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+    let expected_compressed_adler = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
 
     let compressed = &data[12..];
 
@@ -368,7 +365,10 @@ mod tests {
         let compressed3 = compressor.compress_packet(&opcode3, &payload3);
 
         // Each compressed packet must end with the Z_SYNC_FLUSH marker 00 00 FF FF
-        for (i, c) in [&compressed1, &compressed2, &compressed3].iter().enumerate() {
+        for (i, c) in [&compressed1, &compressed2, &compressed3]
+            .iter()
+            .enumerate()
+        {
             let deflated = &c[12..];
             let last4 = &deflated[deflated.len() - 4..];
             assert_eq!(
@@ -415,10 +415,7 @@ mod tests {
                 produced, uncompressed_size,
                 "packet {i} size mismatch: expected {uncompressed_size}, got {produced}"
             );
-            assert_eq!(
-                &output[..2], *opcode,
-                "packet {i} opcode mismatch"
-            );
+            assert_eq!(&output[..2], *opcode, "packet {i} opcode mismatch");
         }
     }
 }

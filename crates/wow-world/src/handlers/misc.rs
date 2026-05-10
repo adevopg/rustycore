@@ -12,8 +12,8 @@ use wow_constants::{ClientOpcodes, ItemExtendedCostFlags};
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
 use wow_packet::packets::item::{
-    GetItemPurchaseData, ItemPurchaseContents, ItemPurchaseRefundCurrency,
-    ItemPurchaseRefundItem, SetItemPurchaseData,
+    GetItemPurchaseData, ItemPurchaseContents, ItemPurchaseRefundCurrency, ItemPurchaseRefundItem,
+    SetItemPurchaseData,
 };
 use wow_packet::packets::misc::{RequestCemeteryListResponse, TaxiNodeStatusPkt};
 
@@ -453,11 +453,12 @@ pub(crate) fn item_purchase_contents_from_extended_cost(
 }
 
 impl crate::session::WorldSession {
-
     /// CMSG_SET_SELECTION — player selected a new target.
     /// C# ref: MiscHandler.HandleSetSelection → player.SetSelection(guid)
     pub async fn handle_set_selection(&mut self, mut pkt: wow_packet::WorldPacket) {
-        let target_guid = pkt.read_packed_guid().unwrap_or(wow_core::ObjectGuid::EMPTY);
+        let target_guid = pkt
+            .read_packed_guid()
+            .unwrap_or(wow_core::ObjectGuid::EMPTY);
         self.selection_guid = Some(target_guid);
         info!(
             "SetSelection: account {} → {:?}",
@@ -473,7 +474,10 @@ impl crate::session::WorldSession {
         use wow_packet::packets::misc::{NewWorld, ResumeToken};
 
         let Some((new_map, new_pos)) = self.pending_teleport.take() else {
-            warn!("WorldPortResponse from account {} but no pending teleport", self.account_id);
+            warn!(
+                "WorldPortResponse from account {} but no pending teleport",
+                self.account_id
+            );
             self.set_state(crate::session::SessionState::LoggedIn);
             return;
         };
@@ -481,7 +485,10 @@ impl crate::session::WorldSession {
         info!(
             account = self.account_id,
             "WorldPortResponse: completing teleport to map {} ({:.2}, {:.2}, {:.2})",
-            new_map, new_pos.x, new_pos.y, new_pos.z
+            new_map,
+            new_pos.x,
+            new_pos.y,
+            new_pos.z
         );
 
         // Update internal state
@@ -497,26 +504,31 @@ impl crate::session::WorldSession {
         });
 
         // SMSG_RESUME_TOKEN — resume movement processing
-        self.send_packet(&ResumeToken { sequence_index: 1, reason: 1 });
+        self.send_packet(&ResumeToken {
+            sequence_index: 1,
+            reason: 1,
+        });
 
         // Back to LoggedIn — handler dispatch resumes
         self.set_state(crate::session::SessionState::LoggedIn);
 
         // Resend nearby world objects at new position
-        self.send_nearby_creatures(new_map as u16, &new_pos, 0).await;
-        self.send_nearby_gameobjects(new_map as u16, &new_pos, 0).await;
+        self.send_nearby_creatures(new_map as u16, &new_pos, 0)
+            .await;
+        self.send_nearby_gameobjects(new_map as u16, &new_pos, 0)
+            .await;
     }
 
     /// CMSG_AREA_TRIGGER — player entered an area trigger.
     /// C# ref: MiscHandler.HandleAreaTrigger
     pub async fn handle_area_trigger(&mut self, mut pkt: wow_packet::WorldPacket) {
         let trigger_id: u32 = pkt.read_uint32().unwrap_or(0);
-        
+
         info!(
             "AreaTrigger: account {} trigger_id={}",
             self.account_id, trigger_id
         );
-        
+
         // Lookup in area trigger store
         if let Some(store) = self.area_trigger_store() {
             if let Some(trigger) = store.get_trigger(trigger_id) {
@@ -524,7 +536,7 @@ impl crate::session::WorldSession {
                     "AreaTrigger {} detected at map {} pos ({}, {}, {})",
                     trigger_id, trigger.map_id, trigger.pos.x, trigger.pos.y, trigger.pos.z
                 );
-                
+
                 if let Some(ref teleport) = trigger.teleport {
                     let target_map = teleport.target_map;
                     let target_pos = teleport.target_position;
@@ -569,7 +581,8 @@ impl crate::session::WorldSession {
         };
 
         const NPC_FLAG_FLIGHT_MASTER: u32 = 0x2000;
-        let is_flight_master = self.creatures
+        let is_flight_master = self
+            .creatures
             .get(&unit_guid)
             .map(|c| c.npc_flags & NPC_FLAG_FLIGHT_MASTER != 0)
             .unwrap_or(false);
@@ -637,7 +650,11 @@ impl crate::session::WorldSession {
     pub async fn handle_violence_level(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_override_screen_flash(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_queued_messages_end(&mut self, _pkt: wow_packet::WorldPacket) {}
-    pub async fn handle_chat_unregister_all_addon_prefixes(&mut self, _pkt: wow_packet::WorldPacket) {}
+    pub async fn handle_chat_unregister_all_addon_prefixes(
+        &mut self,
+        _pkt: wow_packet::WorldPacket,
+    ) {
+    }
     pub async fn handle_set_action_bar_toggles(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_save_cuf_profiles(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_guild_set_achievement_tracking(&mut self, _pkt: wow_packet::WorldPacket) {}
@@ -698,11 +715,19 @@ impl crate::session::WorldSession {
     pub async fn handle_df_get_join_status(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_calendar_get_num_pending(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_gm_ticket_get_case_status(&mut self, _pkt: wow_packet::WorldPacket) {}
-    pub async fn handle_guild_bank_remaining_withdraw_money_query(&mut self, _pkt: wow_packet::WorldPacket) {}
+    pub async fn handle_guild_bank_remaining_withdraw_money_query(
+        &mut self,
+        _pkt: wow_packet::WorldPacket,
+    ) {
+    }
     pub async fn handle_battle_pet_request_journal(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_arena_team_roster(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_request_raid_info(&mut self, _pkt: wow_packet::WorldPacket) {}
-    pub async fn handle_request_conquest_formula_constants(&mut self, _pkt: wow_packet::WorldPacket) {}
+    pub async fn handle_request_conquest_formula_constants(
+        &mut self,
+        _pkt: wow_packet::WorldPacket,
+    ) {
+    }
     pub async fn handle_request_lfg_list_blacklist(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_lfg_list_get_status(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_get_account_character_list(&mut self, _pkt: wow_packet::WorldPacket) {}

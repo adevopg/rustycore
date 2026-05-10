@@ -62,21 +62,37 @@ pub struct ItemStatEntry {
 }
 
 /// C++ `ItemSparseEntry` fields needed to build entity storage templates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ItemSparseTemplateEntry {
     pub flags: [u32; 4],
     pub bag_family: u32,
+    pub start_quest_id: i32,
     pub stackable: i32,
     pub max_count: i32,
     pub lock_id: u16,
     pub required_reputation_rank: i32,
     pub sell_price: u32,
+    pub buy_price: u32,
+    pub vendor_stack_count: u32,
+    pub price_variance: f32,
+    pub price_random_value: f32,
     pub max_durability: u32,
     pub limit_category: u16,
+    pub instance_bound: u16,
+    pub zone_bound: [u16; 2],
     pub required_reputation_faction: u16,
     pub allowable_class: i16,
+    pub required_expansion: u8,
     pub bonding: u8,
     pub container_slots: u8,
+    pub inventory_type: i8,
+}
+
+/// C++ `ItemSparseEntry` fields used by `ItemEnchantmentMgr::GenerateRandomProperties`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemRandomPropertyTemplateEntry {
+    pub item_level: u16,
+    pub quality: i8,
     pub inventory_type: i8,
 }
 
@@ -102,11 +118,11 @@ impl ItemStatEntry {
         for &(stat_type, amount) in &self.stats {
             let amount = amount as i32;
             match stat_type {
-                4 => result[0] += amount,  // Strength
-                3 => result[1] += amount,  // Agility
-                7 => result[2] += amount,  // Stamina
-                5 => result[3] += amount,  // Intellect
-                6 => result[4] += amount,  // Spirit
+                4 => result[0] += amount, // Strength
+                3 => result[1] += amount, // Agility
+                7 => result[2] += amount, // Stamina
+                5 => result[3] += amount, // Intellect
+                6 => result[4] += amount, // Spirit
                 _ => {}
             }
         }
@@ -115,7 +131,8 @@ impl ItemStatEntry {
 
     /// Total attack power bonus from items.
     pub fn attack_power_bonus(&self) -> i32 {
-        self.stats.iter()
+        self.stats
+            .iter()
             .filter(|&&(t, _)| t == 38)
             .map(|&(_, v)| v as i32)
             .sum()
@@ -123,7 +140,8 @@ impl ItemStatEntry {
 
     /// Total ranged attack power bonus.
     pub fn ranged_attack_power_bonus(&self) -> i32 {
-        self.stats.iter()
+        self.stats
+            .iter()
             .filter(|&&(t, _)| t == 39)
             .map(|&(_, v)| v as i32)
             .sum()
@@ -131,7 +149,8 @@ impl ItemStatEntry {
 
     /// Total health bonus.
     pub fn health_bonus(&self) -> i32 {
-        self.stats.iter()
+        self.stats
+            .iter()
             .filter(|&&(t, _)| t == 1)
             .map(|&(_, v)| v as i32)
             .sum()
@@ -139,7 +158,8 @@ impl ItemStatEntry {
 
     /// Total mana bonus.
     pub fn mana_bonus(&self) -> i32 {
-        self.stats.iter()
+        self.stats
+            .iter()
             .filter(|&&(t, _)| t == 0)
             .map(|&(_, v)| v as i32)
             .sum()
@@ -162,11 +182,23 @@ impl ItemStatEntry {
                 19 => cr[8] += amount,  // CritMeleeRating → CritMelee
                 20 => cr[9] += amount,  // CritRangedRating → CritRanged
                 21 => cr[10] += amount, // CritSpellRating → CritSpell
-                31 => { cr[5] += amount; cr[6] += amount; cr[7] += amount; } // HitRating → all
-                32 => { cr[8] += amount; cr[9] += amount; cr[10] += amount; } // CritRating → all
-                36 => { cr[17] += amount; cr[18] += amount; cr[19] += amount; } // HasteRating → all
-                37 => cr[23] += amount,  // ExpertiseRating → Expertise
-                44 => cr[24] += amount,  // ArmorPenetrationRating → ArmorPenetration
+                31 => {
+                    cr[5] += amount;
+                    cr[6] += amount;
+                    cr[7] += amount;
+                } // HitRating → all
+                32 => {
+                    cr[8] += amount;
+                    cr[9] += amount;
+                    cr[10] += amount;
+                } // CritRating → all
+                36 => {
+                    cr[17] += amount;
+                    cr[18] += amount;
+                    cr[19] += amount;
+                } // HasteRating → all
+                37 => cr[23] += amount, // ExpertiseRating → Expertise
+                44 => cr[24] += amount, // ArmorPenetrationRating → ArmorPenetration
                 _ => {}
             }
         }
@@ -175,7 +207,8 @@ impl ItemStatEntry {
 
     /// Total spell power bonus from item stats.
     pub fn spell_power_bonus(&self) -> i32 {
-        self.stats.iter()
+        self.stats
+            .iter()
             .filter(|&&(t, _)| t == 45)
             .map(|&(_, v)| v as i32)
             .sum()
@@ -192,6 +225,7 @@ pub struct ItemStatsStore {
     stats: HashMap<u32, ItemStatEntry>,
     flags: HashMap<u32, [u32; 4]>,
     sparse_templates: HashMap<u32, ItemSparseTemplateEntry>,
+    random_property_templates: HashMap<u32, ItemRandomPropertyTemplateEntry>,
 }
 
 /// Known field byte sizes for ItemSparse.db2 (from field_meta).
@@ -208,14 +242,16 @@ fn field_layout() -> [(u8, bool); 73] {
     layout[0] = (8, false);
 
     // Fields 1-5: inline strings
-    layout[1] = (0, true);  // Description
-    layout[2] = (0, true);  // Display3
-    layout[3] = (0, true);  // Display2
-    layout[4] = (0, true);  // Display1
-    layout[5] = (0, true);  // Display
+    layout[1] = (0, true); // Description
+    layout[2] = (0, true); // Display3
+    layout[3] = (0, true); // Display2
+    layout[4] = (0, true); // Display1
+    layout[5] = (0, true); // Display
 
     // Fields 6-11: f32/i32 (4 bytes each)
-    for i in 6..=11 { layout[i] = (4, false); }
+    for i in 6..=11 {
+        layout[i] = (4, false);
+    }
 
     // Field 12: StatPercentageOfSocket[10] (10 × f32 = 40 bytes)
     layout[12] = (40, false);
@@ -224,22 +260,30 @@ fn field_layout() -> [(u8, bool); 73] {
     layout[13] = (40, false);
 
     // Fields 14-22: i32/u32/f32 (4 bytes each)
-    for i in 14..=22 { layout[i] = (4, false); }
+    for i in 14..=22 {
+        layout[i] = (4, false);
+    }
 
     // Field 23: Flags[4] (4 × i32 = 16 bytes)
     layout[23] = (16, false);
 
     // Fields 24-28: i32/u32 (4 bytes each)
-    for i in 24..=28 { layout[i] = (4, false); }
+    for i in 24..=28 {
+        layout[i] = (4, false);
+    }
 
     // Fields 29-36: u16 (2 bytes each)
-    for i in 29..=36 { layout[i] = (2, false); }
+    for i in 29..=36 {
+        layout[i] = (2, false);
+    }
 
     // Field 37: ZoneBound[2] (2 × u16 = 4 bytes)
     layout[37] = (4, false);
 
     // Fields 38-48: u16/i16 (2 bytes each)
-    for i in 38..=48 { layout[i] = (2, false); }
+    for i in 38..=48 {
+        layout[i] = (2, false);
+    }
 
     // Field 49: MinDamage[5] (5 × u16 = 10 bytes)
     layout[49] = (10, false);
@@ -257,19 +301,25 @@ fn field_layout() -> [(u8, bool); 73] {
     layout[53] = (20, false);
 
     // Fields 54-57: u8/i8 (1 byte each)
-    for i in 54..=57 { layout[i] = (1, false); }
+    for i in 54..=57 {
+        layout[i] = (1, false);
+    }
 
     // Field 58: SocketType[3] (3 × u8 = 3 bytes)
     layout[58] = (3, false);
 
     // Fields 59-64: u8/i8 (1 byte each)
-    for i in 59..=64 { layout[i] = (1, false); }
+    for i in 59..=64 {
+        layout[i] = (1, false);
+    }
 
     // Field 65: _statModifierBonusStat[10] (10 × i8 = 10 bytes)
     layout[65] = (10, false);
 
     // Fields 66-72: u8/i8 (1 byte each)
-    for i in 66..=72 { layout[i] = (1, false); }
+    for i in 66..=72 {
+        layout[i] = (1, false);
+    }
 
     layout
 }
@@ -283,6 +333,7 @@ impl ItemStatsStore {
             stats: stats.into_iter().collect(),
             flags: flags.into_iter().collect(),
             sparse_templates: HashMap::new(),
+            random_property_templates: HashMap::new(),
         }
     }
 
@@ -298,6 +349,35 @@ impl ItemStatsStore {
             stats: HashMap::new(),
             flags,
             sparse_templates,
+            random_property_templates: HashMap::new(),
+        }
+    }
+
+    pub fn from_random_property_templates(
+        random_property_templates: impl IntoIterator<Item = (u32, ItemRandomPropertyTemplateEntry)>,
+    ) -> Self {
+        Self {
+            stats: HashMap::new(),
+            flags: HashMap::new(),
+            sparse_templates: HashMap::new(),
+            random_property_templates: random_property_templates.into_iter().collect(),
+        }
+    }
+
+    pub fn from_sparse_and_random_property_templates(
+        sparse_templates: impl IntoIterator<Item = (u32, ItemSparseTemplateEntry)>,
+        random_property_templates: impl IntoIterator<Item = (u32, ItemRandomPropertyTemplateEntry)>,
+    ) -> Self {
+        let sparse_templates: HashMap<_, _> = sparse_templates.into_iter().collect();
+        let flags = sparse_templates
+            .iter()
+            .map(|(&id, template)| (id, template.flags))
+            .collect();
+        Self {
+            stats: HashMap::new(),
+            flags,
+            sparse_templates,
+            random_property_templates: random_property_templates.into_iter().collect(),
         }
     }
 
@@ -315,6 +395,7 @@ impl ItemStatsStore {
         let mut stats = HashMap::new();
         let mut flags = HashMap::with_capacity(reader.total_count());
         let mut sparse_templates = HashMap::with_capacity(reader.total_count());
+        let mut random_property_templates = HashMap::with_capacity(reader.total_count());
         let mut loaded = 0u32;
 
         for (id, idx) in reader.iter_records() {
@@ -330,26 +411,39 @@ impl ItemStatsStore {
 
             // Field offsets for the stat fields we care about
             let mut bag_family_offset: usize = 0;
+            let mut start_quest_id_offset: usize = 0;
             let mut stackable_offset: usize = 0;
             let mut max_count_offset: usize = 0;
             let mut lock_id_offset: usize = 0;
             let mut required_reputation_rank_offset: usize = 0;
             let mut sell_price_offset: usize = 0;
+            let mut buy_price_offset: usize = 0;
+            let mut vendor_stack_count_offset: usize = 0;
+            let mut price_variance_offset: usize = 0;
+            let mut price_random_value_offset: usize = 0;
             let mut flags_offset: usize = 0;
             let mut max_durability_offset: usize = 0;
             let mut limit_category_offset: usize = 0;
+            let mut instance_bound_offset: usize = 0;
+            let mut zone_bound_offset: usize = 0;
             let mut required_reputation_faction_offset: usize = 0;
             let mut allowable_class_offset: usize = 0;
             let mut resistances_offset: usize = 0;
             let mut stat_amount_offset: usize = 0;
+            let mut item_level_offset: usize = 0;
+            let mut expansion_id_offset: usize = 0;
             let mut bonding_offset: usize = 0;
             let mut stat_type_offset: usize = 0;
             let mut container_slots_offset: usize = 0;
             let mut inventory_type_offset: usize = 0;
+            let mut quality_offset: usize = 0;
 
             for (fi, &(byte_size, is_string)) in layout.iter().enumerate() {
                 if fi == 9 {
                     bag_family_offset = pos;
+                }
+                if fi == 10 {
+                    start_quest_id_offset = pos;
                 }
                 if fi == 14 {
                     stackable_offset = pos;
@@ -366,6 +460,18 @@ impl ItemStatsStore {
                 if fi == 18 {
                     sell_price_offset = pos;
                 }
+                if fi == 19 {
+                    buy_price_offset = pos;
+                }
+                if fi == 20 {
+                    vendor_stack_count_offset = pos;
+                }
+                if fi == 21 {
+                    price_variance_offset = pos;
+                }
+                if fi == 22 {
+                    price_random_value_offset = pos;
+                }
                 if fi == 23 {
                     flags_offset = pos;
                 }
@@ -375,17 +481,29 @@ impl ItemStatsStore {
                 if fi == 32 {
                     limit_category_offset = pos;
                 }
+                if fi == 36 {
+                    instance_bound_offset = pos;
+                }
+                if fi == 37 {
+                    zone_bound_offset = pos;
+                }
                 if fi == 42 {
                     required_reputation_faction_offset = pos;
                 }
                 if fi == 48 {
                     allowable_class_offset = pos;
                 }
+                if fi == 43 {
+                    item_level_offset = pos;
+                }
                 if fi == 51 {
                     resistances_offset = pos;
                 }
                 if fi == 53 {
                     stat_amount_offset = pos;
+                }
+                if fi == 54 {
+                    expansion_id_offset = pos;
                 }
                 if fi == 63 {
                     bonding_offset = pos;
@@ -398,6 +516,9 @@ impl ItemStatsStore {
                 }
                 if fi == 69 {
                     inventory_type_offset = pos;
+                }
+                if fi == 70 {
+                    quality_offset = pos;
                 }
 
                 if is_string {
@@ -433,16 +554,24 @@ impl ItemStatsStore {
             }
 
             if bag_family_offset + 4 <= record.len()
+                && start_quest_id_offset + 4 <= record.len()
                 && stackable_offset + 4 <= record.len()
                 && max_count_offset + 4 <= record.len()
                 && lock_id_offset + 2 <= record.len()
                 && required_reputation_rank_offset + 4 <= record.len()
                 && sell_price_offset + 4 <= record.len()
+                && buy_price_offset + 4 <= record.len()
+                && vendor_stack_count_offset + 4 <= record.len()
+                && price_variance_offset + 4 <= record.len()
+                && price_random_value_offset + 4 <= record.len()
                 && flags_offset + 16 <= record.len()
                 && max_durability_offset + 4 <= record.len()
                 && limit_category_offset + 2 <= record.len()
+                && instance_bound_offset + 2 <= record.len()
+                && zone_bound_offset + 4 <= record.len()
                 && required_reputation_faction_offset + 2 <= record.len()
                 && allowable_class_offset + 2 <= record.len()
+                && expansion_id_offset < record.len()
                 && bonding_offset < record.len()
                 && container_slots_offset < record.len()
                 && inventory_type_offset < record.len()
@@ -452,21 +581,29 @@ impl ItemStatsStore {
                     ItemSparseTemplateEntry {
                         flags: raw_flags,
                         bag_family: read_u32(record, bag_family_offset),
+                        start_quest_id: read_i32(record, start_quest_id_offset),
                         stackable: read_i32(record, stackable_offset),
                         max_count: read_i32(record, max_count_offset),
                         lock_id: read_u16(record, lock_id_offset),
-                        required_reputation_rank: read_i32(
-                            record,
-                            required_reputation_rank_offset,
-                        ),
+                        required_reputation_rank: read_i32(record, required_reputation_rank_offset),
                         sell_price: read_u32(record, sell_price_offset),
+                        buy_price: read_u32(record, buy_price_offset),
+                        vendor_stack_count: read_u32(record, vendor_stack_count_offset),
+                        price_variance: read_f32(record, price_variance_offset),
+                        price_random_value: read_f32(record, price_random_value_offset),
                         max_durability: read_u32(record, max_durability_offset),
                         limit_category: read_u16(record, limit_category_offset),
+                        instance_bound: read_u16(record, instance_bound_offset),
+                        zone_bound: [
+                            read_u16(record, zone_bound_offset),
+                            read_u16(record, zone_bound_offset + 2),
+                        ],
                         required_reputation_faction: read_u16(
                             record,
                             required_reputation_faction_offset,
                         ),
                         allowable_class: read_i16(record, allowable_class_offset),
+                        required_expansion: record[expansion_id_offset],
                         bonding: record[bonding_offset],
                         container_slots: record[container_slots_offset],
                         inventory_type: record[inventory_type_offset] as i8,
@@ -474,9 +611,24 @@ impl ItemStatsStore {
                 );
             }
 
+            if item_level_offset + 2 <= record.len()
+                && inventory_type_offset < record.len()
+                && quality_offset < record.len()
+            {
+                random_property_templates.insert(
+                    id,
+                    ItemRandomPropertyTemplateEntry {
+                        item_level: read_u16(record, item_level_offset),
+                        quality: record[quality_offset] as i8,
+                        inventory_type: record[inventory_type_offset] as i8,
+                    },
+                );
+            }
+
             // Extract physical armor from Resistances[0] (field 51, first i16)
             let item_armor = if resistances_offset + 2 <= record.len() {
-                i16::from_le_bytes([record[resistances_offset], record[resistances_offset + 1]]) as i32
+                i16::from_le_bytes([record[resistances_offset], record[resistances_offset + 1]])
+                    as i32
             } else {
                 0
             };
@@ -490,10 +642,7 @@ impl ItemStatsStore {
             for i in 0..10 {
                 let stat_type = record[stat_type_offset + i] as i8;
                 let amount_off = stat_amount_offset + i * 2;
-                let stat_amount = i16::from_le_bytes([
-                    record[amount_off],
-                    record[amount_off + 1],
-                ]);
+                let stat_amount = i16::from_le_bytes([record[amount_off], record[amount_off + 1]]);
                 entry.stats[i] = (stat_type, stat_amount);
                 if stat_type != -1 && stat_type != 0 && stat_amount != 0 {
                     has_any = true;
@@ -509,11 +658,16 @@ impl ItemStatsStore {
             }
         }
 
-        info!("Loaded {} items with stat modifiers from {}", loaded, path.display());
+        info!(
+            "Loaded {} items with stat modifiers from {}",
+            loaded,
+            path.display()
+        );
         Ok(Self {
             stats,
             flags,
             sparse_templates,
+            random_property_templates,
         })
     }
 
@@ -536,6 +690,14 @@ impl ItemStatsStore {
     /// Return the C++ `ItemSparseEntry` subset needed by `ItemTemplate` helpers.
     pub fn sparse_template(&self, item_id: u32) -> Option<&ItemSparseTemplateEntry> {
         self.sparse_templates.get(&item_id)
+    }
+
+    /// Return the C++ `ItemSparseEntry` subset used by random-property generation.
+    pub fn random_property_template(
+        &self,
+        item_id: u32,
+    ) -> Option<&ItemRandomPropertyTemplateEntry> {
+        self.random_property_templates.get(&item_id)
     }
 
     /// Number of items with stats.
@@ -567,6 +729,15 @@ fn read_i32(record: &[u8], offset: usize) -> i32 {
     ])
 }
 
+fn read_f32(record: &[u8], offset: usize) -> f32 {
+    f32::from_le_bytes([
+        record[offset],
+        record[offset + 1],
+        record[offset + 2],
+        record[offset + 3],
+    ])
+}
+
 fn read_u16(record: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes([record[offset], record[offset + 1]])
 }
@@ -584,11 +755,16 @@ mod tests {
         let entry = ItemStatEntry {
             armor: 0,
             stats: [
-                (4, 100),   // STR=100
-                (7, 80),    // STA=80
-                (3, 50),    // AGI=50
-                (32, 40),   // CritRating=40 (not a base stat)
-                (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0),
+                (4, 100), // STR=100
+                (7, 80),  // STA=80
+                (3, 50),  // AGI=50
+                (32, 40), // CritRating=40 (not a base stat)
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
             ],
         };
         let [str, agi, sta, int, spi] = entry.base_stat_bonuses();
@@ -604,9 +780,16 @@ mod tests {
         let entry = ItemStatEntry {
             armor: 0,
             stats: [
-                (38, 120),  // AttackPower=120
-                (4, 50),    // STR=50
-                (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0),
+                (38, 120), // AttackPower=120
+                (4, 50),   // STR=50
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
+                (-1, 0),
             ],
         };
         assert_eq!(entry.attack_power_bonus(), 120);
@@ -642,15 +825,23 @@ mod tests {
         let template = ItemSparseTemplateEntry {
             flags: [ItemFlags::IS_BOUND_TO_ACCOUNT.bits() as u32, 0, 0, 0],
             bag_family: 0x20,
+            start_quest_id: 0,
             stackable: 20,
             max_count: 5,
             lock_id: 456,
             required_reputation_rank: 0,
             sell_price: 123,
+            buy_price: 456,
+            vendor_stack_count: 2,
+            price_variance: 1.25,
+            price_random_value: 0.75,
             max_durability: 77,
             limit_category: 9,
+            instance_bound: 11,
+            zone_bound: [22, 33],
             required_reputation_faction: 0,
             allowable_class: -1,
+            required_expansion: 4,
             bonding: 2,
             container_slots: 16,
             inventory_type: 18,
@@ -664,6 +855,13 @@ mod tests {
         assert_eq!(loaded.required_reputation_rank, 0);
         assert_eq!(loaded.required_reputation_faction, 0);
         assert_eq!(loaded.sell_price, 123);
+        assert_eq!(loaded.buy_price, 456);
+        assert_eq!(loaded.vendor_stack_count, 2);
+        assert_eq!(loaded.price_variance, 1.25);
+        assert_eq!(loaded.price_random_value, 0.75);
+        assert_eq!(loaded.instance_bound, 11);
+        assert_eq!(loaded.zone_bound, [22, 33]);
+        assert_eq!(loaded.required_expansion, 4);
         assert_eq!(loaded.container_slots, 16);
         assert_eq!(loaded.inventory_type, 18);
         assert_eq!(loaded.allowable_class, -1);
@@ -682,17 +880,22 @@ mod tests {
         let data_dir = "/home/server/woltk-server-core/Data";
         let locale = "esES";
         let path = std::path::Path::new(data_dir)
-            .join("dbc").join(locale).join("ItemSparse.db2");
+            .join("dbc")
+            .join(locale)
+            .join("ItemSparse.db2");
         if !path.exists() {
             eprintln!("Skipping test: ItemSparse.db2 not found");
             return;
         }
 
-        let store = ItemStatsStore::load(data_dir, locale)
-            .expect("failed to load ItemStatsStore");
+        let store = ItemStatsStore::load(data_dir, locale).expect("failed to load ItemStatsStore");
 
         eprintln!("ItemStatsStore: {} items with stats", store.len());
-        assert!(store.len() > 1000, "expected >1000 items with stats, got {}", store.len());
+        assert!(
+            store.len() > 1000,
+            "expected >1000 items with stats, got {}",
+            store.len()
+        );
 
         // Check Shadowmourne (49623): should have STR, STA, CritRating
         if let Some(entry) = store.get(49623) {
@@ -706,6 +909,9 @@ mod tests {
         }
 
         // Hearthstone (6948) should NOT be in the store (no combat stats)
-        assert!(store.get(6948).is_none(), "Hearthstone should have no stats");
+        assert!(
+            store.get(6948).is_none(),
+            "Hearthstone should have no stats"
+        );
     }
 }

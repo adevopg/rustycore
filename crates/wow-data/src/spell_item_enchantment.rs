@@ -106,8 +106,11 @@ impl SpellItemEnchantmentStore {
 
     /// C++ `SpellMgr::IsArenaAllowedEnchancment`.
     pub fn is_arena_allowed_enchantment(&self, id: u32) -> bool {
-        self.get(id)
-            .is_some_and(|entry| entry.flags.contains(SpellItemEnchantmentFlags::ALLOW_ENTERING_ARENA))
+        self.get(id).is_some_and(|entry| {
+            entry
+                .flags
+                .contains(SpellItemEnchantmentFlags::ALLOW_ENTERING_ARENA)
+        })
     }
 
     pub fn len(&self) -> usize {

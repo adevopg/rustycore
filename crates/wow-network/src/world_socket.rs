@@ -24,18 +24,15 @@ use std::pin::Pin;
 use bytes::BytesMut;
 use num_traits::ToPrimitive;
 use rand::Rng;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, trace, warn};
 
 use wow_constants::{ClientOpcodes, ServerOpcodes};
 use wow_crypto::{HmacSha256, SessionKeyGenerator256, WorldCrypt};
-use wow_packet::header::{PacketHeader, HEADER_SIZE, TAG_SIZE};
-use wow_packet::packets::auth::{
-    AuthChallenge, AuthSession,
-    EnterEncryptedMode, Ping, Pong,
-};
+use wow_packet::header::{HEADER_SIZE, PacketHeader, TAG_SIZE};
+use wow_packet::packets::auth::{AuthChallenge, AuthSession, EnterEncryptedMode, Ping, Pong};
 use wow_packet::{ClientPacket, ServerPacket, WorldPacket, compression};
 
 // ── Protocol constants ────────────────────────────────────────────
@@ -44,34 +41,28 @@ const SERVER_CONNECTION_INIT: &[u8] = b"WORLD OF WARCRAFT CONNECTION - SERVER TO
 const CLIENT_CONNECTION_INIT: &[u8] = b"WORLD OF WARCRAFT CONNECTION - CLIENT TO SERVER - V2\n";
 
 const AUTH_CHECK_SEED: [u8; 16] = [
-    0xC5, 0xC6, 0x98, 0x95, 0x76, 0x3F, 0x1D, 0xCD,
-    0xB6, 0xA1, 0x37, 0x28, 0xB3, 0x12, 0xFF, 0x8A,
+    0xC5, 0xC6, 0x98, 0x95, 0x76, 0x3F, 0x1D, 0xCD, 0xB6, 0xA1, 0x37, 0x28, 0xB3, 0x12, 0xFF, 0x8A,
 ];
 
 const SESSION_KEY_SEED: [u8; 16] = [
-    0x58, 0xCB, 0xCF, 0x40, 0xFE, 0x2E, 0xCE, 0xA6,
-    0x5A, 0x90, 0xB8, 0x01, 0x68, 0x6C, 0x28, 0x0B,
+    0x58, 0xCB, 0xCF, 0x40, 0xFE, 0x2E, 0xCE, 0xA6, 0x5A, 0x90, 0xB8, 0x01, 0x68, 0x6C, 0x28, 0x0B,
 ];
 
 #[allow(dead_code)]
 const CONTINUED_SESSION_SEED: [u8; 16] = [
-    0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2,
-    0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F,
+    0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2, 0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F,
 ];
 
 const ENCRYPTION_KEY_SEED: [u8; 16] = [
-    0xE9, 0x75, 0x3C, 0x50, 0x90, 0x93, 0x61, 0xDA,
-    0x3B, 0x07, 0xEE, 0xFA, 0xFF, 0x9D, 0x41, 0xB8,
+    0xE9, 0x75, 0x3C, 0x50, 0x90, 0x93, 0x61, 0xDA, 0x3B, 0x07, 0xEE, 0xFA, 0xFF, 0x9D, 0x41, 0xB8,
 ];
 
 const ENABLE_ENCRYPTION_SEED: [u8; 16] = [
-    0x90, 0x9C, 0xD0, 0x50, 0x5A, 0x2C, 0x14, 0xDD,
-    0x5C, 0x2C, 0xC0, 0x64, 0x14, 0xF3, 0xFE, 0xC9,
+    0x90, 0x9C, 0xD0, 0x50, 0x5A, 0x2C, 0x14, 0xDD, 0x5C, 0x2C, 0xC0, 0x64, 0x14, 0xF3, 0xFE, 0xC9,
 ];
 
 const ENABLE_ENCRYPTION_CONTEXT: [u8; 16] = [
-    0xA7, 0x1F, 0xB6, 0x9B, 0xC9, 0x7C, 0xDD, 0x96,
-    0xE9, 0xBB, 0xB8, 0x21, 0x39, 0x8D, 0x5A, 0xD4,
+    0xA7, 0x1F, 0xB6, 0x9B, 0xC9, 0x7C, 0xDD, 0x96, 0xE9, 0xBB, 0xB8, 0x21, 0x39, 0x8D, 0x5A, 0xD4,
 ];
 
 // Build-specific auth seeds are loaded from the `build_info` DB table at startup
@@ -79,10 +70,8 @@ const ENABLE_ENCRYPTION_CONTEXT: [u8; 16] = [
 
 /// Ed25519 private key seed used for signing `EnterEncryptedMode`.
 const ENTER_ENCRYPTED_MODE_PRIVATE_KEY: [u8; 32] = [
-    0x08, 0xBD, 0xC7, 0xA3, 0xCC, 0xC3, 0x4F, 0x3F,
-    0x6A, 0x0B, 0xFF, 0xCF, 0x31, 0xC1, 0xB6, 0x97,
-    0x69, 0x1E, 0x72, 0x9A, 0x0A, 0xAB, 0x2C, 0x77,
-    0xC3, 0x6F, 0x8A, 0xE7, 0x5A, 0x9A, 0xA7, 0xC9,
+    0x08, 0xBD, 0xC7, 0xA3, 0xCC, 0xC3, 0x4F, 0x3F, 0x6A, 0x0B, 0xFF, 0xCF, 0x31, 0xC1, 0xB6, 0x97,
+    0x69, 0x1E, 0x72, 0x9A, 0x0A, 0xAB, 0x2C, 0x77, 0xC3, 0x6F, 0x8A, 0xE7, 0x5A, 0x9A, 0xA7, 0xC9,
 ];
 
 // ── Error type ────────────────────────────────────────────────────
@@ -305,9 +294,9 @@ impl WorldSocket {
                 ));
             }
             other => {
-                return Err(WorldSocketError::AuthFailed(
-                    format!("unsupported platform: {other}"),
-                ));
+                return Err(WorldSocketError::AuthFailed(format!(
+                    "unsupported platform: {other}"
+                )));
             }
         };
         let digest_key_hash = {
@@ -330,18 +319,42 @@ impl WorldSocket {
             debug!(
                 "HMAC mismatch debug:\n  key_data({} bytes): {}\n  platform_seed: {}\n  digest_key_hash: {}\n  local_challenge: {}\n  server_challenge: {}\n  auth_check_seed: {}\n  server_digest: {}\n  client_digest: {}",
                 key_data.len(),
-                key_data.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                platform_seed.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                digest_key_hash.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                auth_session.local_challenge.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                self.server_challenge.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                AUTH_CHECK_SEED.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                server_digest.iter().map(|b| format!("{b:02X}")).collect::<String>(),
-                auth_session.digest.iter().map(|b| format!("{b:02X}")).collect::<String>(),
+                key_data
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                platform_seed
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                digest_key_hash
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                auth_session
+                    .local_challenge
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                self.server_challenge
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                AUTH_CHECK_SEED
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                server_digest
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
+                auth_session
+                    .digest
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<String>(),
             );
-            return Err(WorldSocketError::AuthFailed(
-                "HMAC digest mismatch".into(),
-            ));
+            return Err(WorldSocketError::AuthFailed("HMAC digest mismatch".into()));
         }
         debug!("Auth digest validated for {}", self.addr);
 
@@ -461,10 +474,7 @@ impl WorldSocket {
     }
 
     /// Send a server packet with encryption (after handshake).
-    pub async fn send_packet(
-        &mut self,
-        pkt: &impl ServerPacket,
-    ) -> Result<(), WorldSocketError> {
+    pub async fn send_packet(&mut self, pkt: &impl ServerPacket) -> Result<(), WorldSocketError> {
         let crypt = match self.crypt.as_mut() {
             Some(c) => c,
             None => return self.send_unencrypted_packet(pkt).await,
@@ -483,9 +493,7 @@ impl WorldSocket {
             let compressed = compression::compress_packet(&opcode_bytes, &data[2..]);
 
             // Replace data with CompressedPacket opcode + compressed payload
-            let comp_opcode = ServerOpcodes::CompressedPacket
-                .to_u16()
-                .unwrap_or(0);
+            let comp_opcode = ServerOpcodes::CompressedPacket.to_u16().unwrap_or(0);
             data = Vec::with_capacity(2 + compressed.len());
             data.extend_from_slice(&comp_opcode.to_le_bytes());
             data.extend_from_slice(&compressed);
@@ -581,7 +589,10 @@ impl WorldSocket {
             .lookup_account(&auth_session.realm_join_ticket)
             .await
             .ok_or_else(|| {
-                tracing::warn!("Ticket lookup failed for: '{}'", &auth_session.realm_join_ticket);
+                tracing::warn!(
+                    "Ticket lookup failed for: '{}'",
+                    &auth_session.realm_join_ticket
+                );
                 WorldSocketError::AuthFailed("account not found for ticket".into())
             })?;
 
@@ -610,7 +621,9 @@ impl WorldSocket {
     ///
     /// Returns `(packet_rx, send_tx)` — the session reads packets from `packet_rx`
     /// and writes responses via `send_tx`.
-    pub fn create_session_channels(&mut self) -> (flume::Receiver<WorldPacket>, flume::Sender<Vec<u8>>) {
+    pub fn create_session_channels(
+        &mut self,
+    ) -> (flume::Receiver<WorldPacket>, flume::Sender<Vec<u8>>) {
         let (pkt_tx, pkt_rx) = flume::bounded(256);
         let (send_tx, send_rx) = flume::bounded(256);
 
@@ -644,7 +657,9 @@ impl WorldSocket {
                 let mut pkt = pkt;
                 pkt.skip_opcode();
                 if let Ok(ping) = Ping::read(&mut pkt) {
-                    let pong = Pong { serial: ping.serial };
+                    let pong = Pong {
+                        serial: ping.serial,
+                    };
                     self.send_packet(&pong).await?;
                 }
                 continue;
@@ -657,7 +672,10 @@ impl WorldSocket {
                     return Err(WorldSocketError::Closed);
                 }
             } else {
-                debug!("No session channel; dropping packet 0x{opcode:04X} from {}", self.addr);
+                debug!(
+                    "No session channel; dropping packet 0x{opcode:04X} from {}",
+                    self.addr
+                );
             }
         }
     }
@@ -710,7 +728,10 @@ impl WorldSocket {
         // _clientCounter, even when IsInitialized is false.
         let reader = SocketReader {
             reader: read_half,
-            crypt: WorldCrypt::new_with_client_counter(&encrypt_key, self.unencrypted_packets_received),
+            crypt: WorldCrypt::new_with_client_counter(
+                &encrypt_key,
+                self.unencrypted_packets_received,
+            ),
             session_tx,
             pong_tx,
             addr: self.addr,
@@ -794,8 +815,12 @@ impl SocketReader {
             let data = match self.crypt.decrypt(&encrypted, &header.tag, &[]) {
                 Ok(d) => d,
                 Err(e) => {
-                    info!("Reader[{}]: decrypt failed, size={}, counter={}: {e}",
-                        self.addr, header.size, self.crypt.client_counter());
+                    info!(
+                        "Reader[{}]: decrypt failed, size={}, counter={}: {e}",
+                        self.addr,
+                        header.size,
+                        self.crypt.client_counter()
+                    );
                     return Err(e.into());
                 }
             };
@@ -804,9 +829,19 @@ impl SocketReader {
             let opcode = pkt.opcode_raw();
             {
                 let dump_len = data.len().min(256);
-                let hex: String = data[..dump_len].iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+                let hex: String = data[..dump_len]
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let suffix = if data.len() > 256 { "..." } else { "" };
-                trace!("Reader[{}]: received opcode 0x{:04X}, size={}\nHEX: {}{suffix}", self.addr, opcode, data.len(), hex);
+                trace!(
+                    "Reader[{}]: received opcode 0x{:04X}, size={}\nHEX: {}{suffix}",
+                    self.addr,
+                    opcode,
+                    data.len(),
+                    hex
+                );
             }
 
             // Handle Ping inline
@@ -814,7 +849,9 @@ impl SocketReader {
                 let mut pkt = pkt;
                 pkt.skip_opcode();
                 if let Ok(ping) = Ping::read(&mut pkt) {
-                    let pong = Pong { serial: ping.serial };
+                    let pong = Pong {
+                        serial: ping.serial,
+                    };
                     let pong_bytes = pong.to_bytes();
                     if self.pong_tx.send(pong_bytes).is_err() {
                         return Err(WorldSocketError::Closed);
@@ -872,11 +909,19 @@ impl SocketWriter {
         // Log every packet with hex dump for debugging (truncate at 512 bytes).
         {
             let dump_len = data.len().min(512);
-            let hex: String = data[..dump_len].iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+            let hex: String = data[..dump_len]
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
             let suffix = if data.len() > 512 { "..." } else { "" };
             trace!(
                 "Writer[{}]: PKT#{} opcode=0x{:04X} len={}\nHEX: {}{suffix}",
-                self.addr, self.crypt.server_counter(), opcode_raw, data.len(), hex
+                self.addr,
+                self.crypt.server_counter(),
+                opcode_raw,
+                data.len(),
+                hex
             );
         }
 
@@ -886,16 +931,18 @@ impl SocketWriter {
             let opcode_bytes = opcode_raw.to_le_bytes();
             let compressed = self.compressor.compress_packet(&opcode_bytes, &data[2..]);
 
-            let comp_opcode = ServerOpcodes::CompressedPacket
-                .to_u16()
-                .unwrap_or(0);
+            let comp_opcode = ServerOpcodes::CompressedPacket.to_u16().unwrap_or(0);
             data = Vec::with_capacity(2 + compressed.len());
             data.extend_from_slice(&comp_opcode.to_le_bytes());
             data.extend_from_slice(&compressed);
 
             info!(
                 "Writer[{}]: Compressed 0x{:04X} {} → {} bytes (CompressedPacket 0x{:04X})",
-                self.addr, opcode_raw, original_len, data.len(), comp_opcode
+                self.addr,
+                opcode_raw,
+                original_len,
+                data.len(),
+                comp_opcode
             );
         }
 

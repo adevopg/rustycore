@@ -501,14 +501,16 @@ mod tests {
         );
 
         assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
-        assert!(store
-            .creatures
-            .get(&creature_guid)
-            .unwrap()
-            .unit()
-            .world()
-            .object()
-            .is_destroyed_object());
+        assert!(
+            store
+                .creatures
+                .get(&creature_guid)
+                .unwrap()
+                .unit()
+                .world()
+                .object()
+                .is_destroyed_object()
+        );
     }
 
     #[test]
@@ -525,13 +527,15 @@ mod tests {
         );
 
         assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
-        assert!(store
-            .game_objects
-            .get(&go_guid)
-            .unwrap()
-            .world()
-            .object()
-            .is_destroyed_object());
+        assert!(
+            store
+                .game_objects
+                .get(&go_guid)
+                .unwrap()
+                .world()
+                .object()
+                .is_destroyed_object()
+        );
     }
 
     #[test]
@@ -548,13 +552,15 @@ mod tests {
         );
 
         assert_eq!(outcome, GridUnloadApplyOutcome::Applied);
-        assert!(store
-            .corpses
-            .get(&corpse_guid)
-            .unwrap()
-            .world()
-            .object()
-            .is_destroyed_object());
+        assert!(
+            store
+                .corpses
+                .get(&corpse_guid)
+                .unwrap()
+                .world()
+                .object()
+                .is_destroyed_object()
+        );
     }
 
     #[test]

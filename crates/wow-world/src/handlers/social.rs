@@ -11,9 +11,11 @@ use tracing::{info, warn};
 use wow_constants::ClientOpcodes;
 use wow_core::ObjectGuid;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
-use wow_packet::packets::query::{NameCacheLookupResult, PlayerGuidLookupData, QueryPlayerNamesResponse};
-use wow_packet::packets::social::{ContactInfo, ContactListPkt, FriendStatusPkt, FriendsResult};
 use wow_packet::ServerPacket;
+use wow_packet::packets::query::{
+    NameCacheLookupResult, PlayerGuidLookupData, QueryPlayerNamesResponse,
+};
+use wow_packet::packets::social::{ContactInfo, ContactListPkt, FriendStatusPkt, FriendsResult};
 
 use crate::session::WorldSession;
 
@@ -55,15 +57,24 @@ impl WorldSession {
     pub async fn handle_add_friend(&mut self, mut pkt: wow_packet::WorldPacket) {
         let name_len = match pkt.read_bits(9) {
             Ok(n) => n as usize,
-            Err(e) => { warn!("AddFriend: failed to read name_len: {}", e); return; }
+            Err(e) => {
+                warn!("AddFriend: failed to read name_len: {}", e);
+                return;
+            }
         };
         let notes_len = match pkt.read_bits(9) {
             Ok(n) => n as usize,
-            Err(e) => { warn!("AddFriend: failed to read notes_len: {}", e); return; }
+            Err(e) => {
+                warn!("AddFriend: failed to read notes_len: {}", e);
+                return;
+            }
         };
         let name = match pkt.read_string(name_len) {
             Ok(s) => s,
-            Err(e) => { warn!("AddFriend: failed to read name: {}", e); return; }
+            Err(e) => {
+                warn!("AddFriend: failed to read name: {}", e);
+                return;
+            }
         };
         let notes = match pkt.read_string(notes_len) {
             Ok(s) => s,
@@ -206,7 +217,10 @@ impl WorldSession {
     pub async fn handle_del_friend(&mut self, mut pkt: wow_packet::WorldPacket) {
         let friend_guid = match pkt.read_packed_guid() {
             Ok(g) => g,
-            Err(e) => { warn!("DelFriend: failed to read guid: {}", e); return; }
+            Err(e) => {
+                warn!("DelFriend: failed to read guid: {}", e);
+                return;
+            }
         };
         // VirtualRealmAddress — ignored
         let _ = pkt.read_uint32();
@@ -221,13 +235,12 @@ impl WorldSession {
             None => return,
         };
 
-        let _ = sqlx::query(
-            "DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags & 1",
-        )
-        .bind(my_guid.counter())
-        .bind(friend_guid.counter())
-        .execute(char_db.pool())
-        .await;
+        let _ =
+            sqlx::query("DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags & 1")
+                .bind(my_guid.counter())
+                .bind(friend_guid.counter())
+                .execute(char_db.pool())
+                .await;
 
         let p = FriendStatusPkt {
             result: FriendsResult::Removed,
@@ -249,7 +262,10 @@ impl WorldSession {
     pub async fn handle_send_contact_list(&mut self, mut pkt: wow_packet::WorldPacket) {
         let flags = match pkt.read_uint32() {
             Ok(f) => f,
-            Err(e) => { warn!("SendContactList: failed to read flags: {}", e); return; }
+            Err(e) => {
+                warn!("SendContactList: failed to read flags: {}", e);
+                return;
+            }
         };
 
         let my_guid = match self.player_guid {

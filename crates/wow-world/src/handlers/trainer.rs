@@ -117,42 +117,37 @@ impl WorldSession {
         // ── Look up TrainerId ──────────────────────────────────────────────
         let mut ct_stmt = world_db.prepare(WorldStatements::SEL_TRAINER_BY_CREATURE);
         ct_stmt.set_u32(0, entry);
-        let trainer_id = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            world_db.query(&ct_stmt),
-        )
-        .await
-        {
-            Ok(Ok(r)) if !r.is_empty() => match r.try_read::<u32>(0) {
-                Some(id) => id,
-                None => {
+        let trainer_id =
+            match tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&ct_stmt))
+                .await
+            {
+                Ok(Ok(r)) if !r.is_empty() => match r.try_read::<u32>(0) {
+                    Some(id) => id,
+                    None => {
+                        warn!(
+                            account = self.account_id,
+                            entry = entry,
+                            "creature_trainer row has no TrainerId"
+                        );
+                        return;
+                    }
+                },
+                _ => {
                     warn!(
                         account = self.account_id,
                         entry = entry,
-                        "creature_trainer row has no TrainerId"
+                        "No creature_trainer row for entry"
                     );
                     return;
                 }
-            },
-            _ => {
-                warn!(
-                    account = self.account_id,
-                    entry = entry,
-                    "No creature_trainer row for entry"
-                );
-                return;
-            }
-        };
+            };
 
         // ── Load trainer info (type + greeting) ────────────────────────────
         let (trainer_type, greeting) = {
             let mut ti_stmt = world_db.prepare(WorldStatements::SEL_TRAINER_INFO);
             ti_stmt.set_u32(0, trainer_id);
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                world_db.query(&ti_stmt),
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&ti_stmt))
+                .await
             {
                 Ok(Ok(r)) if !r.is_empty() => {
                     let t = r.try_read::<i32>(1).unwrap_or(0);
@@ -166,22 +161,28 @@ impl WorldSession {
         // ── Load trainer spells ────────────────────────────────────────────
         let mut ts_stmt = world_db.prepare(WorldStatements::SEL_TRAINER_SPELLS);
         ts_stmt.set_u32(0, trainer_id);
-        let mut ts_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&ts_stmt),
-        )
-        .await
-        {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                warn!(account = self.account_id, trainer_id = trainer_id, "trainer_spell query failed: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!(account = self.account_id, trainer_id = trainer_id, "trainer_spell query timed out");
-                return;
-            }
-        };
+        let mut ts_result =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&ts_stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!(
+                        account = self.account_id,
+                        trainer_id = trainer_id,
+                        "trainer_spell query failed: {e}"
+                    );
+                    return;
+                }
+                Err(_) => {
+                    warn!(
+                        account = self.account_id,
+                        trainer_id = trainer_id,
+                        "trainer_spell query timed out"
+                    );
+                    return;
+                }
+            };
 
         let player_level = self.player_level;
         let mut spells: Vec<TrainerListSpell> = Vec::new();
@@ -247,7 +248,10 @@ impl WorldSession {
         let req = match TrainerBuySpellRequest::read(&mut pkt) {
             Ok(r) => r,
             Err(e) => {
-                warn!(account = self.account_id, "Failed to parse CMSG_TRAINER_BUY_SPELL: {e}");
+                warn!(
+                    account = self.account_id,
+                    "Failed to parse CMSG_TRAINER_BUY_SPELL: {e}"
+                );
                 return;
             }
         };
@@ -266,7 +270,10 @@ impl WorldSession {
         let player_guid = match self.player_guid {
             Some(g) => g,
             None => {
-                warn!(account = self.account_id, "handle_trainer_buy_spell: no player_guid");
+                warn!(
+                    account = self.account_id,
+                    "handle_trainer_buy_spell: no player_guid"
+                );
                 return;
             }
         };
@@ -295,22 +302,20 @@ impl WorldSession {
         let mut ts_stmt = world_db.prepare(WorldStatements::SEL_TRAINER_SPELLS);
         ts_stmt.set_u32(0, trainer_id as u32);
 
-        let ts_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&ts_stmt),
-        )
-        .await
-        {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                warn!(account = self.account_id, "trainer_spell query failed: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!(account = self.account_id, "trainer_spell query timed out");
-                return;
-            }
-        };
+        let ts_result =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&ts_stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!(account = self.account_id, "trainer_spell query failed: {e}");
+                    return;
+                }
+                Err(_) => {
+                    warn!(account = self.account_id, "trainer_spell query timed out");
+                    return;
+                }
+            };
 
         // Find the matching spell in results
         let mut money_cost: u32 = 0;
@@ -395,7 +400,10 @@ impl WorldSession {
         upd_money.set_u64(0, self.player_gold);
         upd_money.set_u64(1, player_guid.counter() as u64);
         if let Err(e) = char_db.execute(&upd_money).await {
-            warn!(account = self.account_id, "TrainerBuySpell: update money failed: {e}");
+            warn!(
+                account = self.account_id,
+                "TrainerBuySpell: update money failed: {e}"
+            );
         }
 
         // ── Persist spell to character_spell ───────────────────────────────
@@ -403,7 +411,11 @@ impl WorldSession {
         ins_spell.set_u64(0, player_guid.counter() as u64);
         ins_spell.set_i32(1, spell_id);
         if let Err(e) = char_db.execute(&ins_spell).await {
-            warn!(account = self.account_id, spell_id = spell_id, "TrainerBuySpell: insert character_spell failed: {e}");
+            warn!(
+                account = self.account_id,
+                spell_id = spell_id,
+                "TrainerBuySpell: insert character_spell failed: {e}"
+            );
         }
 
         // ── Update in-memory state ─────────────────────────────────────────

@@ -8,10 +8,10 @@
 //! Loads `quest_template`, `quest_objectives`, `creature_queststarter`
 //! and `creature_questender` from the world database at startup.
 
-use std::collections::HashMap;
-use wow_database::{WorldDatabase, WorldStatements};
 use anyhow::Result;
+use std::collections::HashMap;
 use tracing::info;
+use wow_database::{WorldDatabase, WorldStatements};
 
 // ── Constants (matching C# SharedConst) ──────────────────────────────────────
 pub const QUEST_REWARD_ITEM_COUNT: usize = 4;
@@ -19,6 +19,7 @@ pub const QUEST_REWARD_CHOICES_COUNT: usize = 6;
 pub const QUEST_REWARD_REPUTATIONS_COUNT: usize = 5;
 pub const QUEST_REWARD_CURRENCY_COUNT: usize = 4;
 pub const QUEST_REWARD_DISPLAY_SPELL_COUNT: usize = 3;
+pub const QUEST_ITEM_DROP_COUNT: usize = 4;
 
 // ── QuestObjective ────────────────────────────────────────────────────────────
 
@@ -70,6 +71,8 @@ pub struct QuestTemplate {
     pub flags_ex2: u32,
     pub reward_items: [u32; QUEST_REWARD_ITEM_COUNT],
     pub reward_amounts: [u32; QUEST_REWARD_ITEM_COUNT],
+    pub item_drop: [u32; QUEST_ITEM_DROP_COUNT],
+    pub item_drop_quantity: [u32; QUEST_ITEM_DROP_COUNT],
     // Strings
     pub log_title: String,
     pub log_description: String,
@@ -179,17 +182,23 @@ impl QuestStore {
 
     /// Whether a given NPC starts any quest.
     pub fn npc_has_start_quests(&self, npc_entry: u32) -> bool {
-        self.starter_quests.get(&npc_entry).map_or(false, |v| !v.is_empty())
+        self.starter_quests
+            .get(&npc_entry)
+            .map_or(false, |v| !v.is_empty())
     }
 
     /// Whether a given NPC ends any quest.
     pub fn npc_has_end_quests(&self, npc_entry: u32) -> bool {
-        self.ender_quests.get(&npc_entry).map_or(false, |v| !v.is_empty())
+        self.ender_quests
+            .get(&npc_entry)
+            .map_or(false, |v| !v.is_empty())
     }
 }
 
 impl Default for QuestStore {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── DB loading ────────────────────────────────────────────────────────────────
@@ -208,62 +217,94 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
             let id: u32 = result.read(0);
             let quest = QuestTemplate {
                 id,
-                quest_type:               result.try_read::<u8>(1).unwrap_or(2),
-                quest_level:              result.try_read::<i32>(2).unwrap_or(0),
-                quest_max_scaling_level:  result.try_read::<i32>(3).unwrap_or(0),
-                min_level:                result.try_read::<i32>(4).unwrap_or(0),
-                quest_sort_id:            result.try_read::<i32>(5).unwrap_or(0),
-                quest_info_id:            result.try_read::<u16>(6).unwrap_or(0),
-                suggested_group_num:      result.try_read::<u8>(7).unwrap_or(0),
-                reward_next_quest:        result.try_read::<u32>(8).unwrap_or(0),
-                reward_xp_difficulty:     result.try_read::<u32>(9).unwrap_or(0),
-                reward_xp_multiplier:     result.try_read::<f32>(10).unwrap_or(1.0),
-                reward_money_difficulty:  result.try_read::<u32>(11).unwrap_or(0),
-                reward_money_multiplier:  result.try_read::<f32>(12).unwrap_or(1.0),
-                reward_bonus_money:       result.try_read::<u32>(13).unwrap_or(0),
+                quest_type: result.try_read::<u8>(1).unwrap_or(2),
+                quest_level: result.try_read::<i32>(2).unwrap_or(0),
+                quest_max_scaling_level: result.try_read::<i32>(3).unwrap_or(0),
+                min_level: result.try_read::<i32>(4).unwrap_or(0),
+                quest_sort_id: result.try_read::<i32>(5).unwrap_or(0),
+                quest_info_id: result.try_read::<u16>(6).unwrap_or(0),
+                suggested_group_num: result.try_read::<u8>(7).unwrap_or(0),
+                reward_next_quest: result.try_read::<u32>(8).unwrap_or(0),
+                reward_xp_difficulty: result.try_read::<u32>(9).unwrap_or(0),
+                reward_xp_multiplier: result.try_read::<f32>(10).unwrap_or(1.0),
+                reward_money_difficulty: result.try_read::<u32>(11).unwrap_or(0),
+                reward_money_multiplier: result.try_read::<f32>(12).unwrap_or(1.0),
+                reward_bonus_money: result.try_read::<u32>(13).unwrap_or(0),
                 reward_display_spell: [
                     result.try_read::<u32>(14).unwrap_or(0),
                     result.try_read::<u32>(15).unwrap_or(0),
                     result.try_read::<u32>(16).unwrap_or(0),
                 ],
-                reward_spell:             result.try_read::<u32>(17).unwrap_or(0),
-                reward_honor:             result.try_read::<u32>(18).unwrap_or(0),
-                flags:                    result.try_read::<u32>(19).unwrap_or(0),
-                flags_ex:                 result.try_read::<u32>(20).unwrap_or(0),
-                flags_ex2:                result.try_read::<u32>(21).unwrap_or(0),
+                reward_spell: result.try_read::<u32>(17).unwrap_or(0),
+                reward_honor: result.try_read::<u32>(18).unwrap_or(0),
+                flags: result.try_read::<u32>(19).unwrap_or(0),
+                flags_ex: result.try_read::<u32>(20).unwrap_or(0),
+                flags_ex2: result.try_read::<u32>(21).unwrap_or(0),
                 reward_items: [
                     result.try_read::<u32>(22).unwrap_or(0),
-                    result.try_read::<u32>(24).unwrap_or(0),
                     result.try_read::<u32>(26).unwrap_or(0),
-                    result.try_read::<u32>(28).unwrap_or(0),
+                    result.try_read::<u32>(30).unwrap_or(0),
+                    result.try_read::<u32>(34).unwrap_or(0),
                 ],
                 reward_amounts: [
                     result.try_read::<u32>(23).unwrap_or(0),
-                    result.try_read::<u32>(25).unwrap_or(0),
                     result.try_read::<u32>(27).unwrap_or(0),
-                    result.try_read::<u32>(29).unwrap_or(0),
+                    result.try_read::<u32>(31).unwrap_or(0),
+                    result.try_read::<u32>(35).unwrap_or(0),
                 ],
-                log_title:           result.try_read::<String>(30).unwrap_or_default(),
-                log_description:     result.try_read::<String>(31).unwrap_or_default(),
-                quest_description:   result.try_read::<String>(32).unwrap_or_default(),
-                area_description:    result.try_read::<String>(33).unwrap_or_default(),
-                quest_completion_log:result.try_read::<String>(34).unwrap_or_default(),
-                allowable_races:     result.try_read::<i64>(35).map(|v| v as u64).unwrap_or(0),
-                allowable_classes:   result.try_read::<u32>(36).unwrap_or(0),
-                max_level:           result.try_read::<u8>(37).unwrap_or(0),
-                prev_quest_id:       result.try_read::<i32>(38).unwrap_or(0),
+                item_drop: [
+                    result.try_read::<u32>(24).unwrap_or(0),
+                    result.try_read::<u32>(28).unwrap_or(0),
+                    result.try_read::<u32>(32).unwrap_or(0),
+                    result.try_read::<u32>(36).unwrap_or(0),
+                ],
+                item_drop_quantity: [
+                    result.try_read::<u32>(25).unwrap_or(0),
+                    result.try_read::<u32>(29).unwrap_or(0),
+                    result.try_read::<u32>(33).unwrap_or(0),
+                    result.try_read::<u32>(37).unwrap_or(0),
+                ],
+                log_title: result.try_read::<String>(38).unwrap_or_default(),
+                log_description: result.try_read::<String>(39).unwrap_or_default(),
+                quest_description: result.try_read::<String>(40).unwrap_or_default(),
+                area_description: result.try_read::<String>(41).unwrap_or_default(),
+                quest_completion_log: result.try_read::<String>(42).unwrap_or_default(),
+                allowable_races: result.try_read::<i64>(43).map(|v| v as u64).unwrap_or(0),
+                allowable_classes: result.try_read::<u32>(44).unwrap_or(0),
+                max_level: result.try_read::<u8>(45).unwrap_or(0),
+                prev_quest_id: result.try_read::<i32>(46).unwrap_or(0),
                 reward_choice_items: [
-                    (result.try_read::<u32>(39).unwrap_or(0), result.try_read::<u32>(40).unwrap_or(0)),
-                    (result.try_read::<u32>(41).unwrap_or(0), result.try_read::<u32>(42).unwrap_or(0)),
-                    (result.try_read::<u32>(43).unwrap_or(0), result.try_read::<u32>(44).unwrap_or(0)),
-                    (result.try_read::<u32>(45).unwrap_or(0), result.try_read::<u32>(46).unwrap_or(0)),
-                    (result.try_read::<u32>(47).unwrap_or(0), result.try_read::<u32>(48).unwrap_or(0)),
-                    (result.try_read::<u32>(49).unwrap_or(0), result.try_read::<u32>(50).unwrap_or(0)),
+                    (
+                        result.try_read::<u32>(47).unwrap_or(0),
+                        result.try_read::<u32>(48).unwrap_or(0),
+                    ),
+                    (
+                        result.try_read::<u32>(49).unwrap_or(0),
+                        result.try_read::<u32>(50).unwrap_or(0),
+                    ),
+                    (
+                        result.try_read::<u32>(51).unwrap_or(0),
+                        result.try_read::<u32>(52).unwrap_or(0),
+                    ),
+                    (
+                        result.try_read::<u32>(53).unwrap_or(0),
+                        result.try_read::<u32>(54).unwrap_or(0),
+                    ),
+                    (
+                        result.try_read::<u32>(55).unwrap_or(0),
+                        result.try_read::<u32>(56).unwrap_or(0),
+                    ),
+                    (
+                        result.try_read::<u32>(57).unwrap_or(0),
+                        result.try_read::<u32>(58).unwrap_or(0),
+                    ),
                 ],
                 objectives: Vec::new(), // filled next
             };
             store.quests.insert(id, quest);
-            if !result.next_row() { break; }
+            if !result.next_row() {
+                break;
+            }
         }
     }
     info!("Loaded {} quest templates", store.quests.len());
@@ -276,23 +317,25 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
         let mut count = 0u32;
         loop {
             let obj = QuestObjective {
-                id:                   result.try_read::<u32>(0).unwrap_or(0),
-                quest_id:             result.try_read::<u32>(1).unwrap_or(0),
-                obj_type:             result.try_read::<u8>(2).unwrap_or(0),
-                order:                result.try_read::<u8>(3).unwrap_or(0),
-                storage_index:        result.try_read::<i8>(4).unwrap_or(0),
-                object_id:            result.try_read::<i32>(5).unwrap_or(0),
-                amount:               result.try_read::<i32>(6).unwrap_or(0),
-                flags:                result.try_read::<u32>(7).unwrap_or(0),
-                flags2:               result.try_read::<u32>(8).unwrap_or(0),
-                progress_bar_weight:  result.try_read::<f32>(9).unwrap_or(0.0),
-                description:          result.try_read::<String>(10).unwrap_or_default(),
+                id: result.try_read::<u32>(0).unwrap_or(0),
+                quest_id: result.try_read::<u32>(1).unwrap_or(0),
+                obj_type: result.try_read::<u8>(2).unwrap_or(0),
+                order: result.try_read::<u8>(3).unwrap_or(0),
+                storage_index: result.try_read::<i8>(4).unwrap_or(0),
+                object_id: result.try_read::<i32>(5).unwrap_or(0),
+                amount: result.try_read::<i32>(6).unwrap_or(0),
+                flags: result.try_read::<u32>(7).unwrap_or(0),
+                flags2: result.try_read::<u32>(8).unwrap_or(0),
+                progress_bar_weight: result.try_read::<f32>(9).unwrap_or(0.0),
+                description: result.try_read::<String>(10).unwrap_or_default(),
             };
             if let Some(quest) = store.quests.get_mut(&obj.quest_id) {
                 quest.objectives.push(obj);
                 count += 1;
             }
-            if !result.next_row() { break; }
+            if !result.next_row() {
+                break;
+            }
         }
         info!("Loaded {} quest objectives", count);
     }
@@ -303,12 +346,14 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
     if !result.is_empty() {
         let mut result = result;
         loop {
-            let npc: u32  = result.try_read::<u32>(0).unwrap_or(0);
+            let npc: u32 = result.try_read::<u32>(0).unwrap_or(0);
             let quest: u32 = result.try_read::<u32>(1).unwrap_or(0);
             if store.quests.contains_key(&quest) {
                 store.starter_quests.entry(npc).or_default().push(quest);
             }
-            if !result.next_row() { break; }
+            if !result.next_row() {
+                break;
+            }
         }
     }
 
@@ -318,12 +363,14 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
     if !result.is_empty() {
         let mut result = result;
         loop {
-            let npc: u32   = result.try_read::<u32>(0).unwrap_or(0);
+            let npc: u32 = result.try_read::<u32>(0).unwrap_or(0);
             let quest: u32 = result.try_read::<u32>(1).unwrap_or(0);
             if store.quests.contains_key(&quest) {
                 store.ender_quests.entry(npc).or_default().push(quest);
             }
-            if !result.next_row() { break; }
+            if !result.next_row() {
+                break;
+            }
         }
     }
 

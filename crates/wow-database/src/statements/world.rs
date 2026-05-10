@@ -20,9 +20,9 @@ pub enum WorldStatements {
     INS_GAME_TELE,
     DEL_GAME_TELE,
     INS_NPC_VENDOR,
-            DEL_NPC_VENDOR,
-            SEL_NPC_VENDOR_REF,
-            SEL_VENDOR_ITEMS,
+    DEL_NPC_VENDOR,
+    SEL_NPC_VENDOR_REF,
+    SEL_VENDOR_ITEMS,
     UPD_CREATURE_MOVEMENT_TYPE,
     UPD_CREATURE_FACTION,
     UPD_CREATURE_NPCFLAG,
@@ -120,12 +120,80 @@ pub enum WorldStatements {
     /// Min/max money loot bounds for an item from item_template_addon.
     /// Args: item ID (u32).
     SEL_ITEM_TEMPLATE_ADDON_MONEY_LOOT,
+    /// FlagsCu and QuestLogItemId for loot eligibility from item_template_addon.
+    /// Args: item ID (u32).
+    SEL_ITEM_TEMPLATE_ADDON_LOOT_METADATA,
     /// Non-group item_loot_template rows for an item.
     /// Args: item ID (u32).
     SEL_ITEM_LOOT_TEMPLATE_ROWS,
+    /// All item_loot_template rows for startup loading.
+    SEL_ITEM_LOOT_TEMPLATE_ALL_ROWS,
+    /// creature_loot_template rows for a creature loot ID.
+    /// Args: creature loot ID (u32).
+    SEL_CREATURE_LOOT_TEMPLATE_ROWS,
+    /// All creature_loot_template rows for startup loading.
+    SEL_CREATURE_LOOT_TEMPLATE_ALL_ROWS,
+    /// fishing_loot_template rows for an area ID.
+    /// Args: area ID (u32).
+    SEL_FISHING_LOOT_TEMPLATE_ROWS,
+    /// All fishing_loot_template rows for startup loading.
+    SEL_FISHING_LOOT_TEMPLATE_ALL_ROWS,
+    /// gameobject_loot_template rows for a gameobject loot ID.
+    /// Args: gameobject loot ID (u32).
+    SEL_GAMEOBJECT_LOOT_TEMPLATE_ROWS,
+    /// All gameobject_loot_template rows for startup loading.
+    SEL_GAMEOBJECT_LOOT_TEMPLATE_ALL_ROWS,
+    /// mail_loot_template rows for a mail template ID.
+    /// Args: mail template ID (u32).
+    SEL_MAIL_LOOT_TEMPLATE_ROWS,
+    /// All mail_loot_template rows for startup loading.
+    SEL_MAIL_LOOT_TEMPLATE_ALL_ROWS,
+    /// milling_loot_template rows for an herb item entry.
+    /// Args: item ID (u32).
+    SEL_MILLING_LOOT_TEMPLATE_ROWS,
+    /// All milling_loot_template rows for startup loading.
+    SEL_MILLING_LOOT_TEMPLATE_ALL_ROWS,
+    /// pickpocketing_loot_template rows for a creature pickpocket loot ID.
+    /// Args: creature pickpocket loot ID (u32).
+    SEL_PICKPOCKETING_LOOT_TEMPLATE_ROWS,
+    /// All pickpocketing_loot_template rows for startup loading.
+    SEL_PICKPOCKETING_LOOT_TEMPLATE_ALL_ROWS,
+    /// prospecting_loot_template rows for an ore item entry.
+    /// Args: item ID (u32).
+    SEL_PROSPECTING_LOOT_TEMPLATE_ROWS,
+    /// All prospecting_loot_template rows for startup loading.
+    SEL_PROSPECTING_LOOT_TEMPLATE_ALL_ROWS,
     /// Non-group reference_loot_template rows for a reference entry.
     /// Args: reference ID (u32).
     SEL_REFERENCE_LOOT_TEMPLATE_ROWS,
+    /// All reference_loot_template rows for startup loading.
+    SEL_REFERENCE_LOOT_TEMPLATE_ALL_ROWS,
+    /// skinning_loot_template rows for a creature skinning loot ID.
+    /// Args: creature skinning loot ID (u32).
+    SEL_SKINNING_LOOT_TEMPLATE_ROWS,
+    /// All skinning_loot_template rows for startup loading.
+    SEL_SKINNING_LOOT_TEMPLATE_ALL_ROWS,
+    /// disenchant_loot_template rows for an ItemDisenchantLoot.db2 ID.
+    /// Args: disenchant loot ID (u32).
+    SEL_DISENCHANT_LOOT_TEMPLATE_ROWS,
+    /// All disenchant_loot_template rows for startup loading.
+    SEL_DISENCHANT_LOOT_TEMPLATE_ALL_ROWS,
+    /// spell_loot_template rows for a spell loot ID.
+    /// Args: spell ID (u32).
+    SEL_SPELL_LOOT_TEMPLATE_ROWS,
+    /// All spell_loot_template rows for startup loading.
+    SEL_SPELL_LOOT_TEMPLATE_ALL_ROWS,
+    /// Load C++ ConditionMgr loot-template conditions.
+    /// Args: SourceTypeOrReferenceId (i32), SourceGroup (u32), SourceEntry (u32).
+    SEL_LOOT_TEMPLATE_CONDITION_ROWS,
+    /// Load distinct C++ ConditionMgr loot-template condition IDs for startup validation.
+    SEL_LOOT_TEMPLATE_CONDITION_IDS,
+    /// Load distinct C++ ConditionMgr loot condition-reference uses for startup validation.
+    SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES,
+    /// Load distinct C++ ConditionMgr reference-condition template IDs for startup validation.
+    SEL_CONDITION_REFERENCE_TEMPLATE_IDS,
+    /// Load C++ ItemEnchantmentMgr random enchantment groups.
+    SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE,
     /// Load all area trigger teleport destinations.
     SEL_AREA_TRIGGER_TELEPORT,
     // Quest system
@@ -144,10 +212,18 @@ pub enum WorldStatements {
 impl StatementDef for WorldStatements {
     fn sql(self) -> &'static str {
         match self {
-            Self::DEL_LINKED_RESPAWN => "DELETE FROM linked_respawn WHERE guid = ? AND linkType  = ?",
-            Self::DEL_LINKED_RESPAWN_MASTER => "DELETE FROM linked_respawn WHERE linkedGuid = ? AND linkType = ?",
-            Self::REP_LINKED_RESPAWN => "REPLACE INTO linked_respawn (guid, linkedGuid, linkType) VALUES (?, ?, ?)",
-            Self::SEL_CREATURE_TEXT => "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound, SoundPlayType, BroadcastTextId, TextRange FROM creature_text",
+            Self::DEL_LINKED_RESPAWN => {
+                "DELETE FROM linked_respawn WHERE guid = ? AND linkType  = ?"
+            }
+            Self::DEL_LINKED_RESPAWN_MASTER => {
+                "DELETE FROM linked_respawn WHERE linkedGuid = ? AND linkType = ?"
+            }
+            Self::REP_LINKED_RESPAWN => {
+                "REPLACE INTO linked_respawn (guid, linkedGuid, linkType) VALUES (?, ?, ?)"
+            }
+            Self::SEL_CREATURE_TEXT => {
+                "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound, SoundPlayType, BroadcastTextId, TextRange FROM creature_text"
+            }
             Self::SEL_SMART_SCRIPTS => concat!(
                 "SELECT entryorguid, source_type, id, link, Difficulties, event_type, event_phase_mask, event_chance, event_flags, ",
                 "event_param1, event_param2, event_param3, event_param4, event_param5, event_param_string, ",
@@ -159,11 +235,19 @@ impl StatementDef for WorldStatements {
             Self::DEL_EVENT_GAMEOBJECT => "DELETE FROM game_event_gameobject WHERE guid = ?",
             Self::INS_GRAVEYARD_ZONE => "INSERT INTO graveyard_zone (ID, GhostZone) VALUES (?, ?)",
             Self::DEL_GRAVEYARD_ZONE => "DELETE FROM graveyard_zone WHERE ID = ? AND GhostZone = ?",
-            Self::INS_GAME_TELE => "INSERT INTO game_tele (id, position_x, position_y, position_z, orientation, map, name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            Self::INS_GAME_TELE => {
+                "INSERT INTO game_tele (id, position_x, position_y, position_z, orientation, map, name) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            }
             Self::DEL_GAME_TELE => "DELETE FROM game_tele WHERE name = ?",
-            Self::INS_NPC_VENDOR => "INSERT INTO npc_vendor (entry, item, maxcount, incrtime, extendedcost, type) VALUES(?, ?, ?, ?, ?, ?)",
-            Self::DEL_NPC_VENDOR => "DELETE FROM npc_vendor WHERE entry = ? AND item = ? AND type = ?",
-            Self::SEL_NPC_VENDOR_REF => "SELECT item, maxcount, incrtime, ExtendedCost, type, BonusListIDs, PlayerConditionID, IgnoreFiltering FROM npc_vendor WHERE entry = ? ORDER BY slot ASC",
+            Self::INS_NPC_VENDOR => {
+                "INSERT INTO npc_vendor (entry, item, maxcount, incrtime, extendedcost, type) VALUES(?, ?, ?, ?, ?, ?)"
+            }
+            Self::DEL_NPC_VENDOR => {
+                "DELETE FROM npc_vendor WHERE entry = ? AND item = ? AND type = ?"
+            }
+            Self::SEL_NPC_VENDOR_REF => {
+                "SELECT item, maxcount, incrtime, ExtendedCost, type, BonusListIDs, PlayerConditionID, IgnoreFiltering FROM npc_vendor WHERE entry = ? ORDER BY slot ASC"
+            }
             // Cols: 0=item, 1=maxcount, 2=ExtendedCost, 3=type, 4=slot,
             //       5=BuyPrice, 6=SellPrice, 7=MaxDurability, 8=VendorStackCount,
             //       9=IgnoreFiltering, 10=incrtime, 11=PlayerConditionID,
@@ -182,26 +266,64 @@ impl StatementDef for WorldStatements {
                 "LEFT JOIN hotfixes.item_sparse isp ON nv.item = isp.ID ",
                 "WHERE nv.entry = ? ORDER BY nv.slot ASC"
             ),
-            Self::UPD_CREATURE_MOVEMENT_TYPE => "UPDATE creature SET MovementType = ? WHERE guid = ?",
-            Self::UPD_CREATURE_FACTION => "UPDATE creature_template SET faction = ? WHERE entry = ?",
-            Self::UPD_CREATURE_NPCFLAG => "UPDATE creature_template SET npcflag = ? WHERE entry = ?",
-            Self::UPD_CREATURE_POSITION => "UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-            Self::UPD_CREATURE_MAP_POSITION => "UPDATE creature SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-            Self::UPD_CREATURE_WANDER_DISTANCE => "UPDATE creature SET wander_distance = ?, MovementType = ? WHERE guid = ?",
-            Self::UPD_CREATURE_SPAWN_TIME_SECS => "UPDATE creature SET spawntimesecs = ? WHERE guid = ?",
-            Self::INS_CREATURE_FORMATION => "INSERT INTO creature_formations (leaderGUID, memberGUID, dist, angle, groupAI) VALUES (?, ?, ?, ?, ?)",
-            Self::SEL_WAYPOINT_PATH_BY_PATHID => "SELECT PathId, MoveType, Flags FROM waypoint_path WHERE PathId = ?",
-            Self::INS_WAYPOINT_PATH_NODE => "INSERT INTO waypoint_path_node (PathId, NodeId, PositionX, PositionY, PositionZ, Orientation) VALUES (?, ?, ?, ?, ?, ?)",
-            Self::DEL_WAYPOINT_PATH_NODE => "DELETE FROM waypoint_path_node WHERE PathId = ? AND NodeId = ?",
-            Self::UPD_WAYPOINT_PATH_NODE => "UPDATE waypoint_path_node SET NodeId = NodeId - 1 WHERE PathId = ? AND NodeId > ?",
-            Self::UPD_WAYPOINT_PATH_NODE_POSITION => "UPDATE waypoint_path_node SET PositionX = ?, PositionY = ?, PositionZ = ?, Orientation = ? WHERE PathId = ? AND NodeId = ?",
+            Self::UPD_CREATURE_MOVEMENT_TYPE => {
+                "UPDATE creature SET MovementType = ? WHERE guid = ?"
+            }
+            Self::UPD_CREATURE_FACTION => {
+                "UPDATE creature_template SET faction = ? WHERE entry = ?"
+            }
+            Self::UPD_CREATURE_NPCFLAG => {
+                "UPDATE creature_template SET npcflag = ? WHERE entry = ?"
+            }
+            Self::UPD_CREATURE_POSITION => {
+                "UPDATE creature SET position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?"
+            }
+            Self::UPD_CREATURE_MAP_POSITION => {
+                "UPDATE creature SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?"
+            }
+            Self::UPD_CREATURE_WANDER_DISTANCE => {
+                "UPDATE creature SET wander_distance = ?, MovementType = ? WHERE guid = ?"
+            }
+            Self::UPD_CREATURE_SPAWN_TIME_SECS => {
+                "UPDATE creature SET spawntimesecs = ? WHERE guid = ?"
+            }
+            Self::INS_CREATURE_FORMATION => {
+                "INSERT INTO creature_formations (leaderGUID, memberGUID, dist, angle, groupAI) VALUES (?, ?, ?, ?, ?)"
+            }
+            Self::SEL_WAYPOINT_PATH_BY_PATHID => {
+                "SELECT PathId, MoveType, Flags FROM waypoint_path WHERE PathId = ?"
+            }
+            Self::INS_WAYPOINT_PATH_NODE => {
+                "INSERT INTO waypoint_path_node (PathId, NodeId, PositionX, PositionY, PositionZ, Orientation) VALUES (?, ?, ?, ?, ?, ?)"
+            }
+            Self::DEL_WAYPOINT_PATH_NODE => {
+                "DELETE FROM waypoint_path_node WHERE PathId = ? AND NodeId = ?"
+            }
+            Self::UPD_WAYPOINT_PATH_NODE => {
+                "UPDATE waypoint_path_node SET NodeId = NodeId - 1 WHERE PathId = ? AND NodeId > ?"
+            }
+            Self::UPD_WAYPOINT_PATH_NODE_POSITION => {
+                "UPDATE waypoint_path_node SET PositionX = ?, PositionY = ?, PositionZ = ?, Orientation = ? WHERE PathId = ? AND NodeId = ?"
+            }
             Self::SEL_WAYPOINT_PATH_NODE_MAX_PATHID => "SELECT MAX(PathId) FROM waypoint_path_node",
-            Self::SEL_WAYPOINT_PATH_NODE_BY_PATHID => "SELECT PathId, NodeId, PositionX, PositionY, PositionZ, Orientation, Delay FROM waypoint_path_node WHERE PathId = ? ORDER BY NodeId",
-            Self::SEL_WAYPOINT_PATH_NODE_POS_BY_PATHID => "SELECT NodeId, PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE PathId = ?",
-            Self::SEL_WAYPOINT_PATH_NODE_POS_FIRST_BY_PATHID => "SELECT PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE NodeId = 1 AND PathId = ?",
-            Self::SEL_WAYPOINT_PATH_NODE_POS_LAST_BY_PATHID => "SELECT PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE PathId = ? ORDER BY NodeId DESC LIMIT 1",
-            Self::SEL_WAYPOINT_PATH_NODE_MAX_NODEID => "SELECT MAX(NodeId) FROM waypoint_path_node WHERE PathId = ?",
-            Self::SEL_WAYPOINT_PATH_NODE_BY_POS => "SELECT PathId, NodeId FROM waypoint_path_node WHERE (abs(PositionX - ?) <= ?) and (abs(PositionY - ?) <= ?) and (abs(PositionZ - ?) <= ?)",
+            Self::SEL_WAYPOINT_PATH_NODE_BY_PATHID => {
+                "SELECT PathId, NodeId, PositionX, PositionY, PositionZ, Orientation, Delay FROM waypoint_path_node WHERE PathId = ? ORDER BY NodeId"
+            }
+            Self::SEL_WAYPOINT_PATH_NODE_POS_BY_PATHID => {
+                "SELECT NodeId, PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE PathId = ?"
+            }
+            Self::SEL_WAYPOINT_PATH_NODE_POS_FIRST_BY_PATHID => {
+                "SELECT PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE NodeId = 1 AND PathId = ?"
+            }
+            Self::SEL_WAYPOINT_PATH_NODE_POS_LAST_BY_PATHID => {
+                "SELECT PositionX, PositionY, PositionZ, Orientation FROM waypoint_path_node WHERE PathId = ? ORDER BY NodeId DESC LIMIT 1"
+            }
+            Self::SEL_WAYPOINT_PATH_NODE_MAX_NODEID => {
+                "SELECT MAX(NodeId) FROM waypoint_path_node WHERE PathId = ?"
+            }
+            Self::SEL_WAYPOINT_PATH_NODE_BY_POS => {
+                "SELECT PathId, NodeId FROM waypoint_path_node WHERE (abs(PositionX - ?) <= ?) and (abs(PositionY - ?) <= ?) and (abs(PositionZ - ?) <= ?)"
+            }
             Self::UPD_CREATURE_ADDON_PATH => "UPDATE creature_addon SET PathId = ? WHERE guid = ?",
             Self::INS_CREATURE_ADDON => "INSERT INTO creature_addon(guid, PathId) VALUES (?, ?)",
             Self::DEL_CREATURE_ADDON => "DELETE FROM creature_addon WHERE guid = ?",
@@ -224,8 +346,12 @@ impl StatementDef for WorldStatements {
             ),
             Self::SEL_CREATURE_BY_ID => "SELECT guid FROM creature WHERE id = ?",
             Self::SEL_CREATURE_ENTRY_BY_GUID => "SELECT id FROM creature WHERE guid = ?",
-            Self::SEL_GAMEOBJECT_NEAREST => "SELECT guid, id, position_x, position_y, position_z, map, (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) AS order_ FROM gameobject WHERE map = ? AND (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) <= ? ORDER BY order_",
-            Self::SEL_CREATURE_NEAREST => "SELECT guid, id, position_x, position_y, position_z, map, (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) AS order_ FROM creature WHERE map = ? AND (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) <= ? ORDER BY order_",
+            Self::SEL_GAMEOBJECT_NEAREST => {
+                "SELECT guid, id, position_x, position_y, position_z, map, (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) AS order_ FROM gameobject WHERE map = ? AND (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) <= ? ORDER BY order_"
+            }
+            Self::SEL_CREATURE_NEAREST => {
+                "SELECT guid, id, position_x, position_y, position_z, map, (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) AS order_ FROM creature WHERE map = ? AND (POW(position_x - ?, 2) + POW(position_y - ?, 2) + POW(position_z - ?, 2)) <= ? ORDER BY order_"
+            }
             Self::SEL_GAMEOBJECT_TARGET => "", // No SQL registered in C# source
             Self::INS_CREATURE => concat!(
                 "INSERT INTO creature (guid, id , map, spawnDifficulties, PhaseId, PhaseGroup, modelid, equipment_id, ",
@@ -242,13 +368,23 @@ impl StatementDef for WorldStatements {
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ),
             Self::SEL_DISABLES => "SELECT entry FROM disables WHERE entry = ? AND sourceType = ?",
-            Self::INS_DISABLES => "INSERT INTO disables (entry, sourceType, flags, comment) VALUES (?, ?, ?, ?)",
+            Self::INS_DISABLES => {
+                "INSERT INTO disables (entry, sourceType, flags, comment) VALUES (?, ?, ?, ?)"
+            }
             Self::DEL_DISABLES => "DELETE FROM disables WHERE entry = ? AND sourceType = ?",
-            Self::UPD_CREATURE_ZONE_AREA_DATA => "UPDATE creature SET zoneId = ?, areaId = ? WHERE guid = ?",
-            Self::UPD_GAMEOBJECT_ZONE_AREA_DATA => "UPDATE gameobject SET zoneId = ?, areaId = ? WHERE guid = ?",
-            Self::DEL_SPAWNGROUP_MEMBER => "DELETE FROM spawn_group WHERE spawnType = ? AND spawnId = ?",
+            Self::UPD_CREATURE_ZONE_AREA_DATA => {
+                "UPDATE creature SET zoneId = ?, areaId = ? WHERE guid = ?"
+            }
+            Self::UPD_GAMEOBJECT_ZONE_AREA_DATA => {
+                "UPDATE gameobject SET zoneId = ?, areaId = ? WHERE guid = ?"
+            }
+            Self::DEL_SPAWNGROUP_MEMBER => {
+                "DELETE FROM spawn_group WHERE spawnType = ? AND spawnId = ?"
+            }
             Self::DEL_GAMEOBJECT_ADDON => "DELETE FROM gameobject_addon WHERE guid = ?",
-            Self::SEL_GUILD_REWARDS_REQ_ACHIEVEMENTS => "SELECT AchievementRequired FROM guild_rewards_req_achievements WHERE ItemID = ?",
+            Self::SEL_GUILD_REWARDS_REQ_ACHIEVEMENTS => {
+                "SELECT AchievementRequired FROM guild_rewards_req_achievements WHERE ItemID = ?"
+            }
             Self::INS_CONDITION => concat!(
                 "INSERT INTO conditions (SourceTypeOrReferenceId, SourceGroup, SourceEntry, SourceId, ElseGroup, ",
                 "ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, ",
@@ -263,7 +399,8 @@ impl StatementDef for WorldStatements {
                 "ct.unit_flags, ct.unit_flags2, ct.unit_flags3, ",
                 "ct.speed_walk, ct.speed_run, ct.scale, ct.unit_class, ",
                 "ct.BaseAttackTime, ct.RangeAttackTime, ",
-                "ctm.CreatureDisplayID ",
+                "ctm.CreatureDisplayID, ",
+                "ctdiff.LootID, ctdiff.GoldMin, ctdiff.GoldMax ",
                 "FROM creature c ",
                 "JOIN creature_template ct ON c.id = ct.entry ",
                 "LEFT JOIN creature_template_difficulty ctdiff ON ct.entry = ctdiff.Entry AND ctdiff.DifficultyID = 0 ",
@@ -315,9 +452,7 @@ impl StatementDef for WorldStatements {
             Self::SEL_SPAWN_GROUP_TEMPLATES => {
                 "SELECT groupId, groupName, groupFlags FROM spawn_group_template"
             }
-            Self::SEL_SPAWN_GROUP_MEMBERS => {
-                "SELECT groupId, spawnType, spawnId FROM spawn_group"
-            }
+            Self::SEL_SPAWN_GROUP_MEMBERS => "SELECT groupId, spawnType, spawnId FROM spawn_group",
             Self::SEL_INSTANCE_SPAWN_GROUPS => {
                 "SELECT instanceMapId, bossStateId, bossStates, spawnGroupId, flags FROM instance_spawn_groups"
             }
@@ -342,12 +477,8 @@ impl StatementDef for WorldStatements {
             Self::SEL_CREATURE_GOSSIP_MENU => {
                 "SELECT MenuID FROM creature_template_gossip WHERE CreatureID = ?"
             }
-            Self::SEL_GOSSIP_MENU => {
-                "SELECT TextID FROM gossip_menu WHERE MenuID = ? LIMIT 1"
-            }
-            Self::SEL_NPC_TEXT => {
-                "SELECT BroadcastTextID0 FROM npc_text WHERE ID = ? LIMIT 1"
-            }
+            Self::SEL_GOSSIP_MENU => "SELECT TextID FROM gossip_menu WHERE MenuID = ? LIMIT 1",
+            Self::SEL_NPC_TEXT => "SELECT BroadcastTextID0 FROM npc_text WHERE ID = ? LIMIT 1",
             Self::SEL_GOSSIP_MENU_OPTIONS => concat!(
                 "SELECT GossipOptionID, OptionID, OptionNpc, OptionText, ",
                 "ActionMenuID, BoxCoded, BoxMoney, BoxText, SpellID, OverrideIconID, ",
@@ -375,14 +506,137 @@ impl StatementDef for WorldStatements {
                 "GREATEST(COALESCE(MinMoneyLoot, 0), COALESCE(MaxMoneyLoot, 0)) ",
                 "FROM item_template_addon WHERE Id = ? LIMIT 1",
             ),
+            Self::SEL_ITEM_TEMPLATE_ADDON_LOOT_METADATA => concat!(
+                "SELECT COALESCE(FlagsCu, 0), COALESCE(QuestLogItemId, 0) ",
+                "FROM item_template_addon WHERE Id = ? LIMIT 1",
+            ),
             Self::SEL_ITEM_LOOT_TEMPLATE_ROWS => concat!(
                 "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
                 "FROM item_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_ITEM_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM item_loot_template",
+            ),
+            Self::SEL_CREATURE_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM creature_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_CREATURE_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM creature_loot_template",
+            ),
+            Self::SEL_FISHING_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM fishing_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_FISHING_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM fishing_loot_template",
+            ),
+            Self::SEL_GAMEOBJECT_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM gameobject_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_GAMEOBJECT_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM gameobject_loot_template",
+            ),
+            Self::SEL_MAIL_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM mail_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_MAIL_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM mail_loot_template",
+            ),
+            Self::SEL_MILLING_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM milling_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_MILLING_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM milling_loot_template",
+            ),
+            Self::SEL_PICKPOCKETING_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM pickpocketing_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_PICKPOCKETING_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM pickpocketing_loot_template",
+            ),
+            Self::SEL_PROSPECTING_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM prospecting_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_PROSPECTING_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM prospecting_loot_template",
             ),
             Self::SEL_REFERENCE_LOOT_TEMPLATE_ROWS => concat!(
                 "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
                 "FROM reference_loot_template WHERE Entry = ?",
             ),
+            Self::SEL_REFERENCE_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM reference_loot_template",
+            ),
+            Self::SEL_SKINNING_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM skinning_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_SKINNING_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM skinning_loot_template",
+            ),
+            Self::SEL_DISENCHANT_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM disenchant_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_DISENCHANT_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM disenchant_loot_template",
+            ),
+            Self::SEL_SPELL_LOOT_TEMPLATE_ROWS => concat!(
+                "SELECT Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM spell_loot_template WHERE Entry = ?",
+            ),
+            Self::SEL_SPELL_LOOT_TEMPLATE_ALL_ROWS => concat!(
+                "SELECT Entry, Item, Reference, Chance, QuestRequired, LootMode, GroupId, MinCount, MaxCount ",
+                "FROM spell_loot_template",
+            ),
+            Self::SEL_LOOT_TEMPLATE_CONDITION_ROWS => concat!(
+                "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ",
+                "ConditionValue1, ConditionValue2, ConditionValue3, ",
+                "COALESCE(ConditionStringValue1, ''), NegativeCondition, COALESCE(ScriptName, '') ",
+                "FROM conditions ",
+                "WHERE SourceTypeOrReferenceId = ? AND SourceGroup = ? AND SourceEntry = ? AND SourceId = 0 ",
+                "ORDER BY ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3",
+            ),
+            Self::SEL_LOOT_TEMPLATE_CONDITION_IDS => concat!(
+                "SELECT DISTINCT SourceTypeOrReferenceId, SourceGroup, SourceEntry ",
+                "FROM conditions ",
+                "WHERE SourceTypeOrReferenceId BETWEEN 1 AND 12 AND SourceId = 0 ",
+                "ORDER BY SourceTypeOrReferenceId, SourceGroup, SourceEntry",
+            ),
+            Self::SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES => concat!(
+                "SELECT DISTINCT SourceTypeOrReferenceId, SourceGroup, SourceEntry, -ConditionTypeOrReference ",
+                "FROM conditions ",
+                "WHERE SourceId = 0 AND ConditionTypeOrReference < 0 ",
+                "AND ConditionTypeOrReference <> SourceTypeOrReferenceId ",
+                "AND (SourceTypeOrReferenceId BETWEEN 1 AND 12 OR SourceTypeOrReferenceId < 0) ",
+                "ORDER BY SourceTypeOrReferenceId, SourceGroup, SourceEntry, -ConditionTypeOrReference",
+            ),
+            Self::SEL_CONDITION_REFERENCE_TEMPLATE_IDS => concat!(
+                "SELECT DISTINCT -SourceTypeOrReferenceId ",
+                "FROM conditions ",
+                "WHERE SourceTypeOrReferenceId < 0 AND SourceGroup = 0 AND SourceEntry = 0 AND SourceId = 0 ",
+                "ORDER BY -SourceTypeOrReferenceId",
+            ),
+            Self::SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE => {
+                "SELECT Id, EnchantmentId, Chance FROM item_random_enchantment_template"
+            }
             Self::SEL_AREA_TRIGGER_TELEPORT => {
                 "SELECT at.ID, wsl.MapID, wsl.LocX, wsl.LocY, wsl.LocZ, wsl.Facing FROM areatrigger_teleport at LEFT JOIN world_safe_locs wsl ON at.PortLocID = wsl.ID"
             }
@@ -394,17 +648,17 @@ impl StatementDef for WorldStatements {
                  ReqAbility1, ReqAbility2, ReqAbility3, ReqLevel \
                  FROM trainer_spell WHERE TrainerId = ?"
             }
-            Self::SEL_TRAINER_INFO => {
-                "SELECT Id, Type, Greeting FROM trainer WHERE Id = ?"
-            }
+            Self::SEL_TRAINER_INFO => "SELECT Id, Type, Greeting FROM trainer WHERE Id = ?",
             Self::SEL_QUEST_TEMPLATE => concat!(
                 "SELECT qt.ID, qt.QuestType, qt.QuestLevel, qt.QuestMaxScalingLevel, qt.MinLevel, qt.QuestSortID, ",
                 "qt.QuestInfoID, qt.SuggestedGroupNum, qt.RewardNextQuest, qt.RewardXPDifficulty, qt.RewardXPMultiplier, ",
                 "qt.RewardMoneyDifficulty, qt.RewardMoneyMultiplier, qt.RewardBonusMoney, ",
                 "qt.RewardDisplaySpell1, qt.RewardDisplaySpell2, qt.RewardDisplaySpell3, ",
                 "qt.RewardSpell, qt.RewardHonor, qt.Flags, qt.FlagsEx, qt.FlagsEx2, ",
-                "qt.RewardItem1, qt.RewardAmount1, qt.RewardItem2, qt.RewardAmount2, ",
-                "qt.RewardItem3, qt.RewardAmount3, qt.RewardItem4, qt.RewardAmount4, ",
+                "qt.RewardItem1, qt.RewardAmount1, qt.ItemDrop1, qt.ItemDropQuantity1, ",
+                "qt.RewardItem2, qt.RewardAmount2, qt.ItemDrop2, qt.ItemDropQuantity2, ",
+                "qt.RewardItem3, qt.RewardAmount3, qt.ItemDrop3, qt.ItemDropQuantity3, ",
+                "qt.RewardItem4, qt.RewardAmount4, qt.ItemDrop4, qt.ItemDropQuantity4, ",
                 "qt.LogTitle, qt.LogDescription, qt.QuestDescription, qt.AreaDescription, qt.QuestCompletionLog, ",
                 "COALESCE(qt.AllowableRaces, 0) AS AllowableRaces, ",
                 "COALESCE(qta.AllowableClasses, 0) AS AllowableClasses, ",
@@ -421,12 +675,8 @@ impl StatementDef for WorldStatements {
             Self::SEL_QUEST_OBJECTIVES => {
                 "SELECT ID, QuestID, Type, `Order`, StorageIndex, ObjectID, Amount, Flags, Flags2, ProgressBarWeight, Description FROM quest_objectives ORDER BY QuestID, `Order`"
             }
-            Self::SEL_QUEST_STARTERS => {
-                "SELECT id, quest FROM creature_queststarter"
-            }
-            Self::SEL_QUEST_ENDERS => {
-                "SELECT id, quest FROM creature_questender"
-            }
+            Self::SEL_QUEST_STARTERS => "SELECT id, quest FROM creature_queststarter",
+            Self::SEL_QUEST_ENDERS => "SELECT id, quest FROM creature_questender",
         }
     }
 }

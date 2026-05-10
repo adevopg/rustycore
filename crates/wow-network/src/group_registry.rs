@@ -1,7 +1,7 @@
 //! Shared registry of active groups for cross-session party management.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use wow_core::ObjectGuid;
 
 static NEXT_GROUP_ID: AtomicU64 = AtomicU64::new(1);
@@ -15,6 +15,7 @@ pub struct GroupInfo {
     pub members: Vec<ObjectGuid>,
     /// 0=FreeForAll, 1=RoundRobin, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
     pub loot_method: u8,
+    pub master_looter_guid: ObjectGuid,
     pub sequence_num: u32,
 }
 
@@ -25,6 +26,7 @@ impl GroupInfo {
             leader_guid: leader,
             members: vec![leader],
             loot_method: 0,
+            master_looter_guid: ObjectGuid::EMPTY,
             sequence_num: 1,
         }
     }

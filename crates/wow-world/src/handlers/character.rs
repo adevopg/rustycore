@@ -10,8 +10,9 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
-    ClientOpcodes, InventoryResult, ItemBondingType, ItemContext, ItemExtendedCostFlags,
-    ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType, InventoryType, Team,
+    ClientOpcodes, InventoryResult, InventoryType, ItemBondingType, ItemContext,
+    ItemExtendedCostFlags, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType,
+    Team,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
@@ -23,9 +24,9 @@ use wow_database::{
 };
 use wow_entities::{
     BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_COUNT, BUYBACK_SLOT_START,
-    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END,
-    INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT,
-    REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, is_equipment_pos, is_inventory_pos,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
+    INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT, REAGENT_BAG_SLOT_END,
+    REAGENT_BAG_SLOT_START, is_equipment_pos, is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
@@ -33,6 +34,7 @@ use wow_packet::packets::auth::{
 };
 use wow_packet::packets::character::*;
 use wow_packet::packets::item::*;
+use wow_packet::packets::loot::LootReleaseAll;
 use wow_packet::packets::misc::*;
 use wow_packet::packets::update::*;
 
@@ -465,49 +467,59 @@ use crate::session::{InventoryItem, PendingCreatureSpawn, WorldSession};
 /// Returns (map_id, x, y, z, orientation).
 fn start_position(race: u8) -> (i32, f32, f32, f32, f32) {
     match race {
-        1 => (0, -8949.95, -132.493, 83.5312, 0.0),        // Human
-        2 => (1, -618.518, -4251.67, 38.718, 0.0),          // Orc
-        3 => (0, -6240.32, 331.033, 382.758, 6.17716),      // Dwarf
-        4 => (1, 10311.3, 832.463, 1326.41, 5.69632),       // NightElf
-        5 => (0, 1676.71, 1678.31, 121.67, 2.70526),        // Undead
-        6 => (1, -2917.58, -257.98, 52.9968, 0.0),          // Tauren
-        7 => (0, -6240.32, 331.033, 382.758, 0.0),          // Gnome
-        8 => (1, -618.518, -4251.67, 38.718, 0.0),          // Troll
-        10 => (530, 10349.6, -6357.29, 33.4026, 5.31605),   // BloodElf
-        11 => (530, -3961.64, -13931.2, 100.615, 2.08364),  // Draenei
-        22 => (0, -8949.95, -132.493, 83.5312, 0.0),        // Worgen → Human
-        _ => (0, -8949.95, -132.493, 83.5312, 0.0),         // Default: Human
+        1 => (0, -8949.95, -132.493, 83.5312, 0.0),       // Human
+        2 => (1, -618.518, -4251.67, 38.718, 0.0),        // Orc
+        3 => (0, -6240.32, 331.033, 382.758, 6.17716),    // Dwarf
+        4 => (1, 10311.3, 832.463, 1326.41, 5.69632),     // NightElf
+        5 => (0, 1676.71, 1678.31, 121.67, 2.70526),      // Undead
+        6 => (1, -2917.58, -257.98, 52.9968, 0.0),        // Tauren
+        7 => (0, -6240.32, 331.033, 382.758, 0.0),        // Gnome
+        8 => (1, -618.518, -4251.67, 38.718, 0.0),        // Troll
+        10 => (530, 10349.6, -6357.29, 33.4026, 5.31605), // BloodElf
+        11 => (530, -3961.64, -13931.2, 100.615, 2.08364), // Draenei
+        22 => (0, -8949.95, -132.493, 83.5312, 0.0),      // Worgen → Human
+        _ => (0, -8949.95, -132.493, 83.5312, 0.0),       // Default: Human
     }
 }
 
 /// Default display ID for a race/sex combination.
 pub(crate) fn default_display_id(race: u8, sex: u8) -> u32 {
     match (race, sex) {
-        (1, 0) => 49,     (1, 1) => 50,     // Human M/F
-        (2, 0) => 51,     (2, 1) => 52,     // Orc
-        (3, 0) => 53,     (3, 1) => 54,     // Dwarf
-        (4, 0) => 55,     (4, 1) => 56,     // NightElf
-        (5, 0) => 57,     (5, 1) => 58,     // Undead
-        (6, 0) => 59,     (6, 1) => 60,     // Tauren
-        (7, 0) => 1563,   (7, 1) => 1564,   // Gnome
-        (8, 0) => 1478,   (8, 1) => 1479,   // Troll
-        (10, 0) => 15476, (10, 1) => 15475, // BloodElf
-        (11, 0) => 16125, (11, 1) => 16126, // Draenei
-        _ => 49,                              // Default: Human Male
+        (1, 0) => 49,
+        (1, 1) => 50, // Human M/F
+        (2, 0) => 51,
+        (2, 1) => 52, // Orc
+        (3, 0) => 53,
+        (3, 1) => 54, // Dwarf
+        (4, 0) => 55,
+        (4, 1) => 56, // NightElf
+        (5, 0) => 57,
+        (5, 1) => 58, // Undead
+        (6, 0) => 59,
+        (6, 1) => 60, // Tauren
+        (7, 0) => 1563,
+        (7, 1) => 1564, // Gnome
+        (8, 0) => 1478,
+        (8, 1) => 1479, // Troll
+        (10, 0) => 15476,
+        (10, 1) => 15475, // BloodElf
+        (11, 0) => 16125,
+        (11, 1) => 16126, // Draenei
+        _ => 49,          // Default: Human Male
     }
 }
 
 /// Default zone ID for a starting position.
 fn start_zone(race: u8) -> i32 {
     match race {
-        1 | 22 => 12,  // Human / Worgen: Elwynn Forest
-        2 | 8 => 14,   // Orc / Troll: Durotar
-        3 | 7 => 1,    // Dwarf / Gnome: Dun Morogh
-        4 => 141,       // NightElf: Teldrassil
-        5 => 85,        // Undead: Tirisfal Glades
-        6 => 215,       // Tauren: Mulgore
-        10 => 3430,     // BloodElf: Eversong Woods
-        11 => 3524,     // Draenei: Azuremyst Isle
+        1 | 22 => 12, // Human / Worgen: Elwynn Forest
+        2 | 8 => 14,  // Orc / Troll: Durotar
+        3 | 7 => 1,   // Dwarf / Gnome: Dun Morogh
+        4 => 141,     // NightElf: Teldrassil
+        5 => 85,      // Undead: Tirisfal Glades
+        6 => 215,     // Tauren: Mulgore
+        10 => 3430,   // BloodElf: Eversong Woods
+        11 => 3524,   // Draenei: Azuremyst Isle
         _ => 12,
     }
 }
@@ -515,17 +527,17 @@ fn start_zone(race: u8) -> i32 {
 /// Default starting health and mana for a level 1 character by class.
 fn default_health_mana(class: u8) -> (u32, u32) {
     match class {
-        1 => (50, 0),      // Warrior — no mana
-        2 => (52, 79),     // Paladin
-        3 => (46, 85),     // Hunter (uses focus at high level, mana at 1)
-        4 => (45, 0),      // Rogue — no mana
-        5 => (52, 160),    // Priest
-        6 => (130, 0),     // Death Knight — no mana (runic power)
-        7 => (47, 73),     // Shaman
-        8 => (42, 200),    // Mage
-        9 => (43, 200),    // Warlock
-        11 => (54, 60),    // Druid
-        _ => (50, 100),    // Default
+        1 => (50, 0),   // Warrior — no mana
+        2 => (52, 79),  // Paladin
+        3 => (46, 85),  // Hunter (uses focus at high level, mana at 1)
+        4 => (45, 0),   // Rogue — no mana
+        5 => (52, 160), // Priest
+        6 => (130, 0),  // Death Knight — no mana (runic power)
+        7 => (47, 73),  // Shaman
+        8 => (42, 200), // Mage
+        9 => (43, 200), // Warlock
+        11 => (54, 60), // Druid
+        _ => (50, 100), // Default
     }
 }
 
@@ -537,23 +549,23 @@ const MAX_CHARACTERS_PER_ACCOUNT: u32 = 10;
 /// Used as a fallback when Item.db2 store is not available.
 fn slot_to_inventory_type(slot: u8) -> Option<u8> {
     match slot {
-        0 => Some(1),         // Head
-        1 => Some(2),         // Neck
-        2 => Some(3),         // Shoulders
-        3 => Some(4),         // Body (Shirt)
-        4 => Some(5),         // Chest
-        5 => Some(6),         // Waist
-        6 => Some(7),         // Legs
-        7 => Some(8),         // Feet
-        8 => Some(9),         // Wrists
-        9 => Some(10),        // Hands
-        10 | 11 => Some(11),  // Finger (Ring)
-        12 | 13 => Some(12),  // Trinket
-        14 => Some(16),       // Cloak
-        15 => Some(21),       // MainHand (WeaponMainHand)
-        16 => Some(22),       // OffHand (WeaponOffHand)
-        17 => Some(15),       // Ranged
-        18 => Some(19),       // Tabard
+        0 => Some(1),        // Head
+        1 => Some(2),        // Neck
+        2 => Some(3),        // Shoulders
+        3 => Some(4),        // Body (Shirt)
+        4 => Some(5),        // Chest
+        5 => Some(6),        // Waist
+        6 => Some(7),        // Legs
+        7 => Some(8),        // Feet
+        8 => Some(9),        // Wrists
+        9 => Some(10),       // Hands
+        10 | 11 => Some(11), // Finger (Ring)
+        12 | 13 => Some(12), // Trinket
+        14 => Some(16),      // Cloak
+        15 => Some(21),      // MainHand (WeaponMainHand)
+        16 => Some(22),      // OffHand (WeaponOffHand)
+        17 => Some(15),      // Ranged
+        18 => Some(19),      // Tabard
         _ => None,
     }
 }
@@ -742,11 +754,12 @@ fn vendor_buy_extended_cost_block_result(
     }
 
     if quantity % buy_count.max(1) != 0 {
-        return Some(VendorExtendedCostBlock::Equip(InventoryResult::CantBuyQuantity));
+        return Some(VendorExtendedCostBlock::Equip(
+            InventoryResult::CantBuyQuantity,
+        ));
     }
 
-    let Some(extended_cost_entry) =
-        extended_cost_store.and_then(|store| store.get(extended_cost))
+    let Some(extended_cost_entry) = extended_cost_store.and_then(|store| store.get(extended_cost))
     else {
         return Some(VendorExtendedCostBlock::Silent);
     };
@@ -798,7 +811,9 @@ fn vendor_buy_extended_cost_block_result(
     }
 
     if extended_cost_entry.required_arena_rating != 0 {
-        return Some(VendorExtendedCostBlock::Equip(InventoryResult::CantEquipRank));
+        return Some(VendorExtendedCostBlock::Equip(
+            InventoryResult::CantEquipRank,
+        ));
     }
 
     if extended_cost_entry.min_faction_id != 0 {
@@ -829,8 +844,7 @@ fn vendor_buy_extended_cost_item_costs(
     if extended_cost == 0 {
         return Vec::new();
     }
-    let Some(extended_cost_entry) =
-        extended_cost_store.and_then(|store| store.get(extended_cost))
+    let Some(extended_cost_entry) = extended_cost_store.and_then(|store| store.get(extended_cost))
     else {
         return Vec::new();
     };
@@ -859,8 +873,7 @@ fn vendor_buy_extended_cost_currency_costs(
     if extended_cost == 0 {
         return Vec::new();
     }
-    let Some(extended_cost_entry) =
-        extended_cost_store.and_then(|store| store.get(extended_cost))
+    let Some(extended_cost_entry) = extended_cost_store.and_then(|store| store.get(extended_cost))
     else {
         return Vec::new();
     };
@@ -1144,12 +1157,8 @@ fn vendor_buy_template_block_result(
     player_race: u8,
     is_game_master: bool,
 ) -> Option<VendorBuyTemplateBlock> {
-    if vendor_list_should_skip_allowed_class(
-        allowable_class,
-        bonding,
-        player_class,
-        is_game_master,
-    ) {
+    if vendor_list_should_skip_allowed_class(allowable_class, bonding, player_class, is_game_master)
+    {
         return Some(VendorBuyTemplateBlock::BuyError(BuyResult::CantFindItem));
     }
 
@@ -1217,13 +1226,8 @@ impl WorldSession {
         };
 
         let elapsed = now.saturating_sub(count.last_increment_time);
-        let (new_count, full) = vendor_buy_stock_refill_count(
-            count.count,
-            elapsed,
-            incr_time,
-            buy_count,
-            max_count,
-        );
+        let (new_count, full) =
+            vendor_buy_stock_refill_count(count.count, elapsed, incr_time, buy_count, max_count);
         if full {
             self.vendor_item_counts.remove(&key);
             max_count
@@ -1253,13 +1257,8 @@ impl WorldSession {
             return 0;
         }
 
-        let current = self.vendor_item_current_count(
-            vendor_guid,
-            item_id,
-            max_count,
-            incr_time,
-            buy_count,
-        );
+        let current =
+            self.vendor_item_current_count(vendor_guid, item_id, max_count, incr_time, buy_count);
         let new_count = current.saturating_sub(used_count);
         self.vendor_item_counts.insert(
             (vendor_guid, item_id),
@@ -1376,7 +1375,10 @@ impl WorldSession {
         let result = match char_db.query(&stmt).await {
             Ok(r) => r,
             Err(e) => {
-                warn!("Failed to query characters for account {}: {e}", self.account_id);
+                warn!(
+                    "Failed to query characters for account {}: {e}",
+                    self.account_id
+                );
                 self.send_packet(&EnumCharactersResult {
                     success: false,
                     characters: vec![],
@@ -1498,16 +1500,16 @@ impl WorldSession {
         // HasExpansion = true if account expansion >= required expansion.
         let account_exp = self.account_expansion;
         let race_unlock_data: Vec<RaceUnlock> = [
-            (1u8, 0u8),  // Human — Classic
-            (2, 0),       // Orc
-            (3, 0),       // Dwarf
-            (4, 0),       // Night Elf
-            (5, 0),       // Undead
-            (6, 0),       // Tauren
-            (7, 0),       // Gnome
-            (8, 0),       // Troll
-            (10, 1),      // Blood Elf — TBC
-            (11, 1),      // Draenei — TBC
+            (1u8, 0u8), // Human — Classic
+            (2, 0),     // Orc
+            (3, 0),     // Dwarf
+            (4, 0),     // Night Elf
+            (5, 0),     // Undead
+            (6, 0),     // Tauren
+            (7, 0),     // Gnome
+            (8, 0),     // Troll
+            (10, 1),    // Blood Elf — TBC
+            (11, 1),    // Draenei — TBC
         ]
         .iter()
         .map(|&(race_id, required_exp)| RaceUnlock {
@@ -1616,28 +1618,28 @@ impl WorldSession {
 
         // Insert character — columns match the real 3.4.3 characters table
         let mut ins_stmt = char_db.prepare(CharStatements::INS_CHARACTER);
-        ins_stmt.set_u64(0, new_guid_counter as u64);    // guid (bigint unsigned)
-        ins_stmt.set_u32(1, self.account_id);             // account
-        ins_stmt.set_string(2, &pkt.name);                // name
-        ins_stmt.set_u8(3, pkt.race);                     // race
-        ins_stmt.set_u8(4, pkt.class);                    // class
-        ins_stmt.set_u8(5, sex);                          // gender
-        ins_stmt.set_u8(6, 1);                            // level
-        ins_stmt.set_u64(7, 0);                           // money (bigint unsigned)
-        ins_stmt.set_i32(8, zone);                        // zone (smallint unsigned)
-        ins_stmt.set_i32(9, map_id);                      // map (smallint unsigned)
-        ins_stmt.set_f32(10, x);                          // position_x
-        ins_stmt.set_f32(11, y);                          // position_y
-        ins_stmt.set_f32(12, z);                          // position_z
-        ins_stmt.set_f32(13, o);                          // orientation
-        ins_stmt.set_string(14, "");                      // taximask (text NOT NULL)
-        ins_stmt.set_i64(15, create_time);                // createTime (bigint)
-        ins_stmt.set_u8(16, 0);                           // createMode
-        ins_stmt.set_u32(17, 0);                          // playerFlags
-        ins_stmt.set_u32(18, 0x20);                       // at_login (AT_LOGIN_FIRST)
-        ins_stmt.set_u32(19, health);                     // health
-        ins_stmt.set_u32(20, mana);                       // power1 (mana)
-        ins_stmt.set_u32(21, self.build);                 // lastLoginBuild
+        ins_stmt.set_u64(0, new_guid_counter as u64); // guid (bigint unsigned)
+        ins_stmt.set_u32(1, self.account_id); // account
+        ins_stmt.set_string(2, &pkt.name); // name
+        ins_stmt.set_u8(3, pkt.race); // race
+        ins_stmt.set_u8(4, pkt.class); // class
+        ins_stmt.set_u8(5, sex); // gender
+        ins_stmt.set_u8(6, 1); // level
+        ins_stmt.set_u64(7, 0); // money (bigint unsigned)
+        ins_stmt.set_i32(8, zone); // zone (smallint unsigned)
+        ins_stmt.set_i32(9, map_id); // map (smallint unsigned)
+        ins_stmt.set_f32(10, x); // position_x
+        ins_stmt.set_f32(11, y); // position_y
+        ins_stmt.set_f32(12, z); // position_z
+        ins_stmt.set_f32(13, o); // orientation
+        ins_stmt.set_string(14, ""); // taximask (text NOT NULL)
+        ins_stmt.set_i64(15, create_time); // createTime (bigint)
+        ins_stmt.set_u8(16, 0); // createMode
+        ins_stmt.set_u32(17, 0); // playerFlags
+        ins_stmt.set_u32(18, 0x20); // at_login (AT_LOGIN_FIRST)
+        ins_stmt.set_u32(19, health); // health
+        ins_stmt.set_u32(20, mana); // power1 (mana)
+        ins_stmt.set_u32(21, self.build); // lastLoginBuild
 
         match char_db.execute(&ins_stmt).await {
             Ok(_) => {
@@ -1655,12 +1657,16 @@ impl WorldSession {
                 let guid = ObjectGuid::create_player(self.realm_id(), new_guid_counter);
                 info!(
                     "Character '{}' created (guid={}, {} customizations) for account {}",
-                    pkt.name, new_guid_counter, pkt.customizations.len(), self.account_id
+                    pkt.name,
+                    new_guid_counter,
+                    pkt.customizations.len(),
+                    self.account_id
                 );
 
                 // Insert initial action buttons from playercreateinfo_action
                 if let Some(world_db) = self.world_db().map(Arc::clone) {
-                    let action_stmt = world_db.prepare(WorldStatements::SEL_PLAYER_CREATEINFO_ACTION);
+                    let action_stmt =
+                        world_db.prepare(WorldStatements::SEL_PLAYER_CREATEINFO_ACTION);
                     if let Ok(mut action_result) = world_db.query(&action_stmt).await {
                         let mut action_count = 0u32;
                         loop {
@@ -1671,7 +1677,8 @@ impl WorldSession {
                                 let action: i32 = action_result.try_read(3).unwrap_or(0);
                                 let btn_type: u8 = action_result.try_read(4).unwrap_or(0);
                                 if action > 0 {
-                                    let mut ins = char_db.prepare(CharStatements::INS_CHARACTER_ACTION);
+                                    let mut ins =
+                                        char_db.prepare(CharStatements::INS_CHARACTER_ACTION);
                                     ins.set_u64(0, new_guid_counter as u64);
                                     ins.set_u8(1, button);
                                     ins.set_i32(2, action);
@@ -1688,7 +1695,10 @@ impl WorldSession {
                             }
                         }
                         if action_count > 0 {
-                            info!("Inserted {action_count} initial action buttons for '{}'", pkt.name);
+                            info!(
+                                "Inserted {action_count} initial action buttons for '{}'",
+                                pkt.name
+                            );
                         }
                     }
                 }
@@ -1824,11 +1834,7 @@ impl WorldSession {
         self.set_connect_to_serial(Some(serial));
 
         // Register in SessionManager — returns oneshot receiver for instance link
-        let rx = session_mgr.register(
-            self.account_id,
-            key_raw,
-            self.session_key.clone(),
-        );
+        let rx = session_mgr.register(self.account_id, key_raw, self.session_key.clone());
         self.set_instance_link_rx(Some(rx));
 
         // Build the ConnectTo payload
@@ -1853,7 +1859,9 @@ impl WorldSession {
 
         info!(
             "Sending ConnectTo (serial={:?}) to account {} for instance {}:{port}",
-            serial, self.account_id, format!("{}.{}.{}.{}", addr[0], addr[1], addr[2], addr[3])
+            serial,
+            self.account_id,
+            format!("{}.{}.{}.{}", addr[0], addr[1], addr[2], addr[3])
         );
 
         self.send_packet(&connect_to);
@@ -1915,7 +1923,12 @@ impl WorldSession {
         for record_id in &query.queries {
             if let Some(ref c) = cache {
                 if let Some(blob) = c.get(query.table_hash, *record_id) {
-                    info!("DbQueryBulk: FOUND blob table=0x{:08X} record={} ({} bytes)", query.table_hash, record_id, blob.len());
+                    info!(
+                        "DbQueryBulk: FOUND blob table=0x{:08X} record={} ({} bytes)",
+                        query.table_hash,
+                        record_id,
+                        blob.len()
+                    );
                     self.send_packet(&DBReply::found(query.table_hash, *record_id, blob.to_vec()));
                     continue;
                 }
@@ -1938,7 +1951,10 @@ impl WorldSession {
     pub async fn handle_hotfix_request(&mut self, req: wow_packet::packets::misc::HotfixRequest) {
         debug!(
             "HotfixRequest: client_build={}, data_build={}, {} hotfixes for account {}",
-            req.client_build, req.data_build, req.hotfixes.len(), self.account_id
+            req.client_build,
+            req.data_build,
+            req.hotfixes.len(),
+            self.account_id
         );
         self.send_packet(&HotfixConnect);
     }
@@ -1953,9 +1969,7 @@ impl WorldSession {
     ) {
         trace!(
             "TimeSyncResponse: seq={}, client_time={} for account {}",
-            resp.sequence_index,
-            resp.client_time,
-            self.account_id
+            resp.sequence_index, resp.client_time, self.account_id
         );
         // TODO: compute clock delta for lag compensation (not needed for basic world entry)
     }
@@ -1973,6 +1987,10 @@ impl WorldSession {
             req.idle_logout, self.account_id
         );
 
+        if !self.active_loot_guid.is_empty() {
+            self.send_packet(&LootReleaseAll);
+        }
+
         // Always allow instant logout for now (no combat/duel checks)
         self.send_packet(&LogoutResponse::instant_ok());
 
@@ -1984,6 +2002,10 @@ impl WorldSession {
 
         // Trinity clears buyback slots before SaveToDB; persisted buyback items must not survive logout.
         self.clear_buyback_on_logout().await;
+
+        if let Some(player_guid) = self.player_guid() {
+            self.do_loot_release_all_like_cpp(player_guid).await;
+        }
 
         // Mark character offline in DB
         self.mark_character_offline().await;
@@ -2052,7 +2074,10 @@ impl WorldSession {
         stmt.set_u32(1, level_time);
         stmt.set_u32(2, guid.counter() as u32);
         if let Err(e) = char_db.execute(&stmt).await {
-            warn!("Failed to save played time for guid {}: {e}", guid.counter());
+            warn!(
+                "Failed to save played time for guid {}: {e}",
+                guid.counter()
+            );
         } else {
             info!(
                 "Saved played time: total={}s level={}s for guid {}",
@@ -2112,7 +2137,10 @@ impl WorldSession {
         }
 
         if let Err(e) = char_db.commit_transaction(tx).await {
-            warn!("Failed to clear buyback items on logout for guid {}: {e}", guid.counter());
+            warn!(
+                "Failed to clear buyback items on logout for guid {}: {e}",
+                guid.counter()
+            );
             return;
         }
 
@@ -2291,9 +2319,8 @@ impl WorldSession {
                                 random_properties_id: 0,
                                 context: 0,
                             });
-                            let inventory_type = self
-                                .item_template_inventory_type(item_entry)
-                                .or_else(|| {
+                            let inventory_type =
+                                self.item_template_inventory_type(item_entry).or_else(|| {
                                     if slot < 19 {
                                         slot_to_inventory_type(slot)
                                     } else {
@@ -2387,7 +2414,8 @@ impl WorldSession {
                                         .get(&bag_slot)
                                         .map(|bag_item| bag_item.guid)
                                     {
-                                        let item_guid = ObjectGuid::create_item(realm_id, item_db_guid as i64);
+                                        let item_guid =
+                                            ObjectGuid::create_item(realm_id, item_db_guid as i64);
                                         let mut item_object = self.make_inventory_item_object(
                                             item_guid,
                                             item_entry,
@@ -2398,10 +2426,11 @@ impl WorldSession {
                                             inner_slot,
                                         );
                                         item_object.set_create_played_time(item_played_time);
-                                        item_object.replace_all_item_flags(ItemFieldFlags::from_bits_retain(
-                                            item_flags,
-                                        ));
-                                        item_object.set_container_guid_and_slot(bag_item_guid, bag_slot);
+                                        item_object.replace_all_item_flags(
+                                            ItemFieldFlags::from_bits_retain(item_flags),
+                                        );
+                                        item_object
+                                            .set_container_guid_and_slot(bag_item_guid, bag_slot);
                                         item_object.set_state(ItemUpdateState::Unchanged);
                                         self.insert_inventory_item_object(item_object);
                                     } else {
@@ -2445,8 +2474,9 @@ impl WorldSession {
                                 .currency_types_store()
                                 .is_some_and(|store| store.has_record(currency_id));
                             if known_currency {
-                                self.player_currencies.entry(currency_id).or_insert_with(|| {
-                                    crate::session::PlayerCurrency {
+                                self.player_currencies
+                                    .entry(currency_id)
+                                    .or_insert_with(|| crate::session::PlayerCurrency {
                                         state: crate::session::PlayerCurrencyState::Unchanged,
                                         quantity: currency_result.try_read(1).unwrap_or(0),
                                         weekly_quantity: currency_result.try_read(2).unwrap_or(0),
@@ -2456,8 +2486,7 @@ impl WorldSession {
                                             .unwrap_or(0),
                                         earned_quantity: currency_result.try_read(5).unwrap_or(0),
                                         flags: currency_result.try_read(6).unwrap_or(0),
-                                    }
-                                });
+                                    });
                             }
                             if !currency_result.next_row() {
                                 break;
@@ -2548,7 +2577,8 @@ impl WorldSession {
             // This covers racial abilities, languages, and weapon passives that are
             // auto-granted from skills the character has in character_skills.
             // Class trainer spells (acquire_method 0) come from character_spell DB.
-            let dbc_spells = skill_store.starting_spells(race, class, level, Some(&known_skill_ids));
+            let dbc_spells =
+                skill_store.starting_spells(race, class, level, Some(&known_skill_ids));
             let racial = skill_store.racial_spells(race);
             for spell_id in dbc_spells.into_iter().chain(racial.into_iter()) {
                 if !known_spells.contains(&spell_id) {
@@ -2601,7 +2631,10 @@ impl WorldSession {
                             let btn_type: u8 = action_result.try_read(2).unwrap_or(0);
                             if (button as usize) < 180 && action > 0 {
                                 action_buttons[button as usize] =
-                                    wow_packet::packets::misc::UpdateActionButtons::pack_button(action as i32, btn_type);
+                                    wow_packet::packets::misc::UpdateActionButtons::pack_button(
+                                        action as i32,
+                                        btn_type,
+                                    );
                                 action_count += 1;
                             }
                             if !action_result.next_row() {
@@ -2635,7 +2668,8 @@ impl WorldSession {
                 let mut g_health = 0i32;
                 let mut g_mana = 0i32;
                 for (&slot, inv_item) in &self.inventory_items {
-                    if slot < 19 { // only equipped gear slots affect stats
+                    if slot < 19 {
+                        // only equipped gear slots affect stats
                         if let Some(entry) = iss.get(inv_item.entry_id) {
                             let [s, a, st, i, sp] = entry.base_stat_bonuses();
                             bonuses[0] += s;
@@ -2686,13 +2720,17 @@ impl WorldSession {
                     3 | 4 => total_str + total_agi - 20,
                     7 | 11 => total_str * 2 - 20,
                     _ => (total_str - 10).max(0),
-                }.max(0) + gear_ap;
+                }
+                .max(0)
+                    + gear_ap;
 
                 let ranged_ap = match class {
                     3 => total_agi * 2 - 20,
                     1 | 4 => total_agi - 10,
                     _ => 0,
-                }.max(0) + gear_rap;
+                }
+                .max(0)
+                    + gear_rap;
 
                 // Damage from total AP
                 let ap_f = melee_ap as f32;
@@ -2732,14 +2770,18 @@ impl WorldSession {
                 );
                 let (h, m) = default_health_mana(class);
                 PlayerCombatStats {
-                    health: h as i64, max_health: h as i64, max_mana: m as i64,
+                    health: h as i64,
+                    max_health: h as i64,
+                    max_mana: m as i64,
                     ..PlayerCombatStats::default()
                 }
             }
         } else {
             let (h, m) = default_health_mana(class);
             PlayerCombatStats {
-                health: h as i64, max_health: h as i64, max_mana: m as i64,
+                health: h as i64,
+                max_health: h as i64,
+                max_mana: m as i64,
                 ..PlayerCombatStats::default()
             }
         };
@@ -2747,18 +2789,42 @@ impl WorldSession {
         info!(
             "Player '{}' ({:?}) continuing login at map {} ({}, {}, {}), {} equipped items, \
              HP={} Mana={} AP={} STR/AGI/STA/INT/SPI={:?} Armor={} Dodge={:.1}% Crit={:.1}%",
-            name, guid, map_id, pos_x, pos_y, pos_z, item_creates.len(),
-            combat.max_health, combat.max_mana, combat.attack_power,
-            combat.stats, combat.base_armor, combat.dodge_pct, combat.crit_pct
+            name,
+            guid,
+            map_id,
+            pos_x,
+            pos_y,
+            pos_z,
+            item_creates.len(),
+            combat.max_health,
+            combat.max_mana,
+            combat.attack_power,
+            combat.stats,
+            combat.base_armor,
+            combat.dodge_pct,
+            combat.crit_pct
         );
 
         // Load active quests from characters DB
         self.load_player_quests().await;
 
         self.send_login_sequence(
-            guid, race, class, gender, level, display_id, &position, map_id, zone,
-            visible_items, inv_slots, item_creates, combat,
-            known_spells, action_buttons, skill_info_tuples,
+            guid,
+            race,
+            class,
+            gender,
+            level,
+            display_id,
+            &position,
+            map_id,
+            zone,
+            visible_items,
+            inv_slots,
+            item_creates,
+            combat,
+            known_spells,
+            action_buttons,
+            skill_info_tuples,
         );
 
         // Mark online in DB
@@ -2791,12 +2857,7 @@ impl WorldSession {
     /// Queries the world database for creatures within visibility range
     /// on the player's map, builds CreatureCreateData for each, and sends
     /// a batched UpdateObject.
-    pub async fn send_nearby_creatures(
-        &mut self,
-        map_id: u16,
-        position: &Position,
-        zone_id: u32,
-    ) {
+    pub async fn send_nearby_creatures(&mut self, map_id: u16, position: &Position, zone_id: u32) {
         let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
             None => {
@@ -2818,20 +2879,20 @@ impl WorldSession {
         stmt.set_f32(3, y_min);
         stmt.set_f32(4, y_max);
 
-        let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&stmt),
-        ).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                warn!("Failed to query creatures for map {map_id}: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!("Creature query timed out for map {map_id}");
-                return;
-            }
-        };
+        let result =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!("Failed to query creatures for map {map_id}: {e}");
+                    return;
+                }
+                Err(_) => {
+                    warn!("Creature query timed out for map {map_id}");
+                    return;
+                }
+            };
 
         if result.is_empty() {
             return;
@@ -2841,10 +2902,10 @@ impl WorldSession {
         let mut blocks = Vec::new();
         let mut result = result;
 
-
         loop {
             // BIGINT UNSIGNED may fail as u64 in sqlx — read as i64 first, cast to u64
-            let spawn_guid: u64 = result.try_read::<i64>(0)
+            let spawn_guid: u64 = result
+                .try_read::<i64>(0)
                 .map(|v| v as u64)
                 .or_else(|| result.try_read::<u64>(0))
                 .unwrap_or(0);
@@ -2860,7 +2921,8 @@ impl WorldSession {
             let _max_level: u8 = result.try_read::<Option<u8>>(10).flatten().unwrap_or(1);
             let faction: i32 = result.try_read::<u16>(11).unwrap_or(35) as i32;
             // BIGINT UNSIGNED may fail as u64 in sqlx — read as i64 first
-            let npc_flags: u64 = result.try_read::<i64>(12)
+            let npc_flags: u64 = result
+                .try_read::<i64>(12)
                 .map(|v| v as u64)
                 .or_else(|| result.try_read::<u64>(12))
                 .unwrap_or(0);
@@ -2873,25 +2935,37 @@ impl WorldSession {
             let unit_class: u8 = result.try_read(19).unwrap_or(1);
             let base_attack_time: u32 = result.try_read(20).unwrap_or(2000);
             let _ranged_attack_time: u32 = result.try_read(21).unwrap_or(0);
-            let template_display_id: u32 = result.try_read::<Option<u32>>(22)
-                .flatten()
-                .unwrap_or(0);
+            let template_display_id: u32 =
+                result.try_read::<Option<u32>>(22).flatten().unwrap_or(0);
+            let loot_id: u32 = result.try_read::<Option<u32>>(23).flatten().unwrap_or(0);
+            let gold_min: u32 = result.try_read::<Option<u32>>(24).flatten().unwrap_or(0);
+            let gold_max: u32 = result.try_read::<Option<u32>>(25).flatten().unwrap_or(0);
 
             let display_id = if model_id > 0 {
                 model_id
             } else if template_display_id > 0 {
                 template_display_id
             } else {
-                if !result.next_row() { break; }
+                if !result.next_row() {
+                    break;
+                }
                 continue;
             };
 
-            let health = if cur_health > 0 { cur_health as i64 } else { 100 };
-
+            let health = if cur_health > 0 {
+                cur_health as i64
+            } else {
+                100
+            };
 
             let guid = ObjectGuid::create_world_object(
                 HighGuid::Creature,
-                0, realm_id, map_id, 1, entry, spawn_guid as i64,
+                0,
+                realm_id,
+                map_id,
+                1,
+                entry,
+                spawn_guid as i64,
             );
 
             let creature_pos = Position::new(pos_x, pos_y, pos_z, orientation);
@@ -2934,6 +3008,9 @@ impl WorldSession {
                 min_dmg,
                 max_dmg,
                 aggro_radius,
+                loot_id,
+                gold_min,
+                gold_max,
             );
 
             if !result.next_row() {
@@ -2951,11 +3028,14 @@ impl WorldSession {
         self.last_visibility_pos = Some(*position);
         let update = UpdateObject::create_creatures(blocks, map_id);
         self.send_packet(&update);
-        debug!("Sent {} creatures ({} mobs / {} npcs) to account {} on map {}",
+        debug!(
+            "Sent {} creatures ({} mobs / {} npcs) to account {} on map {}",
             count,
             self.creatures.values().filter(|a| a.npc_flags == 0).count(),
             self.creatures.values().filter(|a| a.npc_flags > 0).count(),
-            self.account_id, map_id);
+            self.account_id,
+            map_id
+        );
     }
 
     /// Dynamic visibility update — called when the player moves significantly.
@@ -3005,13 +3085,13 @@ impl WorldSession {
         stmt.set_f32(3, y_min);
         stmt.set_f32(4, y_max);
 
-        let cr = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&stmt),
-        ).await {
-            Ok(Ok(r)) => r,
-            _ => return,
-        };
+        let cr =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                _ => return,
+            };
 
         let mut new_visible_creatures: HashSet<ObjectGuid> = HashSet::new();
         let mut new_creature_blocks: Vec<UpdateBlock> = Vec::new();
@@ -3019,8 +3099,11 @@ impl WorldSession {
         if !cr.is_empty() {
             let mut cr = cr;
             loop {
-                let spawn_guid: u64 = cr.try_read::<i64>(0).map(|v| v as u64)
-                    .or_else(|| cr.try_read::<u64>(0)).unwrap_or(0);
+                let spawn_guid: u64 = cr
+                    .try_read::<i64>(0)
+                    .map(|v| v as u64)
+                    .or_else(|| cr.try_read::<u64>(0))
+                    .unwrap_or(0);
                 let entry: u32 = cr.try_read(1).unwrap_or(0);
                 let pos_x: f32 = cr.try_read(2).unwrap_or(0.0);
                 let pos_y: f32 = cr.try_read(3).unwrap_or(0.0);
@@ -3030,8 +3113,11 @@ impl WorldSession {
                 let model_id: u32 = cr.try_read(8).unwrap_or(0);
                 let min_level: u8 = cr.try_read::<Option<u8>>(9).flatten().unwrap_or(1);
                 let faction: i32 = cr.try_read::<u16>(11).unwrap_or(35) as i32;
-                let npc_flags: u64 = cr.try_read::<i64>(12).map(|v| v as u64)
-                    .or_else(|| cr.try_read::<u64>(12)).unwrap_or(0);
+                let npc_flags: u64 = cr
+                    .try_read::<i64>(12)
+                    .map(|v| v as u64)
+                    .or_else(|| cr.try_read::<u64>(12))
+                    .unwrap_or(0);
                 let unit_flags: u32 = cr.try_read(13).unwrap_or(0);
                 let unit_flags2: u32 = cr.try_read(14).unwrap_or(0);
                 let unit_flags3: u32 = cr.try_read(15).unwrap_or(0);
@@ -3040,20 +3126,37 @@ impl WorldSession {
                 let scale: f32 = cr.try_read(18).unwrap_or(1.0);
                 let unit_class: u8 = cr.try_read(19).unwrap_or(1);
                 let base_attack_time: u32 = cr.try_read(20).unwrap_or(2000);
-                let template_display_id: u32 = cr.try_read::<Option<u32>>(22)
-                    .flatten().unwrap_or(0);
+                let template_display_id: u32 =
+                    cr.try_read::<Option<u32>>(22).flatten().unwrap_or(0);
+                let loot_id: u32 = cr.try_read::<Option<u32>>(23).flatten().unwrap_or(0);
+                let gold_min: u32 = cr.try_read::<Option<u32>>(24).flatten().unwrap_or(0);
+                let gold_max: u32 = cr.try_read::<Option<u32>>(25).flatten().unwrap_or(0);
 
-                let display_id = if model_id > 0 { model_id }
-                    else if template_display_id > 0 { template_display_id }
-                    else {
-                        if !cr.next_row() { break; }
-                        continue;
-                    };
+                let display_id = if model_id > 0 {
+                    model_id
+                } else if template_display_id > 0 {
+                    template_display_id
+                } else {
+                    if !cr.next_row() {
+                        break;
+                    }
+                    continue;
+                };
 
-                let health = if cur_health > 0 { cur_health as i64 } else { 100 };
+                let health = if cur_health > 0 {
+                    cur_health as i64
+                } else {
+                    100
+                };
 
                 let guid = ObjectGuid::create_world_object(
-                    HighGuid::Creature, 0, realm_id, map_id, 1, entry, spawn_guid as i64,
+                    HighGuid::Creature,
+                    0,
+                    realm_id,
+                    map_id,
+                    1,
+                    entry,
+                    spawn_guid as i64,
                 );
                 new_visible_creatures.insert(guid);
 
@@ -3097,29 +3200,45 @@ impl WorldSession {
                         min_dmg,
                         max_dmg,
                         aggro_radius,
+                        loot_id,
+                        gold_min,
+                        gold_max,
                     );
                 }
 
-                if !cr.next_row() { break; }
+                if !cr.next_row() {
+                    break;
+                }
             }
         }
 
         // Creatures that left range → out-of-range
-        let removed_creatures: Vec<ObjectGuid> = self.visible_creatures.iter()
+        let removed_creatures: Vec<ObjectGuid> = self
+            .visible_creatures
+            .iter()
             .filter(|g| !new_visible_creatures.contains(g))
             .cloned()
             .collect();
 
         if !new_creature_blocks.is_empty() {
-            debug!("Visibility update: {} new creatures", new_creature_blocks.len());
+            debug!(
+                "Visibility update: {} new creatures",
+                new_creature_blocks.len()
+            );
             self.send_packet(&UpdateObject::create_creatures(new_creature_blocks, map_id));
         }
         if !removed_creatures.is_empty() {
-            debug!("Visibility update: {} creatures out of range", removed_creatures.len());
+            debug!(
+                "Visibility update: {} creatures out of range",
+                removed_creatures.len()
+            );
             for g in &removed_creatures {
                 self.creatures.remove(g);
             }
-            self.send_packet(&UpdateObject::out_of_range_objects(removed_creatures, map_id));
+            self.send_packet(&UpdateObject::out_of_range_objects(
+                removed_creatures,
+                map_id,
+            ));
         }
         self.visible_creatures = new_visible_creatures;
 
@@ -3131,16 +3250,16 @@ impl WorldSession {
         go_stmt.set_f32(3, y_min);
         go_stmt.set_f32(4, y_max);
 
-        let go_result = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&go_stmt),
-        ).await {
-            Ok(Ok(r)) => r,
-            _ => {
-                self.last_visibility_pos = Some(pos);
-                return;
-            }
-        };
+        let go_result =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&go_stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                _ => {
+                    self.last_visibility_pos = Some(pos);
+                    return;
+                }
+            };
 
         let mut new_visible_gos: HashSet<ObjectGuid> = HashSet::new();
         let mut new_go_blocks: Vec<UpdateBlock> = Vec::new();
@@ -3148,8 +3267,11 @@ impl WorldSession {
         if !go_result.is_empty() {
             let mut go_result = go_result;
             loop {
-                let spawn_guid: u64 = go_result.try_read::<i64>(0).map(|v| v as u64)
-                    .or_else(|| go_result.try_read::<u64>(0)).unwrap_or(0);
+                let spawn_guid: u64 = go_result
+                    .try_read::<i64>(0)
+                    .map(|v| v as u64)
+                    .or_else(|| go_result.try_read::<u64>(0))
+                    .unwrap_or(0);
                 let entry: u32 = go_result.try_read(1).unwrap_or(0);
                 let pos_x: f32 = go_result.try_read(2).unwrap_or(0.0);
                 let pos_y: f32 = go_result.try_read(3).unwrap_or(0.0);
@@ -3168,12 +3290,20 @@ impl WorldSession {
                 let data1: u32 = go_result.try_read(17).unwrap_or(0);
 
                 if display_id == 0 {
-                    if !go_result.next_row() { break; }
+                    if !go_result.next_row() {
+                        break;
+                    }
                     continue;
                 }
 
                 let guid = ObjectGuid::create_world_object(
-                    HighGuid::GameObject, 0, realm_id, map_id, 1, entry, spawn_guid as i64,
+                    HighGuid::GameObject,
+                    0,
+                    realm_id,
+                    map_id,
+                    1,
+                    entry,
+                    spawn_guid as i64,
                 );
                 new_visible_gos.insert(guid);
 
@@ -3194,29 +3324,44 @@ impl WorldSession {
                     new_go_blocks.push(UpdateObject::create_gameobject_block(create_data));
                 }
 
-                if !go_result.next_row() { break; }
+                if !go_result.next_row() {
+                    break;
+                }
             }
         }
 
-        let removed_gos: Vec<ObjectGuid> = self.visible_gameobjects.iter()
+        let removed_gos: Vec<ObjectGuid> = self
+            .visible_gameobjects
+            .iter()
             .filter(|g| !new_visible_gos.contains(g))
             .cloned()
             .collect();
 
         if !new_go_blocks.is_empty() {
-            debug!("Visibility update: {} new game objects", new_go_blocks.len());
+            debug!(
+                "Visibility update: {} new game objects",
+                new_go_blocks.len()
+            );
             self.send_packet(&UpdateObject::create_world_objects(new_go_blocks, map_id));
         }
         if !removed_gos.is_empty() {
-            debug!("Visibility update: {} game objects out of range", removed_gos.len());
+            debug!(
+                "Visibility update: {} game objects out of range",
+                removed_gos.len()
+            );
             self.send_packet(&UpdateObject::out_of_range_objects(removed_gos, map_id));
         }
         self.visible_gameobjects = new_visible_gos;
 
         // ── Update position marker ──────────────────────────────────────
         self.last_visibility_pos = Some(pos);
-        debug!("Visibility updated at ({:.1}, {:.1}): {} creatures / {} GOs in range",
-            pos.x, pos.y, self.visible_creatures.len(), self.visible_gameobjects.len());
+        debug!(
+            "Visibility updated at ({:.1}, {:.1}): {} creatures / {} GOs in range",
+            pos.x,
+            pos.y,
+            self.visible_creatures.len(),
+            self.visible_gameobjects.len()
+        );
     }
 
     /// Handle CMSG_QUERY_CREATURE — client requests creature template data.
@@ -3250,7 +3395,10 @@ impl WorldSession {
         let result = match world_db.query(&stmt).await {
             Ok(r) => r,
             Err(e) => {
-                debug!("Failed to query creature template {}: {e}", query.creature_id);
+                debug!(
+                    "Failed to query creature template {}: {e}",
+                    query.creature_id
+                );
                 self.send_packet(&QueryCreatureResponse {
                     creature_id: query.creature_id,
                     allow: false,
@@ -3309,13 +3457,24 @@ impl WorldSession {
                     let loc_title_alt: String = r.read_string(3);
                     (
                         if loc_name.is_empty() { name } else { loc_name },
-                        if loc_subname.is_empty() { subname } else { loc_subname },
-                        if loc_title_alt.is_empty() { title_alt } else { loc_title_alt },
+                        if loc_subname.is_empty() {
+                            subname
+                        } else {
+                            loc_subname
+                        },
+                        if loc_title_alt.is_empty() {
+                            title_alt
+                        } else {
+                            loc_title_alt
+                        },
                     )
                 }
                 Ok(_) => (name, subname, title_alt),
                 Err(e) => {
-                    warn!("Failed to query creature locale for {}: {e}", query.creature_id);
+                    warn!(
+                        "Failed to query creature locale for {}: {e}",
+                        query.creature_id
+                    );
                     (name, subname, title_alt)
                 }
             }
@@ -3343,7 +3502,9 @@ impl WorldSession {
                         scale,
                         probability,
                     });
-                    if !disp_result.next_row() { break; }
+                    if !disp_result.next_row() {
+                        break;
+                    }
                 }
             }
         }
@@ -3389,7 +3550,10 @@ impl WorldSession {
     }
 
     /// Handle CMSG_QUERY_GAME_OBJECT — client requests gameobject template data.
-    pub async fn handle_query_game_object(&mut self, query: wow_packet::packets::query::QueryGameObject) {
+    pub async fn handle_query_game_object(
+        &mut self,
+        query: wow_packet::packets::query::QueryGameObject,
+    ) {
         let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
             None => {
@@ -3409,7 +3573,10 @@ impl WorldSession {
         let result = match world_db.query(&stmt).await {
             Ok(r) => r,
             Err(e) => {
-                debug!("Failed to query gameobject template {}: {e}", query.game_object_id);
+                debug!(
+                    "Failed to query gameobject template {}: {e}",
+                    query.game_object_id
+                );
                 self.send_packet(&QueryGameObjectResponse {
                     game_object_id: query.game_object_id,
                     guid: query.guid,
@@ -3494,20 +3661,20 @@ impl WorldSession {
         stmt.set_f32(3, y_min);
         stmt.set_f32(4, y_max);
 
-        let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            world_db.query(&stmt),
-        ).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                warn!("Failed to query gameobjects for map {map_id}: {e}");
-                return;
-            }
-            Err(_) => {
-                warn!("Gameobject query timed out for map {map_id}");
-                return;
-            }
-        };
+        let result =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), world_db.query(&stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    warn!("Failed to query gameobjects for map {map_id}: {e}");
+                    return;
+                }
+                Err(_) => {
+                    warn!("Gameobject query timed out for map {map_id}");
+                    return;
+                }
+            };
 
         if result.is_empty() {
             return;
@@ -3519,7 +3686,8 @@ impl WorldSession {
         let mut result = result;
 
         loop {
-            let spawn_guid: u64 = result.try_read::<i64>(0)
+            let spawn_guid: u64 = result
+                .try_read::<i64>(0)
                 .map(|v| v as u64)
                 .or_else(|| result.try_read::<u64>(0))
                 .unwrap_or(0);
@@ -3541,13 +3709,20 @@ impl WorldSession {
 
             // Skip gameobjects with no display
             if display_id == 0 {
-                if !result.next_row() { break; }
+                if !result.next_row() {
+                    break;
+                }
                 continue;
             }
 
             let guid = ObjectGuid::create_world_object(
                 HighGuid::GameObject,
-                0, realm_id, map_id, 1, entry, spawn_guid as i64,
+                0,
+                realm_id,
+                map_id,
+                1,
+                entry,
+                spawn_guid as i64,
             );
 
             let go_pos = Position::new(pos_x, pos_y, pos_z, orientation);
@@ -3580,7 +3755,10 @@ impl WorldSession {
         let count = blocks.len();
         let update = UpdateObject::create_world_objects(blocks, map_id);
         self.send_packet(&update);
-        debug!("Sent {} gameobjects to account {} on map {}", count, self.account_id, map_id);
+        debug!(
+            "Sent {} gameobjects to account {} on map {}",
+            count, self.account_id, map_id
+        );
     }
 
     /// Handle CMSG_PING — respond with Pong containing the serial.
@@ -3607,11 +3785,15 @@ impl WorldSession {
             Some(db) => Arc::clone(db),
             None => {
                 // Send failure response for all queried players
-                let players = query.players.iter().map(|guid| NameCacheLookupResult {
-                    player: *guid,
-                    result: 1, // Failure
-                    data: None,
-                }).collect();
+                let players = query
+                    .players
+                    .iter()
+                    .map(|guid| NameCacheLookupResult {
+                        player: *guid,
+                        result: 1, // Failure
+                        data: None,
+                    })
+                    .collect();
                 self.send_packet_realm(&QueryPlayerNamesResponse { players });
                 return;
             }
@@ -3654,14 +3836,8 @@ impl WorldSession {
 
             // Build account GUIDs (simplified — just use account_id)
             let account_id_val = self.account_id as i64;
-            let account_guid = ObjectGuid::new(
-                (HighGuid::WowAccount as i64) << 58,
-                account_id_val,
-            );
-            let bnet_guid = ObjectGuid::new(
-                (HighGuid::BNetAccount as i64) << 58,
-                account_id_val,
-            );
+            let account_guid = ObjectGuid::new((HighGuid::WowAccount as i64) << 58, account_id_val);
+            let bnet_guid = ObjectGuid::new((HighGuid::BNetAccount as i64) << 58, account_id_val);
 
             // Use the session VRA (region << 24 | battlegroup << 16 | realmId)
             // to match what every other packet sends. The wrong formula caused
@@ -3724,15 +3900,26 @@ impl WorldSession {
             hello.unit, self.account_id
         );
 
-        use wow_packet::packets::gossip::ClientGossipOption;
         use crate::session::GossipOptionInfo;
+        use wow_packet::packets::gossip::ClientGossipOption;
 
         const GOSSIP_FLAG: u32 = 0x1;
 
-        let npc_flags = self.creatures.get(&hello.unit).map(|c| c.npc_flags).unwrap_or(0);
-        let entry = self.creatures.get(&hello.unit).map(|c| c.entry).unwrap_or(0);
+        let npc_flags = self
+            .creatures
+            .get(&hello.unit)
+            .map(|c| c.npc_flags)
+            .unwrap_or(0);
+        let entry = self
+            .creatures
+            .get(&hello.unit)
+            .map(|c| c.entry)
+            .unwrap_or(0);
 
-        info!("GossipHello npc_flags=0x{:X} entry={} for {:?}", npc_flags, entry, hello.unit);
+        info!(
+            "GossipHello npc_flags=0x{:X} entry={} for {:?}",
+            npc_flags, entry, hello.unit
+        );
 
         // If the NPC has Gossip flag AND we have a world DB, try to load the gossip menu.
         if npc_flags & GOSSIP_FLAG != 0 && entry != 0 {
@@ -3740,7 +3927,8 @@ impl WorldSession {
                 if let Some(msg) = self.build_gossip_menu(&world_db, entry, hello.unit).await {
                     info!(
                         "Sending GossipMessage with {} options for entry {}",
-                        msg.gossip_options.len(), entry
+                        msg.gossip_options.len(),
+                        entry
                     );
                     self.send_packet(&msg);
                     return;
@@ -3760,16 +3948,17 @@ impl WorldSession {
         entry: u32,
         npc_guid: wow_core::ObjectGuid,
     ) -> Option<GossipMessage> {
-        use wow_packet::packets::gossip::ClientGossipOption;
         use crate::session::GossipOptionInfo;
+        use wow_packet::packets::gossip::ClientGossipOption;
 
         // 1. Get MenuID from creature_template_gossip
         let mut stmt = world_db.prepare(WorldStatements::SEL_CREATURE_GOSSIP_MENU);
         stmt.set_u32(0, entry);
-        let menu_result: wow_database::SqlResult = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            world_db.query(&stmt),
-        ).await.ok()?.ok()?;
+        let menu_result: wow_database::SqlResult =
+            tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
+                .await
+                .ok()?
+                .ok()?;
         if menu_result.is_empty() {
             return None;
         }
@@ -3778,11 +3967,14 @@ impl WorldSession {
         // 2. Get TextID from gossip_menu, then resolve BroadcastTextID from npc_text
         let mut stmt = world_db.prepare(WorldStatements::SEL_GOSSIP_MENU);
         stmt.set_u32(0, menu_id);
-        let text_result: wow_database::SqlResult = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            world_db.query(&stmt),
-        ).await.ok()?.ok()?;
-        let npc_text_id: u32 = if text_result.is_empty() { 1 } else {
+        let text_result: wow_database::SqlResult =
+            tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
+                .await
+                .ok()?
+                .ok()?;
+        let npc_text_id: u32 = if text_result.is_empty() {
+            1
+        } else {
             text_result.try_read::<u32>(0).unwrap_or(1)
         };
 
@@ -3790,26 +3982,28 @@ impl WorldSession {
         let broadcast_text_id: Option<i32> = {
             let mut stmt = world_db.prepare(WorldStatements::SEL_NPC_TEXT);
             stmt.set_u32(0, npc_text_id);
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                world_db.query(&stmt),
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
+                .await
+            {
                 Ok(Ok(r)) if !r.is_empty() => r.try_read::<u32>(0).map(|v| v as i32),
                 _ => None,
             }
         };
-        info!("Gossip menu_id={} npc_text_id={} broadcast_text_id={:?}", menu_id, npc_text_id, broadcast_text_id);
+        info!(
+            "Gossip menu_id={} npc_text_id={} broadcast_text_id={:?}",
+            menu_id, npc_text_id, broadcast_text_id
+        );
 
         // 3. Get options from gossip_menu_option
         let mut stmt = world_db.prepare(WorldStatements::SEL_GOSSIP_MENU_OPTIONS);
         stmt.set_u32(0, menu_id);
-        let mut opt_result: wow_database::SqlResult = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            world_db.query(&stmt),
-        ).await {
-            Ok(Ok(r)) => r,
-            _ => return None,
-        };
+        let mut opt_result: wow_database::SqlResult =
+            match tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
+                .await
+            {
+                Ok(Ok(r)) => r,
+                _ => return None,
+            };
 
         if opt_result.is_empty() {
             return None;
@@ -3849,7 +4043,11 @@ impl WorldSession {
 
         // Resolve localized text for each option via OptionBroadcastTextID.
         let locale = &self.locale;
-        info!("Gossip locale='{}' for {} options", locale, raw_options.len());
+        info!(
+            "Gossip locale='{}' for {} options",
+            locale,
+            raw_options.len()
+        );
         let mut gossip_options = Vec::new();
         let mut stored_options = Vec::new();
         for opt in &raw_options {
@@ -3859,10 +4057,10 @@ impl WorldSession {
                 let mut stmt = world_db.prepare(WorldStatements::SEL_BROADCAST_TEXT_LOCALE);
                 stmt.set_u32(0, opt.broadcast_text_id);
                 stmt.set_string(1, locale);
-                if let Ok(Ok(r)) = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    world_db.query(&stmt),
-                ).await {
+                if let Ok(Ok(r)) =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
+                        .await
+                {
                     if !r.is_empty() {
                         let localized: String = r.read_string(0);
                         if !localized.is_empty() {
@@ -3913,16 +4111,20 @@ impl WorldSession {
     async fn handle_npc_direct_interaction(&mut self, hello: Hello) {
         use wow_packet::packets::misc::{AuctionHelloResponse, NpcInteractionOpenResult};
 
-        const VENDOR_MASK:      u32 = 0x80 | 0x100 | 0x200 | 0x400 | 0x800;
-        const TRAINER_MASK:     u32 = 0x10 | 0x20 | 0x40;
-        const FLIGHT_MASTER:    u32 = 0x2000;
-        const AUCTIONEER:       u32 = 0x200000;
-        const BANKER:           u32 = 0x20000;
-        const TABARD_DESIGNER:  u32 = 0x80000;
-        const STABLE_MASTER:    u32 = 0x400000;
-        const GUILD_BANKER:     u32 = 0x800000;
+        const VENDOR_MASK: u32 = 0x80 | 0x100 | 0x200 | 0x400 | 0x800;
+        const TRAINER_MASK: u32 = 0x10 | 0x20 | 0x40;
+        const FLIGHT_MASTER: u32 = 0x2000;
+        const AUCTIONEER: u32 = 0x200000;
+        const BANKER: u32 = 0x20000;
+        const TABARD_DESIGNER: u32 = 0x80000;
+        const STABLE_MASTER: u32 = 0x400000;
+        const GUILD_BANKER: u32 = 0x800000;
 
-        let npc_flags = self.creatures.get(&hello.unit).map(|c| c.npc_flags).unwrap_or(0);
+        let npc_flags = self
+            .creatures
+            .get(&hello.unit)
+            .map(|c| c.npc_flags)
+            .unwrap_or(0);
 
         if npc_flags & VENDOR_MASK != 0 {
             self.handle_list_inventory(hello).await;
@@ -3961,7 +4163,10 @@ impl WorldSession {
         );
 
         // Find the selected option in our stored gossip data.
-        let opt = self.gossip_options.iter().find(|o| o.gossip_option_id == select.gossip_option_id);
+        let opt = self
+            .gossip_options
+            .iter()
+            .find(|o| o.gossip_option_id == select.gossip_option_id);
         let (option_npc, _action_menu_id) = match opt {
             Some(o) => (o.option_npc, o.action_menu_id),
             None => {
@@ -3969,49 +4174,68 @@ impl WorldSession {
                     "GossipSelectOption: unknown gossip_option_id={} — closing.",
                     select.gossip_option_id
                 );
-                self.send_packet(&GossipComplete { suppress_sound: false });
+                self.send_packet(&GossipComplete {
+                    suppress_sound: false,
+                });
                 return;
             }
         };
 
         let npc_guid = self.gossip_source_guid.unwrap_or(select.gossip_unit);
-        info!("GossipSelectOption: OptionNpc={} for {:?}", option_npc, npc_guid);
+        info!(
+            "GossipSelectOption: OptionNpc={} for {:?}",
+            option_npc, npc_guid
+        );
 
         // Close the gossip window before opening the interaction.
-        self.send_packet(&GossipComplete { suppress_sound: false });
+        self.send_packet(&GossipComplete {
+            suppress_sound: false,
+        });
 
         let hello = Hello { unit: npc_guid };
         match option_npc {
-            1 => { // Vendor
+            1 => {
+                // Vendor
                 self.handle_list_inventory(hello).await;
             }
-            2 => { // Taxinode / Flight Master
+            2 => {
+                // Taxinode / Flight Master
                 self.send_packet(&NpcInteractionOpenResult::new(npc_guid, 6));
             }
-            3 => { // Trainer
+            3 => {
+                // Trainer
                 self.handle_trainer_list(hello).await;
             }
-            5 => { // Binder (Innkeeper)
+            5 => {
+                // Binder (Innkeeper)
                 self.send_packet(&NpcInteractionOpenResult::new(npc_guid, 20));
             }
-            6 => { // Banker
+            6 => {
+                // Banker
                 self.send_packet(&NpcInteractionOpenResult::new(npc_guid, 8));
             }
-            8 => { // Guild Tabard Vendor
+            8 => {
+                // Guild Tabard Vendor
                 self.send_packet(&NpcInteractionOpenResult::new(npc_guid, 14));
             }
-            9 => { // Battlemaster
+            9 => {
+                // Battlemaster
                 info!("Battlemaster interaction (stub)");
             }
-            10 => { // Auctioneer
+            10 => {
+                // Auctioneer
                 use wow_packet::packets::misc::AuctionHelloResponse;
                 self.send_packet(&AuctionHelloResponse::open(npc_guid));
             }
-            12 => { // Stable Master
+            12 => {
+                // Stable Master
                 self.send_packet(&NpcInteractionOpenResult::new(npc_guid, 22));
             }
             _ => {
-                info!("GossipSelectOption: unhandled OptionNpc={} — ignored", option_npc);
+                info!(
+                    "GossipSelectOption: unhandled OptionNpc={} — ignored",
+                    option_npc
+                );
             }
         }
     }
@@ -4022,8 +4246,13 @@ impl WorldSession {
     /// C# ref: AuctionHandler.HandleAuctionHello → SendAuctionHello
     pub async fn handle_auction_hello_request(&mut self, mut pkt: wow_packet::WorldPacket) {
         use wow_packet::packets::misc::AuctionHelloResponse;
-        let guid = pkt.read_packed_guid().unwrap_or(wow_core::ObjectGuid::EMPTY);
-        info!("AuctionHelloRequest from {:?} account {}", guid, self.account_id);
+        let guid = pkt
+            .read_packed_guid()
+            .unwrap_or(wow_core::ObjectGuid::EMPTY);
+        info!(
+            "AuctionHelloRequest from {:?} account {}",
+            guid, self.account_id
+        );
         self.send_packet(&AuctionHelloResponse::open(guid));
     }
 
@@ -4031,7 +4260,10 @@ impl WorldSession {
     /// C# ref: BankHandler.HandleBankerActivate → SendShowBank → NpcInteractionOpenResult(Banker=8)
     pub async fn handle_banker_activate(&mut self, hello: Hello) {
         use wow_packet::packets::misc::NpcInteractionOpenResult;
-        info!("BankerActivate {:?} account {}", hello.unit, self.account_id);
+        info!(
+            "BankerActivate {:?} account {}",
+            hello.unit, self.account_id
+        );
         self.send_packet(&NpcInteractionOpenResult::new(hello.unit, 8)); // Banker
     }
 
@@ -4039,7 +4271,10 @@ impl WorldSession {
     /// C# ref: NPCHandler.HandleBinderActivate → SendBindPoint → NpcInteractionOpenResult(Binder=20)
     pub async fn handle_binder_activate(&mut self, hello: Hello) {
         use wow_packet::packets::misc::NpcInteractionOpenResult;
-        info!("BinderActivate {:?} account {}", hello.unit, self.account_id);
+        info!(
+            "BinderActivate {:?} account {}",
+            hello.unit, self.account_id
+        );
         // TODO: actually set hearthstone bind point in DB.
         self.send_packet(&NpcInteractionOpenResult::new(hello.unit, 20)); // Binder
     }
@@ -4048,8 +4283,13 @@ impl WorldSession {
     /// C# ref: NPCHandler.HandleTabardVendorActivate → NpcInteractionOpenResult(GuildTabardVendor=14)
     pub async fn handle_tabard_vendor_activate(&mut self, mut pkt: wow_packet::WorldPacket) {
         use wow_packet::packets::misc::NpcInteractionOpenResult;
-        let guid = pkt.read_packed_guid().unwrap_or(wow_core::ObjectGuid::EMPTY);
-        info!("TabardVendorActivate {:?} account {}", guid, self.account_id);
+        let guid = pkt
+            .read_packed_guid()
+            .unwrap_or(wow_core::ObjectGuid::EMPTY);
+        info!(
+            "TabardVendorActivate {:?} account {}",
+            guid, self.account_id
+        );
         self.send_packet(&NpcInteractionOpenResult::new(guid, 14)); // GuildTabardVendor
     }
 
@@ -4064,7 +4304,10 @@ impl WorldSession {
     /// C# ref: NPCHandler.HandleRepairItem
     /// TODO: calculate repair cost and apply to character money.
     pub async fn handle_repair_item(&mut self, _pkt: wow_packet::WorldPacket) {
-        info!("RepairItem account {} (stub — all items already at full durability)", self.account_id);
+        info!(
+            "RepairItem account {} (stub — all items already at full durability)",
+            self.account_id
+        );
     }
 
     /// CMSG_REQUEST_STABLED_PETS — player opens stable master UI.
@@ -4093,7 +4336,10 @@ impl WorldSession {
     /// if missing, from world.creature by GUID (fallback when NPC not in tracker).
     pub async fn handle_list_inventory(&mut self, hello: Hello) {
         let vendor_guid = hello.unit;
-        info!("ListInventory for {:?} from account {}", vendor_guid, self.account_id);
+        info!(
+            "ListInventory for {:?} from account {}",
+            vendor_guid, self.account_id
+        );
 
         let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
@@ -4109,7 +4355,9 @@ impl WorldSession {
                 let fallback = match tokio::time::timeout(
                     std::time::Duration::from_secs(2),
                     world_db.query(&stmt),
-                ).await {
+                )
+                .await
+                {
                     Ok(Ok(r)) if !r.is_empty() => r.try_read::<u32>(0),
                     _ => None,
                 };
@@ -4119,7 +4367,10 @@ impl WorldSession {
                         e
                     }
                     None => {
-                        info!("Vendor GUID {:?} not in tracker and not found in creature table", vendor_guid);
+                        info!(
+                            "Vendor GUID {:?} not in tracker and not found in creature table",
+                            vendor_guid
+                        );
                         self.send_packet(&VendorInventory {
                             vendor_guid,
                             reason: 0,
@@ -4149,7 +4400,9 @@ impl WorldSession {
             let mut result = match tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 world_db.query(&stmt),
-            ).await {
+            )
+            .await
+            {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     warn!("Vendor query failed for entry {vendor_entry}: {e}");
@@ -4166,12 +4419,13 @@ impl WorldSession {
                 let maxcount: i32 = result.try_read(1).unwrap_or(0);
                 let extended_cost: i32 = result.try_read::<u32>(2).unwrap_or(0) as i32;
                 let item_type: i32 = result.try_read::<u8>(3).unwrap_or(1) as i32;
-                let buy_price: u64 = result.try_read::<i64>(5).map(|v| v as u64)
-                    .or_else(|| result.try_read::<u64>(5)).unwrap_or(0);
-                let durability: i32 = result.try_read::<i64>(7).map(|v| v as i32)
+                let buy_price: u64 = result
+                    .try_read::<i64>(5)
+                    .map(|v| v as u64)
+                    .or_else(|| result.try_read::<u64>(5))
                     .unwrap_or(0);
-                let stack_count: i32 = result.try_read::<i64>(8).map(|v| v as i32)
-                    .unwrap_or(1);
+                let durability: i32 = result.try_read::<i64>(7).map(|v| v as i32).unwrap_or(0);
+                let stack_count: i32 = result.try_read::<i64>(8).map(|v| v as i32).unwrap_or(1);
                 let do_not_filter: bool = result.try_read::<u8>(9).map(|v| v != 0).unwrap_or(false);
                 let incr_time: u32 = result.try_read::<u32>(10).unwrap_or(0);
                 let player_condition_id: u32 = result.try_read::<u32>(11).unwrap_or(0);
@@ -4194,7 +4448,9 @@ impl WorldSession {
                             item_id,
                             extended_cost,
                         ) {
-                            if !result.next_row() { break; }
+                            if !result.next_row() {
+                                break;
+                            }
                             continue;
                         }
                         items.push(VendorItem {
@@ -4216,17 +4472,22 @@ impl WorldSession {
                         if vendor_list_reaches_cpp_item_limit(items.len()) {
                             break 'vendor_expansion;
                         }
-                        if !result.next_row() { break; }
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
-                    let item_known = self.item_store()
+                    let item_known = self
+                        .item_store()
                         .map_or(true, |s| s.get(item_id as u32).is_some());
                     if !item_known {
                         info!(
                             "Vendor item {} not in Item.db2 (entry {}), skipping",
                             item_id, vendor_entry
                         );
-                        if !result.next_row() { break; }
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
                     let current_count = self.vendor_item_current_count(
@@ -4236,12 +4497,11 @@ impl WorldSession {
                         incr_time,
                         stack_count.max(1) as u32,
                     );
-                    if vendor_list_should_skip_sold_out(
-                        maxcount,
-                        current_count,
-                        self.security > 0,
-                    ) {
-                        if !result.next_row() { break; }
+                    if vendor_list_should_skip_sold_out(maxcount, current_count, self.security > 0)
+                    {
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
                     let template = self.item_storage_template(item_id as u32);
@@ -4254,7 +4514,9 @@ impl WorldSession {
                         self.player_class,
                         self.security > 0,
                     ) {
-                        if !result.next_row() { break; }
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
                     if vendor_list_should_skip_faction_flags(
@@ -4262,11 +4524,15 @@ impl WorldSession {
                         player_team_for_race_cpp(self.player_race),
                         self.security > 0,
                     ) {
-                        if !result.next_row() { break; }
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
                     if has_vendor_conditions {
-                        if !result.next_row() { break; }
+                        if !result.next_row() {
+                            break;
+                        }
                         continue;
                     }
                     let refundable = vendor_list_item_refundable(
@@ -4278,7 +4544,11 @@ impl WorldSession {
                         muid,
                         item_id,
                         item_type,
-                        quantity: if maxcount == 0 { -1 } else { current_count as i32 },
+                        quantity: if maxcount == 0 {
+                            -1
+                        } else {
+                            current_count as i32
+                        },
                         price: buy_price,
                         durability,
                         stack_count: stack_count.max(1),
@@ -4311,7 +4581,11 @@ impl WorldSession {
             entry,
             item_ids
         );
-        self.send_packet(&VendorInventory { vendor_guid, reason: 0, items });
+        self.send_packet(&VendorInventory {
+            vendor_guid,
+            reason: 0,
+            items,
+        });
     }
 
     fn has_item_count_direct_inventory(&self, item_entry: u32, count: u32) -> bool {
@@ -4501,10 +4775,15 @@ impl WorldSession {
     pub async fn handle_buy_item(&mut self, buy: BuyItem) {
         use wow_packet::packets::update::{ItemCreateData, UpdateObject};
 
-        debug!("BuyItem: item={} qty={} muid={} from {:?}",
-            buy.item_id, buy.quantity, buy.muid, buy.vendor_guid);
+        debug!(
+            "BuyItem: item={} qty={} muid={} from {:?}",
+            buy.item_id, buy.quantity, buy.muid, buy.vendor_guid
+        );
 
-        let player_guid = match self.player_guid { Some(g) => g, None => return };
+        let player_guid = match self.player_guid {
+            Some(g) => g,
+            None => return,
+        };
         let realm_id = self.realm_id();
         let map_id = self.current_map_id;
         let vendor_slot = match vendor_buy_muid_to_cpp_slot(buy.muid) {
@@ -4613,13 +4892,7 @@ impl WorldSession {
                 let Some(mut changes) =
                     self.plan_destroy_item_count_direct_inventory(item_id, amount)
                 else {
-                    self.send_equip_error(
-                        InventoryResult::VendorMissingTurnins,
-                        None,
-                        None,
-                        0,
-                        0,
-                    );
+                    self.send_equip_error(InventoryResult::VendorMissingTurnins, None, None, 0, 0);
                     return;
                 };
                 item_turnin_changes.append(&mut changes);
@@ -4636,13 +4909,7 @@ impl WorldSession {
             for &(currency_id, amount) in &extended_cost_currency_costs {
                 if i32::try_from(amount).is_err() || !self.remove_currency(currency_id, amount) {
                     self.player_currencies = currency_snapshot;
-                    self.send_equip_error(
-                        InventoryResult::VendorMissingTurnins,
-                        None,
-                        None,
-                        0,
-                        0,
-                    );
+                    self.send_equip_error(InventoryResult::VendorMissingTurnins, None, None, 0, 0);
                     return;
                 }
             }
@@ -4675,12 +4942,15 @@ impl WorldSession {
                 };
                 let mut packet =
                     SetCurrency::vendor_gain(delta.currency_id as i32, quantity, amount);
-                packet.weekly_quantity =
-                    delta.weekly_quantity.and_then(|value| i32::try_from(value).ok());
-                packet.max_quantity =
-                    delta.max_quantity.and_then(|value| i32::try_from(value).ok());
-                packet.total_earned =
-                    delta.total_earned.and_then(|value| i32::try_from(value).ok());
+                packet.weekly_quantity = delta
+                    .weekly_quantity
+                    .and_then(|value| i32::try_from(value).ok());
+                packet.max_quantity = delta
+                    .max_quantity
+                    .and_then(|value| i32::try_from(value).ok());
+                packet.total_earned = delta
+                    .total_earned
+                    .and_then(|value| i32::try_from(value).ok());
                 packet.suppress_chat_log = delta.suppress_chat_log;
                 self.send_packet(&packet);
             }
@@ -4841,20 +5111,14 @@ impl WorldSession {
             vendor_item.buy_count,
             quantity,
         );
-        if let Some(result) = vendor_buy_direct_store_block_result(
-            store_bag,
-            store_slot,
-            quantity,
-        ) {
+        if let Some(result) = vendor_buy_direct_store_block_result(store_bag, store_slot, quantity)
+        {
             self.send_equip_error(result, None, None, 0, 0);
             return;
         }
 
-        let (quantity, buy_price): (u32, u64) = vendor_buy_quantity_and_price(
-            vendor_item.buy_price,
-            vendor_item.buy_count,
-            quantity,
-        );
+        let (quantity, buy_price): (u32, u64) =
+            vendor_buy_quantity_and_price(vendor_item.buy_price, vendor_item.buy_count, quantity);
         let max_durability = vendor_item.max_durability;
         let refund_template = self.item_storage_template(buy.item_id as u32);
         let creates_refund_metadata = vendor_list_item_refundable(
@@ -4875,14 +5139,12 @@ impl WorldSession {
             return;
         }
 
-        let (store_result, store_dest, _) = match self
-            .plan_store_new_direct_inventory_item_at(
-                buy.item_id as u32,
-                quantity,
-                store_bag,
-                store_slot,
-            )
-        {
+        let (store_result, store_dest, _) = match self.plan_store_new_direct_inventory_item_at(
+            buy.item_id as u32,
+            quantity,
+            store_bag,
+            store_slot,
+        ) {
             Some(plan) => plan,
             None => {
                 self.send_buy_error(
@@ -4925,7 +5187,10 @@ impl WorldSession {
             let bag = (dest.pos >> 8) as u8;
             let slot = (dest.pos & 0x00FF) as u8;
             if bag != u8::from(INVENTORY_SLOT_BAG_0) {
-                warn!("BuyItem: direct inventory plan produced unsupported bag {}", bag);
+                warn!(
+                    "BuyItem: direct inventory plan produced unsupported bag {}",
+                    bag
+                );
                 self.send_equip_error(InventoryResult::WrongBagType, None, None, 0, 0);
                 return;
             }
@@ -4990,13 +5255,7 @@ impl WorldSession {
         for &(item_id, amount) in &extended_cost_item_costs {
             let Some(mut changes) = self.plan_destroy_item_count_direct_inventory(item_id, amount)
             else {
-                self.send_equip_error(
-                    InventoryResult::VendorMissingTurnins,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
+                self.send_equip_error(InventoryResult::VendorMissingTurnins, None, None, 0, 0);
                 return;
             };
             item_turnin_changes.append(&mut changes);
@@ -5012,13 +5271,7 @@ impl WorldSession {
         for &(currency_id, amount) in &extended_cost_currency_costs {
             if i32::try_from(amount).is_err() || !self.remove_currency(currency_id, amount) {
                 self.player_currencies = currency_snapshot;
-                self.send_equip_error(
-                    InventoryResult::VendorMissingTurnins,
-                    None,
-                    None,
-                    0,
-                    0,
-                );
+                self.send_equip_error(InventoryResult::VendorMissingTurnins, None, None, 0, 0);
                 return;
             }
         }
@@ -5060,12 +5313,15 @@ impl WorldSession {
 
         let inv_type = self.item_template_inventory_type(buy.item_id as u32);
         for &(slot, db_guid, item_guid, stack_count) in &new_stacks {
-            self.inventory_items.insert(slot, crate::session::InventoryItem {
-                guid: item_guid,
-                entry_id: buy.item_id as u32,
-                db_guid,
-                inventory_type: inv_type,
-            });
+            self.inventory_items.insert(
+                slot,
+                crate::session::InventoryItem {
+                    guid: item_guid,
+                    entry_id: buy.item_id as u32,
+                    db_guid,
+                    inventory_type: inv_type,
+                },
+            );
             let mut item_object = self.make_inventory_item_object(
                 item_guid,
                 buy.item_id as u32,
@@ -5092,7 +5348,11 @@ impl WorldSession {
 
         info!(
             "BuyItem: player {:?} bought item {} across {} destination(s) for {} copper (remaining: {})",
-            player_guid, buy.item_id, store_dest.len(), buy_price, self.player_gold
+            player_guid,
+            buy.item_id,
+            store_dest.len(),
+            buy_price,
+            self.player_gold
         );
         let new_quantity = if vendor_item.max_count == 0 {
             -1
@@ -5169,52 +5429,35 @@ impl WorldSession {
             buyback.slot, buyback.vendor_guid
         );
 
-        let player_guid = match self.player_guid { Some(g) => g, None => return };
+        let player_guid = match self.player_guid {
+            Some(g) => g,
+            None => return,
+        };
         let map_id = self.current_map_id;
         if !self.creatures.contains_key(&buyback.vendor_guid) {
-            self.send_sell_error(
-                SellResult::CantFindVendor,
-                None,
-                ObjectGuid::EMPTY,
-            );
+            self.send_sell_error(SellResult::CantFindVendor, None, ObjectGuid::EMPTY);
             return;
         }
 
         let Ok(buyback_slot) = u8::try_from(buyback.slot) else {
-            self.send_buy_error(
-                BuyResult::CantFindItem,
-                Some(buyback.vendor_guid),
-                0,
-            );
+            self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
             return;
         };
         if !WorldSession::is_buyback_slot(buyback_slot) {
-            self.send_buy_error(
-                BuyResult::CantFindItem,
-                Some(buyback.vendor_guid),
-                0,
-            );
+            self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
             return;
         }
 
         let buyback_item = match self.buyback_items.get(&buyback_slot).cloned() {
             Some(item) => item,
             None => {
-                self.send_buy_error(
-                    BuyResult::CantFindItem,
-                    Some(buyback.vendor_guid),
-                    0,
-                );
+                self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
                 return;
             }
         };
         let Some(runtime_item) = self.inventory_item_objects.get(&buyback_item.guid).cloned()
         else {
-            self.send_buy_error(
-                BuyResult::CantFindItem,
-                Some(buyback.vendor_guid),
-                0,
-            );
+            self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
             return;
         };
 
@@ -5237,11 +5480,7 @@ impl WorldSession {
         ) {
             Some(plan) => plan,
             None => {
-                self.send_buy_error(
-                    BuyResult::CantFindItem,
-                    Some(buyback.vendor_guid),
-                    0,
-                );
+                self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
                 return;
             }
         };
@@ -5268,17 +5507,19 @@ impl WorldSession {
             let bag = (dest.pos >> 8) as u8;
             let slot = (dest.pos & 0x00FF) as u8;
             if bag != u8::from(INVENTORY_SLOT_BAG_0) {
-                self.send_equip_error(InventoryResult::WrongBagType, Some(buyback_item.guid), None, 0, 0);
+                self.send_equip_error(
+                    InventoryResult::WrongBagType,
+                    Some(buyback_item.guid),
+                    None,
+                    0,
+                    0,
+                );
                 return;
             }
 
             if let Some(inv_item) = self.inventory_items.get(&slot) {
                 let Some(existing_item) = self.inventory_item_objects.get(&inv_item.guid) else {
-                    self.send_buy_error(
-                        BuyResult::CantFindItem,
-                        Some(buyback.vendor_guid),
-                        0,
-                    );
+                    self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
                     return;
                 };
                 let new_count = existing_item.count().saturating_add(dest.count);
@@ -5327,11 +5568,7 @@ impl WorldSession {
 
         if let Err(e) = char_db.commit_transaction(tx).await {
             warn!("BuyBackItem: transaction failed: {e}");
-            self.send_buy_error(
-                BuyResult::CantFindItem,
-                Some(buyback.vendor_guid),
-                0,
-            );
+            self.send_buy_error(BuyResult::CantFindItem, Some(buyback.vendor_guid), 0);
             return;
         }
 
@@ -5397,13 +5634,21 @@ impl WorldSession {
     pub async fn handle_sell_item(&mut self, sell: SellItem) {
         use wow_packet::packets::update::UpdateObject;
 
-        debug!("SellItem: item={:?} from account {}", sell.item_guid, self.account_id);
+        debug!(
+            "SellItem: item={:?} from account {}",
+            sell.item_guid, self.account_id
+        );
 
-        let player_guid = match self.player_guid { Some(g) => g, None => return };
+        let player_guid = match self.player_guid {
+            Some(g) => g,
+            None => return,
+        };
         let map_id = self.current_map_id;
 
         // ── Find item in inventory by GUID ──
-        let (slot, item) = match self.inventory_items.iter()
+        let (slot, item) = match self
+            .inventory_items
+            .iter()
             .find(|(_, item)| item.guid == sell.item_guid)
             .map(|(&s, item)| (s, item.clone()))
         {
@@ -5456,8 +5701,7 @@ impl WorldSession {
             );
             return;
         }
-        if self.is_active_loot_guid(item.guid) || item_is_currently_looted_like_cpp(&runtime_item)
-        {
+        if self.is_active_loot_guid(item.guid) || item_is_currently_looted_like_cpp(&runtime_item) {
             self.send_sell_error(
                 SellResult::CantSellItem,
                 Some(sell.vendor_guid),
@@ -5725,7 +5969,10 @@ impl WorldSession {
             .find(|(_, item)| item.guid == refund.item_guid)
             .map(|(&slot, item)| (slot, item.clone()))
         else {
-            warn!("ItemPurchaseRefund: item {:?} not in inventory", refund.item_guid);
+            warn!(
+                "ItemPurchaseRefund: item {:?} not in inventory",
+                refund.item_guid
+            );
             return;
         };
 
@@ -5908,10 +6155,8 @@ impl WorldSession {
                         });
                         return;
                     }
-                    planned_existing_counts.insert(
-                        slot,
-                        (existing.guid, existing.db_guid, new_count),
-                    );
+                    planned_existing_counts
+                        .insert(slot, (existing.guid, existing.db_guid, new_count));
                     continue;
                 }
 
@@ -5930,9 +6175,7 @@ impl WorldSession {
                         INVENTORY_SLOT_ITEM_START.saturating_add(INVENTORY_DEFAULT_SIZE);
                     let Some(alt_slot) = (INVENTORY_SLOT_ITEM_START..backpack_end).find(|slot| {
                         !self.inventory_items.contains_key(slot)
-                            && !planned_new_stacks
-                                .iter()
-                                .any(|stack| stack.slot == *slot)
+                            && !planned_new_stacks.iter().any(|stack| stack.slot == *slot)
                     }) else {
                         self.send_packet(&ItemPurchaseRefundResult {
                             item_guid: refund.item_guid,
@@ -6127,9 +6370,15 @@ impl WorldSession {
                 type_id,
                 quantity,
                 amount,
-                delta.weekly_quantity.and_then(|value| i32::try_from(value).ok()),
-                delta.max_quantity.and_then(|value| i32::try_from(value).ok()),
-                delta.total_earned.and_then(|value| i32::try_from(value).ok()),
+                delta
+                    .weekly_quantity
+                    .and_then(|value| i32::try_from(value).ok()),
+                delta
+                    .max_quantity
+                    .and_then(|value| i32::try_from(value).ok()),
+                delta
+                    .total_earned
+                    .and_then(|value| i32::try_from(value).ok()),
                 delta.suppress_chat_log,
             ));
         }
@@ -6238,7 +6487,9 @@ impl WorldSession {
 
         // Both slots must be in valid range (0-140)
         if src as usize >= 141 || dst as usize >= 141 {
-            self.send_packet(&InventoryChangeFailure::error(InventoryResult::InternalBagError));
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::InternalBagError,
+            ));
             return;
         }
 
@@ -6290,6 +6541,18 @@ impl WorldSession {
             stmt.set_u64(1, player_guid.counter() as u64);
             stmt.set_u64(2, item.db_guid);
             let _ = char_db.execute(&stmt).await;
+        }
+
+        let source_moved_bag_has_active_loot = is_represented_bag_slot(src)
+            && src_item.as_ref().is_some_and(|item| {
+                self.represented_bag_contains_active_item_loot_like_cpp(item.guid)
+            });
+        let destination_moved_bag_has_active_loot = is_represented_bag_slot(dst)
+            && dst_item.as_ref().is_some_and(|item| {
+                self.represented_bag_contains_active_item_loot_like_cpp(item.guid)
+            });
+        if source_moved_bag_has_active_loot || destination_moved_bag_has_active_loot {
+            self.do_loot_release_all_like_cpp(player_guid).await;
         }
 
         // Build VALUES update changes
@@ -6396,12 +6659,15 @@ impl WorldSession {
                         "AutoEquipItem: no inventory_type for entry {} — not in cache",
                         src_item.entry_id
                     );
-                    self.send_packet(&InventoryChangeFailure::error(InventoryResult::NotEquippable));
+                    self.send_packet(&InventoryChangeFailure::error(
+                        InventoryResult::NotEquippable,
+                    ));
                     return;
                 }
             };
             // Build occupied map from currently equipped gear and bag slots.
-            let occupied: std::collections::HashMap<u8, ()> = self.inventory_items
+            let occupied: std::collections::HashMap<u8, ()> = self
+                .inventory_items
                 .keys()
                 .filter(|&&s| s < 19 || (30..34).contains(&s))
                 .map(|&s| (s, ()))
@@ -6413,7 +6679,9 @@ impl WorldSession {
                         "AutoEquipItem: inv_type {} has no valid equipment slot",
                         inv_type
                     );
-                    self.send_packet(&InventoryChangeFailure::error(InventoryResult::NotEquippable));
+                    self.send_packet(&InventoryChangeFailure::error(
+                        InventoryResult::NotEquippable,
+                    ));
                     return;
                 }
             }
@@ -6441,15 +6709,15 @@ impl WorldSession {
 
         debug!(
             "SwapItem: A=({},{}) B=({},{}) for {:?}",
-            swap.container_slot_a, swap.slot_a,
-            swap.container_slot_b, swap.slot_b,
-            player_guid
+            swap.container_slot_a, swap.slot_a, swap.container_slot_b, swap.slot_b, player_guid
         );
 
         // Only support player's direct inventory (container=255) for now
         if swap.container_slot_a != 255 || swap.container_slot_b != 255 {
             warn!("SwapItem with non-255 containers not supported yet");
-            self.send_packet(&InventoryChangeFailure::error(InventoryResult::InternalBagError));
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::InternalBagError,
+            ));
             return;
         }
 
@@ -6466,7 +6734,10 @@ impl WorldSession {
     ///
     /// This is used by the client when right-clicking equipped items to unequip them,
     /// or to move items between containers.
-    pub async fn handle_auto_store_bag_item(&mut self, store: wow_packet::packets::item::AutoStoreBagItem) {
+    pub async fn handle_auto_store_bag_item(
+        &mut self,
+        store: wow_packet::packets::item::AutoStoreBagItem,
+    ) {
         let player_guid = match self.player_guid {
             Some(g) => g,
             None => return,
@@ -6480,7 +6751,9 @@ impl WorldSession {
         // Only support player's direct inventory (container=255) for now
         if store.container_slot_a != 255 {
             warn!("AutoStoreBagItem with non-255 source container not supported yet");
-            self.send_packet(&InventoryChangeFailure::error(InventoryResult::InternalBagError));
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::InternalBagError,
+            ));
             return;
         }
 
@@ -6511,7 +6784,10 @@ impl WorldSession {
     }
 
     /// Handle CMSG_DESTROY_ITEM: delete an item from inventory.
-    pub async fn handle_destroy_item(&mut self, destroy: wow_packet::packets::item::DestroyItemPkt) {
+    pub async fn handle_destroy_item(
+        &mut self,
+        destroy: wow_packet::packets::item::DestroyItemPkt,
+    ) {
         let player_guid = match self.player_guid {
             Some(g) => g,
             None => return,
@@ -6525,7 +6801,9 @@ impl WorldSession {
         // Only support player's direct inventory (container=255) for now
         if destroy.container_id != 255 {
             warn!("DestroyItem with non-255 container not supported yet");
-            self.send_packet(&InventoryChangeFailure::error(InventoryResult::InternalBagError));
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::InternalBagError,
+            ));
             return;
         }
 
@@ -6555,7 +6833,9 @@ impl WorldSession {
             .item_template_flags(item.entry_id)
             .is_some_and(|flags| flags.contains(ItemFlags::NO_USER_DESTROY))
         {
-            self.send_packet(&InventoryChangeFailure::error(InventoryResult::DropBoundItem));
+            self.send_packet(&InventoryChangeFailure::error(
+                InventoryResult::DropBoundItem,
+            ));
             return;
         }
 
@@ -6666,7 +6946,10 @@ impl WorldSession {
             self.send_stat_update();
         }
 
-        info!("Destroyed item entry={} at slot {} for {:?}", item.entry_id, slot, player_guid);
+        info!(
+            "Destroyed item entry={} at slot {} for {:?}",
+            item.entry_id, slot, player_guid
+        );
     }
 
     /// Find the first empty slot in the default backpack (slots 35-58).
@@ -6699,41 +6982,50 @@ impl WorldSession {
         }
 
         // Sum gear stat bonuses from equipped items (slots 0-18)
-        let (gear_stats, gear_ap, gear_rap, gear_health, gear_mana,
-             gear_combat_ratings, gear_spell_power, gear_armor) =
-            if let Some(iss) = self.item_stats_store() {
-                let mut bonuses = [0i32; 5];
-                let mut g_ap = 0i32;
-                let mut g_rap = 0i32;
-                let mut g_health = 0i32;
-                let mut g_mana = 0i32;
-                let mut g_cr = [0i32; 25];
-                let mut g_sp = 0i32;
-                let mut g_armor = 0i32;
-                for (&slot, inv_item) in &self.inventory_items {
-                    if slot < 19 {
-                        if let Some(entry) = iss.get(inv_item.entry_id) {
-                            let [s, a, st, i, sp] = entry.base_stat_bonuses();
-                            bonuses[0] += s;
-                            bonuses[1] += a;
-                            bonuses[2] += st;
-                            bonuses[3] += i;
-                            bonuses[4] += sp;
-                            g_ap += entry.attack_power_bonus();
-                            g_rap += entry.ranged_attack_power_bonus();
-                            g_health += entry.health_bonus();
-                            g_mana += entry.mana_bonus();
-                            let cr = entry.combat_rating_bonuses();
-                            for j in 0..25 { g_cr[j] += cr[j]; }
-                            g_sp += entry.spell_power_bonus();
-                            g_armor += entry.armor;
+        let (
+            gear_stats,
+            gear_ap,
+            gear_rap,
+            gear_health,
+            gear_mana,
+            gear_combat_ratings,
+            gear_spell_power,
+            gear_armor,
+        ) = if let Some(iss) = self.item_stats_store() {
+            let mut bonuses = [0i32; 5];
+            let mut g_ap = 0i32;
+            let mut g_rap = 0i32;
+            let mut g_health = 0i32;
+            let mut g_mana = 0i32;
+            let mut g_cr = [0i32; 25];
+            let mut g_sp = 0i32;
+            let mut g_armor = 0i32;
+            for (&slot, inv_item) in &self.inventory_items {
+                if slot < 19 {
+                    if let Some(entry) = iss.get(inv_item.entry_id) {
+                        let [s, a, st, i, sp] = entry.base_stat_bonuses();
+                        bonuses[0] += s;
+                        bonuses[1] += a;
+                        bonuses[2] += st;
+                        bonuses[3] += i;
+                        bonuses[4] += sp;
+                        g_ap += entry.attack_power_bonus();
+                        g_rap += entry.ranged_attack_power_bonus();
+                        g_health += entry.health_bonus();
+                        g_mana += entry.mana_bonus();
+                        let cr = entry.combat_rating_bonuses();
+                        for j in 0..25 {
+                            g_cr[j] += cr[j];
                         }
+                        g_sp += entry.spell_power_bonus();
+                        g_armor += entry.armor;
                     }
                 }
-                (bonuses, g_ap, g_rap, g_health, g_mana, g_cr, g_sp, g_armor)
-            } else {
-                ([0i32; 5], 0, 0, 0, 0, [0i32; 25], 0, 0)
-            };
+            }
+            (bonuses, g_ap, g_rap, g_health, g_mana, g_cr, g_sp, g_armor)
+        } else {
+            ([0i32; 5], 0, 0, 0, 0, [0i32; 25], 0, 0)
+        };
 
         // Compute total stats from base + gear
         let store = match self.player_stats() {
@@ -6772,13 +7064,17 @@ impl WorldSession {
             3 | 4 => total_str + total_agi - 20,
             7 | 11 => total_str * 2 - 20,
             _ => (total_str - 10).max(0),
-        }.max(0) + gear_ap;
+        }
+        .max(0)
+            + gear_ap;
 
         let ranged_ap = match class {
             3 => total_agi * 2 - 20,
             1 | 4 => total_agi - 10,
             _ => 0,
-        }.max(0) + gear_rap;
+        }
+        .max(0)
+            + gear_rap;
 
         // Damage
         let ap_f = melee_ap as f32;
@@ -6796,10 +7092,10 @@ impl WorldSession {
 
         // Power for slot 0 (mana/rage/energy/runic)
         let power0 = match class {
-            1 => 1000,               // Warrior: rage
-            4 => 100,                // Rogue: energy
-            6 => 1000,               // DK: runic power
-            _ => max_mana as i32,    // Casters: mana
+            1 => 1000,            // Warrior: rage
+            4 => 100,             // Rogue: energy
+            6 => 1000,            // DK: runic power
+            _ => max_mana as i32, // Casters: mana
         };
 
         // CombatRatings[32]: copy 25 used indices, rest 0
@@ -6811,40 +7107,44 @@ impl WorldSession {
 
         // Crit from AGI: class-dependent AGI-to-crit ratio at level 80
         let agi_crit_ratio = match class {
-            4 => 40.0,       // Rogue
-            3 => 53.0,       // Hunter
-            11 => 45.5,      // Druid
-            7 => 80.0,       // Shaman
-            2 => 59.5,       // Paladin
-            1 | 6 => 62.5,   // Warrior, DK
-            _ => 80.0,       // Casters (Mage/Warlock/Priest)
+            4 => 40.0,     // Rogue
+            3 => 53.0,     // Hunter
+            11 => 45.5,    // Druid
+            7 => 80.0,     // Shaman
+            2 => 59.5,     // Paladin
+            1 | 6 => 62.5, // Warrior, DK
+            _ => 80.0,     // Casters (Mage/Warlock/Priest)
         };
         let crit_from_agi = total_agi as f32 / agi_crit_ratio;
 
         // Crit from rating: ~45.91 rating per 1% at level 80
-        let crit_rating_per_pct = if lvl >= 80.0 { 45.91 } else { (lvl * 0.574).max(1.0) };
+        let crit_rating_per_pct = if lvl >= 80.0 {
+            45.91
+        } else {
+            (lvl * 0.574).max(1.0)
+        };
         let crit_from_rating = gear_combat_ratings[8] as f32 / crit_rating_per_pct as f32;
 
         // Base crit varies by class (roughly)
         let base_crit = match class {
-            4 => 3.5,   // Rogue
-            3 => 3.6,   // Hunter
-            1 => 3.2,   // Warrior
-            2 => 3.3,   // Paladin
-            6 => 3.2,   // DK
-            _ => 1.8,   // Casters
+            4 => 3.5, // Rogue
+            3 => 3.6, // Hunter
+            1 => 3.2, // Warrior
+            2 => 3.3, // Paladin
+            6 => 3.2, // DK
+            _ => 1.8, // Casters
         };
         let melee_crit_pct = (base_crit + crit_from_agi + crit_from_rating).min(100.0);
 
         // Spell crit from INT: class-dependent INT-to-spell-crit ratio
         let int_crit_ratio = match class {
-            8 => 80.0,       // Mage
-            9 => 82.0,       // Warlock
-            5 => 80.0,       // Priest
-            7 => 80.0,       // Shaman
-            11 => 80.0,      // Druid
-            2 => 80.0,       // Paladin
-            _ => 160.0,      // Non-casters
+            8 => 80.0,  // Mage
+            9 => 82.0,  // Warlock
+            5 => 80.0,  // Priest
+            7 => 80.0,  // Shaman
+            11 => 80.0, // Druid
+            2 => 80.0,  // Paladin
+            _ => 160.0, // Non-casters
         };
         let spell_crit_from_int = total_int as f32 / int_crit_ratio;
         let spell_crit_from_rating = gear_combat_ratings[10] as f32 / crit_rating_per_pct as f32;
@@ -6857,16 +7157,25 @@ impl WorldSession {
             2 => 3.33,  // Paladin
             _ => 0.0,
         };
-        let spell_crit_pct = (base_spell_crit as f32 + spell_crit_from_int + spell_crit_from_rating).min(100.0);
+        let spell_crit_pct =
+            (base_spell_crit as f32 + spell_crit_from_int + spell_crit_from_rating).min(100.0);
 
         // Dodge from AGI + rating
         let dodge_from_agi = total_agi as f32 / agi_crit_ratio; // simplified: same ratio
-        let dodge_rating_per_pct = if lvl >= 80.0 { 39.35 } else { (lvl * 0.492).max(1.0) };
+        let dodge_rating_per_pct = if lvl >= 80.0 {
+            39.35
+        } else {
+            (lvl * 0.492).max(1.0)
+        };
         let dodge_from_rating = gear_combat_ratings[2] as f32 / dodge_rating_per_pct as f32;
         let dodge_pct = (dodge_from_agi + dodge_from_rating + 5.0).min(100.0); // 5% base
 
         // Parry from STR + rating (for classes that can parry)
-        let parry_rating_per_pct = if lvl >= 80.0 { 49.18 } else { (lvl * 0.615).max(1.0) };
+        let parry_rating_per_pct = if lvl >= 80.0 {
+            49.18
+        } else {
+            (lvl * 0.615).max(1.0)
+        };
         let parry_from_rating = gear_combat_ratings[3] as f32 / parry_rating_per_pct as f32;
         let parry_pct = match class {
             1 | 2 | 4 | 6 => (5.0 + parry_from_rating).min(100.0), // 5% base for melee
@@ -6874,7 +7183,11 @@ impl WorldSession {
         };
 
         // Block from rating (only shield users)
-        let block_rating_per_pct = if lvl >= 80.0 { 16.39 } else { (lvl * 0.205).max(1.0) };
+        let block_rating_per_pct = if lvl >= 80.0 {
+            16.39
+        } else {
+            (lvl * 0.205).max(1.0)
+        };
         let block_from_rating = gear_combat_ratings[4] as f32 / block_rating_per_pct as f32;
         let block_pct = match class {
             1 | 2 | 7 => (5.0 + block_from_rating).min(100.0), // 5% base
@@ -6884,19 +7197,21 @@ impl WorldSession {
         // SpellCritPercentage[7]: index 0=Physical (same as melee), 1-6=spell schools
         let mut spell_crit_arr = [0.0f32; 7];
         spell_crit_arr[0] = melee_crit_pct;
-        for i in 1..7 { spell_crit_arr[i] = spell_crit_pct; }
+        for i in 1..7 {
+            spell_crit_arr[i] = spell_crit_pct;
+        }
 
         // ── Mana regen (WotLK spirit-based formula) ──
         // spirit_regen = 0.001 + sqrt(INT) * SPI * class_coeff
         let class_regen_coeff: f32 = match class {
-            2 => 0.044,   // Paladin
-            3 => 0.030,   // Hunter
-            5 => 0.033,   // Priest
-            7 => 0.044,   // Shaman
-            8 => 0.035,   // Mage
-            9 => 0.033,   // Warlock
-            11 => 0.044,  // Druid
-            _ => 0.0,     // Warrior, Rogue, DK (no mana)
+            2 => 0.044,  // Paladin
+            3 => 0.030,  // Hunter
+            5 => 0.033,  // Priest
+            7 => 0.044,  // Shaman
+            8 => 0.035,  // Mage
+            9 => 0.033,  // Warlock
+            11 => 0.044, // Druid
+            _ => 0.0,    // Warrior, Rogue, DK (no mana)
         };
         let spirit_regen = if class_regen_coeff > 0.0 {
             0.001 + (total_int as f32).max(0.0).sqrt() * total_spi as f32 * class_regen_coeff
@@ -6906,7 +7221,11 @@ impl WorldSession {
 
         // ── Expertise from rating ──
         // CombatRating::Expertise = index 23, 15.77 rating per expertise at level 80
-        let expertise_rating_per_pct = if lvl >= 80.0 { 15.77 } else { (lvl * 0.197).max(1.0) };
+        let expertise_rating_per_pct = if lvl >= 80.0 {
+            15.77
+        } else {
+            (lvl * 0.197).max(1.0)
+        };
         let expertise_value = gear_combat_ratings[23] as f32 / expertise_rating_per_pct;
 
         // ── Dodge/Parry from attribute (for tooltip display) ──
@@ -6945,8 +7264,8 @@ impl WorldSession {
             spell_crit_pct: spell_crit_arr,
             // Mana regen
             mana_regen: spirit_regen,
-            mana_regen_combat: 0.0,  // No talents = no in-combat spirit regen
-            mana_regen_mp5: 0.0,     // No MP5 auras without talent system
+            mana_regen_combat: 0.0, // No talents = no in-combat spirit regen
+            mana_regen_mp5: 0.0,    // No MP5 auras without talent system
             // Expertise
             mainhand_expertise: expertise_value,
             offhand_expertise: expertise_value,
@@ -6966,17 +7285,21 @@ impl WorldSession {
 
         debug!(
             "Stat update for {:?}: HP={} AP={} STR/AGI/STA/INT/SPI={:?} Armor={} SP={} Crit={:.1}% SCrit={:.1}% Dodge={:.1}% Parry={:.1}% Exp={:.1} ManaRegen={:.1}",
-            player_guid, max_health, melee_ap,
+            player_guid,
+            max_health,
+            melee_ap,
             [total_str, total_agi, total_sta, total_int, total_spi],
-            total_armor, gear_spell_power, melee_crit_pct, spell_crit_pct, dodge_pct, parry_pct,
-            expertise_value, spirit_regen
+            total_armor,
+            gear_spell_power,
+            melee_crit_pct,
+            spell_crit_pct,
+            dodge_pct,
+            parry_pct,
+            expertise_value,
+            spirit_regen
         );
 
-        let update = UpdateObject::player_stat_update(
-            player_guid,
-            self.current_map_id,
-            changes,
-        );
+        let update = UpdateObject::player_stat_update(player_guid, self.current_map_id, changes);
         self.send_packet(&update);
     }
 
@@ -6996,7 +7319,11 @@ impl WorldSession {
 
         let num_chars: u8 = match char_db.query(&count_stmt).await {
             Ok(result) => {
-                if result.is_empty() { 0 } else { result.try_read::<i64>(0).unwrap_or(0) as u8 }
+                if result.is_empty() {
+                    0
+                } else {
+                    result.try_read::<i64>(0).unwrap_or(0) as u8
+                }
             }
             Err(_) => return,
         };
@@ -7010,7 +7337,12 @@ impl WorldSession {
         if let Err(e) = login_db.execute(&rep_stmt).await {
             warn!("Failed to update realmcharacters: {e}");
         } else {
-            debug!("Updated realmcharacters: account={} realm={} count={}", self.account_id, self.realm_id(), num_chars);
+            debug!(
+                "Updated realmcharacters: account={} realm={} count={}",
+                self.account_id,
+                self.realm_id(),
+                num_chars
+            );
         }
     }
 
@@ -7108,7 +7440,9 @@ impl WorldSession {
         self.send_packet(&SendSpellCharges);
 
         // 14. ActiveGlyphs (empty with full update)
-        self.send_packet(&ActiveGlyphs { is_full_update: true });
+        self.send_packet(&ActiveGlyphs {
+            is_full_update: true,
+        });
 
         // 15. UpdateActionButtons — populated from character_action table
         self.send_packet(&UpdateActionButtons {
@@ -7170,7 +7504,9 @@ impl WorldSession {
             // Build quest log for the UpdateObject (25 slots max).
             // C# ref: QuestLog.WriteCreate — sent with PartyMember flag for self-view.
             // StateFlags: 0=None, 1=Complete (QuestSlotStateMask)
-            let quest_log: Vec<(u32, u32, i64, [u16; 24])> = self.player_quests.values()
+            let quest_log: Vec<(u32, u32, i64, [u16; 24])> = self
+                .player_quests
+                .values()
                 .filter(|qs| qs.status == 1 || qs.status == 2)
                 .take(25)
                 .map(|qs| {
@@ -7184,19 +7520,38 @@ impl WorldSession {
                 .collect();
 
             let mut player_pkt = UpdateObject::create_player(
-                guid, race, class, sex, level, display_id, position,
-                map_id as u16, zone_id as u32, true, visible_items, inv_slots,
-                combat, skill_info, self.player_gold, quest_log,
+                guid,
+                race,
+                class,
+                sex,
+                level,
+                display_id,
+                position,
+                map_id as u16,
+                zone_id as u32,
+                true,
+                visible_items,
+                inv_slots,
+                combat,
+                skill_info,
+                self.player_gold,
+                quest_log,
             );
 
             if !item_creates.is_empty() {
-                info!("Sending {} item CREATE blocks + player in single UpdateObject", item_creates.len());
+                info!(
+                    "Sending {} item CREATE blocks + player in single UpdateObject",
+                    item_creates.len()
+                );
                 // Prepend item blocks before the player block
                 let mut all_blocks: Vec<UpdateBlock> = item_creates
                     .into_iter()
                     .map(|data| {
                         let g = data.item_guid;
-                        UpdateBlock::CreateItem { guid: g, create_data: data }
+                        UpdateBlock::CreateItem {
+                            guid: g,
+                            create_data: data,
+                        }
                     })
                     .collect();
                 all_blocks.append(&mut player_pkt.blocks);
@@ -7265,7 +7620,10 @@ impl WorldSession {
         //     fully computed stats (mana regen, expertise, shield block, etc.).
         self.send_stat_update();
 
-        info!("Login sequence complete for {:?} (37 packets including broadcasts)", guid);
+        info!(
+            "Login sequence complete for {:?} (37 packets including broadcasts)",
+            guid
+        );
     }
 
     // ── ShowTradeSkill ───────────────────────────────────────────────────────
@@ -7315,6 +7673,30 @@ impl WorldSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_packet::WorldPacket;
+    use wow_packet::packets::loot::{CreatureLoot, LootEntry, LootEntryFlags};
+
+    fn make_session_with_send_capacity(
+        capacity: usize,
+    ) -> (WorldSession, flume::Receiver<Vec<u8>>) {
+        let (_pkt_tx, pkt_rx) = flume::bounded::<WorldPacket>(1);
+        let (send_tx, send_rx) = flume::bounded::<Vec<u8>>(capacity);
+        (
+            WorldSession::new(
+                1,
+                "TestAccount".into(),
+                0,
+                2,
+                9,
+                54261,
+                vec![0u8; 40],
+                "esES".into(),
+                pkt_rx,
+                send_tx,
+            ),
+            send_rx,
+        )
+    }
 
     #[test]
     fn start_positions_are_valid() {
@@ -7322,7 +7704,10 @@ mod tests {
             let (map, x, y, z, _o) = start_position(race);
             assert!(map >= 0, "Race {race} has invalid map");
             // Positions should be non-zero (except possibly orientation)
-            assert!(x != 0.0 || y != 0.0 || z != 0.0, "Race {race} has zero position");
+            assert!(
+                x != 0.0 || y != 0.0 || z != 0.0,
+                "Race {race} has zero position"
+            );
         }
     }
 
@@ -7334,6 +7719,75 @@ mod tests {
                 assert!(id > 0, "Race {race} sex {sex} has zero display ID");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn logout_releases_active_loot_views_like_cpp_remove_from_world() {
+        let (mut session, send_rx) = make_session_with_send_capacity(4);
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let loot_guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 19_030);
+        session.set_player_guid(Some(player_guid));
+        session.set_active_loot_guid(loot_guid);
+        session.loot_table.insert(
+            loot_guid,
+            CreatureLoot {
+                loot_guid,
+                coins: 0,
+                loot_method: 0,
+                allowed_looters: Vec::new(),
+                items: vec![LootEntry {
+                    loot_list_id: 0,
+                    item_id: 25,
+                    quantity: 1,
+                    random_properties_id: 0,
+                    random_properties_seed: 0,
+                    item_context: 0,
+                    flags: LootEntryFlags::default(),
+                    allowed_looters: vec![player_guid],
+                    roll_winner: ObjectGuid::EMPTY,
+                    ffa_looted_by: Vec::new(),
+                    taken: false,
+                }],
+                looted_by_player: false,
+            },
+        );
+
+        session
+            .handle_logout_request(LogoutRequest { idle_logout: false })
+            .await;
+
+        let sent = send_rx.try_recv().unwrap();
+        let mut sent = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            sent.read_uint16().unwrap(),
+            wow_constants::ServerOpcodes::LootReleaseAll as u16
+        );
+        assert_eq!(sent.remaining(), 0);
+
+        let sent = send_rx.try_recv().unwrap();
+        let mut sent = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            sent.read_uint16().unwrap(),
+            wow_constants::ServerOpcodes::LogoutResponse as u16
+        );
+
+        let sent = send_rx.try_recv().unwrap();
+        let mut sent = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            sent.read_uint16().unwrap(),
+            wow_constants::ServerOpcodes::LootRelease as u16
+        );
+        assert_eq!(sent.read_packed_guid().unwrap(), loot_guid);
+        assert_eq!(sent.read_packed_guid().unwrap(), player_guid);
+
+        let sent = send_rx.try_recv().unwrap();
+        let mut sent = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            sent.read_uint16().unwrap(),
+            wow_constants::ServerOpcodes::LogoutComplete as u16
+        );
+        assert!(!session.is_active_loot_guid(loot_guid));
+        assert!(session.loot_table.contains_key(&loot_guid));
     }
 
     #[test]
@@ -7426,17 +7880,13 @@ mod tests {
             flags: wow_constants::CurrencyTypesFlags::empty(),
             flags_b: wow_constants::CurrencyTypesFlagsB::empty(),
         }]);
+        assert!(vendor_list_should_skip_currency_row(Some(&store), 395, 0,));
+        assert!(!vendor_list_should_skip_currency_row(Some(&store), 395, 10,));
         assert!(vendor_list_should_skip_currency_row(
             Some(&store),
-            395,
-            0,
+            999_999,
+            10
         ));
-        assert!(!vendor_list_should_skip_currency_row(
-            Some(&store),
-            395,
-            10,
-        ));
-        assert!(vendor_list_should_skip_currency_row(Some(&store), 999_999, 10));
         assert!(vendor_list_should_skip_currency_row(None, 395, 10));
     }
 
@@ -7462,7 +7912,10 @@ mod tests {
 
     #[test]
     fn vendor_required_reputation_fails_closed_until_reputation_mgr_exists() {
-        assert_eq!(vendor_buy_required_reputation_block_result(None, None, -1), None);
+        assert_eq!(
+            vendor_buy_required_reputation_block_result(None, None, -1),
+            None
+        );
         assert_eq!(
             vendor_buy_required_reputation_block_result(Some(72), Some(5), -1),
             Some(BuyResult::ReputationRequire)
@@ -7502,7 +7955,7 @@ mod tests {
                 item_count: [0; wow_data::MAX_ITEM_EXT_COST_ITEMS],
                 currency_id: [395, 0, 0, 0, 0],
                 currency_count: [10, 0, 0, 0, 0],
-        }]);
+            }]);
 
         assert_eq!(
             vendor_buy_extended_cost_block_result(
@@ -7528,7 +7981,9 @@ mod tests {
                 5,
                 3
             ),
-            Some(VendorExtendedCostBlock::Equip(InventoryResult::CantBuyQuantity))
+            Some(VendorExtendedCostBlock::Equip(
+                InventoryResult::CantBuyQuantity
+            ))
         );
         assert_eq!(
             vendor_buy_extended_cost_block_result(
@@ -7680,18 +8135,9 @@ mod tests {
 
     #[test]
     fn vendor_buy_stock_refill_matches_cpp_increment_and_full_reset() {
-        assert_eq!(
-            vendor_buy_stock_refill_count(2, 20, 10, 5, 20),
-            (12, false)
-        );
-        assert_eq!(
-            vendor_buy_stock_refill_count(18, 10, 10, 5, 20),
-            (20, true)
-        );
-        assert_eq!(
-            vendor_buy_stock_refill_count(2, 9, 10, 5, 20),
-            (2, false)
-        );
+        assert_eq!(vendor_buy_stock_refill_count(2, 20, 10, 5, 20), (12, false));
+        assert_eq!(vendor_buy_stock_refill_count(18, 10, 10, 5, 20), (20, true));
+        assert_eq!(vendor_buy_stock_refill_count(2, 9, 10, 5, 20), (2, false));
     }
 
     #[test]
@@ -7828,8 +8274,7 @@ mod tests {
 
     #[test]
     fn loaded_refund_metadata_matches_cpp_load_cleanup() {
-        let refundable_flags =
-            (ItemFieldFlags::SOULBOUND | ItemFieldFlags::REFUNDABLE).bits();
+        let refundable_flags = (ItemFieldFlags::SOULBOUND | ItemFieldFlags::REFUNDABLE).bits();
         assert_eq!(
             loaded_item_refund_decision(refundable_flags, 7_200, Some(123), Some(45)),
             LoadedItemRefundDecision::Valid {
@@ -7893,7 +8338,10 @@ mod tests {
             }
         );
         assert_eq!(sell_item_amount_action(5, 6), SellItemAmountAction::Invalid);
-        assert_eq!(sell_item_amount_action(5, -1), SellItemAmountAction::Invalid);
+        assert_eq!(
+            sell_item_amount_action(5, -1),
+            SellItemAmountAction::Invalid
+        );
     }
 
     #[test]
@@ -7992,7 +8440,11 @@ mod tests {
             Team::Horde,
             true,
         ));
-        assert!(!vendor_list_should_skip_faction_flags(None, Team::Alliance, false));
+        assert!(!vendor_list_should_skip_faction_flags(
+            None,
+            Team::Alliance,
+            false
+        ));
     }
 
     #[test]
@@ -8077,7 +8529,10 @@ mod tests {
             item_id: 700,
         };
 
-        assert_eq!(vendor_buy_direct_inventory_destination(player_guid, &buy), None);
+        assert_eq!(
+            vendor_buy_direct_inventory_destination(player_guid, &buy),
+            None
+        );
     }
 
     #[test]

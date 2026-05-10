@@ -108,6 +108,12 @@ pub struct CreatureAI {
     pub display_id: u32,
     /// Faction template ID.
     pub faction: u32,
+    /// Resolved C++ `Creature::GetLootId()` value for corpse loot.
+    pub loot_id: u32,
+    /// C++ `CreatureDifficulty::GoldMin`.
+    pub gold_min: u32,
+    /// C++ `CreatureDifficulty::GoldMax`.
+    pub gold_max: u32,
 }
 
 impl CreatureAI {
@@ -125,6 +131,9 @@ impl CreatureAI {
         faction: u32,
         npc_flags: u32,
         unit_flags: u32,
+        loot_id: u32,
+        gold_min: u32,
+        gold_max: u32,
     ) -> Self {
         let now = Instant::now();
         // Derive rough damage if zero
@@ -164,6 +173,9 @@ impl CreatureAI {
             unit_flags,
             display_id,
             faction,
+            loot_id,
+            gold_min,
+            gold_max,
         }
     }
 
@@ -209,7 +221,9 @@ impl CreatureAI {
     ///
     /// Returns true if the creature just died.
     pub fn take_damage(&mut self, dmg: u32) -> bool {
-        if !self.is_alive { return false; }
+        if !self.is_alive {
+            return false;
+        }
         self.hp = self.hp.saturating_sub(dmg);
         if self.hp == 0 {
             self.die();
@@ -249,16 +263,22 @@ impl CreatureAI {
 
     /// Check if the creature's current movement is complete.
     pub fn movement_finished(&self) -> bool {
-        if self.move_target.is_none() { return true; }
+        if self.move_target.is_none() {
+            return true;
+        }
         self.move_start.elapsed().as_millis() as u32 >= self.move_duration_ms
     }
 
     /// Interpolate the creature's current position along its movement path.
     pub fn interpolated_position(&self) -> Position {
-        let Some(ref dst) = self.move_target else { return self.current_pos.clone(); };
+        let Some(ref dst) = self.move_target else {
+            return self.current_pos.clone();
+        };
         let elapsed = self.move_start.elapsed().as_millis() as f32;
         let total = self.move_duration_ms as f32;
-        if total <= 0.0 { return dst.clone(); }
+        if total <= 0.0 {
+            return dst.clone();
+        }
         let t = (elapsed / total).min(1.0);
         Position::new(
             self.current_pos.x + (dst.x - self.current_pos.x) * t,
@@ -301,7 +321,9 @@ impl CreatureAI {
 
     /// Roll a random damage value in [min_dmg, max_dmg].
     pub fn roll_damage(&self) -> u32 {
-        if self.min_dmg >= self.max_dmg { return self.min_dmg; }
+        if self.min_dmg >= self.max_dmg {
+            return self.min_dmg;
+        }
         let range = self.max_dmg - self.min_dmg;
         // Simple LCG-style pseudo-random based on timer
         let seed = self.last_swing.elapsed().subsec_nanos();

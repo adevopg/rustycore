@@ -56,9 +56,7 @@ impl SqlResult {
 
     /// Number of columns in the result (0 if empty).
     pub fn field_count(&self) -> usize {
-        self.rows
-            .first()
-            .map_or(0, |r| r.columns().len())
+        self.rows.first().map_or(0, |r| r.columns().len())
     }
 
     /// Read a typed value from the current row at the given column index.
@@ -179,16 +177,12 @@ impl<'a> SqlFields<'a> {
     where
         T: sqlx::Decode<'a, sqlx::MySql> + sqlx::Type<sqlx::MySql>,
     {
-        (start..start + count)
-            .map(|i| self.row.get(i))
-            .collect()
+        (start..start + count).map(|i| self.row.get(i)).collect()
     }
 
     /// Check if a column is `NULL`.
     pub fn is_null(&self, column: usize) -> bool {
-        self.row
-            .try_get_raw(column)
-            .map_or(true, |v| v.is_null())
+        self.row.try_get_raw(column).map_or(true, |v| v.is_null())
     }
 
     /// Number of columns in this row.

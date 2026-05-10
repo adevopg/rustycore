@@ -128,16 +128,19 @@ pub struct Wdc4Reader {
 impl Wdc4Reader {
     /// Open and parse a WDC4 file.
     pub fn open(path: &Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let data =
+            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
         ensure!(data.len() >= HEADER_SIZE, "file too small for WDC4 header");
 
         let header = parse_header(&data)?;
         debug!(
             "WDC4: records={}, fields={}, record_size={}, sections={}, table_hash=0x{:08X}",
-            header.record_count, header.field_count, header.record_size,
-            header.section_count, header.table_hash
+            header.record_count,
+            header.field_count,
+            header.record_size,
+            header.section_count,
+            header.table_hash
         );
 
         let section_count = header.section_count as usize;
@@ -147,7 +150,10 @@ impl Wdc4Reader {
         let mut offset = HEADER_SIZE;
         let mut sections = Vec::with_capacity(section_count);
         for _ in 0..section_count {
-            ensure!(offset + SECTION_HEADER_SIZE <= data.len(), "truncated section header");
+            ensure!(
+                offset + SECTION_HEADER_SIZE <= data.len(),
+                "truncated section header"
+            );
             sections.push(parse_section_header(&data[offset..]));
             offset += SECTION_HEADER_SIZE;
         }
@@ -158,10 +164,16 @@ impl Wdc4Reader {
 
         // Parse field storage info
         let fsi_count = header.field_storage_info_size as usize / FIELD_STORAGE_INFO_SIZE;
-        ensure!(fsi_count == field_count, "field_storage_info count ({fsi_count}) != field_count ({field_count})");
+        ensure!(
+            fsi_count == field_count,
+            "field_storage_info count ({fsi_count}) != field_count ({field_count})"
+        );
         let mut field_info = Vec::with_capacity(fsi_count);
         for _ in 0..fsi_count {
-            ensure!(offset + FIELD_STORAGE_INFO_SIZE <= data.len(), "truncated field_storage_info");
+            ensure!(
+                offset + FIELD_STORAGE_INFO_SIZE <= data.len(),
+                "truncated field_storage_info"
+            );
             field_info.push(parse_field_storage_info(&data[offset..])?);
             offset += FIELD_STORAGE_INFO_SIZE;
         }
@@ -203,7 +215,10 @@ impl Wdc4Reader {
             let after_records = if has_offset_map {
                 // Offset-map: records are variable-length, end at offset_records_end
                 let rec_end = sec._offset_records_end as usize;
-                ensure!(rec_end <= data.len(), "section {si} record data truncated (offset_map)");
+                ensure!(
+                    rec_end <= data.len(),
+                    "section {si} record data truncated (offset_map)"
+                );
                 record_data.extend_from_slice(&data[sec_offset..rec_end]);
                 rec_end
             } else {
@@ -277,7 +292,10 @@ impl Wdc4Reader {
                 // Parse offset map ID list
                 let om_id_bytes = om_count * 4;
                 let om_id_end = cursor + om_id_bytes;
-                ensure!(om_id_end <= data.len(), "section {si} offset_map_id_list truncated");
+                ensure!(
+                    om_id_end <= data.len(),
+                    "section {si} offset_map_id_list truncated"
+                );
 
                 // Build per-ID offset+size mapping, then populate record_ids + record_offsets
                 // using the ID list order (which matches the actual record order in data)
@@ -299,8 +317,8 @@ impl Wdc4Reader {
                     for idx in start_idx..record_ids.len() {
                         let id = record_ids[idx];
                         if let Some(&(file_off, rec_sz)) = id_to_om_info.get(&id) {
-                            let data_relative = (file_off as usize)
-                                .saturating_sub(sec_offset) + base_data_len;
+                            let data_relative =
+                                (file_off as usize).saturating_sub(sec_offset) + base_data_len;
                             record_offsets.push(data_relative);
                             record_sizes.push(rec_sz as usize);
                         } else {
@@ -316,8 +334,8 @@ impl Wdc4Reader {
                         let (file_off, rec_sz) = om_entries[i];
                         if rec_sz > 0 {
                             record_ids.push(om_id);
-                            let data_relative = (file_off as usize)
-                                .saturating_sub(sec_offset) + base_data_len;
+                            let data_relative =
+                                (file_off as usize).saturating_sub(sec_offset) + base_data_len;
                             record_offsets.push(data_relative);
                             record_sizes.push(rec_sz as usize);
                         }
@@ -333,8 +351,7 @@ impl Wdc4Reader {
 
             trace!(
                 "  section {si}: {} records, {} copies, id_list={}, offset_map={}",
-                sec.record_count, sec.copy_table_count, sec.id_list_size,
-                sec._offset_map_id_count
+                sec.record_count, sec.copy_table_count, sec.id_list_size, sec._offset_map_id_count
             );
         }
 
@@ -449,7 +466,13 @@ impl Wdc4Reader {
     /// Array fields in WDC4 are stored as a single field with
     /// `field_size_bits = element_count * element_bits`. This method reads
     /// a single element at `array_index` within the field.
-    pub fn get_array_element(&self, record_idx: usize, field: usize, array_index: usize, element_bits: usize) -> u32 {
+    pub fn get_array_element(
+        &self,
+        record_idx: usize,
+        field: usize,
+        array_index: usize,
+        element_bits: usize,
+    ) -> u32 {
         let info = &self.field_info[field];
         let record_start = if !self.record_offsets.is_empty() {
             self.record_offsets[record_idx]
@@ -526,7 +549,11 @@ impl Wdc4Reader {
     ///
     /// For copy table entries, the record_index points to the source record data.
     pub fn iter_records(&self) -> impl Iterator<Item = (u32, usize)> + '_ {
-        let direct = self.record_ids.iter().enumerate().map(|(idx, &id)| (id, idx));
+        let direct = self
+            .record_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, &id)| (id, idx));
         let copies = self.copy_table.iter().filter_map(|&(new_id, source_id)| {
             self.id_to_index.get(&source_id).map(|&idx| (new_id, idx))
         });
@@ -544,14 +571,14 @@ impl Wdc4Reader {
         };
 
         match info.compression {
-            CompressionType::None | CompressionType::Bitpacked | CompressionType::BitpackedSigned => {
-                read_bits(
-                    &self.record_data,
-                    record_start,
-                    info.field_offset_bits as usize,
-                    info.field_size_bits as usize,
-                )
-            }
+            CompressionType::None
+            | CompressionType::Bitpacked
+            | CompressionType::BitpackedSigned => read_bits(
+                &self.record_data,
+                record_start,
+                info.field_offset_bits as usize,
+                info.field_size_bits as usize,
+            ),
             CompressionType::Pallet => {
                 let index = read_bits(
                     &self.record_data,
@@ -559,7 +586,8 @@ impl Wdc4Reader {
                     info.field_offset_bits as usize,
                     info.field_size_bits as usize,
                 ) as usize;
-                self.pallet_data.get(field)
+                self.pallet_data
+                    .get(field)
                     .and_then(|p| p.get(index))
                     .copied()
                     .unwrap_or(0)
@@ -572,14 +600,16 @@ impl Wdc4Reader {
                     info.field_size_bits as usize,
                 ) as usize;
                 let cardinality = info.val3.max(1) as usize;
-                self.pallet_data.get(field)
+                self.pallet_data
+                    .get(field)
                     .and_then(|p| p.get(index * cardinality))
                     .copied()
                     .unwrap_or(0)
             }
             CompressionType::Common => {
                 let record_id = self.record_ids.get(record_idx).copied().unwrap_or(0);
-                self.common_data.get(field)
+                self.common_data
+                    .get(field)
                     .and_then(|m| m.get(&record_id))
                     .copied()
                     .unwrap_or(info.val1) // val1 = default_value for Common
@@ -600,8 +630,14 @@ fn read_u32_le(data: &[u8], off: usize) -> u32 {
 
 fn read_u64_le(data: &[u8], off: usize) -> u64 {
     u64::from_le_bytes([
-        data[off], data[off + 1], data[off + 2], data[off + 3],
-        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+        data[off],
+        data[off + 1],
+        data[off + 2],
+        data[off + 3],
+        data[off + 4],
+        data[off + 5],
+        data[off + 6],
+        data[off + 7],
     ])
 }
 
@@ -663,7 +699,10 @@ fn split_pallet_data(raw: &[u8], fields: &[FieldStorageInfo]) -> Vec<Vec<u32>> {
     let mut offset = 0usize;
 
     for info in fields {
-        if matches!(info.compression, CompressionType::Pallet | CompressionType::PalletArray) {
+        if matches!(
+            info.compression,
+            CompressionType::Pallet | CompressionType::PalletArray
+        ) {
             let size = info.additional_data_size as usize;
             let count = size / 4;
             let mut values = Vec::with_capacity(count);
@@ -733,7 +772,11 @@ fn read_bits(record_data: &[u8], record_start: usize, bit_offset: usize, bit_cou
 
     // Shift right to skip the starting bits, then mask
     let shifted = val >> bit_start;
-    let mask = if bit_count >= 32 { u32::MAX } else { (1u32 << bit_count) - 1 };
+    let mask = if bit_count >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << bit_count) - 1
+    };
     (shifted as u32) & mask
 }
 
@@ -800,7 +843,10 @@ mod tests {
     #[test]
     fn test_compression_type_from_u32() {
         assert_eq!(CompressionType::from_u32(0).unwrap(), CompressionType::None);
-        assert_eq!(CompressionType::from_u32(3).unwrap(), CompressionType::Pallet);
+        assert_eq!(
+            CompressionType::from_u32(3).unwrap(),
+            CompressionType::Pallet
+        );
         assert!(CompressionType::from_u32(99).is_err());
     }
 
@@ -844,17 +890,20 @@ mod tests {
     /// Diagnostic test: probe ItemSparse.db2 field layout to find stat modifier fields.
     #[test]
     fn test_probe_item_sparse_db2() {
-        let path = std::path::Path::new(
-            "/home/server/woltk-server-core/Data/dbc/esES/ItemSparse.db2",
-        );
+        let path =
+            std::path::Path::new("/home/server/woltk-server-core/Data/dbc/esES/ItemSparse.db2");
         if !path.exists() {
             eprintln!("Skipping test: ItemSparse.db2 not found");
             return;
         }
 
         let reader = Wdc4Reader::open(path).expect("failed to parse ItemSparse.db2");
-        eprintln!("ItemSparse: {} records, {} total, {} fields",
-            reader.record_count(), reader.total_count(), reader.field_count());
+        eprintln!(
+            "ItemSparse: {} records, {} total, {} fields",
+            reader.record_count(),
+            reader.total_count(),
+            reader.field_count()
+        );
 
         // Print all field info with byte offsets
         let mut prev_end_bits = 0u32;
@@ -864,27 +913,38 @@ mod tests {
             let end_byte = (info.field_offset_bits + info.field_size_bits + 7) / 8;
             let gap = if info.field_offset_bits as u32 > prev_end_bits {
                 format!(" GAP={}bits", info.field_offset_bits as u32 - prev_end_bits)
-            } else { String::new() };
+            } else {
+                String::new()
+            };
             eprintln!(
                 "  f[{:2}] byte {:3}..{:3} ({:4}bits) {:?}{}",
                 i, start_byte, end_byte, info.field_size_bits, info.compression, gap
             );
             prev_end_bits = info.field_offset_bits as u32 + info.field_size_bits as u32;
         }
-        eprintln!("Total record bit-width: {prev_end_bits} ({} bytes)", prev_end_bits / 8);
+        eprintln!(
+            "Total record bit-width: {prev_end_bits} ({} bytes)",
+            prev_end_bits / 8
+        );
 
         // f[53] = StatModifierBonusAmount[10] (i16[10], 160 bits)
         // f[65] = _statModifierBonusStat[10] (i8[10], 80 bits)
         // f[45] = ItemLevel (u16)
         // f[69] = _inventoryType (i8)
         // Verify with known items
-        eprintln!("record_ids={}, record_offsets={}", reader.record_ids.len(), reader.record_offsets.len());
+        eprintln!(
+            "record_ids={}, record_offsets={}",
+            reader.record_ids.len(),
+            reader.record_offsets.len()
+        );
         for &check_id in &[6948u32, 49623, 19364, 19019] {
             if let Some(idx) = reader.get_record_index(check_id) {
                 let offset = reader.record_offsets[idx];
                 let item_level = reader.get_field_u16(idx, 45);
                 let inv_type = reader.get_field_i8(idx, 69);
-                eprintln!("\n=== Item {check_id} (idx={idx}, offset={offset}, iLvl={item_level}, invType={inv_type}) ===");
+                eprintln!(
+                    "\n=== Item {check_id} (idx={idx}, offset={offset}, iLvl={item_level}, invType={inv_type}) ==="
+                );
                 for i in 0..10 {
                     let stat_type = reader.get_array_i8(idx, 65, i);
                     let stat_amount = reader.get_array_i16(idx, 53, i);
@@ -899,17 +959,22 @@ mod tests {
 
 #[test]
 fn test_find_record_58268() {
-    let path = std::path::Path::new(
-        "/home/server/woltk-server-core/Data/dbc/esES/ItemSparse.db2",
-    );
-    if !path.exists() { return; }
+    let path = std::path::Path::new("/home/server/woltk-server-core/Data/dbc/esES/ItemSparse.db2");
+    if !path.exists() {
+        return;
+    }
     let reader = Wdc4Reader::open(path).expect("failed to parse");
     let found = reader.iter_records().any(|(id, _)| id == 58268);
     eprintln!("Record 58268 in ItemSparse: {found}");
     // Also check nearby
-    let nearby: Vec<u32> = reader.iter_records()
+    let nearby: Vec<u32> = reader
+        .iter_records()
         .map(|(id, _)| id)
         .filter(|&id| id >= 58260 && id <= 58280)
         .collect();
-    eprintln!("Records 58260-58280: {:?}", {let mut v=nearby; v.sort(); v});
+    eprintln!("Records 58260-58280: {:?}", {
+        let mut v = nearby;
+        v.sort();
+        v
+    });
 }

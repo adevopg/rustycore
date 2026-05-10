@@ -107,40 +107,40 @@ pub struct PlayerStatChanges {
     pub ranged_attack_power: i32,
     pub min_ranged_damage: f32,
     pub max_ranged_damage: f32,
-    pub power0: i32,       // Mana/Rage/Energy current
-    pub max_power0: i32,    // Mana/Rage/Energy max
-    pub stats: [i32; 5],    // STR, AGI, STA, INT, SPI
+    pub power0: i32,             // Mana/Rage/Energy current
+    pub max_power0: i32,         // Mana/Rage/Energy max
+    pub stats: [i32; 5],         // STR, AGI, STA, INT, SPI
     pub stat_pos_buff: [i32; 5], // gear bonuses shown as positive buffs
-    pub armor: i32,         // Resistances[0] = Physical
+    pub armor: i32,              // Resistances[0] = Physical
     // ActivePlayerData secondary stats
     pub combat_ratings: [i32; 32], // CombatRatings[32] (indices per CombatRating enum, 0-24 used)
     pub spell_power: i32,          // ModDamageDonePos for magic schools 1-6
     // Percentage fields (server-computed, displayed by client)
-    pub block_pct: f32,            // BlockPercentage (bit 41)
-    pub dodge_pct: f32,            // DodgePercentage (bit 42)
-    pub parry_pct: f32,            // ParryPercentage (bit 44)
-    pub crit_pct: f32,             // CritPercentage (bit 46) — melee
-    pub ranged_crit_pct: f32,      // RangedCritPercentage (bit 47)
-    pub spell_crit_pct: [f32; 7],  // SpellCritPercentage[7] (bits 270-276)
+    pub block_pct: f32,           // BlockPercentage (bit 41)
+    pub dodge_pct: f32,           // DodgePercentage (bit 42)
+    pub parry_pct: f32,           // ParryPercentage (bit 44)
+    pub crit_pct: f32,            // CritPercentage (bit 46) — melee
+    pub ranged_crit_pct: f32,     // RangedCritPercentage (bit 47)
+    pub spell_crit_pct: [f32; 7], // SpellCritPercentage[7] (bits 270-276)
     // UnitData: mana regen (parent 116 interleaved loop)
-    pub mana_regen: f32,              // PowerRegenFlatModifier[0] (bit 117)
-    pub mana_regen_combat: f32,       // PowerRegenInterruptedFlatModifier[0] (bit 127)
-    pub mana_regen_mp5: f32,          // ModPowerRegen[0] (bit 157)
+    pub mana_regen: f32,        // PowerRegenFlatModifier[0] (bit 117)
+    pub mana_regen_combat: f32, // PowerRegenInterruptedFlatModifier[0] (bit 127)
+    pub mana_regen_mp5: f32,    // ModPowerRegen[0] (bit 157)
     // ActivePlayerData parent 0: expertise (bits 36-37)
-    pub mainhand_expertise: f32,      // MainhandExpertise (bit 36)
-    pub offhand_expertise: f32,       // OffhandExpertise (bit 37)
+    pub mainhand_expertise: f32, // MainhandExpertise (bit 36)
+    pub offhand_expertise: f32,  // OffhandExpertise (bit 37)
     // ActivePlayerData parent 38: extended fields (bits 39-69)
-    pub ranged_expertise: f32,        // bit 39
-    pub combat_rating_expertise: f32, // bit 40
-    pub dodge_from_attr: f32,         // bit 43
-    pub parry_from_attr: f32,         // bit 45
-    pub offhand_crit_pct: f32,        // bit 48
-    pub shield_block: i32,            // bit 49
-    pub shield_block_crit_pct: f32,   // bit 50
-    pub mod_healing_pct: f32,         // bit 60 (1.0)
-    pub mod_healing_done_pct: f32,    // bit 61 (1.0)
-    pub mod_periodic_healing_pct: f32,// bit 62 (1.0)
-    pub mod_spell_power_pct: f32,     // bit 63 (1.0)
+    pub ranged_expertise: f32,         // bit 39
+    pub combat_rating_expertise: f32,  // bit 40
+    pub dodge_from_attr: f32,          // bit 43
+    pub parry_from_attr: f32,          // bit 45
+    pub offhand_crit_pct: f32,         // bit 48
+    pub shield_block: i32,             // bit 49
+    pub shield_block_crit_pct: f32,    // bit 50
+    pub mod_healing_pct: f32,          // bit 60 (1.0)
+    pub mod_healing_done_pct: f32,     // bit 61 (1.0)
+    pub mod_periodic_healing_pct: f32, // bit 62 (1.0)
+    pub mod_spell_power_pct: f32,      // bit 63 (1.0)
 }
 
 // ── PlayerCombatStats ──────────────────────────────────────────────
@@ -171,13 +171,22 @@ pub struct PlayerCombatStats {
 impl Default for PlayerCombatStats {
     fn default() -> Self {
         Self {
-            health: 100, max_health: 100,
-            stats: [0; 5], base_armor: 0, max_mana: 60,
-            attack_power: 0, ranged_attack_power: 0,
-            min_damage: 1.0, max_damage: 2.0,
-            min_ranged_damage: 0.0, max_ranged_damage: 0.0,
-            dodge_pct: 0.0, parry_pct: 0.0,
-            crit_pct: 5.0, ranged_crit_pct: 5.0, spell_crit_pct: 0.0,
+            health: 100,
+            max_health: 100,
+            stats: [0; 5],
+            base_armor: 0,
+            max_mana: 60,
+            attack_power: 0,
+            ranged_attack_power: 0,
+            min_damage: 1.0,
+            max_damage: 2.0,
+            min_ranged_damage: 0.0,
+            max_ranged_damage: 0.0,
+            dodge_pct: 0.0,
+            parry_pct: 0.0,
+            crit_pct: 5.0,
+            ranged_crit_pct: 5.0,
+            spell_crit_pct: 0.0,
         }
     }
 }
@@ -249,17 +258,17 @@ impl PlayerCreateData {
     /// Get the faction template for a race.
     pub fn faction_for_race(race: u8) -> i32 {
         match race {
-            1 => 1,      // Human
-            2 => 2,      // Orc
-            3 => 3,      // Dwarf
-            4 => 4,      // NightElf
-            5 => 5,      // Undead
-            6 => 6,      // Tauren
-            7 => 115,    // Gnome
-            8 => 116,    // Troll
-            10 => 1610,  // BloodElf
-            11 => 1629,  // Draenei
-            22 => 1,     // Worgen → Human faction
+            1 => 1,     // Human
+            2 => 2,     // Orc
+            3 => 3,     // Dwarf
+            4 => 4,     // NightElf
+            5 => 5,     // Undead
+            6 => 6,     // Tauren
+            7 => 115,   // Gnome
+            8 => 116,   // Troll
+            10 => 1610, // BloodElf
+            11 => 1629, // Draenei
+            22 => 1,    // Worgen → Human faction
             _ => 1,
         }
     }
@@ -272,10 +281,10 @@ impl PlayerCreateData {
     /// - All others: mana from `max_mana` field (loaded from player_levelstats)
     fn power_for_slot0(&self) -> i32 {
         match self.class {
-            1 => 1000,                   // Warrior: rage
-            4 => 100,                    // Rogue: energy
-            6 => 1000,                   // DK: runic power
-            _ => self.max_mana as i32,   // Casters: real mana from DB
+            1 => 1000,                 // Warrior: rage
+            4 => 100,                  // Rogue: energy
+            6 => 1000,                 // DK: runic power
+            _ => self.max_mana as i32, // Casters: real mana from DB
         }
     }
 
@@ -306,9 +315,9 @@ impl PlayerCreateData {
     // ── ObjectFieldData.WriteCreate ─────────────────────────────
 
     fn write_object_data(&self, buf: &mut WorldPacket) {
-        buf.write_int32(0);    // EntryId (0 for players)
-        buf.write_uint32(0);   // DynamicFlags
-        buf.write_float(1.0);  // Scale
+        buf.write_int32(0); // EntryId (0 for players)
+        buf.write_uint32(0); // DynamicFlags
+        buf.write_float(1.0); // Scale
     }
 
     // ── UnitData.WriteCreate ────────────────────────────────────
@@ -417,9 +426,9 @@ impl PlayerCreateData {
 
         // Flags, Flags2, Flags3, AuraState
         buf.write_uint32(0x0000_0008); // UnitFlags: UNIT_FLAG_PLAYER_CONTROLLED
-        buf.write_uint32(0);            // Flags2
-        buf.write_uint32(0);            // Flags3
-        buf.write_uint32(0);            // AuraState
+        buf.write_uint32(0); // Flags2
+        buf.write_uint32(0); // Flags3
+        buf.write_uint32(0); // AuraState
 
         // AttackRoundBaseTime[2]
         buf.write_uint32(2000); // MainHand
@@ -432,13 +441,13 @@ impl PlayerCreateData {
 
         // BoundingRadius, CombatReach, DisplayScale
         buf.write_float(0.306); // BoundingRadius (human default)
-        buf.write_float(1.5);   // CombatReach
-        buf.write_float(1.0);   // DisplayScale
+        buf.write_float(1.5); // CombatReach
+        buf.write_float(1.0); // DisplayScale
 
         // NativeDisplayID, NativeXDisplayScale, MountDisplayID
         buf.write_int32(self.native_display_id as i32);
         buf.write_float(1.0); // NativeXDisplayScale
-        buf.write_int32(0);   // MountDisplayID
+        buf.write_int32(0); // MountDisplayID
 
         // MinDamage, MaxDamage, MinOffHandDamage, MaxOffHandDamage (Owner|Empath)
         if is_owner {
@@ -480,8 +489,8 @@ impl PlayerCreateData {
         if is_owner {
             for i in 0..5 {
                 buf.write_int32(self.stats[i]); // Stat
-                buf.write_int32(0);              // StatPosBuff
-                buf.write_int32(0);              // StatNegBuff
+                buf.write_int32(0); // StatPosBuff
+                buf.write_int32(0); // StatNegBuff
             }
         }
 
@@ -496,7 +505,7 @@ impl PlayerCreateData {
         // PowerCostModifier[7], PowerCostMultiplier[7] (Owner only)
         if is_owner {
             for _ in 0..7 {
-                buf.write_int32(0);   // PowerCostModifier
+                buf.write_int32(0); // PowerCostModifier
                 buf.write_float(1.0); // PowerCostMultiplier
             }
         }
@@ -523,34 +532,34 @@ impl PlayerCreateData {
 
         // AttackPower block (Owner only — 13 fields)
         if is_owner {
-            buf.write_int32(self.attack_power);         // AttackPower
-            buf.write_int32(0);                          // AttackPowerModPos
-            buf.write_int32(0);                          // AttackPowerModNeg
-            buf.write_float(1.0);                        // AttackPowerMultiplier
-            buf.write_int32(self.ranged_attack_power);   // RangedAttackPower
-            buf.write_int32(0);                          // RangedAttackPowerModPos
-            buf.write_int32(0);                          // RangedAttackPowerModNeg
-            buf.write_float(1.0);                        // RangedAttackPowerMultiplier
-            buf.write_int32(0);                          // SetAttackSpeedAura
-            buf.write_float(0.0);                        // Lifesteal
-            buf.write_float(self.min_ranged_damage);     // MinRangedDamage
-            buf.write_float(self.max_ranged_damage);     // MaxRangedDamage
-            buf.write_float(1.0);                        // MaxHealthModifier
+            buf.write_int32(self.attack_power); // AttackPower
+            buf.write_int32(0); // AttackPowerModPos
+            buf.write_int32(0); // AttackPowerModNeg
+            buf.write_float(1.0); // AttackPowerMultiplier
+            buf.write_int32(self.ranged_attack_power); // RangedAttackPower
+            buf.write_int32(0); // RangedAttackPowerModPos
+            buf.write_int32(0); // RangedAttackPowerModNeg
+            buf.write_float(1.0); // RangedAttackPowerMultiplier
+            buf.write_int32(0); // SetAttackSpeedAura
+            buf.write_float(0.0); // Lifesteal
+            buf.write_float(self.min_ranged_damage); // MinRangedDamage
+            buf.write_float(self.max_ranged_damage); // MaxRangedDamage
+            buf.write_float(1.0); // MaxHealthModifier
         }
 
         // HoverHeight + misc fields
-        buf.write_float(1.0);  // HoverHeight
-        buf.write_int32(0);    // MinItemLevelCutoff
-        buf.write_int32(0);    // MinItemLevel
-        buf.write_int32(0);    // MaxItemLevel
-        buf.write_int32(0);    // WildBattlePetLevel
-        buf.write_int32(0);    // BattlePetCompanionNameTimestamp
-        buf.write_int32(0);    // InteractSpellId
-        buf.write_int32(0);    // ScaleDuration
-        buf.write_int32(0);    // LooksLikeMountID
-        buf.write_int32(0);    // LooksLikeCreatureID
-        buf.write_int32(0);    // LookAtControllerID
-        buf.write_int32(0);    // PerksVendorItemID
+        buf.write_float(1.0); // HoverHeight
+        buf.write_int32(0); // MinItemLevelCutoff
+        buf.write_int32(0); // MinItemLevel
+        buf.write_int32(0); // MaxItemLevel
+        buf.write_int32(0); // WildBattlePetLevel
+        buf.write_int32(0); // BattlePetCompanionNameTimestamp
+        buf.write_int32(0); // InteractSpellId
+        buf.write_int32(0); // ScaleDuration
+        buf.write_int32(0); // LooksLikeMountID
+        buf.write_int32(0); // LooksLikeCreatureID
+        buf.write_int32(0); // LookAtControllerID
+        buf.write_int32(0); // PerksVendorItemID
         write_empty_guid(buf); // GuildGUID
 
         // Dynamic array sizes: PassiveSpells, WorldEffects, ChannelObjects
@@ -621,10 +630,11 @@ impl PlayerCreateData {
             for i in 0..25usize {
                 let (quest_id, state_flags, end_time, obj_progress) =
                     self.quest_log.get(i).copied().unwrap_or(empty_slot);
-                buf.write_int64(end_time);          // EndTime (int64)
-                buf.write_int32(quest_id as i32);   // QuestID (int32)
-                buf.write_uint32(state_flags);      // StateFlags (uint32)
-                for progress in &obj_progress {     // ObjectiveProgress[24] (uint16 each)
+                buf.write_int64(end_time); // EndTime (int64)
+                buf.write_int32(quest_id as i32); // QuestID (int32)
+                buf.write_uint32(state_flags); // StateFlags (uint32)
+                for progress in &obj_progress {
+                    // ObjectiveProgress[24] (uint16 each)
                     buf.write_uint16(*progress);
                 }
             }
@@ -707,13 +717,13 @@ impl PlayerCreateData {
         for i in 0..256 {
             if i < self.skill_info.len() {
                 let (id, step, rank, start, max, temp, perm) = self.skill_info[i];
-                buf.write_uint16(id);    // SkillLineID
-                buf.write_uint16(step);  // SkillStep
-                buf.write_uint16(rank);  // SkillRank
+                buf.write_uint16(id); // SkillLineID
+                buf.write_uint16(step); // SkillStep
+                buf.write_uint16(rank); // SkillRank
                 buf.write_uint16(start); // SkillStartingRank
-                buf.write_uint16(max);   // SkillMaxRank
-                buf.write_int16(temp);   // SkillTempBonus
-                buf.write_uint16(perm);  // SkillPermBonus
+                buf.write_uint16(max); // SkillMaxRank
+                buf.write_int16(temp); // SkillTempBonus
+                buf.write_uint16(perm); // SkillPermBonus
             } else {
                 buf.write_uint16(0);
                 buf.write_uint16(0);
@@ -743,21 +753,21 @@ impl PlayerCreateData {
         buf.write_float(0.0);
 
         // Block, Dodge, DodgeFromAttr, Parry, ParryFromAttr, Crit, RangedCrit, OffhandCrit
-        buf.write_float(0.0);                // Block (need shield)
-        buf.write_float(self.dodge_pct);     // Dodge
-        buf.write_float(self.dodge_pct);     // DodgeFromAttr (same as dodge for display)
-        buf.write_float(self.parry_pct);     // Parry
-        buf.write_float(self.parry_pct);     // ParryFromAttr
-        buf.write_float(self.crit_pct);      // CritPercentage
+        buf.write_float(0.0); // Block (need shield)
+        buf.write_float(self.dodge_pct); // Dodge
+        buf.write_float(self.dodge_pct); // DodgeFromAttr (same as dodge for display)
+        buf.write_float(self.parry_pct); // Parry
+        buf.write_float(self.parry_pct); // ParryFromAttr
+        buf.write_float(self.crit_pct); // CritPercentage
         buf.write_float(self.ranged_crit_pct); // RangedCritPercentage
-        buf.write_float(self.crit_pct);      // OffhandCritPercentage
+        buf.write_float(self.crit_pct); // OffhandCritPercentage
 
         // SpellCritPercentage[7], ModDamageDonePos[7], ModDamageDoneNeg[7], ModDamageDonePercent[7]
         for _ in 0..7 {
             buf.write_float(self.spell_crit_pct); // SpellCritPercentage per school
-            buf.write_int32(0);                    // ModDamageDonePos (spell power from gear)
-            buf.write_int32(0);                    // ModDamageDoneNeg
-            buf.write_float(1.0);                  // ModDamageDonePercent
+            buf.write_int32(0); // ModDamageDonePos (spell power from gear)
+            buf.write_int32(0); // ModDamageDoneNeg
+            buf.write_float(1.0); // ModDamageDonePercent
         }
 
         // ShieldBlock, ShieldBlockCritPercentage
@@ -786,8 +796,8 @@ impl PlayerCreateData {
         // RestInfo[2] (each: i32 Threshold + u8 StateID)
         // StateID: 1=Rested, 2=Normal, 6=RAFLinked — must NOT be 0 (invalid)
         for _ in 0..2 {
-            buf.write_int32(0);        // Threshold (no rest bonus)
-            buf.write_uint8(2);        // StateID = Normal
+            buf.write_int32(0); // Threshold (no rest bonus)
+            buf.write_uint8(2); // StateID = Normal
         }
 
         // ModHealingDonePos, ModHealingPercent, ModHealingDonePercent, ModPeriodicHealingDonePercent
@@ -830,7 +840,7 @@ impl PlayerCreateData {
         // BuybackPrice[12] + BuybackTimestamp[12]
         for _ in 0..12 {
             buf.write_uint32(0); // BuybackPrice
-            buf.write_int64(0);  // BuybackTimestamp
+            buf.write_int64(0); // BuybackTimestamp
         }
 
         // HonorableKills/DishonorableKills (8x u16)
@@ -988,23 +998,23 @@ impl PlayerCreateData {
 
         // PvpInfo[7].WriteCreate (each: i8 Bracket + 16 i32/u32 fields + bit Disqualified)
         for _ in 0..7 {
-            buf.write_int8(0);    // Bracket
-            buf.write_int32(0);   // PvpRatingID
-            buf.write_int32(0);   // WeeklyPlayed
-            buf.write_int32(0);   // WeeklyWon
-            buf.write_int32(0);   // SeasonPlayed
-            buf.write_int32(0);   // SeasonWon
-            buf.write_int32(0);   // Rating
-            buf.write_int32(0);   // WeeklyBestRating
-            buf.write_int32(0);   // SeasonBestRating
-            buf.write_int32(0);   // PvpTierID
-            buf.write_int32(0);   // WeeklyBestWinPvpTierID
-            buf.write_uint32(0);  // Field_28
-            buf.write_uint32(0);  // Field_2C
-            buf.write_int32(0);   // WeeklyRoundsPlayed
-            buf.write_int32(0);   // WeeklyRoundsWon
-            buf.write_int32(0);   // SeasonRoundsPlayed
-            buf.write_int32(0);   // SeasonRoundsWon
+            buf.write_int8(0); // Bracket
+            buf.write_int32(0); // PvpRatingID
+            buf.write_int32(0); // WeeklyPlayed
+            buf.write_int32(0); // WeeklyWon
+            buf.write_int32(0); // SeasonPlayed
+            buf.write_int32(0); // SeasonWon
+            buf.write_int32(0); // Rating
+            buf.write_int32(0); // WeeklyBestRating
+            buf.write_int32(0); // SeasonBestRating
+            buf.write_int32(0); // PvpTierID
+            buf.write_int32(0); // WeeklyBestWinPvpTierID
+            buf.write_uint32(0); // Field_28
+            buf.write_uint32(0); // Field_2C
+            buf.write_int32(0); // WeeklyRoundsPlayed
+            buf.write_int32(0); // WeeklyRoundsWon
+            buf.write_int32(0); // SeasonRoundsPlayed
+            buf.write_int32(0); // SeasonRoundsWon
             buf.write_bit(false); // Disqualified
             buf.flush_bits();
         }
@@ -1119,8 +1129,8 @@ impl CreatureCreateData {
 
     fn write_object_data(&self, buf: &mut WorldPacket) {
         buf.write_int32(self.entry as i32); // EntryId (non-zero for creatures)
-        buf.write_uint32(0);                // DynamicFlags
-        buf.write_float(self.scale);        // Scale
+        buf.write_uint32(0); // DynamicFlags
+        buf.write_float(self.scale); // Scale
     }
 
     fn write_unit_data(&self, buf: &mut WorldPacket) {
@@ -1212,8 +1222,8 @@ impl CreatureCreateData {
 
         // BoundingRadius, CombatReach, DisplayScale
         buf.write_float(0.389); // BoundingRadius (common default)
-        buf.write_float(1.5);   // CombatReach
-        buf.write_float(1.0);   // DisplayScale
+        buf.write_float(1.5); // CombatReach
+        buf.write_float(1.0); // DisplayScale
 
         // NativeDisplayID, NativeXDisplayScale, MountDisplayID
         buf.write_int32(self.native_display_id as i32);
@@ -1334,20 +1344,20 @@ impl GameObjectCreateData {
 
         // ObjectFieldData.WriteCreate
         buf.write_int32(self.entry as i32); // EntryId
-        buf.write_uint32(0);                 // DynamicFlags
-        buf.write_float(self.scale);         // Scale
+        buf.write_uint32(0); // DynamicFlags
+        buf.write_float(self.scale); // Scale
 
         // GameObjectFieldData.WriteCreate (matches C# GameObjectFieldData.WriteCreate)
         buf.write_int32(self.display_id as i32); // DisplayID
-        buf.write_int32(0);                       // SpellVisualID
-        buf.write_int32(0);                       // StateSpellVisualID
-        buf.write_int32(0);                       // SpawnTrackingStateAnimID
-        buf.write_int32(0);                       // SpawnTrackingStateAnimKitID
-        buf.write_int32(0);                       // StateWorldEffectIDs.Count
+        buf.write_int32(0); // SpellVisualID
+        buf.write_int32(0); // StateSpellVisualID
+        buf.write_int32(0); // SpawnTrackingStateAnimID
+        buf.write_int32(0); // SpawnTrackingStateAnimKitID
+        buf.write_int32(0); // StateWorldEffectIDs.Count
         // No StateWorldEffectIDs entries (count=0)
-        write_empty_guid(&mut buf);               // CreatedBy
-        write_empty_guid(&mut buf);               // GuildGUID
-        buf.write_uint32(0);                       // Flags
+        write_empty_guid(&mut buf); // CreatedBy
+        write_empty_guid(&mut buf); // GuildGUID
+        buf.write_uint32(0); // Flags
         // ParentRotation (Quaternion: x, y, z, w)
         // In C# this comes from gameobject_addon.parent_rotation, NOT from gameobject.rotation0-3.
         // For most GameObjects it's the identity quaternion (0, 0, 0, 1).
@@ -1356,15 +1366,15 @@ impl GameObjectCreateData {
         buf.write_float(0.0); // ParentRotation.Y
         buf.write_float(0.0); // ParentRotation.Z
         buf.write_float(1.0); // ParentRotation.W
-        buf.write_int32(self.faction_template);    // FactionTemplate
-        buf.write_uint32(0);                       // Level
-        buf.write_int8(self.state);                // State
-        buf.write_int8(self.go_type as i8);        // TypeID (gameobject type)
-        buf.write_uint8(self.anim_progress);       // PercentHealth (anim progress)
-        buf.write_int32(0);                        // ArtKit
-        buf.write_int32(0);                        // EnableDoodadSets.Size
-        buf.write_int32(0);                        // CustomParam
-        buf.write_int32(0);                        // WorldEffects.Size
+        buf.write_int32(self.faction_template); // FactionTemplate
+        buf.write_uint32(0); // Level
+        buf.write_int8(self.state); // State
+        buf.write_int8(self.go_type as i8); // TypeID (gameobject type)
+        buf.write_uint8(self.anim_progress); // PercentHealth (anim progress)
+        buf.write_int32(0); // ArtKit
+        buf.write_int32(0); // EnableDoodadSets.Size
+        buf.write_int32(0); // CustomParam
+        buf.write_int32(0); // WorldEffects.Size
         // No EnableDoodadSets/WorldEffects entries
 
         let data = buf.into_data();
@@ -1388,10 +1398,10 @@ impl GameObjectCreateData {
     /// ```
     /// Layout: bits[0:20]=Z(21), bits[21:41]=Y(21), bits[42:63]=X(22).
     pub fn packed_rotation(&self) -> i64 {
-        const PACK_YZ: i64 = 1 << 20;           // 1,048,576
-        const PACK_X: i64 = PACK_YZ << 1;       // 2,097,152
+        const PACK_YZ: i64 = 1 << 20; // 1,048,576
+        const PACK_X: i64 = PACK_YZ << 1; // 2,097,152
         const PACK_YZ_MASK: i64 = (PACK_YZ << 1) - 1; // 0x1FFFFF
-        const PACK_X_MASK: i64 = (PACK_X << 1) - 1;   // 0x3FFFFF
+        const PACK_X_MASK: i64 = (PACK_X << 1) - 1; // 0x3FFFFF
 
         // Normalize quaternion (C# SetLocalRotation does this before packing)
         let (rx, ry, rz, rw) = {
@@ -1442,10 +1452,7 @@ pub enum UpdateBlock {
         create_data: ItemCreateData,
     },
     /// VALUES update for an item: currently only StackCount is needed by direct inventory stores.
-    ItemValuesUpdate {
-        guid: ObjectGuid,
-        stack_count: u32,
-    },
+    ItemValuesUpdate { guid: ObjectGuid, stack_count: u32 },
     /// VALUES update for a player: only changed InvSlots, VisibleItems, VirtualItems.
     PlayerValuesUpdate {
         guid: ObjectGuid,
@@ -1474,9 +1481,7 @@ pub enum UpdateBlock {
         data: ObjectDataValuesUpdate,
     },
     /// Out-of-range destroy (removes object from client view without full destroy).
-    DestroyOutOfRange {
-        guid: ObjectGuid,
-    },
+    DestroyOutOfRange { guid: ObjectGuid },
 }
 
 // ── UpdateObject (SMSG_UPDATE_OBJECT) ───────────────────────────────
@@ -1526,9 +1531,7 @@ impl UpdateObject {
     }
 
     /// Create a gameobject spawn block.
-    pub fn create_gameobject_block(
-        create_data: GameObjectCreateData,
-    ) -> UpdateBlock {
+    pub fn create_gameobject_block(create_data: GameObjectCreateData) -> UpdateBlock {
         UpdateBlock::CreateGameObject {
             guid: create_data.guid,
             create_data,
@@ -1719,11 +1722,7 @@ impl UpdateObject {
     }
 
     /// Create a VALUES update for player stats only (after equip/desequip).
-    pub fn player_stat_update(
-        guid: ObjectGuid,
-        map_id: u16,
-        changes: PlayerStatChanges,
-    ) -> Self {
+    pub fn player_stat_update(guid: ObjectGuid, map_id: u16, changes: PlayerStatChanges) -> Self {
         Self {
             map_id,
             num_updates: 1,
@@ -1815,9 +1814,7 @@ impl ServerPacket for UpdateObject {
 
         if has_destroy_or_oor {
             data_buf.write_uint16(self.destroy_guids.len() as u16);
-            data_buf.write_int32(
-                (self.destroy_guids.len() + self.out_of_range_guids.len()) as i32,
-            );
+            data_buf.write_int32((self.destroy_guids.len() + self.out_of_range_guids.len()) as i32);
             for g in &self.destroy_guids {
                 data_buf.write_packed_guid(g);
             }
@@ -1853,32 +1850,13 @@ impl ServerPacket for UpdateObject {
                     movement,
                     create_data,
                 } => {
-                    write_creature_create_block(
-                        &mut blocks_buf,
-                        guid,
-                        movement,
-                        create_data,
-                    );
+                    write_creature_create_block(&mut blocks_buf, guid, movement, create_data);
                 }
-                UpdateBlock::CreateGameObject {
-                    guid,
-                    create_data,
-                } => {
-                    write_gameobject_create_block(
-                        &mut blocks_buf,
-                        guid,
-                        create_data,
-                    );
+                UpdateBlock::CreateGameObject { guid, create_data } => {
+                    write_gameobject_create_block(&mut blocks_buf, guid, create_data);
                 }
-                UpdateBlock::CreateItem {
-                    guid,
-                    create_data,
-                } => {
-                    write_item_create_block(
-                        &mut blocks_buf,
-                        guid,
-                        create_data,
-                    );
+                UpdateBlock::CreateItem { guid, create_data } => {
+                    write_item_create_block(&mut blocks_buf, guid, create_data);
                 }
                 UpdateBlock::ItemValuesUpdate { guid, stack_count } => {
                     write_item_values_update_block(&mut blocks_buf, guid, *stack_count);
@@ -1903,7 +1881,11 @@ impl ServerPacket for UpdateObject {
                         *coinage_change,
                     );
                 }
-                UpdateBlock::CreatureHealthUpdate { guid, health, max_health } => {
+                UpdateBlock::CreatureHealthUpdate {
+                    guid,
+                    health,
+                    max_health,
+                } => {
                     write_creature_health_update_block(&mut blocks_buf, guid, *health, *max_health);
                 }
                 UpdateBlock::ObjectValuesUpdate { guid, data } => {
@@ -1946,24 +1928,24 @@ fn write_create_block(
 
     // ── 18-bit CreateObjectBits ────────────────────────────────
     let has_movement = movement.is_some();
-    buf.write_bit(false);         // 0: NoBirthAnim
-    buf.write_bit(false);         // 1: EnablePortals
-    buf.write_bit(false);         // 2: PlayHoverAnim
-    buf.write_bit(has_movement);  // 3: MovementUpdate
-    buf.write_bit(false);         // 4: MovementTransport
-    buf.write_bit(false);         // 5: Stationary
-    buf.write_bit(false);         // 6: CombatVictim
-    buf.write_bit(false);         // 7: ServerTime
-    buf.write_bit(false);         // 8: Vehicle
-    buf.write_bit(false);         // 9: AnimKit
-    buf.write_bit(false);         // 10: Rotation
-    buf.write_bit(false);         // 11: AreaTrigger
-    buf.write_bit(false);         // 12: GameObject
-    buf.write_bit(false);         // 13: SmoothPhasing
-    buf.write_bit(is_self);       // 14: ThisIsYou
-    buf.write_bit(false);         // 15: SceneObject
-    buf.write_bit(is_self);       // 16: ActivePlayer
-    buf.write_bit(false);         // 17: Conversation
+    buf.write_bit(false); // 0: NoBirthAnim
+    buf.write_bit(false); // 1: EnablePortals
+    buf.write_bit(false); // 2: PlayHoverAnim
+    buf.write_bit(has_movement); // 3: MovementUpdate
+    buf.write_bit(false); // 4: MovementTransport
+    buf.write_bit(false); // 5: Stationary
+    buf.write_bit(false); // 6: CombatVictim
+    buf.write_bit(false); // 7: ServerTime
+    buf.write_bit(false); // 8: Vehicle
+    buf.write_bit(false); // 9: AnimKit
+    buf.write_bit(false); // 10: Rotation
+    buf.write_bit(false); // 11: AreaTrigger
+    buf.write_bit(false); // 12: GameObject
+    buf.write_bit(false); // 13: SmoothPhasing
+    buf.write_bit(is_self); // 14: ThisIsYou
+    buf.write_bit(false); // 15: SceneObject
+    buf.write_bit(is_self); // 16: ActivePlayer
+    buf.write_bit(false); // 17: Conversation
     buf.flush_bits();
 
     // ── MovementUpdate block ───────────────────────────────────
@@ -2053,23 +2035,23 @@ fn write_movement_update(buf: &mut WorldPacket, guid: &ObjectGuid, mv: &Movement
     buf.write_float(1.0);
 
     // 17 AdvancedFlying parameters (hardcoded defaults from C#)
-    buf.write_float(2.0);   // airFriction
-    buf.write_float(65.0);  // maxVel
-    buf.write_float(1.0);   // liftCoefficient
-    buf.write_float(3.0);   // doubleJumpVelMod
-    buf.write_float(10.0);  // glideStartMinHeight
+    buf.write_float(2.0); // airFriction
+    buf.write_float(65.0); // maxVel
+    buf.write_float(1.0); // liftCoefficient
+    buf.write_float(3.0); // doubleJumpVelMod
+    buf.write_float(10.0); // glideStartMinHeight
     buf.write_float(100.0); // addImpulseMaxSpeed
-    buf.write_float(90.0);  // minBankingRate
+    buf.write_float(90.0); // minBankingRate
     buf.write_float(140.0); // maxBankingRate
     buf.write_float(180.0); // minPitchingRateDown
     buf.write_float(360.0); // maxPitchingRateDown
-    buf.write_float(90.0);  // minPitchingRateUp
+    buf.write_float(90.0); // minPitchingRateUp
     buf.write_float(270.0); // maxPitchingRateUp
-    buf.write_float(30.0);  // minTurnVelThreshold
-    buf.write_float(80.0);  // maxTurnVelThreshold
-    buf.write_float(2.75);  // surfaceFriction
-    buf.write_float(7.0);   // overMaxDeceleration
-    buf.write_float(0.4);   // launchSpeedCoefficient
+    buf.write_float(30.0); // minTurnVelThreshold
+    buf.write_float(80.0); // maxTurnVelThreshold
+    buf.write_float(2.75); // surfaceFriction
+    buf.write_float(7.0); // overMaxDeceleration
+    buf.write_float(0.4); // launchSpeedCoefficient
 
     // HasSplineData bit
     buf.write_bit(false);
@@ -2092,7 +2074,7 @@ fn write_active_player_movement_block(buf: &mut WorldPacket) {
     // 3 bits: HasSceneInstanceIDs, HasRuneState, HasActionButtons
     buf.write_bit(false); // HasSceneInstanceIDs
     buf.write_bit(false); // HasRuneState
-    buf.write_bit(true);  // HasActionButtons
+    buf.write_bit(true); // HasActionButtons
     buf.flush_bits();
 
     // HasSceneInstanceIDs: if true, would write i32 count + i32[] IDs (skipped)
@@ -2122,24 +2104,24 @@ fn write_creature_create_block(
     buf.write_uint8(TypeId::Unit as u8);
 
     // ── 18-bit CreateObjectBits ────────────────────────────
-    buf.write_bit(false);        // 0: NoBirthAnim
-    buf.write_bit(false);        // 1: EnablePortals
-    buf.write_bit(false);        // 2: PlayHoverAnim
-    buf.write_bit(true);         // 3: MovementUpdate (always true for Unit)
-    buf.write_bit(false);        // 4: MovementTransport
-    buf.write_bit(false);        // 5: Stationary
-    buf.write_bit(false);        // 6: CombatVictim
-    buf.write_bit(false);        // 7: ServerTime
-    buf.write_bit(false);        // 8: Vehicle
-    buf.write_bit(false);        // 9: AnimKit
-    buf.write_bit(false);        // 10: Rotation
-    buf.write_bit(false);        // 11: AreaTrigger
-    buf.write_bit(false);        // 12: GameObject
-    buf.write_bit(false);        // 13: SmoothPhasing
-    buf.write_bit(false);        // 14: ThisIsYou (false for creatures)
-    buf.write_bit(false);        // 15: SceneObject
-    buf.write_bit(false);        // 16: ActivePlayer (false for creatures)
-    buf.write_bit(false);        // 17: Conversation
+    buf.write_bit(false); // 0: NoBirthAnim
+    buf.write_bit(false); // 1: EnablePortals
+    buf.write_bit(false); // 2: PlayHoverAnim
+    buf.write_bit(true); // 3: MovementUpdate (always true for Unit)
+    buf.write_bit(false); // 4: MovementTransport
+    buf.write_bit(false); // 5: Stationary
+    buf.write_bit(false); // 6: CombatVictim
+    buf.write_bit(false); // 7: ServerTime
+    buf.write_bit(false); // 8: Vehicle
+    buf.write_bit(false); // 9: AnimKit
+    buf.write_bit(false); // 10: Rotation
+    buf.write_bit(false); // 11: AreaTrigger
+    buf.write_bit(false); // 12: GameObject
+    buf.write_bit(false); // 13: SmoothPhasing
+    buf.write_bit(false); // 14: ThisIsYou (false for creatures)
+    buf.write_bit(false); // 15: SceneObject
+    buf.write_bit(false); // 16: ActivePlayer (false for creatures)
+    buf.write_bit(false); // 17: Conversation
     buf.flush_bits();
 
     // ── MovementUpdate block ───────────────────────────────
@@ -2173,24 +2155,24 @@ fn write_gameobject_create_block(
     buf.write_uint8(TypeId::GameObject as u8);
 
     // ── 18-bit CreateObjectBits ────────────────────────────
-    buf.write_bit(false);        // 0: NoBirthAnim
-    buf.write_bit(false);        // 1: EnablePortals
-    buf.write_bit(false);        // 2: PlayHoverAnim
-    buf.write_bit(false);        // 3: MovementUpdate (false for GOs)
-    buf.write_bit(false);        // 4: MovementTransport
-    buf.write_bit(true);         // 5: Stationary (true for GOs)
-    buf.write_bit(false);        // 6: CombatVictim
-    buf.write_bit(false);        // 7: ServerTime
-    buf.write_bit(false);        // 8: Vehicle
-    buf.write_bit(false);        // 9: AnimKit
-    buf.write_bit(true);         // 10: Rotation (true for GOs)
-    buf.write_bit(false);        // 11: AreaTrigger
-    buf.write_bit(true);         // 12: GameObject (true for GOs)
-    buf.write_bit(false);        // 13: SmoothPhasing
-    buf.write_bit(false);        // 14: ThisIsYou
-    buf.write_bit(false);        // 15: SceneObject
-    buf.write_bit(false);        // 16: ActivePlayer
-    buf.write_bit(false);        // 17: Conversation
+    buf.write_bit(false); // 0: NoBirthAnim
+    buf.write_bit(false); // 1: EnablePortals
+    buf.write_bit(false); // 2: PlayHoverAnim
+    buf.write_bit(false); // 3: MovementUpdate (false for GOs)
+    buf.write_bit(false); // 4: MovementTransport
+    buf.write_bit(true); // 5: Stationary (true for GOs)
+    buf.write_bit(false); // 6: CombatVictim
+    buf.write_bit(false); // 7: ServerTime
+    buf.write_bit(false); // 8: Vehicle
+    buf.write_bit(false); // 9: AnimKit
+    buf.write_bit(true); // 10: Rotation (true for GOs)
+    buf.write_bit(false); // 11: AreaTrigger
+    buf.write_bit(true); // 12: GameObject (true for GOs)
+    buf.write_bit(false); // 13: SmoothPhasing
+    buf.write_bit(false); // 14: ThisIsYou
+    buf.write_bit(false); // 15: SceneObject
+    buf.write_bit(false); // 16: ActivePlayer
+    buf.write_bit(false); // 17: Conversation
     buf.flush_bits();
 
     // No MovementUpdate (bit 3 = false)
@@ -2208,8 +2190,8 @@ fn write_gameobject_create_block(
     buf.write_int64(create_data.packed_rotation());
 
     // ── GameObject block (bit 12 = true) ─────────────────────
-    buf.write_int32(0);        // WorldEffectID
-    buf.write_bit(false);      // has extra u32
+    buf.write_int32(0); // WorldEffectID
+    buf.write_bit(false); // has extra u32
     buf.flush_bits();
 
     // ── Values block ─────────────────────────────────────────
@@ -2220,11 +2202,7 @@ fn write_gameobject_create_block(
 ///
 /// Items have NO movement block, NO stationary, and all 18 bits are false.
 /// Values = ObjectData + ItemData (with Owner conditional fields).
-fn write_item_create_block(
-    buf: &mut WorldPacket,
-    guid: &ObjectGuid,
-    data: &ItemCreateData,
-) {
+fn write_item_create_block(buf: &mut WorldPacket, guid: &ObjectGuid, data: &ItemCreateData) {
     // UpdateType: CreateObject2 — first appearance of item to the client
     buf.write_uint8(UpdateType::CreateObject2 as u8);
 
@@ -2249,22 +2227,22 @@ fn write_item_create_block(
     val_buf.write_uint8(flags);
 
     // -- ObjectData (3 fields) --
-    val_buf.write_int32(data.entry_id);   // EntryId
-    val_buf.write_uint32(0);              // DynamicFlags
-    val_buf.write_float(1.0);             // Scale
+    val_buf.write_int32(data.entry_id); // EntryId
+    val_buf.write_uint32(0); // DynamicFlags
+    val_buf.write_float(1.0); // Scale
 
     // -- ItemData --
     // Owner, ContainedIn, Creator, GiftCreator
     val_buf.write_packed_guid(&data.owner_guid);
     val_buf.write_packed_guid(&data.contained_in);
-    write_empty_guid(&mut val_buf);       // Creator
-    write_empty_guid(&mut val_buf);       // GiftCreator
+    write_empty_guid(&mut val_buf); // Creator
+    write_empty_guid(&mut val_buf); // GiftCreator
 
     // Owner conditional block 1
     val_buf.write_int32(data.stack_count as i32); // StackCount
-    val_buf.write_int32(0);               // Expiration
+    val_buf.write_int32(0); // Expiration
     for _ in 0..5 {
-        val_buf.write_int32(0);           // SpellCharges[5]
+        val_buf.write_int32(0); // SpellCharges[5]
     }
 
     // DynamicFlags
@@ -2272,11 +2250,11 @@ fn write_item_create_block(
 
     // 13 x ItemEnchantment (all zeros)
     for _ in 0..13 {
-        val_buf.write_int32(0);           // ID
-        val_buf.write_int32(0);           // Duration
-        val_buf.write_int16(0);           // Charges
-        val_buf.write_uint8(0);           // Field_A
-        val_buf.write_uint8(0);           // Field_B
+        val_buf.write_int32(0); // ID
+        val_buf.write_int32(0); // Duration
+        val_buf.write_int16(0); // Charges
+        val_buf.write_uint8(0); // Field_A
+        val_buf.write_uint8(0); // Field_B
     }
 
     // PropertySeed, RandomPropertiesID
@@ -2284,7 +2262,7 @@ fn write_item_create_block(
     val_buf.write_int32(data.random_properties_id);
 
     // Owner conditional block 2
-    val_buf.write_int32(data.durability as i32);  // Durability
+    val_buf.write_int32(data.durability as i32); // Durability
     val_buf.write_int32(data.max_durability as i32); // MaxDurability
 
     // CreatePlayedTime, Context, CreateTime
@@ -2293,22 +2271,22 @@ fn write_item_create_block(
     val_buf.write_int64(0);
 
     // Owner conditional block 3
-    val_buf.write_int64(0);               // ArtifactXP
-    val_buf.write_uint8(0);               // ItemAppearanceModID
+    val_buf.write_int64(0); // ArtifactXP
+    val_buf.write_uint8(0); // ItemAppearanceModID
 
     // ArtifactPowers.Size, Gems.Size
     val_buf.write_int32(0);
     val_buf.write_int32(0);
 
     // Owner conditional block 4
-    val_buf.write_uint32(0);              // DynamicFlags2
+    val_buf.write_uint32(0); // DynamicFlags2
 
     // ItemBonusKey: ItemID + BonusCount
-    val_buf.write_int32(0);               // ItemID
-    val_buf.write_int32(0);               // BonusListIDs.Count
+    val_buf.write_int32(0); // ItemID
+    val_buf.write_int32(0); // BonusListIDs.Count
 
     // Owner conditional block 5
-    val_buf.write_uint16(0);              // DEBUGItemLevel
+    val_buf.write_uint16(0); // DEBUGItemLevel
 
     // ItemModList (dynamic) — 6 bits for size = 0, then FlushBits
     val_buf.write_bits(0, 6);
@@ -2388,16 +2366,21 @@ fn write_player_values_update_block(
     // Compute which sections have changes
     let has_unit = !virtual_item_changes.is_empty() || stat_changes.is_some();
     let has_player = !visible_item_changes.is_empty();
-    let has_active_player =
-        !inv_slot_changes.is_empty()
-            || !buyback_changes.is_empty()
-            || stat_changes.is_some()
-            || coinage_change.is_some();
+    let has_active_player = !inv_slot_changes.is_empty()
+        || !buyback_changes.is_empty()
+        || stat_changes.is_some()
+        || coinage_change.is_some();
 
     let mut type_mask: u32 = 0;
-    if has_unit { type_mask |= 1 << 5; }           // TypeId::Unit = 5
-    if has_player { type_mask |= 1 << 6; }         // TypeId::Player = 6
-    if has_active_player { type_mask |= 1 << 7; }  // TypeId::ActivePlayer = 7
+    if has_unit {
+        type_mask |= 1 << 5;
+    } // TypeId::Unit = 5
+    if has_player {
+        type_mask |= 1 << 6;
+    } // TypeId::Player = 6
+    if has_active_player {
+        type_mask |= 1 << 7;
+    } // TypeId::ActivePlayer = 7
 
     val_buf.write_uint32(type_mask);
 
@@ -2410,7 +2393,11 @@ fn write_player_values_update_block(
     }
     if has_active_player {
         write_active_player_data_values_update(
-            &mut val_buf, inv_slot_changes, buyback_changes, stat_changes, coinage_change,
+            &mut val_buf,
+            inv_slot_changes,
+            buyback_changes,
+            stat_changes,
+            coinage_change,
         );
     }
 
@@ -2499,12 +2486,23 @@ fn write_unit_data_values_update(
     if stat_changes.is_some() {
         blocks[0] |= (1 << 0) | (1 << 5) | (1 << 6);
         blocks[1] |= (1 << 0) | (1 << 20) | (1 << 21);
-        blocks[2] |= (1 << 0) | (1 << 11) | (1 << 12) | (1 << 17) | (1 << 21) | (1 << 27) | (1 << 28);
+        blocks[2] |=
+            (1 << 0) | (1 << 11) | (1 << 12) | (1 << 17) | (1 << 21) | (1 << 27) | (1 << 28);
         blocks[3] |= (1 << 20) | (1 << 21) | (1 << 31);
         blocks[4] |= (1 << 9) | (1 << 19) | (1 << 29);
-        blocks[5] |= (1 << 14) | (1 << 15) | (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19)
-            | (1 << 20) | (1 << 21) | (1 << 22) | (1 << 23) | (1 << 24)
-            | (1 << 30) | (1 << 31);
+        blocks[5] |= (1 << 14)
+            | (1 << 15)
+            | (1 << 16)
+            | (1 << 17)
+            | (1 << 18)
+            | (1 << 19)
+            | (1 << 20)
+            | (1 << 21)
+            | (1 << 22)
+            | (1 << 23)
+            | (1 << 24)
+            | (1 << 30)
+            | (1 << 31);
     }
 
     let mut blocks_mask: u32 = 0;
@@ -2547,11 +2545,11 @@ fn write_unit_data_values_update(
 
         // Blocks 3-4: Power interleaved loop (index 0)
         // C# writes PowerRegenFlat, PowerRegenInterrupted, Power, MaxPower, ModPowerRegen
-        buf.write_float(sc.mana_regen);        // PowerRegenFlatModifier[0]
+        buf.write_float(sc.mana_regen); // PowerRegenFlatModifier[0]
         buf.write_float(sc.mana_regen_combat); // PowerRegenInterruptedFlatModifier[0]
-        buf.write_int32(sc.power0);            // Power[0]
-        buf.write_int32(sc.max_power0);        // MaxPower[0]
-        buf.write_float(sc.mana_regen_mp5);   // ModPowerRegen[0]
+        buf.write_int32(sc.power0); // Power[0]
+        buf.write_int32(sc.max_power0); // MaxPower[0]
+        buf.write_float(sc.mana_regen_mp5); // ModPowerRegen[0]
     }
 
     // Block 5: VirtualItems FIRST (bits 7-10), then Stats (14-24), then Resistances (30-31)
@@ -2571,8 +2569,8 @@ fn write_unit_data_values_update(
     // then Resistances — after VirtualItems in block 5
     if let Some(sc) = stat_changes {
         for i in 0..5 {
-            buf.write_int32(sc.stats[i]);          // Stats[i]
-            buf.write_int32(sc.stat_pos_buff[i]);  // StatPosBuff[i]
+            buf.write_int32(sc.stats[i]); // Stats[i]
+            buf.write_int32(sc.stat_pos_buff[i]); // StatPosBuff[i]
             // StatNegBuff[i] bits not set → skip
         }
         buf.write_int32(sc.armor); // Resistances[0]
@@ -2602,7 +2600,9 @@ fn write_player_data_values_update(
     blocks[1] |= 1 << 29;
 
     for &(slot, _, _, _) in visible_item_changes {
-        if slot >= 19 { continue; }
+        if slot >= 19 {
+            continue;
+        }
         let bit = 62 + slot as u32;
         let block_idx = (bit / 32) as usize;
         let bit_in_block = bit % 32;
@@ -2686,7 +2686,9 @@ fn write_active_player_data_values_update(
     if !inv_slot_changes.is_empty() {
         blocks[3] |= 1 << 28;
         for &(slot, _) in inv_slot_changes {
-            if (slot as u32) >= 141 { continue; }
+            if (slot as u32) >= 141 {
+                continue;
+            }
             let bit = 125 + slot as u32;
             let block_idx = (bit / 32) as usize;
             let bit_in_block = bit % 32;
@@ -2723,7 +2725,7 @@ fn write_active_player_data_values_update(
         // Parent 38 section: ALL 31 fields (bits 39-69)
         // parent=38→b1:6, bits 39-63→b1:7-31, bits 64-69→b2:0-5
         blocks[1] |= 0xFFFF_FFC0; // bits 6-31
-        blocks[2] |= 0x3F;        // bits 0-5
+        blocks[2] |= 0x3F; // bits 0-5
 
         // Parent 269 section (block 8): SpellCritPercentage[7] + ModDamageDonePos[7]
         // parent=269→bit13, SpellCrit[0-6]=270-276→bits14-20, ModDmgPos[0-6]=277-283→bits21-27
@@ -2739,10 +2741,14 @@ fn write_active_player_data_values_update(
     let mut group0: u32 = 0;
     let mut group1: u32 = 0;
     for i in 0..32 {
-        if blocks[i] != 0 { group0 |= 1 << i; }
+        if blocks[i] != 0 {
+            group0 |= 1 << i;
+        }
     }
     for i in 32..48 {
-        if blocks[i] != 0 { group1 |= 1 << (i - 32); }
+        if blocks[i] != 0 {
+            group1 |= 1 << (i - 32);
+        }
     }
 
     // C#: WriteUInt32 for group 0 (byte-aligned), WriteBits for group 1 (16 bits)
@@ -2769,50 +2775,48 @@ fn write_active_player_data_values_update(
 
     // Parent 0 section: expertise (bits 36-37) — BEFORE parent 38
     if let Some(sc) = stat_changes {
-        buf.write_float(sc.mainhand_expertise);     // bit 36: MainhandExpertise
-        buf.write_float(sc.offhand_expertise);      // bit 37: OffhandExpertise
+        buf.write_float(sc.mainhand_expertise); // bit 36: MainhandExpertise
+        buf.write_float(sc.offhand_expertise); // bit 37: OffhandExpertise
     }
 
     // Parent 38 section: ALL 31 fields (bits 39-69) in C# definition order
     if let Some(sc) = stat_changes {
-        buf.write_float(sc.ranged_expertise);        // bit 39: RangedExpertise
+        buf.write_float(sc.ranged_expertise); // bit 39: RangedExpertise
         buf.write_float(sc.combat_rating_expertise); // bit 40: CombatRatingExpertise
-        buf.write_float(sc.block_pct);               // bit 41: BlockPercentage
-        buf.write_float(sc.dodge_pct);               // bit 42: DodgePercentage
-        buf.write_float(sc.dodge_from_attr);         // bit 43: DodgePercentageFromAttribute
-        buf.write_float(sc.parry_pct);               // bit 44: ParryPercentage
-        buf.write_float(sc.parry_from_attr);         // bit 45: ParryPercentageFromAttribute
-        buf.write_float(sc.crit_pct);                // bit 46: CritPercentage
-        buf.write_float(sc.ranged_crit_pct);         // bit 47: RangedCritPercentage
-        buf.write_float(sc.offhand_crit_pct);        // bit 48: OffhandCritPercentage
-        buf.write_int32(sc.shield_block);            // bit 49: ShieldBlock
-        buf.write_float(sc.shield_block_crit_pct);   // bit 50: ShieldBlockCritPercentage
-        buf.write_float(0.0);                        // bit 51: Mastery
-        buf.write_float(0.0);                        // bit 52: Speed
-        buf.write_float(0.0);                        // bit 53: Avoidance
-        buf.write_float(0.0);                        // bit 54: Sturdiness
-        buf.write_int32(0);                          // bit 55: Versatility
-        buf.write_float(0.0);                        // bit 56: VersatilityBonus
-        buf.write_float(0.0);                        // bit 57: PvpPowerDamage
-        buf.write_float(0.0);                        // bit 58: PvpPowerHealing
-        buf.write_int32(sc.spell_power);             // bit 59: ModHealingDonePos
-        buf.write_float(sc.mod_healing_pct);         // bit 60: ModHealingPercent
-        buf.write_float(sc.mod_healing_done_pct);    // bit 61: ModHealingDonePercent
+        buf.write_float(sc.block_pct); // bit 41: BlockPercentage
+        buf.write_float(sc.dodge_pct); // bit 42: DodgePercentage
+        buf.write_float(sc.dodge_from_attr); // bit 43: DodgePercentageFromAttribute
+        buf.write_float(sc.parry_pct); // bit 44: ParryPercentage
+        buf.write_float(sc.parry_from_attr); // bit 45: ParryPercentageFromAttribute
+        buf.write_float(sc.crit_pct); // bit 46: CritPercentage
+        buf.write_float(sc.ranged_crit_pct); // bit 47: RangedCritPercentage
+        buf.write_float(sc.offhand_crit_pct); // bit 48: OffhandCritPercentage
+        buf.write_int32(sc.shield_block); // bit 49: ShieldBlock
+        buf.write_float(sc.shield_block_crit_pct); // bit 50: ShieldBlockCritPercentage
+        buf.write_float(0.0); // bit 51: Mastery
+        buf.write_float(0.0); // bit 52: Speed
+        buf.write_float(0.0); // bit 53: Avoidance
+        buf.write_float(0.0); // bit 54: Sturdiness
+        buf.write_int32(0); // bit 55: Versatility
+        buf.write_float(0.0); // bit 56: VersatilityBonus
+        buf.write_float(0.0); // bit 57: PvpPowerDamage
+        buf.write_float(0.0); // bit 58: PvpPowerHealing
+        buf.write_int32(sc.spell_power); // bit 59: ModHealingDonePos
+        buf.write_float(sc.mod_healing_pct); // bit 60: ModHealingPercent
+        buf.write_float(sc.mod_healing_done_pct); // bit 61: ModHealingDonePercent
         buf.write_float(sc.mod_periodic_healing_pct); // bit 62: ModPeriodicHealingDonePercent
-        buf.write_float(sc.mod_spell_power_pct);     // bit 63: ModSpellPowerPercent
-        buf.write_float(0.0);                        // bit 64: ModResiliencePercent
-        buf.write_float(-1.0);                       // bit 65: OverrideSpellPowerByAPPercent
-        buf.write_float(-1.0);                       // bit 66: OverrideAPBySpellPowerPercent
-        buf.write_int32(0);                          // bit 67: ModTargetResistance
-        buf.write_int32(0);                          // bit 68: ModTargetPhysicalResistance
-        buf.write_uint32(0);                         // bit 69: LocalFlags
+        buf.write_float(sc.mod_spell_power_pct); // bit 63: ModSpellPowerPercent
+        buf.write_float(0.0); // bit 64: ModResiliencePercent
+        buf.write_float(-1.0); // bit 65: OverrideSpellPowerByAPPercent
+        buf.write_float(-1.0); // bit 66: OverrideAPBySpellPowerPercent
+        buf.write_int32(0); // bit 67: ModTargetResistance
+        buf.write_int32(0); // bit 68: ModTargetPhysicalResistance
+        buf.write_uint32(0); // bit 69: LocalFlags
     }
 
     // Parent 124 section: InvSlots
     for slot in 0..141u8 {
-        if let Some(&(_, ref guid)) =
-            inv_slot_changes.iter().find(|&&(s, _)| s == slot)
-        {
+        if let Some(&(_, ref guid)) = inv_slot_changes.iter().find(|&&(s, _)| s == slot) {
             buf.write_packed_guid(guid);
         }
     }
@@ -2822,7 +2826,7 @@ fn write_active_player_data_values_update(
     // Both SpellCritPct bits (270-276) and ModDmgDonePos bits (277-283) are set.
     if let Some(sc) = stat_changes {
         for i in 0..7 {
-            buf.write_float(sc.spell_crit_pct[i]);  // SpellCritPercentage[i]
+            buf.write_float(sc.spell_crit_pct[i]); // SpellCritPercentage[i]
             if i == 0 {
                 buf.write_int32(0); // Physical school: no spell power
             } else {
@@ -2910,7 +2914,11 @@ impl UpdateObject {
             num_updates: 1,
             destroy_guids: Vec::new(),
             out_of_range_guids: Vec::new(),
-            blocks: vec![UpdateBlock::CreatureHealthUpdate { guid, health, max_health }],
+            blocks: vec![UpdateBlock::CreatureHealthUpdate {
+                guid,
+                health,
+                max_health,
+            }],
         }
     }
 
@@ -2948,10 +2956,31 @@ mod tests {
         let guid = ObjectGuid::create_player(1, 42);
         let pos = Position::new(-8949.95, -132.493, 83.5312, 0.0);
 
-        let pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, true, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
+        let pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            true,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
         let bytes = pkt.to_bytes();
         // Should be a substantial packet (many KB with ActivePlayerData)
-        assert!(bytes.len() > 1000, "Packet too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 1000,
+            "Packet too small: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]
@@ -2995,8 +3024,16 @@ mod tests {
         assert!(bytes.windows(4).any(|window| window == 7i32.to_le_bytes()));
         assert!(bytes.windows(4).any(|window| window == 12i32.to_le_bytes()));
         assert!(bytes.windows(4).any(|window| window == 20i32.to_le_bytes()));
-        assert!(bytes.windows(4).any(|window| window == 456i32.to_le_bytes()));
-        assert!(bytes.windows(4).any(|window| window == (-77i32).to_le_bytes()));
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 456i32.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == (-77i32).to_le_bytes())
+        );
         assert!(bytes.windows(4).any(|window| window == 2i32.to_le_bytes()));
     }
 
@@ -3021,8 +3058,8 @@ mod tests {
 
     #[test]
     fn player_create_data_faction() {
-        assert_eq!(PlayerCreateData::faction_for_race(1), 1);     // Human
-        assert_eq!(PlayerCreateData::faction_for_race(2), 2);     // Orc
+        assert_eq!(PlayerCreateData::faction_for_race(1), 1); // Human
+        assert_eq!(PlayerCreateData::faction_for_race(2), 2); // Orc
         assert_eq!(PlayerCreateData::faction_for_race(10), 1610); // BloodElf
         assert_eq!(PlayerCreateData::faction_for_race(11), 1629); // Draenei
     }
@@ -3032,7 +3069,24 @@ mod tests {
         // Verify the top-level format: opcode + NumObjUpdates + MapID + Data
         let guid = ObjectGuid::create_player(1, 1);
         let pos = Position::new(0.0, 0.0, 0.0, 0.0);
-        let pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, true, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
+        let pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            true,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
         let bytes = pkt.to_bytes();
 
         // opcode (2 bytes)
@@ -3129,8 +3183,42 @@ mod tests {
         // Non-self player should be smaller (no ActivePlayerData)
         let guid = ObjectGuid::create_player(1, 42);
         let pos = Position::new(0.0, 0.0, 0.0, 0.0);
-        let self_pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, true, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
-        let other_pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, false, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
+        let self_pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            true,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
+        let other_pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            false,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
         let self_bytes = self_pkt.to_bytes();
         let other_bytes = other_pkt.to_bytes();
         // Self packet should be much larger due to ActivePlayerData
@@ -3153,7 +3241,13 @@ mod tests {
     #[test]
     fn creature_create_serializes() {
         let guid = ObjectGuid::create_world_object(
-            wow_core::guid::HighGuid::Creature, 0, 1, 0, 1, 1234, 5678,
+            wow_core::guid::HighGuid::Creature,
+            0,
+            1,
+            0,
+            1,
+            1234,
+            5678,
         );
         let pos = Position::new(-8949.0, -132.0, 83.0, 0.0);
         let data = CreatureCreateData {
@@ -3181,22 +3275,42 @@ mod tests {
         let pkt = UpdateObject::create_creatures(vec![block], 0);
         let bytes = pkt.to_bytes();
         // Creature packet should be much smaller than player (no PlayerData/ActivePlayerData)
-        assert!(bytes.len() > 100, "Creature packet too small: {} bytes", bytes.len());
-        assert!(bytes.len() < 2000, "Creature packet too large: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 100,
+            "Creature packet too small: {} bytes",
+            bytes.len()
+        );
+        assert!(
+            bytes.len() < 2000,
+            "Creature packet too large: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]
     fn creature_smaller_than_player() {
         let player_guid = ObjectGuid::create_player(1, 42);
-        let creature_guid = ObjectGuid::create_world_object(
-            wow_core::guid::HighGuid::Creature, 0, 1, 0, 1, 100, 1,
-        );
+        let creature_guid =
+            ObjectGuid::create_world_object(wow_core::guid::HighGuid::Creature, 0, 1, 0, 1, 100, 1);
         let pos = Position::new(0.0, 0.0, 0.0, 0.0);
 
         let player_pkt = UpdateObject::create_player(
-            player_guid, 1, 1, 0, 1, 49, &pos, 0, 12, false,
-            [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141],
-            PlayerCombatStats::default(), Vec::new(), 0, Vec::new(),
+            player_guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            false,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
         );
 
         let creature_data = CreatureCreateData {
@@ -3241,7 +3355,13 @@ mod tests {
         let mut blocks = Vec::new();
         for i in 0..5 {
             let guid = ObjectGuid::create_world_object(
-                wow_core::guid::HighGuid::Creature, 0, 1, 0, 1, 100, i,
+                wow_core::guid::HighGuid::Creature,
+                0,
+                1,
+                0,
+                1,
+                100,
+                i,
             );
             let data = CreatureCreateData {
                 guid,
@@ -3270,7 +3390,11 @@ mod tests {
         let bytes = pkt.to_bytes();
 
         // 5 creatures should be 5x the single creature data
-        assert!(bytes.len() > 500, "Batched packet too small: {} bytes", bytes.len());
+        assert!(
+            bytes.len() > 500,
+            "Batched packet too small: {} bytes",
+            bytes.len()
+        );
 
         // Check num_updates = 5
         let num_updates = u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]);
@@ -3282,7 +3406,13 @@ mod tests {
         // Verify that NpcFlags value appears in the creature's values block.
         // NpcFlags=1 (Gossip) should be written as 0x01000000 in the packet.
         let guid = ObjectGuid::create_world_object(
-            wow_core::guid::HighGuid::Creature, 0, 1, 0, 1, 3296, 1,
+            wow_core::guid::HighGuid::Creature,
+            0,
+            1,
+            0,
+            1,
+            3296,
+            1,
         );
         let pos = Position::new(1600.0, -4400.0, 10.0, 0.0);
         let data = CreatureCreateData {
@@ -3323,15 +3453,24 @@ mod tests {
         let npc_le = 1u32.to_le_bytes();
         let mut found = false;
         for i in 0..bytes.len().saturating_sub(8) {
-            if bytes[i..i+4] == display_le && bytes[i+4..i+8] == npc_le {
+            if bytes[i..i + 4] == display_le && bytes[i + 4..i + 8] == npc_le {
                 found = true;
                 // Also check NpcFlags[1] = 0
-                assert_eq!(bytes[i+8..i+12], [0, 0, 0, 0], "NpcFlags[1] should be 0");
+                assert_eq!(
+                    bytes[i + 8..i + 12],
+                    [0, 0, 0, 0],
+                    "NpcFlags[1] should be 0"
+                );
                 break;
             }
         }
-        assert!(found, "NpcFlags=1 not found after DisplayId={} in packet ({} bytes). \
-            This means NpcFlags are not being written correctly!", 4500, bytes.len());
+        assert!(
+            found,
+            "NpcFlags=1 not found after DisplayId={} in packet ({} bytes). \
+            This means NpcFlags are not being written correctly!",
+            4500,
+            bytes.len()
+        );
     }
 
     #[test]
@@ -3341,8 +3480,42 @@ mod tests {
         // Non-self packets don't have this block.
         let guid = ObjectGuid::create_player(1, 42);
         let pos = Position::new(0.0, 0.0, 0.0, 0.0);
-        let self_pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, true, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
-        let other_pkt = UpdateObject::create_player(guid, 1, 1, 0, 1, 49, &pos, 0, 12, false, [(0, 0, 0); 19], [ObjectGuid::EMPTY; 141], PlayerCombatStats::default(), Vec::new(), 0, Vec::new());
+        let self_pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            true,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
+        let other_pkt = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            false,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
         let self_bytes = self_pkt.to_bytes();
         let other_bytes = other_pkt.to_bytes();
 

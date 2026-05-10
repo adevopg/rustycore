@@ -13,10 +13,8 @@ use tracing::{debug, error, info};
 
 use wow_constants::ClientOpcodes;
 use wow_crypto::HmacSha256;
-use wow_packet::packets::auth::{
-    AuthContinuedSession, ConnectToKey, EnterEncryptedMode,
-};
 use wow_packet::ClientPacket;
+use wow_packet::packets::auth::{AuthContinuedSession, ConnectToKey, EnterEncryptedMode};
 
 use crate::group_registry::{GroupRegistry, PendingInvites};
 use crate::player_registry::PlayerRegistry;
@@ -24,6 +22,38 @@ use crate::session_mgr::{InstanceLink, SessionManager};
 use crate::world_socket::{
     AccountInfo, AccountLookup, WorldSocket, WorldSocketError, sign_enable_encryption,
 };
+
+/// C++ `World::rate_values` subset used by loot generation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LootDropRatesLikeCpp {
+    pub item_poor: f32,
+    pub item_normal: f32,
+    pub item_uncommon: f32,
+    pub item_rare: f32,
+    pub item_epic: f32,
+    pub item_legendary: f32,
+    pub item_artifact: f32,
+    pub item_referenced: f32,
+    pub item_referenced_amount: f32,
+    pub money: f32,
+}
+
+impl Default for LootDropRatesLikeCpp {
+    fn default() -> Self {
+        Self {
+            item_poor: 1.0,
+            item_normal: 1.0,
+            item_uncommon: 1.0,
+            item_rare: 1.0,
+            item_epic: 1.0,
+            item_legendary: 1.0,
+            item_artifact: 1.0,
+            item_referenced: 1.0,
+            item_referenced_amount: 1.0,
+            money: 1.0,
+        }
+    }
+}
 
 /// Resources needed for creating a WorldSession after authentication.
 ///
@@ -34,18 +64,30 @@ pub struct SessionResources {
     pub world_db: Option<Arc<wow_database::WorldDatabase>>,
     pub guid_generator: Option<Arc<wow_core::ObjectGuidGenerator>>,
     pub currency_types_store: Option<Arc<wow_data::CurrencyTypesStore>>,
+    pub import_price_stores: Option<Arc<wow_data::ImportPriceStores>>,
+    pub item_class_store: Option<Arc<wow_data::ItemClassStore>>,
+    pub item_currency_cost_store: Option<Arc<wow_data::ItemCurrencyCostStore>>,
     pub item_extended_cost_store: Option<Arc<wow_data::ItemExtendedCostStore>>,
     pub item_appearance_store: Option<Arc<wow_data::ItemAppearanceStore>>,
     pub item_store: Option<Arc<wow_data::ItemStore>>,
     pub item_modified_appearance_store: Option<Arc<wow_data::ItemModifiedAppearanceStore>>,
+    pub item_price_base_store: Option<Arc<wow_data::ItemPriceBaseStore>>,
     pub player_stats: Option<Arc<wow_data::PlayerStatsStore>>,
     pub item_stats_store: Option<Arc<wow_data::ItemStatsStore>>,
     pub item_random_suffix_store: Option<Arc<wow_data::ItemRandomSuffixStore>>,
+    pub item_random_properties_store: Option<Arc<wow_data::ItemRandomPropertiesStore>>,
+    pub rand_prop_points_store: Option<Arc<wow_data::RandPropPointsStore>>,
+    pub item_random_enchantment_template_store:
+        Option<Arc<wow_data::ItemRandomEnchantmentTemplateStore>>,
+    pub item_disenchant_loot_store: Option<Arc<wow_data::ItemDisenchantLootStore>>,
+    pub loot_stores: Option<Arc<wow_loot::LootStores>>,
+    pub lock_store: Option<Arc<wow_data::LockStore>>,
     pub spell_item_enchantment_store: Option<Arc<wow_data::SpellItemEnchantmentStore>>,
     pub hotfix_blob_cache: Option<Arc<wow_data::HotfixBlobCache>>,
     pub skill_store: Option<Arc<wow_data::SkillStore>>,
     pub spell_store: Option<Arc<wow_data::SpellStore>>,
     pub area_trigger_store: Option<Arc<wow_data::AreaTriggerStore>>,
+    pub chr_specialization_store: Option<Arc<wow_data::ChrSpecializationStore>>,
     pub quest_store: Option<Arc<wow_data::quest::QuestStore>>,
     pub quest_xp_store: Option<Arc<wow_data::quest_xp::QuestXpStore>>,
     /// XP required per level: index = level (1-based), value = xp_needed.
@@ -56,6 +98,8 @@ pub struct SessionResources {
     pub group_registry: Option<Arc<GroupRegistry>>,
     /// Pending party invites: invited_guid → inviter_guid.
     pub pending_invites: Option<Arc<PendingInvites>>,
+    pub loot_drop_rates: LootDropRatesLikeCpp,
+    pub enable_ae_loot: bool,
     pub realm_id: u16,
     /// External (public) IP from `realmlist.address`.
     pub realm_external_address: [u8; 4],
@@ -83,14 +127,14 @@ pub async fn start_world_listener<F, Fut>(
 ) -> std::io::Result<()>
 where
     F: Fn(
-        AccountInfo,
-        flume::Receiver<wow_packet::WorldPacket>,
-        flume::Sender<Vec<u8>>,
-        Arc<SessionResources>,
-    ) -> Fut
-    + Send
-    + Sync
-    + 'static,
+            AccountInfo,
+            flume::Receiver<wow_packet::WorldPacket>,
+            flume::Sender<Vec<u8>>,
+            Arc<SessionResources>,
+        ) -> Fut
+        + Send
+        + Sync
+        + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let listener = TcpListener::bind(bind_addr).await?;
@@ -132,9 +176,8 @@ where
                 Some(info) => {
                     let mut ai = info.clone();
                     ai.client_address = Some(addr.ip());
-                    ai.derived_session_key = socket.session_key()
-                        .map(|k| k.to_vec())
-                        .unwrap_or_default();
+                    ai.derived_session_key =
+                        socket.session_key().map(|k| k.to_vec()).unwrap_or_default();
                     ai
                 }
                 None => {
@@ -183,13 +226,11 @@ where
 
 /// Seeds from C# WorldSocket.cs — must match the realm socket values.
 const CONTINUED_SESSION_SEED: [u8; 16] = [
-    0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2,
-    0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F,
+    0x16, 0xAD, 0x0C, 0xD4, 0x46, 0xF9, 0x4F, 0xB2, 0xEF, 0x7D, 0xEA, 0x2A, 0x17, 0x66, 0x4D, 0x2F,
 ];
 
 const ENCRYPTION_KEY_SEED: [u8; 16] = [
-    0xE9, 0x75, 0x3C, 0x50, 0x90, 0x93, 0x61, 0xDA,
-    0x3B, 0x07, 0xEE, 0xFA, 0xFF, 0x9D, 0x41, 0xB8,
+    0xE9, 0x75, 0x3C, 0x50, 0x90, 0x93, 0x61, 0xDA, 0x3B, 0x07, 0xEE, 0xFA, 0xFF, 0x9D, 0x41, 0xB8,
 ];
 
 /// Start the instance server TCP listener.
@@ -281,20 +322,46 @@ async fn handle_instance_connection(
     // C# ref: WorldSocket.cs HandleAuthContinuedSessionCallback line 777.
 
     // DEBUG: Log all HMAC inputs for comparison with C# server
-    info!("[DEBUG-HMAC] sessionKey({}): {}",
+    info!(
+        "[DEBUG-HMAC] sessionKey({}): {}",
         session_key.len(),
-        session_key.iter().map(|b| format!("{b:02X}")).collect::<String>());
-    info!("[DEBUG-HMAC] authKey(i64): {} bytes: {}",
+        session_key
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
+    info!(
+        "[DEBUG-HMAC] authKey(i64): {} bytes: {}",
         auth.key,
-        auth.key.to_le_bytes().iter().map(|b| format!("{b:02X}")).collect::<String>());
-    info!("[DEBUG-HMAC] localChallenge({}): {}",
+        auth.key
+            .to_le_bytes()
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
+    info!(
+        "[DEBUG-HMAC] localChallenge({}): {}",
         auth.local_challenge.len(),
-        auth.local_challenge.iter().map(|b| format!("{b:02X}")).collect::<String>());
-    info!("[DEBUG-HMAC] serverChallenge({}): {}",
+        auth.local_challenge
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
+    info!(
+        "[DEBUG-HMAC] serverChallenge({}): {}",
         server_challenge.len(),
-        server_challenge.iter().map(|b| format!("{b:02X}")).collect::<String>());
-    info!("[DEBUG-HMAC] continuedSeed: {}",
-        CONTINUED_SESSION_SEED.iter().map(|b| format!("{b:02X}")).collect::<String>());
+        server_challenge
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
+    info!(
+        "[DEBUG-HMAC] continuedSeed: {}",
+        CONTINUED_SESSION_SEED
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
 
     let mut hmac = HmacSha256::new(session_key);
     hmac.update(&auth.key.to_le_bytes());
@@ -303,11 +370,21 @@ async fn handle_instance_connection(
     hmac.update(&CONTINUED_SESSION_SEED);
     let server_digest = hmac.finalize();
 
-    info!("[DEBUG-HMAC] serverDigest: {}",
-        server_digest.iter().map(|b| format!("{b:02X}")).collect::<String>());
-    info!("[DEBUG-HMAC] clientDigest({}): {}",
+    info!(
+        "[DEBUG-HMAC] serverDigest: {}",
+        server_digest
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
+    info!(
+        "[DEBUG-HMAC] clientDigest({}): {}",
         auth.digest.len(),
-        auth.digest.iter().map(|b| format!("{b:02X}")).collect::<String>());
+        auth.digest
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<String>()
+    );
 
     if server_digest[..24] != auth.digest {
         return Err(WorldSocketError::AuthFailed(

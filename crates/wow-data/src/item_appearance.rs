@@ -100,14 +100,22 @@ mod tests {
             .join(locale)
             .join("ItemAppearance.db2");
         if !path.exists() {
-            eprintln!("Skipping test: ItemAppearance.db2 not found at {}", path.display());
+            eprintln!(
+                "Skipping test: ItemAppearance.db2 not found at {}",
+                path.display()
+            );
             return;
         }
 
-        let store =
-            ItemAppearanceStore::load(data_dir, locale).expect("failed to load ItemAppearanceStore");
+        let store = ItemAppearanceStore::load(data_dir, locale)
+            .expect("failed to load ItemAppearanceStore");
         assert!(!store.is_empty());
-        assert!(store.entries.values().any(|entry| entry.item_display_info_id > 0));
+        assert!(
+            store
+                .entries
+                .values()
+                .any(|entry| entry.item_display_info_id > 0)
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@
 //! - [`SessionKeyGenerator`] uses SHA-1 (20-byte blocks).
 //! - [`SessionKeyGenerator256`] uses SHA-256 (32-byte blocks).
 
+use digest::Digest;
 use sha1::Sha1;
 use sha2::Sha256;
-use digest::Digest;
 
 // ---------------------------------------------------------------------------
 // SHA-1 variant (20-byte blocks)

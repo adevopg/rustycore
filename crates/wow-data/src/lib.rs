@@ -5,42 +5,70 @@
 
 //! Game data file readers (DB2/WDC4).
 
-pub mod wdc4;
+pub mod area_trigger;
+pub mod chr_specialization;
 pub mod currency;
+pub mod hotfix_cache;
+pub mod import_price;
 pub mod item;
-pub mod item_extended_cost;
 pub mod item_appearance;
+pub mod item_class;
+pub mod item_currency_cost;
+pub mod item_disenchant_loot;
+pub mod item_extended_cost;
 pub mod item_modified_appearance;
+pub mod item_price_base;
+pub mod item_random_enchantment;
+pub mod item_random_properties;
 pub mod item_random_suffix;
 pub mod item_stats;
-pub mod hotfix_cache;
-pub mod player_stats;
+pub mod lock;
 pub mod player_power;
-pub mod skill;
-pub mod area_trigger;
-pub mod spell;
-pub mod spell_item_enchantment;
+pub mod player_stats;
 pub mod quest;
 pub mod quest_xp;
+pub mod rand_prop_points;
+pub mod skill;
+pub mod spell;
+pub mod spell_item_enchantment;
+pub mod wdc4;
 
+pub use area_trigger::{
+    AreaTriggerData, AreaTriggerStore, AreaTriggerTeleport, TriggerShape, load_area_triggers,
+};
+pub use chr_specialization::{ChrSpecializationEntry, ChrSpecializationStore};
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
+pub use hotfix_cache::{HotfixBlobCache, build_hotfix_blob_cache};
+pub use import_price::{
+    ImportPriceArmorEntry, ImportPriceArmorStore, ImportPriceQualityEntry, ImportPriceQualityStore,
+    ImportPriceShieldEntry, ImportPriceShieldStore, ImportPriceStores, ImportPriceWeaponEntry,
+    ImportPriceWeaponStore,
+};
 pub use item::{ItemRecord, ItemStore};
+pub use item_appearance::{ItemAppearanceEntry, ItemAppearanceStore};
+pub use item_class::{ItemClassEntry, ItemClassStore};
+pub use item_currency_cost::{ItemCurrencyCostEntry, ItemCurrencyCostStore};
+pub use item_disenchant_loot::{ItemDisenchantLootEntry, ItemDisenchantLootStore};
 pub use item_extended_cost::{
     ItemExtendedCostEntry, ItemExtendedCostStore, MAX_ITEM_EXT_COST_CURRENCIES,
     MAX_ITEM_EXT_COST_ITEMS,
 };
-pub use item_appearance::{ItemAppearanceEntry, ItemAppearanceStore};
 pub use item_modified_appearance::{ItemModifiedAppearanceEntry, ItemModifiedAppearanceStore};
+pub use item_price_base::{ItemPriceBaseEntry, ItemPriceBaseStore};
+pub use item_random_enchantment::{
+    ItemRandomEnchantmentTemplateEntry, ItemRandomEnchantmentTemplateStore,
+};
+pub use item_random_properties::{ItemRandomPropertiesEntry, ItemRandomPropertiesStore};
 pub use item_random_suffix::{ItemRandomSuffixEntry, ItemRandomSuffixStore};
-pub use item_stats::{ItemSparseTemplateEntry, ItemStatEntry, ItemStatsStore};
-pub use hotfix_cache::{HotfixBlobCache, build_hotfix_blob_cache};
-pub use player_stats::{PlayerLevelStats, PlayerStatsStore};
+pub use item_stats::{
+    ItemRandomPropertyTemplateEntry, ItemSparseTemplateEntry, ItemStatEntry, ItemStatsStore,
+};
+pub use lock::{LockEntry, LockStore};
 pub use player_power::{
     ClassPowerIndexRecord, Db2PlayerPowerIndexResolver, PlayerClassPowerIndexStore,
 };
+pub use player_stats::{PlayerLevelStats, PlayerStatsStore};
+pub use rand_prop_points::{RandPropPointsEntry, RandPropPointsStore};
 pub use skill::{SkillInfoEntry, SkillStore};
-pub use area_trigger::{
-    AreaTriggerTeleport, AreaTriggerData, AreaTriggerStore, TriggerShape, load_area_triggers,
-};
 pub use spell::{SpellInfo, SpellStore};
 pub use spell_item_enchantment::{SpellItemEnchantmentEntry, SpellItemEnchantmentStore};
