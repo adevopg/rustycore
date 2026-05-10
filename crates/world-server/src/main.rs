@@ -751,9 +751,15 @@ async fn main() -> Result<()> {
         instance_lock_stats.player_count,
         instance_lock_load_issues.len()
     );
+    let registered_instance_ids = loaded_instance_lock_mgr.registered_instance_ids_like_cpp_order();
     let instance_lock_mgr = Arc::new(std::sync::RwLock::new(loaded_instance_lock_mgr));
 
     let canonical_map_manager = Arc::new(Mutex::new(create_canonical_map_manager(&world_configs)));
+    register_loaded_instance_ids(
+        &shared_map,
+        canonical_map_manager.as_ref(),
+        &registered_instance_ids,
+    );
 
     // Build session resources
     let session_resources = Arc::new(SessionResources {
@@ -1251,6 +1257,44 @@ fn map_db2_entries_from_stores(
         is_flex_locking: map.is_flex_locking(),
         is_using_encounter_locks: map_difficulty.is_using_encounter_locks(),
     })
+}
+
+fn register_loaded_instance_ids(
+    legacy_map_manager: &SharedMapManager,
+    canonical_map_manager: &Mutex<wow_map::MapManager>,
+    instance_ids: &[u32],
+) {
+    let Some(max_instance_id) = instance_ids.iter().copied().max() else {
+        return;
+    };
+
+    match legacy_map_manager.write() {
+        Ok(mut manager) => {
+            manager.init_instance_ids_from_max(max_instance_id);
+            for &instance_id in instance_ids {
+                manager.register_instance_id(instance_id);
+            }
+        }
+        Err(_) => warn!("Legacy MapManager lock poisoned; persisted instance ids not registered"),
+    }
+
+    match canonical_map_manager.lock() {
+        Ok(mut manager) => {
+            manager.init_instance_ids(u64::from(max_instance_id));
+            for &instance_id in instance_ids {
+                manager.register_instance_id(instance_id);
+            }
+        }
+        Err(_) => {
+            warn!("Canonical MapManager lock poisoned; persisted instance ids not registered")
+        }
+    }
+
+    info!(
+        "Registered {} persisted instance ids with MapManager, max_instance_id={}",
+        instance_ids.len(),
+        max_instance_id
+    );
 }
 
 fn spawn_canonical_map_update_loop(

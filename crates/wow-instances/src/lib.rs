@@ -769,6 +769,20 @@ impl InstanceLockMgr {
         }
     }
 
+    /// Instance ids currently referenced by loaded permanent locks, sorted like
+    /// C++ `character_instance_lock ORDER BY instanceId` before
+    /// `MapManager::RegisterInstanceId`.
+    pub fn registered_instance_ids_like_cpp_order(&self) -> Vec<u32> {
+        let mut instance_ids = self
+            .instance_locks_by_player
+            .values()
+            .flat_map(|locks| locks.values().map(|lock| lock.instance_id))
+            .collect::<Vec<_>>();
+        instance_ids.sort_unstable();
+        instance_ids.dedup();
+        instance_ids
+    }
+
     pub fn delete_character_instance_lock_statement(
         player_guid: ObjectGuid,
         entries: &MapDb2Entries,
@@ -1374,6 +1388,7 @@ mod tests {
         assert!(locks[0].extended);
         assert_eq!(mgr.statistics().instance_count, 1);
         assert_eq!(mgr.statistics().player_count, 1);
+        assert_eq!(mgr.registered_instance_ids_like_cpp_order(), vec![9001]);
     }
 
     #[test]
