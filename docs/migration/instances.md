@@ -1,11 +1,11 @@
 # Migration: Instances (Dungeons / Raids — Lock + Script)
 
 > **C++ canonical path:** `/home/server/woltk-trinity-legacy/src/server/game/Instances/`
-> **Rust target crate(s):** `crates/wow-instances/` (NOT YET CREATED — must be added to workspace)
+> **Rust target crate(s):** `crates/wow-instances/`
 > **Layer:** L7
-> **Status:** ❌ not started
-> **Audited vs C++:** ✅ audited 2026-05-01 (❌ confirmed)
-> **Last updated:** 2026-05-01
+> **Status:** 🟡 foundation in progress
+> **Audited vs C++:** ✅ audited 2026-05-10 (`InstanceLockMgr` core contrasted; broad module still pending)
+> **Last updated:** 2026-05-10
 
 ---
 
@@ -212,23 +212,24 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 
 | Rust target | Kind | Rust files | Lines | Status | Notes |
 |---|---|---:|---:|---|---|
-| `crates/wow-instances` | `crate_dir` | 0 | 0 | `missing_declared_path` | declared/proposed target does not exist |
+| `crates/wow-instances` | `crate_dir` | 1 | 1113 | `foundation_active` | Encounter metadata foundation plus in-memory `InstanceLockMgr` core contrasted against C++ |
 | `crates/wow-world/src/map_manager.rs` | `file` | 1 | 784 | `exists_active` | file exists |
 
 <!-- REFINE.021:END rust-target-coverage -->
 
 **Files in `/home/server/rustycore`:**
-- `crates/wow-instances/src/lib.rs` — foundation started in `#NEXT.R8.ENTITIES.303/#NEXT.R8.ENTITIES.304`: the crate exists and ports the pure C++ encounter metadata path for `MAX_DUNGEON_ENCOUNTERS_PER_BOSS`, `EncounterState`, `DungeonEncounterData`, `BossInfo::GetDungeonEncounterForDifficulty`, `InstanceScript::LoadDungeonEncounterData`, `InstanceScript::GetBossDungeonEncounter(uint32)` and the `BossAI::GetBossId()` branch behind `InstanceScript::GetBossDungeonEncounter(Creature const*)`. `#NEXT.R8.ENTITIES.305` preserves optional represented `BossAI::_bossId` on `wow-ai::CreatureAI`, but real script instantiation and runtime instance use remain pending. Full per-instance state, map integration, lock manager, boss transitions, doors/minions, persistence, criteria and LFG delivery remain pending.
+- `crates/wow-instances/src/lib.rs` — foundation started in `#NEXT.R8.ENTITIES.303/#NEXT.R8.ENTITIES.304`: the crate exists and ports the pure C++ encounter metadata path for `MAX_DUNGEON_ENCOUNTERS_PER_BOSS`, `EncounterState`, `DungeonEncounterData`, `BossInfo::GetDungeonEncounterForDifficulty`, `InstanceScript::LoadDungeonEncounterData`, `InstanceScript::GetBossDungeonEncounter(uint32)` and the `BossAI::GetBossId()` branch behind `InstanceScript::GetBossDungeonEncounter(Creature const*)`. `#NEXT.R8.ENTITIES.305` preserves optional represented `BossAI::_bossId` on `wow-ai::CreatureAI`.
+- `#NEXT.R8.INSTANCES.001` ports the C++ `InstanceLockMgr` in-memory core: `InstanceLockData`, `InstanceLock`, `SharedInstanceLockData`, `MapDb2Entries::GetKey`, `IsInstanceIdBound`, temporary lock creation, active-lock lookup with extended expired locks, `CanJoinInstanceLock`, temporary-to-permanent promotion, shared-data update, lock extension, reset in-use guard, statistics, `GetNextResetTime`, and C++ instance-id mask constants.
 
 **What's implemented:**
 - `crates/wow-world/src/map_manager.rs` (per the active WIP commits) provides a `MapManager` global stub with placeholder for `GenerateInstanceId` (must verify), but no lock store and no script dispatch. (See WIP commit `f83c48d82`.)
 - World/character DB pool layer can run queries; no statements registered for `instance` / `character_instance_lock`.
 
 **What's missing vs C++:**
-- Everything below `InstanceLockMgr` — lock load/save, expiration, extension, reset.
+- `InstanceLockMgr` database load/save, SQL prepared statements, weak-ref cleanup on shared data delete, global singleton plumbing and real world/map call-sites.
 - Everything below `InstanceScript` — boss-state machine, door/minion linking, encounter packets, persistent values, JSON save blob.
 - Instance ID allocation policy + free-id reuse, ID masks (`0x1F440000`, `0x00000001`, `0x00010000`).
-- Reset cron (per-`MapDifficulty.ResetInterval` + daily/weekly anchor).
+- Reset cron caller in `MapManager::Update`; pure `GetNextResetTime` is now ported/tested in `wow-instances`.
 - All wire packets (Section 7).
 - Group-leader-as-lock-owner rule.
 - Account-wide instance-enter rate limit (`account_instance_times`).
@@ -238,11 +239,11 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 - All ~120 dungeon/raid scripts (each a separate Trait/struct in Rust).
 
 **Suspicious / likely divergent (hipótesis pre-auditoría):**
-- `MapManager::GenerateInstanceId` in WIP commit may not honor the `INSTANCE_ID_HIGH_MASK | _NORMAL_MASK` bit pattern — verify before persisting any IDs (DB-level break if wrong).
+- `MapManager::GenerateInstanceId` in WIP commit may not honor the `INSTANCE_ID_HIGH_MASK | _NORMAL_MASK` bit pattern — verify before persisting any IDs (DB-level break if wrong). The mask constants now exist in `wow-instances`, but allocator policy is still pending.
 - No code path in current Rust calls anything resembling `CanJoinInstanceLock` — players can be ported into instances without lock validation; risk of phantom lock binding.
 
 **Tests existing:**
-- 0 tests in any wow-instances or related crate.
+- `cargo test -p wow-instances -- --nocapture` currently covers 14 focused tests, including C++-contrasted lock key/binding, daily/weekly reset anchors, temporary lock creation, active lock lookup, temp promotion, expired-lock replacement, flex-mask join rejection, different-instance rejection, and reset in-use guard.
 
 ---
 
@@ -303,22 +304,22 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>12h, splitear).
 
-- [ ] **#INST.1** Create `crates/wow-instances/` crate with `Cargo.toml` (deps on `wow-core`, `wow-constants`, `wow-database`, `wow-data-stores`, `serde_json`); add to workspace (L)
-- [ ] **#INST.2** Port `InstanceLockData`, `InstanceLock`, `SharedInstanceLockData`, `SharedInstanceLock` structs (L)
-- [ ] **#INST.3** Port `MapDb2Entries` w/ `GetKey()`, `IsInstanceIdBound()` resolving DB2 entries via `wow-data-stores` (M)
-- [ ] **#INST.4** Define `InstanceLockKey = (u32 mapId, u32 lockId)` and `EncounterState`, `EncounterDoorBehavior`, `EncounterFrameType` enums in `wow-constants` (L)
-- [ ] **#INST.5** Implement `InstanceLockMgr` skeleton: `DashMap<ObjectGuid, HashMap<InstanceLockKey, Arc<InstanceLock>>>` for both `_temporary` and `_main`; weak-map for shared data (M)
+- [x] **#INST.1** Create `crates/wow-instances/` crate with `Cargo.toml`; add to workspace (L)
+- [x] **#INST.2** Port `InstanceLockData`, `InstanceLock`, `SharedInstanceLockData`, `SharedInstanceLock` structs (L) — in-memory core done; DB lifetime cleanup pending under `#INST.15`.
+- [x] **#INST.3** Port `MapDb2Entries` w/ `GetKey()`, `IsInstanceIdBound()` (M) — Rust uses an explicit DB2-derived value object; direct `wow-data-stores` resolver pending integration.
+- [~] **#INST.4** Define `InstanceLockKey = (u32 mapId, u32 lockId)` and `EncounterState`, `EncounterDoorBehavior`, `EncounterFrameType` enums in `wow-constants` (L) — `InstanceLockKey`, `EncounterState`, and instance-id masks are in `wow-instances`; door/frame enums still pending.
+- [x] **#INST.5** Implement `InstanceLockMgr` skeleton: temporary/permanent player lock maps plus shared data map (M)
 - [ ] **#INST.6** Register prepared statements for `instance`, `character_instance_lock` in `wow-database` (SEL/REP/DEL) (M)
 - [ ] **#INST.7** Implement `InstanceLockMgr::load()` — async load all rows + reconstruct shared map (H)
-- [ ] **#INST.8** Implement `CanJoinInstanceLock` returning `TransferAbortReason` enum mirror (M)
-- [ ] **#INST.9** Implement `FindActiveInstanceLock` (player or group-leader guid) honoring extended-but-expired (M)
-- [ ] **#INST.10** Implement `CreateInstanceLockForNewInstance` → temporary map (L)
-- [ ] **#INST.11** Implement `UpdateInstanceLockForPlayer` (promote temp→perm, REPLACE row, transactional) (H)
-- [ ] **#INST.12** Implement `UpdateSharedInstanceLock` for raid-id locks (M)
-- [ ] **#INST.13** Implement `UpdateInstanceLockExtensionForPlayer` (toggle + recompute expiry) (M)
-- [ ] **#INST.14** Implement `ResetInstanceLocksForPlayer` w/ in-use guard (M)
+- [x] **#INST.8** Implement `CanJoinInstanceLock` returning `TransferAbortReason` enum mirror (M)
+- [x] **#INST.9** Implement `FindActiveInstanceLock` honoring extended-but-expired (M) — group-leader owner selection remains a caller responsibility until group/map wiring.
+- [x] **#INST.10** Implement `CreateInstanceLockForNewInstance` → temporary map (L)
+- [~] **#INST.11** Implement `UpdateInstanceLockForPlayer` (promote temp→perm, REPLACE row, transactional) (H) — in-memory promotion/merge done; database transaction pending.
+- [~] **#INST.12** Implement `UpdateSharedInstanceLock` for raid-id locks (M) — in-memory shared data update done; database row write pending.
+- [x] **#INST.13** Implement `UpdateInstanceLockExtensionForPlayer` (toggle + recompute expiry) (M) — in-memory done; database update pending under `#INST.6/#INST.11`.
+- [x] **#INST.14** Implement `ResetInstanceLocksForPlayer` w/ in-use guard (M) — in-memory expiry done; database update pending.
 - [ ] **#INST.15** Implement `OnSharedInstanceLockDataDelete` cleanup (L)
-- [ ] **#INST.16** Implement `GetNextResetTime` from `MapDifficulty.ResetInterval` + reset-hour config (M)
+- [x] **#INST.16** Implement `GetNextResetTime` from `MapDifficulty.ResetInterval` + reset-hour config (M)
 - [ ] **#INST.17** Implement instance-id allocator with `INSTANCE_ID_HIGH_MASK`/`_LFG_MASK`/`_NORMAL_MASK` bits + free-id reuse (M)
 - [ ] **#INST.18** Implement `account_instance_times` rate-limit (5 per hour) check (M)
 - [ ] **#INST.19** Port `BossInfo`, `DoorData`, `DoorInfo`, `MinionData`, `MinionInfo`, `ObjectData`, `DungeonEncounterData`, `BossBoundaryEntry` (M)
@@ -451,18 +452,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ---
 
-## 13. Audit (2026-05-01)
+## 13. Audit (2026-05-10)
 
-❌ confirmado. Auditado contra `/home/server/rustycore/crates/`.
+🟡 parcialmente mitigado. Auditado contra `/home/server/rustycore/crates/` y contrastado con `/home/server/woltk-trinity-legacy/src/server/game/Instances/InstanceLockMgr.cpp/.h`.
 
 **Hallazgos clave:**
-- No existe `crates/wow-instances/`. Búsqueda de `INSTANCE_ID_HIGH_MASK | _LFG_MASK | _NORMAL_MASK | 0x1F44 | 0x1f44` en todo el workspace: **0 resultados**. La hipótesis de la sección 8 queda confirmada — *no hay generador de instance IDs todavía*, ni con el bitfield correcto ni con uno secuencial: simplemente el `instance_id: u32` se pasa como parámetro por callers en `crates/wow-world/src/map_manager.rs:466` (`get_or_create_map(map_id, instance_id)`).
+- `crates/wow-instances/` existe y contiene las constantes `INSTANCE_ID_HIGH_MASK`, `_LFG_MASK`, `_NORMAL_MASK`; todavía no hay generador de instance IDs ni free-id reuse.
 - Los 2 únicos call-sites de `add_creature(0,0,0,0,…)` están en tests del propio `map_manager.rs` (líneas 761, 774). Sin caller real, la pregunta "qué bits usan los IDs" todavía no se ha decidido.
-- `InstanceLockMgr` análogo: 0 código. Tablas `instance`, `character_instance_lock`, `account_instance_times` no aparecen en `crates/wow-database/src/`. Cero prepared statements.
+- `InstanceLockMgr` análogo: core in-memory creado en `#NEXT.R8.INSTANCES.001`; tablas `instance`, `character_instance_lock`, `account_instance_times` siguen sin prepared statements ni load/save.
 - 0 handlers para `CMSG_RESET_INSTANCES`, `CMSG_INSTANCE_LOCK_RESPONSE`, `CMSG_REQUEST_RAID_INFO`. 0 builders para `SMSG_RAID_INSTANCE_INFO`, `SMSG_PENDING_RAID_LOCK`, `SMSG_INSTANCE_ENCOUNTER_*`, `SMSG_INSTANCE_RESET*`.
 
 **Riesgo de UI hang silencioso:**
 - ⚠️ **`CMSG_REQUEST_RAID_INFO` no está registrado** en `wow-handler` ni stubbed en `misc.rs`. El cliente al hacer `Shift-O → Raid` espera `SMSG_RAID_INSTANCE_INFO`; sin handler ni stub, el packet se descarta en el dispatcher (registro inventario) y la pestaña queda *forever-loading*. Si y cuando se cree wow-instances, este es el primer opcode a registrar (incluso si solo devuelve 0 locks).
 - Bajo riesgo de UI hang en el resto del flujo: el cliente nunca llega a "set difficulty" o "reset instance" porque el botón "Enter Dungeon" requiere primero un raid info populado.
 
-**Acción:** dejar `❌ not started` en el badge. El módulo puede dormir hasta después de Maps + WorldStateMgr + DataStores estén verdes. Cuando arranque, **prioridad #INST.41** (auditar `GenerateInstanceId` antes de persistir IDs) sigue válida porque ahora *no existe* y hay que crearla con los bits correctos desde el inicio — no parchearla después.
+**Acción:** mantener `🟡 foundation in progress`. Siguiente cierre recomendado: `#INST.6/#INST.7/#INST.11/#INST.12/#INST.15` para persistencia real de `InstanceLockMgr`, y `#INST.41` antes de persistir IDs.

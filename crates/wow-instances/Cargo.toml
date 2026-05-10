@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+wow-core = { workspace = true }
 wow-data = { workspace = true }
 
 [lints]

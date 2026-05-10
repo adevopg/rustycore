@@ -3119,6 +3119,7 @@ dependencies = [
 name = "wow-instances"
 version = "0.1.0"
 dependencies = [
+ "wow-core",
  "wow-data",
 ]
 
