@@ -3080,7 +3080,7 @@ impl WorldSession {
             &mut rand::thread_rng(),
         );
 
-        CreatureLoot {
+        let mut loot = CreatureLoot {
             loot_guid: represented_loot_object_guid_like_cpp(gameobject_guid),
             coins,
             unlooted_count: 0,
@@ -3094,7 +3094,37 @@ impl WorldSession {
             allowed_looters: Vec::new(),
             items,
             looted_by_player: false,
+        };
+
+        if source.loot_id == 0 && source.personal_loot_id != 0 && source.dungeon_encounter_id != 0 {
+            for tapper in self.represented_gameobject_tappers_like_cpp(gameobject_guid, player_guid)
+            {
+                mark_loot_allowed_for_player_like_cpp(&mut loot, tapper);
+            }
         }
+
+        loot
+    }
+
+    fn represented_gameobject_tappers_like_cpp(
+        &self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    ) -> Vec<ObjectGuid> {
+        let Some(tappers) = self.represented_gameobject_tap_lists.get(&gameobject_guid) else {
+            return vec![player_guid];
+        };
+        let mut represented_tappers = tappers
+            .iter()
+            .copied()
+            .filter(|guid| guid.is_player())
+            .collect::<Vec<_>>();
+        represented_tappers.sort_unstable_by_key(|guid| (guid.high_value(), guid.low_value()));
+        represented_tappers.dedup();
+        if represented_tappers.is_empty() {
+            represented_tappers.push(player_guid);
+        }
+        represented_tappers
     }
 
     fn represented_gameobject_chest_group_state_like_cpp(
@@ -6170,6 +6200,80 @@ mod tests {
         assert_eq!(loot.loot_type, LOOT_TYPE_CHEST_LIKE_CPP);
         assert_eq!(loot.dungeon_encounter_id, 733);
         assert_eq!(loot.loot_method, 0);
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_loot_uses_current_player_when_no_tap_list_like_cpp()
+     {
+        let session = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_008);
+        let source = GameObjectLootSource {
+            loot_id: 0,
+            use_group_loot_rules: false,
+            dungeon_encounter_id: 733,
+            personal_loot_id: 10_001,
+            push_loot_id: 0,
+            triggered_event_id: 0,
+            linked_trap_entry: 0,
+        };
+
+        let loot = session
+            .generate_represented_gameobject_chest_loot_like_cpp(
+                gameobject_guid,
+                player_guid,
+                source,
+            )
+            .await;
+
+        assert_eq!(loot.allowed_looters, vec![player_guid]);
+        assert!(
+            loot.items
+                .iter()
+                .all(|entry| entry.allowed_looters == vec![player_guid])
+        );
+    }
+
+    #[tokio::test]
+    async fn represented_gameobject_personal_encounter_loot_uses_tap_list_like_cpp() {
+        let mut session = make_session();
+        let first_tapper = ObjectGuid::create_player(1, 42);
+        let second_tapper = ObjectGuid::create_player(1, 77);
+        let non_player_tapper = ObjectGuid::create_item(1, 900);
+        let gameobject_guid = test_gameobject_guid(91_009);
+        session.represented_gameobject_tap_lists.insert(
+            gameobject_guid,
+            vec![
+                second_tapper,
+                non_player_tapper,
+                first_tapper,
+                second_tapper,
+            ],
+        );
+        let source = GameObjectLootSource {
+            loot_id: 0,
+            use_group_loot_rules: false,
+            dungeon_encounter_id: 733,
+            personal_loot_id: 10_001,
+            push_loot_id: 0,
+            triggered_event_id: 0,
+            linked_trap_entry: 0,
+        };
+
+        let loot = session
+            .generate_represented_gameobject_chest_loot_like_cpp(
+                gameobject_guid,
+                first_tapper,
+                source,
+            )
+            .await;
+
+        assert_eq!(loot.allowed_looters, vec![first_tapper, second_tapper]);
+        assert!(
+            loot.items
+                .iter()
+                .all(|entry| entry.allowed_looters == vec![first_tapper, second_tapper])
+        );
     }
 
     #[tokio::test]

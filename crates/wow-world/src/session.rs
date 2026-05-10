@@ -507,6 +507,9 @@ pub struct WorldSession {
     /// Session-local represented `GameObject` use state until canonical GO runtime ownership lands.
     pub(crate) represented_gameobject_use_states:
         std::collections::HashMap<wow_core::ObjectGuid, RepresentedGameObjectUseState>,
+    /// Session-local representation of `GameObject::m_tapList` for personal encounter loot.
+    pub(crate) represented_gameobject_tap_lists:
+        std::collections::HashMap<wow_core::ObjectGuid, Vec<wow_core::ObjectGuid>>,
 
     // ── Dynamic visibility tracking ───────────────────────────────
     /// GUIDs of all creatures currently visible to this client.
@@ -815,6 +818,7 @@ impl WorldSession {
             represented_unique_gameobject_uses: std::collections::HashSet::new(),
             represented_gameobject_use_effects: Vec::new(),
             represented_gameobject_use_states: std::collections::HashMap::new(),
+            represented_gameobject_tap_lists: std::collections::HashMap::new(),
             visible_creatures: std::collections::HashSet::new(),
             visible_gameobjects: std::collections::HashSet::new(),
             last_visibility_pos: None,
