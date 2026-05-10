@@ -271,6 +271,20 @@ impl WorldSession {
             return;
         }
 
+        if source.should_autostore_push_loot_like_cpp()
+            && !self
+                .represented_unique_gameobject_uses
+                .contains(&gameobject_guid)
+        {
+            self.represented_unique_gameobject_uses
+                .insert(gameobject_guid);
+            self.autostore_represented_gameobject_chest_push_loot_like_cpp(gameobject_guid, source)
+                .await;
+        }
+        if !source.has_open_loot_like_cpp() {
+            return;
+        }
+
         self.ensure_represented_gameobject_chest_loot_like_cpp(
             gameobject_guid,
             player_guid,
@@ -2769,11 +2783,7 @@ impl WorldSession {
                 source.use_group_loot_rules,
                 player_guid,
             );
-        let loot_id = if source.loot_id != 0 {
-            source.loot_id
-        } else {
-            source.personal_loot_id
-        };
+        let loot_id = source.open_loot_id_like_cpp();
         let items = self
             .generate_represented_gameobject_loot_items_like_cpp(loot_id)
             .await
@@ -2915,6 +2925,40 @@ impl WorldSession {
                 })
                 .collect(),
         )
+    }
+
+    async fn autostore_represented_gameobject_chest_push_loot_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        source: GameObjectLootSource,
+    ) -> bool {
+        if !source.should_autostore_push_loot_like_cpp() {
+            return true;
+        }
+
+        let items = self
+            .generate_represented_gameobject_loot_items_like_cpp(source.push_loot_id)
+            .await
+            .unwrap_or_else(|| {
+                debug!(
+                    loot_id = source.push_loot_id,
+                    gameobject = ?gameobject_guid,
+                    "gameobject push loot template unavailable for represented chest"
+                );
+                Vec::new()
+            });
+
+        let mut all_stored = true;
+        for entry in items {
+            if !self
+                .store_direct_loot_item_like_cpp(&entry, source.dungeon_encounter_id)
+                .await
+            {
+                all_stored = false;
+            }
+        }
+
+        all_stored
     }
 
     async fn load_gameobject_template_addon_money_loot_like_cpp(
@@ -5834,6 +5878,7 @@ mod tests {
             use_group_loot_rules: false,
             dungeon_encounter_id: 733,
             personal_loot_id: 10_001,
+            push_loot_id: 0,
         };
 
         let loot = session

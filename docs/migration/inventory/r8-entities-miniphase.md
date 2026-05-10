@@ -1190,6 +1190,11 @@
   Rust targets: `crates/wow-database/src/statements/world.rs`, `crates/wow-database/src/statements/mod.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
   Acceptance: `WorldStatements` now exposes `SEL_GAMEOBJECT_TEMPLATE_ADDON_MONEY_LOOT` for `gameobject_template_addon.entry -> mingold/maxgold` with C++-safe min/max normalization, represented chest generation loads those bounds by gameobject entry and uses the shared C++ `generateMoneyLoot` helper plus configured money drop rate. Focused DB statement and represented chest tests pass. Remaining gaps: startup `GameObjectTemplateAddon` object ownership, art kits/faction/flags/world-effect fields, full loot mode by map difficulty, restock/state/despawn side effects and dungeon encounter personal lock fanout remain pending.
 
+- [x] **#NEXT.R8.ENTITIES.309** Add represented chest `chestPushLoot` autostore source.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h` (`chestPushLoot` Data33), `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp` (`if (!m_unique_users.count(player) && !info->GetLootId())` push-loot branch), `/home/server/woltk-trinity-legacy/src/server/game/Loot/Loot.cpp` (`Loot::AutoStore`).
+  Rust targets: `crates/wow-entities/src/game_object.rs`, `crates/wow-world/src/handlers/loot.rs`, docs.
+  Acceptance: the represented chest source now captures Data33, distinguishes open loot (`chestLoot`/`chestPersonalLoot`) from push-only loot, and for the C++ `!GetLootId()` branch generates `LootTemplates_Gameobject` push loot with `LOOT_CHEST` semantics and stores eligible rows directly through the existing represented direct-inventory bridge without creating a loot window or money. A session-local unique-use guard prevents repeated represented push autostore for the same gameobject. Remaining gaps: canonical `GameObject::m_unique_users`, triggered events, linked traps, loot state transitions, restock/despawn and canonical shared `GameObject::m_loot` ownership are still pending.
+
 ## Follow-Up Work Items
 
 - [ ] **#NEXT.R8.ENTITIES.003** Bind `wow-map` grid unload actions to real entity methods once Creature/GameObject/Corpse exist.
