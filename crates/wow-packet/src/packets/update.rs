@@ -69,6 +69,19 @@ pub struct ObjectDataValuesUpdate {
     pub scale: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicObjectDataValuesUpdate {
+    pub changed_object_type_mask: u32,
+    pub object_data: Option<ObjectDataValuesUpdate>,
+    pub dynamic_object_data_mask: u32,
+    pub caster: ObjectGuid,
+    pub dynamic_object_type: u8,
+    pub spell_visual_id: i32,
+    pub spell_id: i32,
+    pub radius: f32,
+    pub cast_time_ms: u32,
+}
+
 // ── ItemCreateData ──────────────────────────────────────────────────
 
 /// Data needed to build an Item CREATE_OBJECT block for the client.
@@ -1480,6 +1493,11 @@ pub enum UpdateBlock {
         guid: ObjectGuid,
         data: ObjectDataValuesUpdate,
     },
+    /// VALUES update for DynamicObjectData.
+    DynamicObjectValuesUpdate {
+        guid: ObjectGuid,
+        data: DynamicObjectDataValuesUpdate,
+    },
     /// Out-of-range destroy (removes object from client view without full destroy).
     DestroyOutOfRange { guid: ObjectGuid },
 }
@@ -1758,6 +1776,21 @@ impl UpdateObject {
         }
     }
 
+    /// Create a VALUES update for `UF::DynamicObjectData`.
+    pub fn dynamic_object_values_update(
+        guid: ObjectGuid,
+        map_id: u16,
+        data: DynamicObjectDataValuesUpdate,
+    ) -> Self {
+        Self {
+            map_id,
+            num_updates: 1,
+            destroy_guids: Vec::new(),
+            out_of_range_guids: Vec::new(),
+            blocks: vec![UpdateBlock::DynamicObjectValuesUpdate { guid, data }],
+        }
+    }
+
     /// Create an UpdateObject with item CREATE blocks.
     ///
     /// Each item gets its own block. Sent BEFORE the player CREATE packet
@@ -1890,6 +1923,9 @@ impl ServerPacket for UpdateObject {
                 }
                 UpdateBlock::ObjectValuesUpdate { guid, data } => {
                     write_object_values_update_block(&mut blocks_buf, guid, *data);
+                }
+                UpdateBlock::DynamicObjectValuesUpdate { guid, data } => {
+                    write_dynamic_object_values_update_block(&mut blocks_buf, guid, *data);
                 }
                 UpdateBlock::DestroyOutOfRange { .. } => {
                     // Handled via destroy_guids / out_of_range_guids, not as a block.
@@ -2438,6 +2474,87 @@ fn write_object_values_update_block(
             }
             if mask & 0x08 != 0 {
                 val_buf.write_float(data.scale);
+            }
+        }
+    }
+
+    let val_data = val_buf.into_data();
+    buf.write_uint32(val_data.len() as u32);
+    buf.write_bytes(&val_data);
+}
+
+const VALUES_TYPE_OBJECT: u32 = 1 << 0;
+const VALUES_TYPE_DYNAMIC_OBJECT: u32 = 1 << 9;
+
+fn write_object_data_values_update_section(buf: &mut WorldPacket, data: ObjectDataValuesUpdate) {
+    let mask = data.object_data_mask & 0x0F;
+    buf.write_bits(mask, 4);
+    buf.flush_bits();
+
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            buf.write_int32(data.entry_id);
+        }
+        if mask & 0x04 != 0 {
+            buf.write_uint32(data.dynamic_flags);
+        }
+        if mask & 0x08 != 0 {
+            buf.write_float(data.scale);
+        }
+    }
+}
+
+fn write_dynamic_object_values_update_block(
+    buf: &mut WorldPacket,
+    guid: &ObjectGuid,
+    data: DynamicObjectDataValuesUpdate,
+) {
+    buf.write_uint8(UpdateType::Values as u8);
+    buf.write_packed_guid(guid);
+
+    let mut val_buf = WorldPacket::new_empty();
+    val_buf.write_uint32(data.changed_object_type_mask);
+
+    if data.changed_object_type_mask & VALUES_TYPE_OBJECT != 0 {
+        if let Some(object_data) = data.object_data {
+            write_object_data_values_update_section(&mut val_buf, object_data);
+        } else {
+            write_object_data_values_update_section(
+                &mut val_buf,
+                ObjectDataValuesUpdate {
+                    changed_object_type_mask: VALUES_TYPE_OBJECT,
+                    object_data_mask: 0,
+                    entry_id: 0,
+                    dynamic_flags: 0,
+                    scale: 0.0,
+                },
+            );
+        }
+    }
+
+    if data.changed_object_type_mask & VALUES_TYPE_DYNAMIC_OBJECT != 0 {
+        let mask = data.dynamic_object_data_mask & 0x7F;
+        val_buf.write_bits(mask, 7);
+        val_buf.flush_bits();
+
+        if mask & 0x01 != 0 {
+            if mask & 0x02 != 0 {
+                val_buf.write_packed_guid(&data.caster);
+            }
+            if mask & 0x04 != 0 {
+                val_buf.write_uint8(data.dynamic_object_type);
+            }
+            if mask & 0x08 != 0 {
+                val_buf.write_int32(data.spell_visual_id);
+            }
+            if mask & 0x10 != 0 {
+                val_buf.write_int32(data.spell_id);
+            }
+            if mask & 0x20 != 0 {
+                val_buf.write_float(data.radius);
+            }
+            if mask & 0x40 != 0 {
+                val_buf.write_uint32(data.cast_time_ms);
             }
         }
     }
@@ -3140,6 +3257,46 @@ mod tests {
         assert_eq!(i32::from_le_bytes(bytes[12..16].try_into().unwrap()), 42);
         assert_eq!(f32::from_le_bytes(bytes[16..20].try_into().unwrap()), 2.0);
         assert_eq!(bytes.len(), 20);
+    }
+
+    #[test]
+    fn dynamic_object_values_update_block_matches_cpp_dynamicobjectdata_delta_shape() {
+        let mut block = WorldPacket::new_empty();
+        write_dynamic_object_values_update_block(
+            &mut block,
+            &ObjectGuid::EMPTY,
+            DynamicObjectDataValuesUpdate {
+                changed_object_type_mask: VALUES_TYPE_DYNAMIC_OBJECT,
+                object_data: None,
+                dynamic_object_data_mask: 0b111_1111,
+                caster: ObjectGuid::EMPTY,
+                dynamic_object_type: 1,
+                spell_visual_id: 42,
+                spell_id: 1337,
+                radius: 8.5,
+                cast_time_ms: 123_456,
+            },
+        );
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 24);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_DYNAMIC_OBJECT
+        );
+        assert_eq!(bytes[11], 0b1111_1110);
+        assert_eq!(&bytes[12..14], &[0, 0]);
+        assert_eq!(bytes[14], 1);
+        assert_eq!(i32::from_le_bytes(bytes[15..19].try_into().unwrap()), 42);
+        assert_eq!(i32::from_le_bytes(bytes[19..23].try_into().unwrap()), 1337);
+        assert_eq!(f32::from_le_bytes(bytes[23..27].try_into().unwrap()), 8.5);
+        assert_eq!(
+            u32::from_le_bytes(bytes[27..31].try_into().unwrap()),
+            123_456
+        );
+        assert_eq!(bytes.len(), 31);
     }
 
     #[test]
