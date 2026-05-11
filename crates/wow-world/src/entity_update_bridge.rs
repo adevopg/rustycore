@@ -271,4 +271,34 @@ mod tests {
         assert_eq!(unit.virtual_items[2].appearance_mod_id, 3);
         assert_eq!(unit.virtual_items[2].item_visual, 4);
     }
+
+    #[test]
+    fn bridges_forced_default_value_deltas() {
+        let mut player = Player::new(Some(7), false);
+        player.clear_data_changes();
+        player.mark_inv_slot_changed(0);
+        player.mark_visible_item_slot_changed(0);
+        player.unit_mut().mark_virtual_item_changed(0);
+
+        let update = player.values_update(true);
+        let packet_update = player_values_update_to_packet(&update).unwrap();
+        let active = packet_update.active_player_data.unwrap();
+        let unit = packet_update.unit_data.unwrap();
+
+        assert!(mask_has(
+            &active.active_player_data_mask,
+            wow_entities::ACTIVE_PLAYER_DATA_INV_SLOTS_FIRST_BIT
+        ));
+        assert!(mask_has(
+            &packet_update.player_data_mask,
+            wow_entities::PLAYER_DATA_VISIBLE_ITEMS_FIRST_BIT
+        ));
+        assert!(mask_has(
+            &unit.unit_data_mask,
+            wow_entities::UNIT_DATA_VIRTUAL_ITEMS_FIRST_BIT
+        ));
+        assert_eq!(active.inv_slots[0], ObjectGuid::EMPTY);
+        assert_eq!(packet_update.visible_items[0].item_id, 0);
+        assert_eq!(unit.virtual_items[0].item_id, 0);
+    }
 }

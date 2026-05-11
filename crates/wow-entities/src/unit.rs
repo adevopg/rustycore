@@ -425,6 +425,18 @@ impl Unit {
         }
     }
 
+    pub fn mark_virtual_item_changed(&mut self, index: usize) {
+        if index >= MAX_ATTACK {
+            return;
+        }
+
+        self.mark_unit_data_array(
+            UNIT_DATA_VIRTUAL_ITEMS_PARENT_BIT,
+            UNIT_DATA_VIRTUAL_ITEMS_FIRST_BIT,
+            index,
+        );
+    }
+
     pub fn changed_object_type_mask(&self) -> u32 {
         self.world.object().changed_object_type_mask()
             | if self.unit_data_changes.is_any_set() {
@@ -761,6 +773,24 @@ mod tests {
         assert!(
             unit.unit_data_changes_mask()
                 .is_set(UNIT_DATA_VIRTUAL_ITEMS_FIRST_BIT + 1)
+        );
+    }
+
+    #[test]
+    fn virtual_item_mark_changed_forces_default_value_delta() {
+        let mut unit = Unit::new(true);
+        unit.clear_unit_data_changes();
+
+        unit.mark_virtual_item_changed(2);
+
+        assert_eq!(unit.data().virtual_items[2], VisibleItemValues::default());
+        assert!(
+            unit.unit_data_changes_mask()
+                .is_set(UNIT_DATA_VIRTUAL_ITEMS_PARENT_BIT)
+        );
+        assert!(
+            unit.unit_data_changes_mask()
+                .is_set(UNIT_DATA_VIRTUAL_ITEMS_FIRST_BIT + 2)
         );
     }
 
