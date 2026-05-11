@@ -1160,43 +1160,224 @@ impl MotionSubsystem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+pub const SUMMON_SLOT_PET: usize = 0;
+pub const SUMMON_SLOT_TOTEM: usize = 1;
+pub const SUMMON_SLOT_TOTEM_2: usize = 2;
+pub const SUMMON_SLOT_TOTEM_3: usize = 3;
+pub const SUMMON_SLOT_TOTEM_4: usize = 4;
+pub const SUMMON_SLOT_MINIPET: usize = 5;
+pub const SUMMON_SLOT_QUEST: usize = 6;
+pub const MAX_SUMMON_SLOT: usize = 7;
+pub const MAX_TOTEM_SLOT: usize = 5;
+pub const MAX_UNIT_ACTION_BAR_INDEX: usize = 10;
+pub const MAX_SPELL_CHARM: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum CharmType {
+    Charm = 0,
+    Possess = 1,
+    Vehicle = 2,
+    Convert = 3,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CharmInfoState {
+    pub pet_number: u32,
+    pub command_state: u8,
+    pub action_bar: [u32; MAX_UNIT_ACTION_BAR_INDEX],
+    pub charm_spells: [u32; MAX_SPELL_CHARM],
+    pub is_command_attack: bool,
+    pub is_command_follow: bool,
+    pub is_at_stay: bool,
+    pub is_following: bool,
+    pub is_returning: bool,
+    pub stay_position: Option<(f32, f32, f32)>,
+}
+
+impl Default for CharmInfoState {
+    fn default() -> Self {
+        Self {
+            pet_number: 0,
+            command_state: 0,
+            action_bar: [0; MAX_UNIT_ACTION_BAR_INDEX],
+            charm_spells: [0; MAX_SPELL_CHARM],
+            is_command_attack: false,
+            is_command_follow: false,
+            is_at_stay: false,
+            is_following: false,
+            is_returning: false,
+            stay_position: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ControlSubsystem {
+    pub owner_guid: Option<ObjectGuid>,
+    pub minion_guid: Option<ObjectGuid>,
+    pub summon_slots: [ObjectGuid; MAX_SUMMON_SLOT],
     pub last_charmer_guid: Option<ObjectGuid>,
     pub charmer_guid: Option<ObjectGuid>,
     pub charmed_guid: Option<ObjectGuid>,
     pub controlled_guids: HashSet<ObjectGuid>,
     pub controlled_by_player: bool,
+    pub charm_type: Option<CharmType>,
     pub unit_moved_by_me: Option<ObjectGuid>,
     pub player_moving_me: Option<ObjectGuid>,
     pub shared_vision_guids: HashSet<ObjectGuid>,
-    pub has_charm_info: bool,
+    pub charm_info: Option<CharmInfoState>,
+    pub old_faction_id: Option<u32>,
+    pub walking_before_charm: bool,
+}
+
+impl Default for ControlSubsystem {
+    fn default() -> Self {
+        Self {
+            owner_guid: None,
+            minion_guid: None,
+            summon_slots: [ObjectGuid::EMPTY; MAX_SUMMON_SLOT],
+            last_charmer_guid: None,
+            charmer_guid: None,
+            charmed_guid: None,
+            controlled_guids: HashSet::new(),
+            controlled_by_player: false,
+            charm_type: None,
+            unit_moved_by_me: None,
+            player_moving_me: None,
+            shared_vision_guids: HashSet::new(),
+            charm_info: None,
+            old_faction_id: None,
+            walking_before_charm: false,
+        }
+    }
 }
 
 impl ControlSubsystem {
+    pub fn set_owner_guid(&mut self, owner: Option<ObjectGuid>) {
+        self.owner_guid = owner;
+    }
+
+    pub fn set_minion_guid(&mut self, minion: Option<ObjectGuid>) {
+        self.minion_guid = minion;
+    }
+
+    pub fn pet_guid(&self) -> ObjectGuid {
+        self.summon_slots[SUMMON_SLOT_PET]
+    }
+
+    pub fn set_pet_guid(&mut self, pet: ObjectGuid) {
+        self.summon_slots[SUMMON_SLOT_PET] = pet;
+    }
+
+    pub fn set_summon_slot(&mut self, slot: usize, guid: ObjectGuid) -> bool {
+        let Some(target) = self.summon_slots.get_mut(slot) else {
+            return false;
+        };
+        *target = guid;
+        true
+    }
+
+    pub fn clear_summon_slot(&mut self, slot: usize) -> Option<ObjectGuid> {
+        let target = self.summon_slots.get_mut(slot)?;
+        let previous = *target;
+        *target = ObjectGuid::EMPTY;
+        Some(previous)
+    }
+
     pub fn set_charmer(&mut self, charmer: ObjectGuid, controlled_by_player: bool) {
         self.last_charmer_guid = self.charmer_guid;
         self.charmer_guid = Some(charmer);
         self.controlled_by_player = controlled_by_player;
-        self.has_charm_info = true;
+        self.init_charm_info();
     }
 
     pub fn remove_charmer(&mut self) {
         self.last_charmer_guid = self.charmer_guid;
         self.charmer_guid = None;
         self.controlled_by_player = false;
+        self.charm_type = None;
+        self.old_faction_id = None;
+        self.delete_charm_info();
     }
 
     pub fn set_charmed(&mut self, charmed: ObjectGuid) {
         self.charmed_guid = Some(charmed);
         self.controlled_guids.insert(charmed);
-        self.has_charm_info = true;
     }
 
     pub fn remove_charmed(&mut self) {
         if let Some(charmed) = self.charmed_guid.take() {
             self.controlled_guids.remove(&charmed);
         }
+    }
+
+    pub fn apply_charm_as_controller(&mut self, charmed: ObjectGuid, controller_is_player: bool) {
+        if controller_is_player {
+            self.charmed_guid = Some(charmed);
+        }
+        self.controlled_guids.insert(charmed);
+    }
+
+    pub fn remove_charm_as_controller(
+        &mut self,
+        charmed: ObjectGuid,
+        controlled_has_same_owner: bool,
+        controlled_is_minion: bool,
+        controlled_is_player: bool,
+    ) {
+        if self.charmed_guid == Some(charmed) {
+            self.charmed_guid = None;
+        }
+        if controlled_is_player || !controlled_is_minion || !controlled_has_same_owner {
+            self.controlled_guids.remove(&charmed);
+        }
+    }
+
+    pub fn apply_charmed_by(
+        &mut self,
+        charmer: ObjectGuid,
+        charm_type: CharmType,
+        controlled_by_player: bool,
+        old_faction_id: Option<u32>,
+        was_walking: bool,
+    ) -> bool {
+        if self.charmer_guid.is_some() {
+            return false;
+        }
+        self.charmer_guid = Some(charmer);
+        self.controlled_by_player = controlled_by_player;
+        self.charm_type = Some(charm_type);
+        self.old_faction_id = old_faction_id;
+        self.walking_before_charm = was_walking;
+        if charm_type != CharmType::Vehicle {
+            self.init_charm_info();
+        }
+        true
+    }
+
+    pub fn remove_charmed_by(
+        &mut self,
+        expected_charmer: Option<ObjectGuid>,
+        is_guardian: bool,
+    ) -> bool {
+        let Some(charmer) = self.charmer_guid else {
+            return false;
+        };
+        if expected_charmer.is_some_and(|expected| expected != charmer) {
+            return false;
+        }
+        if self.charm_type != Some(CharmType::Vehicle) {
+            self.last_charmer_guid = Some(charmer);
+        }
+        self.charmer_guid = None;
+        self.controlled_by_player = false;
+        self.charm_type = None;
+        self.old_faction_id = None;
+        if !is_guardian {
+            self.delete_charm_info();
+        }
+        true
     }
 
     pub fn add_controlled(&mut self, guid: ObjectGuid) -> bool {
@@ -1219,12 +1400,66 @@ impl ControlSubsystem {
         self.charmer_guid.is_some()
     }
 
+    pub fn is_possessed(&self) -> bool {
+        self.charm_type == Some(CharmType::Possess)
+    }
+
+    pub fn is_possessed_by_player(&self) -> bool {
+        self.is_possessed() && self.controlled_by_player
+    }
+
+    pub fn is_possessing(&self) -> bool {
+        self.charmed_guid.is_some()
+    }
+
+    pub fn is_possessing_guid(&self, guid: ObjectGuid) -> bool {
+        self.charmed_guid == Some(guid)
+    }
+
+    pub fn charmer_or_owner_guid(&self) -> Option<ObjectGuid> {
+        self.charmer_guid.or(self.owner_guid)
+    }
+
+    pub fn charmer_or_owner_or_self_guid(&self, own_guid: ObjectGuid) -> ObjectGuid {
+        self.charmer_or_owner_guid().unwrap_or(own_guid)
+    }
+
+    pub fn init_charm_info(&mut self) -> &mut CharmInfoState {
+        self.charm_info.get_or_insert_with(CharmInfoState::default)
+    }
+
+    pub fn delete_charm_info(&mut self) {
+        self.charm_info = None;
+    }
+
+    pub fn has_charm_info(&self) -> bool {
+        self.charm_info.is_some()
+    }
+
+    pub fn remove_all_controlled(&mut self) -> Vec<ObjectGuid> {
+        let removed = self.controlled_guids.drain().collect();
+        self.charmed_guid = None;
+        removed
+    }
+
+    pub fn set_moved_unit(&mut self, target: Option<ObjectGuid>) {
+        self.unit_moved_by_me = target;
+    }
+
+    pub fn set_player_moving_me(&mut self, player: Option<ObjectGuid>) {
+        self.player_moving_me = player;
+    }
+
     pub fn add_shared_vision(&mut self, guid: ObjectGuid) -> bool {
         self.shared_vision_guids.insert(guid)
     }
 
     pub fn remove_shared_vision(&mut self, guid: ObjectGuid) -> bool {
         self.shared_vision_guids.remove(&guid)
+    }
+
+    pub fn has_shared_vision(&self) -> bool {
+        !self.shared_vision_guids.is_empty()
     }
 }
 
@@ -1610,6 +1845,134 @@ mod unit_subsystems_tests {
         );
         assert!(motion.stopped);
         assert!(!motion.spline.enabled);
+    }
+
+    #[test]
+    fn control_summon_slots_match_cpp_shared_defines() {
+        assert_eq!(SUMMON_SLOT_PET, 0);
+        assert_eq!(SUMMON_SLOT_TOTEM, 1);
+        assert_eq!(SUMMON_SLOT_TOTEM_2, 2);
+        assert_eq!(SUMMON_SLOT_TOTEM_3, 3);
+        assert_eq!(SUMMON_SLOT_TOTEM_4, 4);
+        assert_eq!(SUMMON_SLOT_MINIPET, 5);
+        assert_eq!(SUMMON_SLOT_QUEST, 6);
+        assert_eq!(MAX_SUMMON_SLOT, 7);
+        assert_eq!(MAX_TOTEM_SLOT, 5);
+
+        let mut control = ControlSubsystem::default();
+        let pet = guid(40);
+        let totem = guid(41);
+
+        assert_eq!(control.pet_guid(), ObjectGuid::EMPTY);
+        control.set_pet_guid(pet);
+        assert_eq!(control.pet_guid(), pet);
+        assert!(control.set_summon_slot(SUMMON_SLOT_TOTEM_3, totem));
+        assert_eq!(control.summon_slots[SUMMON_SLOT_TOTEM_3], totem);
+        assert!(!control.set_summon_slot(MAX_SUMMON_SLOT, guid(42)));
+        assert_eq!(control.clear_summon_slot(SUMMON_SLOT_TOTEM_3), Some(totem));
+        assert_eq!(control.summon_slots[SUMMON_SLOT_TOTEM_3], ObjectGuid::EMPTY);
+    }
+
+    #[test]
+    fn control_charm_controller_and_target_state_follow_cpp_set_charm() {
+        let mut controller = ControlSubsystem::default();
+        let mut target = ControlSubsystem::default();
+        let controller_guid = guid(50);
+        let target_guid = guid(51);
+        let other_guid = guid(52);
+
+        controller.apply_charm_as_controller(target_guid, true);
+        assert_eq!(controller.charmed_guid, Some(target_guid));
+        assert!(controller.controlled_guids.contains(&target_guid));
+        assert!(!controller.has_charm_info());
+
+        assert!(target.apply_charmed_by(
+            controller_guid,
+            CharmType::Possess,
+            true,
+            Some(123),
+            true,
+        ));
+        assert_eq!(target.charmer_guid, Some(controller_guid));
+        assert_eq!(target.charm_type, Some(CharmType::Possess));
+        assert_eq!(target.old_faction_id, Some(123));
+        assert!(target.walking_before_charm);
+        assert!(target.is_charmed());
+        assert!(target.is_possessed_by_player());
+        assert!(target.has_charm_info());
+        assert!(!target.apply_charmed_by(other_guid, CharmType::Charm, false, None, false,));
+
+        assert!(!target.remove_charmed_by(Some(other_guid), false));
+        assert!(target.remove_charmed_by(Some(controller_guid), false));
+        assert_eq!(target.charmer_guid, None);
+        assert_eq!(target.last_charmer_guid, Some(controller_guid));
+        assert_eq!(target.charm_type, None);
+        assert_eq!(target.old_faction_id, None);
+        assert!(!target.has_charm_info());
+
+        controller.remove_charm_as_controller(target_guid, false, true, false);
+        assert_eq!(controller.charmed_guid, None);
+        assert!(!controller.controlled_guids.contains(&target_guid));
+    }
+
+    #[test]
+    fn control_remove_charm_preserves_owned_minions_like_cpp() {
+        let mut controller = ControlSubsystem::default();
+        let minion = guid(60);
+
+        controller.apply_charm_as_controller(minion, false);
+        controller.remove_charm_as_controller(minion, true, true, false);
+        assert!(controller.controlled_guids.contains(&minion));
+
+        controller.remove_charm_as_controller(minion, true, false, false);
+        assert!(!controller.controlled_guids.contains(&minion));
+    }
+
+    #[test]
+    fn charm_info_direct_control_and_shared_vision_helpers_roundtrip() {
+        let mut control = ControlSubsystem::default();
+        let controller = guid(70);
+        let controlled = guid(71);
+        let observer = guid(72);
+
+        control.set_owner_guid(Some(controller));
+        assert_eq!(control.charmer_or_owner_guid(), Some(controller));
+        assert_eq!(
+            control.charmer_or_owner_or_self_guid(controlled),
+            controller
+        );
+
+        let charm_info = control.init_charm_info();
+        charm_info.pet_number = 9;
+        charm_info.command_state = 2;
+        charm_info.action_bar[0] = 100;
+        charm_info.charm_spells[0] = 200;
+        charm_info.is_command_follow = true;
+        charm_info.stay_position = Some((1.0, 2.0, 3.0));
+        assert!(control.has_charm_info());
+        assert_eq!(
+            control.charm_info.as_ref().map(|info| info.pet_number),
+            Some(9)
+        );
+
+        control.add_controlled(controlled);
+        control.set_charmed(controlled);
+        control.set_moved_unit(Some(controlled));
+        control.set_player_moving_me(Some(controller));
+        assert!(control.is_possessing_guid(controlled));
+        assert_eq!(control.unit_moved_by_me, Some(controlled));
+        assert_eq!(control.player_moving_me, Some(controller));
+
+        assert!(control.add_shared_vision(observer));
+        assert!(control.has_shared_vision());
+        assert!(control.remove_shared_vision(observer));
+        assert!(!control.has_shared_vision());
+
+        let removed = control.remove_all_controlled();
+        assert_eq!(removed, vec![controlled]);
+        assert_eq!(control.charmed_guid, None);
+        control.delete_charm_info();
+        assert!(!control.has_charm_info());
     }
 
     #[test]

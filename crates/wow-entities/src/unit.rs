@@ -675,8 +675,8 @@ fn power_slot(power: PowerType) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::{
-        AppliedAuraRef, AuraRef, CurrentSpellRef, CurrentSpellSlot, MovementGeneratorKind,
-        OwnedAuraRef,
+        AppliedAuraRef, AuraRef, CurrentSpellRef, CurrentSpellSlot, MAX_SUMMON_SLOT,
+        MovementGeneratorKind, OwnedAuraRef,
     };
 
     #[test]
@@ -716,6 +716,13 @@ mod tests {
         assert!(!unit.subsystems().motion.paused);
         assert!(!unit.subsystems().motion.spline.enabled);
         assert_eq!(unit.subsystems().control.charmer_guid, None);
+        assert_eq!(unit.subsystems().control.owner_guid, None);
+        assert_eq!(unit.subsystems().control.minion_guid, None);
+        assert_eq!(
+            unit.subsystems().control.summon_slots,
+            [ObjectGuid::EMPTY; MAX_SUMMON_SLOT]
+        );
+        assert!(!unit.subsystems().control.has_charm_info());
         assert_eq!(unit.subsystems().vehicle.vehicle_guid, None);
         assert_eq!(unit.subsystems().ai.active_ai, None);
         assert!(!unit.subsystems().ai.locked);
