@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use wow_constants::SpellState;
+use wow_constants::{SpellState, UnitState};
 use wow_core::ObjectGuid;
 
 /// Minimal bridge for TrinityCore `Unit` aura containers.
@@ -696,11 +696,177 @@ pub enum MovementGeneratorKind {
     Idle,
     Random,
     Waypoint,
-    Chase,
-    Follow,
-    Fleeing,
     Confused,
+    Chase,
+    Home,
+    Flight,
+    Point,
+    Fleeing,
+    Distract,
+    Assistance,
+    AssistanceDistract,
+    TimedFleeing,
+    Follow,
+    Rotate,
+    Effect,
+    SplineChain,
+    Formation,
     Custom(u32),
+}
+
+impl MovementGeneratorKind {
+    pub const fn trinity_id(self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Random => 1,
+            Self::Waypoint => 2,
+            Self::Confused => 4,
+            Self::Chase => 5,
+            Self::Home => 6,
+            Self::Flight => 7,
+            Self::Point => 8,
+            Self::Fleeing => 9,
+            Self::Distract => 10,
+            Self::Assistance => 11,
+            Self::AssistanceDistract => 12,
+            Self::TimedFleeing => 13,
+            Self::Follow => 14,
+            Self::Rotate => 15,
+            Self::Effect => 16,
+            Self::SplineChain => 17,
+            Self::Formation => 18,
+            Self::Custom(value) => value as u8,
+        }
+    }
+
+    pub const fn from_trinity_id(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Idle),
+            1 => Some(Self::Random),
+            2 => Some(Self::Waypoint),
+            3 | 19..=u8::MAX => None,
+            4 => Some(Self::Confused),
+            5 => Some(Self::Chase),
+            6 => Some(Self::Home),
+            7 => Some(Self::Flight),
+            8 => Some(Self::Point),
+            9 => Some(Self::Fleeing),
+            10 => Some(Self::Distract),
+            11 => Some(Self::Assistance),
+            12 => Some(Self::AssistanceDistract),
+            13 => Some(Self::TimedFleeing),
+            14 => Some(Self::Follow),
+            15 => Some(Self::Rotate),
+            16 => Some(Self::Effect),
+            17 => Some(Self::SplineChain),
+            18 => Some(Self::Formation),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum MovementGeneratorMode {
+    Default = 0,
+    Override = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum MovementGeneratorPriority {
+    None = 0,
+    Normal = 1,
+    Highest = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MovementSlot {
+    Default = 0,
+    Active = 1,
+}
+
+pub const MOVEMENTGENERATOR_FLAG_NONE: u16 = 0x000;
+pub const MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING: u16 = 0x001;
+pub const MOVEMENTGENERATOR_FLAG_INITIALIZED: u16 = 0x002;
+pub const MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING: u16 = 0x004;
+pub const MOVEMENTGENERATOR_FLAG_INTERRUPTED: u16 = 0x008;
+pub const MOVEMENTGENERATOR_FLAG_PAUSED: u16 = 0x010;
+pub const MOVEMENTGENERATOR_FLAG_TIMED_PAUSED: u16 = 0x020;
+pub const MOVEMENTGENERATOR_FLAG_DEACTIVATED: u16 = 0x040;
+pub const MOVEMENTGENERATOR_FLAG_INFORM_ENABLED: u16 = 0x080;
+pub const MOVEMENTGENERATOR_FLAG_FINALIZED: u16 = 0x100;
+pub const MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH: u16 = 0x200;
+pub const MOTIONMASTER_FLAG_INITIALIZATION_PENDING: u8 = 0x4;
+pub const MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING: u8 = 0x2;
+pub const MOTIONMASTER_FLAG_UPDATE: u8 = 0x1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MovementGeneratorRef {
+    pub kind: MovementGeneratorKind,
+    pub mode: MovementGeneratorMode,
+    pub priority: MovementGeneratorPriority,
+    pub slot: MovementSlot,
+    pub flags: u16,
+    pub base_unit_state: u32,
+    pub target_guid: Option<ObjectGuid>,
+    pub movement_id: u32,
+    pub duration_ms: Option<u32>,
+}
+
+impl MovementGeneratorRef {
+    pub const fn new(kind: MovementGeneratorKind, slot: MovementSlot) -> Self {
+        Self {
+            kind,
+            mode: MovementGeneratorMode::Default,
+            priority: MovementGeneratorPriority::None,
+            slot,
+            flags: MOVEMENTGENERATOR_FLAG_NONE,
+            base_unit_state: 0,
+            target_guid: None,
+            movement_id: 0,
+            duration_ms: None,
+        }
+    }
+
+    pub const fn with_mode(mut self, mode: MovementGeneratorMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub const fn with_priority(mut self, priority: MovementGeneratorPriority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub const fn with_flags(mut self, flags: u16) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    pub const fn with_base_unit_state(mut self, base_unit_state: u32) -> Self {
+        self.base_unit_state = base_unit_state;
+        self
+    }
+
+    pub const fn with_target_guid(mut self, target_guid: ObjectGuid) -> Self {
+        self.target_guid = Some(target_guid);
+        self
+    }
+
+    pub const fn with_movement_id(mut self, movement_id: u32) -> Self {
+        self.movement_id = movement_id;
+        self
+    }
+
+    pub const fn with_duration_ms(mut self, duration_ms: u32) -> Self {
+        self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    pub const fn has_flag(&self, flag: u16) -> bool {
+        (self.flags & flag) != 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -724,8 +890,12 @@ impl Default for MoveSplineState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MotionSubsystem {
-    pub default_generator: MovementGeneratorKind,
+    pub default_generator: MovementGeneratorRef,
+    pub active_generators: Vec<MovementGeneratorRef>,
     pub current_generator: MovementGeneratorKind,
+    pub base_unit_states: HashMap<u32, usize>,
+    pub flags: u8,
+    pub delayed_actions: Vec<u8>,
     pub paused: bool,
     pub stopped: bool,
     pub spline: MoveSplineState,
@@ -733,9 +903,15 @@ pub struct MotionSubsystem {
 
 impl Default for MotionSubsystem {
     fn default() -> Self {
+        let default_generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
         Self {
-            default_generator: MovementGeneratorKind::Idle,
+            default_generator,
+            active_generators: Vec::new(),
             current_generator: MovementGeneratorKind::Idle,
+            base_unit_states: HashMap::new(),
+            flags: MOTIONMASTER_FLAG_INITIALIZATION_PENDING,
+            delayed_actions: Vec::new(),
             paused: false,
             stopped: false,
             spline: MoveSplineState::default(),
@@ -745,8 +921,181 @@ impl Default for MotionSubsystem {
 
 impl MotionSubsystem {
     pub fn set_current_generator(&mut self, generator: MovementGeneratorKind) {
-        self.current_generator = generator;
+        self.add_generator(MovementGeneratorRef::new(generator, MovementSlot::Active));
+    }
+
+    pub fn add_to_world(&mut self) {
+        self.flags &= !MOTIONMASTER_FLAG_INITIALIZATION_PENDING;
+        self.current_generator = self.current_movement_generator().kind;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.active_generators.is_empty()
+            && self.default_generator.kind == MovementGeneratorKind::Custom(u32::MAX)
+    }
+
+    pub fn size(&self) -> usize {
+        1 + self.active_generators.len()
+    }
+
+    pub fn current_slot(&self) -> MovementSlot {
+        if self.active_generators.is_empty() {
+            MovementSlot::Default
+        } else {
+            MovementSlot::Active
+        }
+    }
+
+    pub fn current_movement_generator(&self) -> MovementGeneratorRef {
+        self.active_generators
+            .first()
+            .copied()
+            .unwrap_or(self.default_generator)
+    }
+
+    pub fn add_generator(&mut self, mut generator: MovementGeneratorRef) {
+        match generator.slot {
+            MovementSlot::Default => {
+                generator.slot = MovementSlot::Default;
+                self.default_generator = generator;
+                if generator.kind == MovementGeneratorKind::Idle {
+                    self.flags |= MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
+                }
+            }
+            MovementSlot::Active => {
+                generator.slot = MovementSlot::Active;
+                if let Some(top) = self.active_generators.first().copied() {
+                    if generator.priority >= top.priority {
+                        if generator.priority == top.priority {
+                            self.remove_generator_at(0);
+                        } else if let Some(top) = self.active_generators.first_mut() {
+                            top.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+                        }
+                    } else if let Some(index) = self
+                        .active_generators
+                        .iter()
+                        .position(|known| known.priority == generator.priority)
+                    {
+                        self.remove_generator_at(index);
+                    }
+                }
+
+                self.add_base_unit_state(generator.base_unit_state);
+                self.active_generators.push(generator);
+                self.sort_active_generators();
+            }
+        }
+        self.current_generator = self.current_movement_generator().kind;
         self.stopped = false;
+    }
+
+    pub fn remove_generator_kind(
+        &mut self,
+        kind: MovementGeneratorKind,
+        slot: MovementSlot,
+    ) -> Option<MovementGeneratorRef> {
+        let removed = match slot {
+            MovementSlot::Default if self.default_generator.kind == kind => {
+                let previous = self.default_generator;
+                self.move_idle();
+                Some(previous)
+            }
+            MovementSlot::Default => None,
+            MovementSlot::Active => self
+                .active_generators
+                .iter()
+                .position(|generator| generator.kind == kind)
+                .map(|index| self.remove_generator_at(index)),
+        };
+        self.current_generator = self.current_movement_generator().kind;
+        removed
+    }
+
+    pub fn clear_active(&mut self) -> Vec<MovementGeneratorRef> {
+        let removed = std::mem::take(&mut self.active_generators);
+        self.base_unit_states.clear();
+        self.current_generator = self.default_generator.kind;
+        removed
+    }
+
+    pub fn clear_slot(&mut self, slot: MovementSlot) -> Vec<MovementGeneratorRef> {
+        match slot {
+            MovementSlot::Default => {
+                let previous = self.default_generator;
+                self.move_idle();
+                vec![previous]
+            }
+            MovementSlot::Active => self.clear_active(),
+        }
+    }
+
+    pub fn clear_by_priority(
+        &mut self,
+        priority: MovementGeneratorPriority,
+    ) -> Vec<MovementGeneratorRef> {
+        let mut removed = Vec::new();
+        let mut index = 0;
+        while index < self.active_generators.len() {
+            if self.active_generators[index].priority == priority {
+                removed.push(self.remove_generator_at(index));
+            } else {
+                index += 1;
+            }
+        }
+        self.current_generator = self.current_movement_generator().kind;
+        removed
+    }
+
+    pub fn move_idle(&mut self) {
+        self.default_generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
+        self.flags |= MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
+        if self.active_generators.is_empty() {
+            self.current_generator = MovementGeneratorKind::Idle;
+        }
+    }
+
+    pub fn move_point(&mut self, movement_id: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_movement_id(movement_id),
+        );
+    }
+
+    pub fn move_charge(&mut self, movement_id: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_base_unit_state(UnitState::CHARGING.bits())
+                .with_movement_id(movement_id),
+        );
+    }
+
+    pub fn move_follow(&mut self, target_guid: ObjectGuid, duration_ms: Option<u32>) {
+        let mut generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_target_guid(target_guid);
+        if let Some(duration_ms) = duration_ms {
+            generator = generator.with_duration_ms(duration_ms);
+        }
+        self.add_generator(generator);
+    }
+
+    pub fn stop_on_death(&mut self) -> bool {
+        if self
+            .active_generators
+            .first()
+            .is_some_and(|generator| generator.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH))
+        {
+            return false;
+        }
+
+        self.clear_active();
+        self.move_idle();
+        self.stop_moving();
+        true
     }
 
     pub fn pause_movement(&mut self) {
@@ -775,6 +1124,39 @@ impl MotionSubsystem {
 
     pub fn set_spline_progress(&mut self, progress_ms: u32) {
         self.spline.progress_ms = progress_ms.min(self.spline.duration_ms);
+    }
+
+    fn sort_active_generators(&mut self) {
+        self.active_generators.sort_by(|left, right| {
+            right
+                .mode
+                .cmp(&left.mode)
+                .then_with(|| right.priority.cmp(&left.priority))
+        });
+    }
+
+    fn remove_generator_at(&mut self, index: usize) -> MovementGeneratorRef {
+        let removed = self.active_generators.remove(index);
+        self.clear_base_unit_state(removed.base_unit_state);
+        removed
+    }
+
+    fn add_base_unit_state(&mut self, base_unit_state: u32) {
+        if base_unit_state != 0 {
+            *self.base_unit_states.entry(base_unit_state).or_insert(0) += 1;
+        }
+    }
+
+    fn clear_base_unit_state(&mut self, base_unit_state: u32) {
+        if base_unit_state == 0 {
+            return;
+        }
+        if let Some(count) = self.base_unit_states.get_mut(&base_unit_state) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.base_unit_states.remove(&base_unit_state);
+            }
+        }
     }
 }
 
@@ -1134,6 +1516,100 @@ mod unit_subsystems_tests {
         combat.clear_attackers();
         assert!(combat.attackers.is_empty());
         assert_eq!(combat.attacking_guid, None);
+    }
+
+    #[test]
+    fn motion_generator_ids_slots_and_priorities_match_cpp_motion_master_shape() {
+        assert_eq!(MovementGeneratorKind::Idle.trinity_id(), 0);
+        assert_eq!(MovementGeneratorKind::Random.trinity_id(), 1);
+        assert_eq!(MovementGeneratorKind::Waypoint.trinity_id(), 2);
+        assert_eq!(MovementGeneratorKind::from_trinity_id(3), None);
+        assert_eq!(
+            MovementGeneratorKind::from_trinity_id(14),
+            Some(MovementGeneratorKind::Follow)
+        );
+        assert_eq!(
+            MovementGeneratorKind::from_trinity_id(18),
+            Some(MovementGeneratorKind::Formation)
+        );
+        assert_eq!(MovementSlot::Default as u8, 0);
+        assert_eq!(MovementSlot::Active as u8, 1);
+
+        let mut motion = MotionSubsystem::default();
+        motion.add_to_world();
+        assert_eq!(motion.size(), 1);
+        assert_eq!(motion.current_slot(), MovementSlot::Default);
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Idle
+        );
+
+        motion.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_target_guid(guid(30)),
+        );
+        assert_eq!(motion.current_slot(), MovementSlot::Active);
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Follow
+        );
+
+        motion.move_charge(42);
+        let current = motion.current_movement_generator();
+        assert_eq!(current.kind, MovementGeneratorKind::Point);
+        assert_eq!(current.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(current.base_unit_state, UnitState::CHARGING.bits());
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::CHARGING.bits()),
+            Some(&1)
+        );
+        assert!(
+            motion
+                .active_generators
+                .iter()
+                .any(|generator| generator.kind == MovementGeneratorKind::Follow
+                    && generator.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED))
+        );
+
+        let removed = motion.clear_by_priority(MovementGeneratorPriority::Highest);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::CHARGING.bits()),
+            None
+        );
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Follow
+        );
+    }
+
+    #[test]
+    fn motion_stop_on_death_preserves_persistent_generators_like_cpp() {
+        let mut motion = MotionSubsystem::default();
+        motion.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Effect, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH),
+        );
+
+        assert!(!motion.stop_on_death());
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Effect
+        );
+
+        motion.clear_active();
+        motion.move_point(9);
+        motion.start_spline(7, 1_000);
+        assert!(motion.stop_on_death());
+        assert_eq!(motion.current_slot(), MovementSlot::Default);
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Idle
+        );
+        assert!(motion.stopped);
+        assert!(!motion.spline.enabled);
     }
 
     #[test]

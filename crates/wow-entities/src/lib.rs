@@ -229,9 +229,17 @@ pub use unit::{
 pub use unit_subsystems::{
     AiSubsystem, AppliedAuraRef, AuraRef, AuraSubsystem, CURRENT_FIRST_NON_MELEE_SPELL,
     CURRENT_MAX_SPELL, CombatSubsystem, ControlSubsystem, CurrentSpellRef, CurrentSpellSlot,
-    INFINITY_COOLDOWN_DELAY_MS, MAX_SPELL_SCHOOL, MotionSubsystem, MoveSplineState,
-    MovementGeneratorKind, OwnedAuraRef, SpellChargeState, SpellCooldown, SpellHistory,
-    SpellSubsystem, UnitSubsystems, VehicleKitState, VehicleSubsystem,
+    INFINITY_COOLDOWN_DELAY_MS, MAX_SPELL_SCHOOL, MOTIONMASTER_FLAG_INITIALIZATION_PENDING,
+    MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING, MOTIONMASTER_FLAG_UPDATE,
+    MOVEMENTGENERATOR_FLAG_DEACTIVATED, MOVEMENTGENERATOR_FLAG_FINALIZED,
+    MOVEMENTGENERATOR_FLAG_INFORM_ENABLED, MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+    MOVEMENTGENERATOR_FLAG_INITIALIZED, MOVEMENTGENERATOR_FLAG_INTERRUPTED,
+    MOVEMENTGENERATOR_FLAG_NONE, MOVEMENTGENERATOR_FLAG_PAUSED,
+    MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH, MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING,
+    MOVEMENTGENERATOR_FLAG_TIMED_PAUSED, MotionSubsystem, MoveSplineState, MovementGeneratorKind,
+    MovementGeneratorMode, MovementGeneratorPriority, MovementGeneratorRef, MovementSlot,
+    OwnedAuraRef, SpellChargeState, SpellCooldown, SpellHistory, SpellSubsystem, UnitSubsystems,
+    VehicleKitState, VehicleSubsystem,
 };
 pub use update_fields::{
     ACTIVE_PLAYER_DATA_BITS, AREA_TRIGGER_DATA_BITS, CONTAINER_DATA_BITS, CONVERSATION_DATA_BITS,
