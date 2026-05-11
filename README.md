@@ -14,12 +14,17 @@ Built using WoW protocol research from the TrinityCore/MaNGOS community.
 
 ### Why Rust?
 
-| | RustyCore (Rust) | Traditional (C#/.NET) |
+RustyCore is a Rust port of the TrinityCore WotLK Classic C++ server codebase.
+The goal is behavioral parity with the original C++ implementation first, then
+incremental Rust-native improvements where they do not change gameplay semantics.
+
+| | RustyCore (Rust port) | TrinityCore legacy (C++) |
 |---|---|---|
-| Release binary | ~10 MB | ~200 MB+ |
-| Idle RAM | ~50–80 MB | ~300–500 MB |
-| GC pauses | None | Yes |
-| Concurrency | Tokio async | Thread-based |
+| Porting target | Must match C++ behavior and packet layout | Source of truth |
+| Memory safety | Ownership, borrowing, type-checked lifetimes | Manual ownership discipline |
+| GC pauses | None | None |
+| Concurrency | Tokio async where appropriate | Thread/event-loop based runtime |
+| Validation | Rust tests contrasted against C++ behavior | Existing C++ implementation |
 
 Runs comfortably on a Raspberry Pi 5.
 
