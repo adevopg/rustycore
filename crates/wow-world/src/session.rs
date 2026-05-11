@@ -1728,7 +1728,7 @@ impl WorldSession {
             return Err(());
         };
 
-        let player_team = player_team_for_race_cpp(self.player_race);
+        let player_team = player_team_for_race_cpp(self.player_race_like_cpp());
         if (entry.is_alliance() && player_team != Team::Alliance)
             || (entry.is_horde() && player_team != Team::Horde)
         {
@@ -1742,18 +1742,16 @@ impl WorldSession {
             return Err(());
         }
 
-        let currency = self
-            .player_currencies
-            .entry(currency_id)
-            .or_insert(PlayerCurrency {
-                state: PlayerCurrencyState::New,
-                quantity: 0,
-                weekly_quantity: 0,
-                tracked_quantity: 0,
-                increased_cap_quantity: 0,
-                earned_quantity: 0,
-                flags: 0,
-            });
+        let mut currencies = self.player_currencies_like_cpp().clone();
+        let currency = currencies.entry(currency_id).or_insert(PlayerCurrency {
+            state: PlayerCurrencyState::New,
+            quantity: 0,
+            weekly_quantity: 0,
+            tracked_quantity: 0,
+            increased_cap_quantity: 0,
+            earned_quantity: 0,
+            flags: 0,
+        });
 
         let weekly_cap = entry.max_earnable_per_week;
         let mut applied = amount;
@@ -1795,7 +1793,7 @@ impl WorldSession {
             total_earned: entry.has_total_earned().then_some(currency.earned_quantity),
             suppress_chat_log: entry.is_suppressing_chat_log(false),
         };
-        self.sync_player_currencies_like_cpp();
+        self.set_player_currencies_like_cpp(currencies);
         Ok(Some(delta))
     }
 
@@ -1818,7 +1816,7 @@ impl WorldSession {
             return Err(());
         };
 
-        let player_team = player_team_for_race_cpp(self.player_race);
+        let player_team = player_team_for_race_cpp(self.player_race_like_cpp());
         if (entry.is_alliance() && player_team != Team::Alliance)
             || (entry.is_horde() && player_team != Team::Horde)
         {
@@ -1832,18 +1830,16 @@ impl WorldSession {
             return Ok(None);
         }
 
-        let currency = self
-            .player_currencies
-            .entry(currency_id)
-            .or_insert(PlayerCurrency {
-                state: PlayerCurrencyState::New,
-                quantity: 0,
-                weekly_quantity: 0,
-                tracked_quantity: 0,
-                increased_cap_quantity: 0,
-                earned_quantity: 0,
-                flags: 0,
-            });
+        let mut currencies = self.player_currencies_like_cpp().clone();
+        let currency = currencies.entry(currency_id).or_insert(PlayerCurrency {
+            state: PlayerCurrencyState::New,
+            quantity: 0,
+            weekly_quantity: 0,
+            tracked_quantity: 0,
+            increased_cap_quantity: 0,
+            earned_quantity: 0,
+            flags: 0,
+        });
 
         if currency.state != PlayerCurrencyState::New {
             currency.state = PlayerCurrencyState::Changed;
@@ -1862,7 +1858,7 @@ impl WorldSession {
             total_earned: entry.has_total_earned().then_some(currency.earned_quantity),
             suppress_chat_log: entry.is_suppressing_chat_log(false),
         };
-        self.sync_player_currencies_like_cpp();
+        self.set_player_currencies_like_cpp(currencies);
         Ok(Some(delta))
     }
 
@@ -1872,7 +1868,8 @@ impl WorldSession {
             return true;
         }
 
-        let Some(currency) = self.player_currencies.get_mut(&currency_id) else {
+        let mut currencies = self.player_currencies_like_cpp().clone();
+        let Some(currency) = currencies.get_mut(&currency_id) else {
             return false;
         };
         if currency.quantity == 0 {
@@ -1884,7 +1881,7 @@ impl WorldSession {
         if currency.state != PlayerCurrencyState::New {
             currency.state = PlayerCurrencyState::Changed;
         }
-        self.sync_player_currencies_like_cpp();
+        self.set_player_currencies_like_cpp(currencies);
         true
     }
 
@@ -1897,7 +1894,8 @@ impl WorldSession {
         let Some(store) = self.currency_types_store.as_ref() else {
             return;
         };
-        for (&currency_id, currency) in &mut self.player_currencies {
+        let mut currencies = self.player_currencies_like_cpp().clone();
+        for (&currency_id, currency) in &mut currencies {
             if !store.has_record(currency_id) {
                 continue;
             }
@@ -1937,7 +1935,7 @@ impl WorldSession {
                 PlayerCurrencyState::Unchanged | PlayerCurrencyState::Removed => {}
             }
         }
-        self.sync_player_currencies_like_cpp();
+        self.set_player_currencies_like_cpp(currencies);
     }
 
     /// Set the item appearance store for this session.
@@ -5098,6 +5096,20 @@ impl WorldSession {
         if let Some(controller) = &mut self.player_controller {
             controller.set_currencies(self.player_currencies.clone());
         }
+    }
+
+    pub(crate) fn set_player_currencies_like_cpp(
+        &mut self,
+        currencies: HashMap<u32, PlayerCurrency>,
+    ) {
+        self.player_currencies = currencies.clone();
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_currencies(currencies);
+        }
+    }
+
+    pub(crate) fn clear_player_currencies_like_cpp(&mut self) {
+        self.set_player_currencies_like_cpp(HashMap::new());
     }
 
     pub(crate) fn session_player_inventory_runtime_like_cpp(
