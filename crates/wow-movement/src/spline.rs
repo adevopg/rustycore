@@ -341,6 +341,10 @@ impl MoveSplineInit {
         self.args.path[1] = destination;
     }
 
+    pub fn set_first_point_id(&mut self, point_id: i32) {
+        self.args.path_idx_offset = point_id;
+    }
+
     pub fn set_velocity(&mut self, velocity: f32) {
         self.args.velocity = velocity;
         self.args.has_velocity = true;
@@ -366,6 +370,14 @@ impl MoveSplineInit {
         self.args.flags.enable_flying();
     }
 
+    pub fn set_transport_enter(&mut self) {
+        self.args.flags.enable_transport_enter();
+    }
+
+    pub fn set_transport_exit(&mut self) {
+        self.args.flags.enable_transport_exit();
+    }
+
     pub fn set_backward(&mut self) {
         self.args.flags.insert(MoveSplineFlag::BACKWARD);
     }
@@ -385,6 +397,63 @@ impl MoveSplineInit {
         self.args
             .flags
             .set(MoveSplineFlag::FALLING_SLOW, falling_slow);
+    }
+
+    pub fn set_parabolic(&mut self, amplitude: f32, time_shift: f32) {
+        self.args.effect_start_time_percent = time_shift;
+        self.args.parabolic_amplitude = amplitude;
+        self.args.vertical_acceleration = 0.0;
+        self.args.flags.enable_parabolic();
+    }
+
+    pub fn set_parabolic_vertical_acceleration(
+        &mut self,
+        vertical_acceleration: f32,
+        time_shift: f32,
+    ) {
+        self.args.effect_start_time_percent = time_shift;
+        self.args.parabolic_amplitude = 0.0;
+        self.args.vertical_acceleration = vertical_acceleration;
+        self.args.flags.enable_parabolic();
+    }
+
+    pub fn set_animation(
+        &mut self,
+        anim_tier: u8,
+        tier_transition_id: u32,
+        transition_start_time_ms: i32,
+    ) {
+        self.args.effect_start_time_percent = 0.0;
+        self.args.effect_start_time_ms = transition_start_time_ms;
+        self.args.anim_tier = Some(AnimTierTransition {
+            tier_transition_id,
+            anim_tier,
+        });
+        self.args.flags.enable_animation();
+    }
+
+    pub fn set_facing_spot(&mut self, spot: Position) {
+        self.args.facing.spot = spot;
+        self.args.facing.kind = MonsterMoveType::FacingSpot;
+    }
+
+    pub fn set_facing_target_with_angle(&mut self, target: ObjectGuid, absolute_angle: f32) {
+        self.args.facing.angle = absolute_angle;
+        self.args.facing.target = target;
+        self.args.facing.kind = MonsterMoveType::FacingTarget;
+    }
+
+    pub fn set_facing_angle(&mut self, angle: f32) {
+        self.args.facing.angle = wrap_angle_0_2pi(angle);
+        self.args.facing.kind = MonsterMoveType::FacingAngle;
+    }
+
+    pub fn set_spell_effect_extra_data(&mut self, spell_effect_extra: SpellEffectExtraData) {
+        self.args.spell_effect_extra = Some(spell_effect_extra);
+    }
+
+    pub fn disable_transport_path_transformations(&mut self) {
+        self.args.transform_for_transport = false;
     }
 
     pub fn launch(
@@ -1255,6 +1324,10 @@ fn evaluate_derivative_catmullrom(spline: &SplineData, index: i32, t: f32) -> Po
     Position::xyz(x, y, z)
 }
 
+fn wrap_angle_0_2pi(angle: f32) -> f32 {
+    angle.rem_euclid(2.0 * PI)
+}
+
 fn distance_3d(left: Position, right: Position) -> f32 {
     let dx = left.x - right.x;
     let dy = left.y - right.y;
@@ -1419,6 +1492,92 @@ mod tests {
             init.stop(&mut spline, MoveSplineStopInput::new(Position::ZERO))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn move_spline_init_setters_match_cpp_flag_side_effects() {
+        let mut init = MoveSplineInit::new(80);
+        init.args.transform_for_transport = true;
+
+        init.set_first_point_id(12);
+        init.set_transport_enter();
+        init.set_transport_exit();
+        init.set_orientation_fixed(true);
+        init.set_uncompressed();
+        init.set_cyclic();
+        init.set_unlimited_speed();
+        init.set_facing_angle(-0.5);
+        init.set_spell_effect_extra_data(SpellEffectExtraData {
+            target: ObjectGuid::create_player(1, 99),
+            spell_visual_id: 123,
+            progress_curve_id: 456,
+            parabolic_curve_id: 789,
+        });
+        init.disable_transport_path_transformations();
+
+        assert_eq!(init.args.path_idx_offset, 12);
+        assert!(init.args.flags.contains(MoveSplineFlag::TRANSPORT_EXIT));
+        assert!(!init.args.flags.contains(MoveSplineFlag::TRANSPORT_ENTER));
+        assert!(init.args.flags.contains(MoveSplineFlag::ORIENTATION_FIXED));
+        assert!(init.args.flags.contains(MoveSplineFlag::UNCOMPRESSED_PATH));
+        assert!(init.args.flags.contains(MoveSplineFlag::CYCLIC));
+        assert!(init.args.flags.contains(MoveSplineFlag::UNLIMITED_SPEED));
+        assert_eq!(init.args.facing.kind, MonsterMoveType::FacingAngle);
+        assert!((init.args.facing.angle - (2.0 * PI - 0.5)).abs() < f32::EPSILON);
+        assert!(init.args.spell_effect_extra.is_some());
+        assert!(!init.args.transform_for_transport);
+    }
+
+    #[test]
+    fn move_spline_init_visual_effect_setters_are_mutually_exclusive_like_cpp() {
+        let mut init = MoveSplineInit::new(81);
+
+        init.set_parabolic(3.5, 0.25);
+        assert_eq!(init.args.effect_start_time_percent, 0.25);
+        assert_eq!(init.args.parabolic_amplitude, 3.5);
+        assert_eq!(init.args.vertical_acceleration, 0.0);
+        assert!(init.args.flags.contains(MoveSplineFlag::PARABOLIC));
+        assert!(!init.args.flags.contains(MoveSplineFlag::ANIMATION));
+
+        init.set_animation(4, 99, 250);
+        assert_eq!(init.args.effect_start_time_percent, 0.0);
+        assert_eq!(init.args.effect_start_time_ms, 250);
+        assert_eq!(
+            init.args.anim_tier,
+            Some(AnimTierTransition {
+                tier_transition_id: 99,
+                anim_tier: 4,
+            })
+        );
+        assert!(init.args.flags.contains(MoveSplineFlag::ANIMATION));
+        assert!(!init.args.flags.contains(MoveSplineFlag::PARABOLIC));
+
+        init.set_parabolic_vertical_acceleration(9.0, 0.75);
+        assert_eq!(init.args.effect_start_time_percent, 0.75);
+        assert_eq!(init.args.parabolic_amplitude, 0.0);
+        assert_eq!(init.args.vertical_acceleration, 9.0);
+        assert!(init.args.flags.contains(MoveSplineFlag::PARABOLIC));
+        assert!(!init.args.flags.contains(MoveSplineFlag::ANIMATION));
+    }
+
+    #[test]
+    fn move_spline_init_facing_setters_match_cpp_shapes() {
+        let mut init = MoveSplineInit::new(82);
+        let spot = Position::xyz(1.0, 2.0, 3.0);
+        let target = ObjectGuid::create_player(1, 22);
+
+        init.set_facing_spot(spot);
+        assert_eq!(init.args.facing.kind, MonsterMoveType::FacingSpot);
+        assert_eq!(init.args.facing.spot, spot);
+
+        init.set_facing_target_with_angle(target, 1.25);
+        assert_eq!(init.args.facing.kind, MonsterMoveType::FacingTarget);
+        assert_eq!(init.args.facing.target, target);
+        assert_eq!(init.args.facing.angle, 1.25);
+
+        init.set_facing_angle(2.5 * PI);
+        assert_eq!(init.args.facing.kind, MonsterMoveType::FacingAngle);
+        assert!((init.args.facing.angle - 0.5 * PI).abs() < 0.000_001);
     }
 
     #[test]
