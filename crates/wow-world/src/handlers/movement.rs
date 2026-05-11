@@ -88,20 +88,25 @@ impl WorldSession {
             }
         };
 
-        // Validate: GUID must match our player character.
-        if let Some(player_guid) = self.player_guid() {
-            if info.info.guid != player_guid && !info.info.guid.is_empty() {
-                warn!(
-                    account = self.account_id,
-                    "Movement GUID mismatch: expected {:?}, got {:?}", player_guid, info.info.guid
-                );
-                return;
-            }
+        let Some(player_guid) = self.player_guid() else {
+            warn!(
+                account = self.account_id,
+                "Movement packet received without loaded player"
+            );
+            return;
+        };
+
+        // C++ rejects any movement packet whose guid does not match the current mover.
+        if info.info.guid != player_guid {
+            warn!(
+                account = self.account_id,
+                "Movement GUID mismatch: expected {:?}, got {:?}", player_guid, info.info.guid
+            );
+            return;
         }
 
-        // Validate: position must be finite (anti-cheat sanity check).
         let pos = &info.info.position;
-        if !pos.x.is_finite() || !pos.y.is_finite() || !pos.z.is_finite() {
+        if !pos.is_valid_map_coord_like_cpp() {
             warn!(
                 account = self.account_id,
                 "Invalid movement position: {pos:?}"
