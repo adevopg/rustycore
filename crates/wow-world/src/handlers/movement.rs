@@ -449,7 +449,7 @@ impl WorldSession {
             spline_id = pkt.spline_id,
             "MoveSplineDone"
         );
-        self.record_move_spline_done_like_cpp(&pkt.status, pkt.spline_id);
+        self.handle_move_spline_done_taxi_like_cpp(&pkt.status, pkt.spline_id);
     }
 
     /// Handle C++ `HandleMoveTeleportAck` bookkeeping until near-teleport runtime is complete.
@@ -469,9 +469,10 @@ impl WorldSession {
 mod tests {
     use super::*;
     use crate::session::{
-        AuraApplication, MovementSpeedAckActionLikeCpp, RepresentedAuraEffectLikeCpp,
-        UnitMoveTypeLikeCpp,
+        AuraApplication, MoveSplineDoneTaxiActionLikeCpp, MovementSpeedAckActionLikeCpp,
+        RepresentedAuraEffectLikeCpp, RepresentedTaxiFlightNodeLikeCpp, UnitMoveTypeLikeCpp,
     };
+    use wow_constants::unit::UnitFlags;
     use wow_core::ObjectGuid;
 
     fn make_session() -> WorldSession {
@@ -914,6 +915,87 @@ mod tests {
         let kicked = session.movement_speed_ack_events_like_cpp().last().unwrap();
         assert_eq!(kicked.action, MovementSpeedAckActionLikeCpp::Kicked);
         assert!(session.is_disconnecting());
+    }
+
+    #[test]
+    fn move_spline_done_taxi_final_cleanup_matches_cpp_represented_side_effects() {
+        let mut session = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(guid));
+        session.set_player_position_like_cpp(wow_core::Position::new(1.0, 2.0, 30.0, 0.5));
+        session.set_fall_information_like_cpp(1_200, 120.0);
+        session.set_taxi_destinations_like_cpp(vec![100]);
+        session.set_taxi_cleanup_state_like_cpp(
+            UnitFlags::REMOVE_CLIENT_CONTROL | UnitFlags::ON_TAXI,
+            true,
+        );
+        session.set_player_pvp_hostile_like_cpp(true);
+
+        let status = MovementInfo {
+            guid,
+            time: 1_000,
+            position: wow_core::Position::new(1.0, 2.0, 30.0, 0.5),
+            ..MovementInfo::default()
+        };
+
+        let action = session.handle_move_spline_done_taxi_like_cpp(&status, 55);
+        assert_eq!(action, MoveSplineDoneTaxiActionLikeCpp::FinalCleanup);
+        assert!(session.taxi_destinations_like_cpp().is_empty());
+        assert!(!session.taxi_mounted_like_cpp());
+        assert_eq!(session.taxi_unit_flags_like_cpp(), UnitFlags::empty());
+        assert_eq!(session.fall_information_like_cpp(), (0, 30.0));
+        let event = session
+            .move_spline_done_taxi_events_like_cpp()
+            .last()
+            .unwrap();
+        assert!(event.honorless_target_cast);
+    }
+
+    #[test]
+    fn move_spline_done_taxi_far_teleport_matches_cpp_represented_branch() {
+        let mut session = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(guid));
+        session.set_player_map_position_like_cpp(0, wow_core::Position::new(1.0, 2.0, 3.0, 1.0));
+        session.set_taxi_destinations_like_cpp(vec![10, 20]);
+        session.set_taxi_node_map_id_like_cpp(20, 1);
+        session.set_taxi_flight_state_like_cpp(
+            RepresentedTaxiFlightNodeLikeCpp {
+                map_id: 0,
+                position: wow_core::Position::new(5.0, 6.0, 7.0, 1.0),
+                teleport_flag: false,
+            },
+            Some(RepresentedTaxiFlightNodeLikeCpp {
+                map_id: 1,
+                position: wow_core::Position::new(50.0, 60.0, 70.0, 1.0),
+                teleport_flag: false,
+            }),
+        );
+
+        let status = MovementInfo {
+            guid,
+            time: 1_000,
+            position: wow_core::Position::new(1.0, 2.0, 3.0, 1.0),
+            ..MovementInfo::default()
+        };
+
+        let action = session.handle_move_spline_done_taxi_like_cpp(&status, 56);
+        assert_eq!(action, MoveSplineDoneTaxiActionLikeCpp::TeleportRequested);
+        assert_eq!(session.player_map_id_like_cpp(), 1);
+        assert_eq!(
+            session.player_position_like_cpp().unwrap(),
+            wow_core::Position::new(50.0, 60.0, 70.0, 1.0)
+        );
+        let event = session
+            .move_spline_done_taxi_events_like_cpp()
+            .last()
+            .unwrap();
+        assert_eq!(event.destination_node_id, Some(20));
+        assert_eq!(event.teleport_map_id, Some(1));
+        assert_eq!(
+            event.teleport_position,
+            Some(wow_core::Position::new(50.0, 60.0, 70.0, 1.0))
+        );
     }
 
     fn broadcast_info(

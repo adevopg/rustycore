@@ -15,7 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
-use wow_constants::unit::{Team, UnitStandStateType};
+use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
     ItemClass, ItemContext, ItemEnchantmentType, ItemFlags, ItemFlags2, ItemQuality, SellResult,
@@ -138,6 +138,39 @@ pub(crate) struct MovementAckEventLikeCpp {
     pub time_skipped: Option<u32>,
     pub spline_id: Option<i32>,
     pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MoveSplineDoneTaxiActionLikeCpp {
+    InvalidMovement,
+    InProgressNoFlightGenerator,
+    InProgressNoTeleport,
+    TeleportRequested,
+    FinalCleanup,
+    IgnoredUnexpectedFinalPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RepresentedTaxiFlightNodeLikeCpp {
+    pub map_id: u16,
+    pub position: wow_core::Position,
+    pub teleport_flag: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MoveSplineDoneTaxiEventLikeCpp {
+    pub spline_id: i32,
+    pub action: MoveSplineDoneTaxiActionLikeCpp,
+    pub destination_node_id: Option<u32>,
+    pub teleport_map_id: Option<u16>,
+    pub teleport_position: Option<wow_core::Position>,
+    pub honorless_target_cast: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RepresentedTaxiFlightStateLikeCpp {
+    current_node: RepresentedTaxiFlightNodeLikeCpp,
+    node_after_teleport: Option<RepresentedTaxiFlightNodeLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -803,6 +836,20 @@ pub struct WorldSession {
     movement_visibility_refresh_requests_like_cpp: u32,
     /// ACKs accepted by represented movement handling until full Unit movement runtime/broadcasts exist.
     movement_ack_events_like_cpp: Vec<MovementAckEventLikeCpp>,
+    /// Represented `PlayerTaxi::m_TaxiDestinations` until PlayerTaxi/MotionMaster runtime is canonical.
+    taxi_destinations_like_cpp: Vec<u32>,
+    /// Minimal TaxiNodes.db2 map lookup used by represented `MoveSplineDone` taxi transitions.
+    taxi_node_map_ids_like_cpp: HashMap<u32, u16>,
+    /// Represented active `FlightPathMovementGenerator`, if any.
+    taxi_flight_state_like_cpp: Option<RepresentedTaxiFlightStateLikeCpp>,
+    /// Represented unit flags touched by `CleanupAfterTaxiFlight`.
+    taxi_unit_flags_like_cpp: UnitFlags,
+    /// Represented mount state touched by `CleanupAfterTaxiFlight`.
+    taxi_mounted_like_cpp: bool,
+    /// Represented `pvpInfo.IsHostile` branch for Honorless Target after taxi landing.
+    player_pvp_hostile_like_cpp: bool,
+    /// `MoveSplineDone` taxi decisions recorded until full Taxi/MotionMaster runtime exists.
+    move_spline_done_taxi_events_like_cpp: Vec<MoveSplineDoneTaxiEventLikeCpp>,
     /// C++ `Player::m_forced_speed_changes[MAX_MOVE_TYPE]` represented state.
     forced_speed_changes_like_cpp: [u8; UnitMoveTypeLikeCpp::COUNT],
     /// C++ `Unit::m_speed_rate[MAX_MOVE_TYPE]` represented state for player-controlled movers.
@@ -1233,6 +1280,13 @@ impl WorldSession {
             active_player_transport_server_time_like_cpp: 0,
             movement_visibility_refresh_requests_like_cpp: 0,
             movement_ack_events_like_cpp: Vec::new(),
+            taxi_destinations_like_cpp: Vec::new(),
+            taxi_node_map_ids_like_cpp: HashMap::new(),
+            taxi_flight_state_like_cpp: None,
+            taxi_unit_flags_like_cpp: UnitFlags::empty(),
+            taxi_mounted_like_cpp: false,
+            player_pvp_hostile_like_cpp: false,
+            move_spline_done_taxi_events_like_cpp: Vec::new(),
             forced_speed_changes_like_cpp: [0; UnitMoveTypeLikeCpp::COUNT],
             movement_speed_rates_like_cpp: [1.0; UnitMoveTypeLikeCpp::COUNT],
             player_on_transport_like_cpp: false,
@@ -6261,6 +6315,127 @@ impl WorldSession {
         accepted
     }
 
+    pub(crate) fn handle_move_spline_done_taxi_like_cpp(
+        &mut self,
+        status: &wow_packet::packets::movement::MovementInfo,
+        spline_id: i32,
+    ) -> MoveSplineDoneTaxiActionLikeCpp {
+        if !self.record_move_spline_done_like_cpp(status, spline_id) {
+            return self.record_move_spline_done_taxi_event_like_cpp(
+                spline_id,
+                MoveSplineDoneTaxiActionLikeCpp::InvalidMovement,
+                None,
+                None,
+                None,
+                false,
+            );
+        }
+
+        let current_destination = self.taxi_destinations_like_cpp.get(1).copied();
+        if let Some(destination_node_id) = current_destination {
+            let Some(flight) = self.taxi_flight_state_like_cpp else {
+                return self.record_move_spline_done_taxi_event_like_cpp(
+                    spline_id,
+                    MoveSplineDoneTaxiActionLikeCpp::InProgressNoFlightGenerator,
+                    Some(destination_node_id),
+                    None,
+                    None,
+                    false,
+                );
+            };
+
+            let destination_map_id = self
+                .taxi_node_map_ids_like_cpp
+                .get(&destination_node_id)
+                .copied();
+            let should_teleport = destination_map_id
+                .map(|map_id| map_id != self.player_map_id_like_cpp())
+                .unwrap_or(false)
+                || flight.current_node.teleport_flag;
+
+            if should_teleport {
+                if let (Some(map_id), Some(node)) = (destination_map_id, flight.node_after_teleport)
+                {
+                    self.taxi_flight_state_like_cpp = Some(RepresentedTaxiFlightStateLikeCpp {
+                        current_node: node,
+                        node_after_teleport: None,
+                    });
+                    self.set_player_map_position_like_cpp(map_id, node.position);
+                    return self.record_move_spline_done_taxi_event_like_cpp(
+                        spline_id,
+                        MoveSplineDoneTaxiActionLikeCpp::TeleportRequested,
+                        Some(destination_node_id),
+                        Some(map_id),
+                        Some(node.position),
+                        false,
+                    );
+                }
+            }
+
+            return self.record_move_spline_done_taxi_event_like_cpp(
+                spline_id,
+                MoveSplineDoneTaxiActionLikeCpp::InProgressNoTeleport,
+                Some(destination_node_id),
+                None,
+                None,
+                false,
+            );
+        }
+
+        if self.taxi_destinations_like_cpp.len() != 1 {
+            return self.record_move_spline_done_taxi_event_like_cpp(
+                spline_id,
+                MoveSplineDoneTaxiActionLikeCpp::IgnoredUnexpectedFinalPath,
+                None,
+                None,
+                None,
+                false,
+            );
+        }
+
+        self.taxi_destinations_like_cpp.clear();
+        self.taxi_flight_state_like_cpp = None;
+        self.taxi_mounted_like_cpp = false;
+        self.taxi_unit_flags_like_cpp
+            .remove(UnitFlags::REMOVE_CLIENT_CONTROL | UnitFlags::ON_TAXI);
+        let current_z = self
+            .player_position_like_cpp()
+            .map(|position| position.z)
+            .unwrap_or(status.position.z);
+        self.set_fall_information_like_cpp(0, current_z);
+        let honorless_target_cast = self.player_pvp_hostile_like_cpp;
+
+        self.record_move_spline_done_taxi_event_like_cpp(
+            spline_id,
+            MoveSplineDoneTaxiActionLikeCpp::FinalCleanup,
+            None,
+            None,
+            None,
+            honorless_target_cast,
+        )
+    }
+
+    fn record_move_spline_done_taxi_event_like_cpp(
+        &mut self,
+        spline_id: i32,
+        action: MoveSplineDoneTaxiActionLikeCpp,
+        destination_node_id: Option<u32>,
+        teleport_map_id: Option<u16>,
+        teleport_position: Option<wow_core::Position>,
+        honorless_target_cast: bool,
+    ) -> MoveSplineDoneTaxiActionLikeCpp {
+        self.move_spline_done_taxi_events_like_cpp
+            .push(MoveSplineDoneTaxiEventLikeCpp {
+                spline_id,
+                action,
+                destination_node_id,
+                teleport_map_id,
+                teleport_position,
+                honorless_target_cast,
+            });
+        action
+    }
+
     pub(crate) fn record_move_teleport_ack_like_cpp(
         &mut self,
         mover_guid: ObjectGuid,
@@ -6286,6 +6461,66 @@ impl WorldSession {
     #[cfg(test)]
     pub(crate) fn movement_ack_events_like_cpp(&self) -> &[MovementAckEventLikeCpp] {
         &self.movement_ack_events_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_taxi_destinations_like_cpp(&mut self, destinations: Vec<u32>) {
+        self.taxi_destinations_like_cpp = destinations;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn taxi_destinations_like_cpp(&self) -> &[u32] {
+        &self.taxi_destinations_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_taxi_node_map_id_like_cpp(&mut self, node_id: u32, map_id: u16) {
+        self.taxi_node_map_ids_like_cpp.insert(node_id, map_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_taxi_flight_state_like_cpp(
+        &mut self,
+        current_node: RepresentedTaxiFlightNodeLikeCpp,
+        node_after_teleport: Option<RepresentedTaxiFlightNodeLikeCpp>,
+    ) {
+        self.taxi_flight_state_like_cpp = Some(RepresentedTaxiFlightStateLikeCpp {
+            current_node,
+            node_after_teleport,
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_taxi_cleanup_state_like_cpp(&mut self, unit_flags: UnitFlags, mounted: bool) {
+        self.taxi_unit_flags_like_cpp = unit_flags;
+        self.taxi_mounted_like_cpp = mounted;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn taxi_unit_flags_like_cpp(&self) -> UnitFlags {
+        self.taxi_unit_flags_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn taxi_mounted_like_cpp(&self) -> bool {
+        self.taxi_mounted_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_player_pvp_hostile_like_cpp(&mut self, hostile: bool) {
+        self.player_pvp_hostile_like_cpp = hostile;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fall_information_like_cpp(&self) -> (u32, f32) {
+        (self.last_fall_time_like_cpp, self.last_fall_z_like_cpp)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn move_spline_done_taxi_events_like_cpp(
+        &self,
+    ) -> &[MoveSplineDoneTaxiEventLikeCpp] {
+        &self.move_spline_done_taxi_events_like_cpp
     }
 
     pub(crate) fn player_movement_time_like_cpp(&self) -> u32 {
