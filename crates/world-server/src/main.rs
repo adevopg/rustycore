@@ -587,20 +587,6 @@ async fn main() -> Result<()> {
     }
     let hotfix_blob_cache = Arc::new(hotfix_blob_cache);
 
-    // Diagnostic: check if known problem items exist in cache
-    for item_id in [58256i32, 58274, 58257] {
-        let has = hotfix_blob_cache.get(0x919BE54E, item_id); // ItemSparse table hash
-        info!(
-            "HotfixBlobCache check: ItemSparse record {} → {}",
-            item_id,
-            if let Some(b) = has {
-                format!("FOUND ({} bytes)", b.len())
-            } else {
-                "NOT FOUND".into()
-            }
-        );
-    }
-
     // Load SkillLineAbility.db2 + SkillRaceClassInfo.db2 for auto-learned spells
     let skill_store = Arc::new(
         wow_data::SkillStore::load(&data_dir, &locale)

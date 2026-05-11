@@ -41,7 +41,10 @@ pub use area_trigger::{
 pub use chr_specialization::{ChrSpecializationEntry, ChrSpecializationStore};
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
-pub use hotfix_cache::{HotfixBlobCache, build_hotfix_blob_cache};
+pub use hotfix_cache::{
+    HotfixBlobCache, HotfixId, HotfixRecord, HotfixRecordStatus, build_hotfix_blob_cache,
+    hotfix_locale_mask,
+};
 pub use import_price::{
     ImportPriceArmorEntry, ImportPriceArmorStore, ImportPriceQualityEntry, ImportPriceQualityStore,
     ImportPriceShieldEntry, ImportPriceShieldStore, ImportPriceStores, ImportPriceWeaponEntry,

@@ -280,6 +280,19 @@ impl HotfixBlobCache {
         &self.hotfix_data
     }
 
+    pub fn hotfix_push(&self, push_id: i32) -> Option<&HotfixPush> {
+        self.hotfix_data.get(&push_id)
+    }
+
+    pub fn available_hotfix_ids(&self, locale: &str) -> Vec<HotfixId> {
+        let locale_mask = locale_mask_for_name(locale);
+        self.hotfix_data
+            .values()
+            .filter(|push| push.available_locales_mask & locale_mask != 0)
+            .filter_map(|push| push.records.first().map(|record| record.id))
+            .collect()
+    }
+
     pub fn hotfix_count(&self) -> usize {
         self.hotfix_data
             .values()
@@ -294,6 +307,10 @@ impl HotfixBlobCache {
 
 fn locale_mask_for_name(locale: &str) -> u32 {
     locale_index(locale).map_or(0, |index| 1_u32 << index)
+}
+
+pub fn hotfix_locale_mask(locale: &str) -> u32 {
+    locale_mask_for_name(locale)
 }
 
 fn locale_index(locale: &str) -> Option<u32> {

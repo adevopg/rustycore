@@ -4460,7 +4460,7 @@ impl WorldSession {
     /// 2. SetTimeZoneInformation
     /// 3. FeatureSystemStatusGlueScreen (NOT the in-game FeatureSystemStatus!)
     /// 4. ClientCacheVersion
-    /// 5. AvailableHotfixes (empty)
+    /// 5. AvailableHotfixes
     /// 6. AccountDataTimes (global)
     /// 7. TutorialFlags
     /// 8. ConnectionStatus (State=1)
@@ -4517,9 +4517,25 @@ impl WorldSession {
             cache_version: 24081,
         });
 
-        // 5. AvailableHotfixes (empty — no hotfixes)
+        let hotfixes = self
+            .hotfix_blob_cache
+            .as_ref()
+            .map(|cache| {
+                cache
+                    .available_hotfix_ids(&self.locale)
+                    .into_iter()
+                    .map(|id| HotfixId {
+                        push_id: id.push_id,
+                        unique_id: id.unique_id,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // 5. AvailableHotfixes
         self.send_packet(&AvailableHotfixes {
             virtual_realm_address: vra,
+            hotfixes,
         });
 
         // 6. AccountDataTimes (global)

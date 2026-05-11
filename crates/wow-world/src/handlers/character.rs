@@ -17,7 +17,7 @@ use wow_constants::{
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
 use wow_crypto::rsa_sign::rsa_sign_connect_to;
-use wow_data::{CurrencyTypesStore, ItemExtendedCostStore};
+use wow_data::{CurrencyTypesStore, HotfixRecordStatus, ItemExtendedCostStore, hotfix_locale_mask};
 use wow_database::{
     CharStatements, CharacterDatabase, LoginStatements, SqlTransaction, WorldDatabase,
     WorldStatements,
@@ -1955,8 +1955,6 @@ impl WorldSession {
     }
 
     /// Handle CMSG_HOTFIX_REQUEST — client requests hotfix data.
-    ///
-    /// We have no hotfixes, so we respond with an empty HotfixConnect.
     pub async fn handle_hotfix_request(&mut self, req: wow_packet::packets::misc::HotfixRequest) {
         debug!(
             "HotfixRequest: client_build={}, data_build={}, {} hotfixes for account {}",
@@ -1965,7 +1963,67 @@ impl WorldSession {
             req.hotfixes.len(),
             self.account_id
         );
-        self.send_packet(&HotfixConnect);
+
+        let Some(cache) = self.hotfix_blob_cache().map(Arc::clone) else {
+            self.send_packet(&HotfixConnect::empty());
+            return;
+        };
+
+        let mut response = HotfixConnect::empty();
+        let locale_mask = hotfix_locale_mask(&self.locale);
+        for push_id in &req.hotfixes {
+            let Some(push) = cache.hotfix_push(*push_id) else {
+                continue;
+            };
+
+            for record in &push.records {
+                if record.available_locales_mask & locale_mask == 0 {
+                    continue;
+                }
+
+                let mut status = record.status as u8;
+                let mut size = 0u32;
+
+                if record.status == HotfixRecordStatus::Valid {
+                    if let Some(blob) = cache.get(record.table_hash, record.record_id) {
+                        let start = response.content.len();
+                        response.content.extend_from_slice(blob);
+                        if let Some(optional_entries) = cache.get_optional_data(
+                            record.table_hash,
+                            record.record_id,
+                            &self.locale,
+                        ) {
+                            for optional_data in optional_entries {
+                                response
+                                    .content
+                                    .extend_from_slice(&optional_data.key.to_le_bytes());
+                                response.content.extend_from_slice(&optional_data.data);
+                            }
+                        }
+                        size = (response.content.len() - start) as u32;
+                    } else {
+                        status = if cache.has_table(record.table_hash) {
+                            HotfixRecordStatus::RecordRemoved as u8
+                        } else {
+                            HotfixRecordStatus::Invalid as u8
+                        };
+                    }
+                }
+
+                response.hotfixes.push(HotfixConnectData {
+                    id: HotfixId {
+                        push_id: record.id.push_id,
+                        unique_id: record.id.unique_id,
+                    },
+                    table_hash: record.table_hash,
+                    record_id: record.record_id,
+                    size,
+                    status,
+                });
+            }
+        }
+
+        self.send_packet(&response);
     }
 
     /// Handle CMSG_TIME_SYNC_RESPONSE — client's response to our TimeSyncRequest.
