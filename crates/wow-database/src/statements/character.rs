@@ -124,6 +124,14 @@ pub enum CharStatements {
     DEL_INSTANCE,
     /// INSERT INTO instance (instanceId, data, completedEncountersMask, entranceWorldSafeLocId) VALUES (?, ?, ?, ?)
     INS_INSTANCE,
+    /// SELECT type, spawnId, respawnTime FROM respawn WHERE mapId = ? AND instanceId = ?
+    SEL_RESPAWNS,
+    /// REPLACE INTO respawn (type, spawnId, respawnTime, mapId, instanceId) VALUES (?, ?, ?, ?, ?)
+    REP_RESPAWN,
+    /// DELETE FROM respawn WHERE type = ? AND spawnId = ? AND mapId = ? AND instanceId = ?
+    DEL_RESPAWN,
+    /// DELETE FROM respawn WHERE mapId = ? AND instanceId = ?
+    DEL_ALL_RESPAWNS,
 
     // Quest status
     SEL_CHAR_QUEST_STATUS,
@@ -336,6 +344,16 @@ impl StatementDef for CharStatements {
             Self::INS_INSTANCE => {
                 "INSERT INTO instance (instanceId, data, completedEncountersMask, entranceWorldSafeLocId) VALUES (?, ?, ?, ?)"
             }
+            Self::SEL_RESPAWNS => {
+                "SELECT type, spawnId, respawnTime FROM respawn WHERE mapId = ? AND instanceId = ?"
+            }
+            Self::REP_RESPAWN => {
+                "REPLACE INTO respawn (type, spawnId, respawnTime, mapId, instanceId) VALUES (?, ?, ?, ?, ?)"
+            }
+            Self::DEL_RESPAWN => {
+                "DELETE FROM respawn WHERE type = ? AND spawnId = ? AND mapId = ? AND instanceId = ?"
+            }
+            Self::DEL_ALL_RESPAWNS => "DELETE FROM respawn WHERE mapId = ? AND instanceId = ?",
             Self::UPD_CHAR_XP => "UPDATE characters SET xp = ? WHERE guid = ?",
             Self::UPD_CHAR_LEVEL => "UPDATE characters SET level = ?, xp = ? WHERE guid = ?",
             Self::UPD_CHAR_MONEY => "UPDATE characters SET money = ? WHERE guid = ?",
@@ -461,6 +479,10 @@ mod tests {
         assert!(!CharStatements::SEL_CHARACTER_INSTANCE_LOCK.sql().is_empty());
         assert!(!CharStatements::INS_CHARACTER_INSTANCE_LOCK.sql().is_empty());
         assert!(!CharStatements::INS_INSTANCE.sql().is_empty());
+        assert!(!CharStatements::SEL_RESPAWNS.sql().is_empty());
+        assert!(!CharStatements::REP_RESPAWN.sql().is_empty());
+        assert!(!CharStatements::DEL_RESPAWN.sql().is_empty());
+        assert!(!CharStatements::DEL_ALL_RESPAWNS.sql().is_empty());
     }
 
     #[test]
@@ -484,6 +506,8 @@ mod tests {
                 .sql()
                 .contains("account_instance_times")
         );
+        assert!(CharStatements::SEL_RESPAWNS.sql().contains("respawn"));
+        assert!(CharStatements::DEL_ALL_RESPAWNS.sql().contains("respawn"));
     }
 
     #[test]
@@ -724,5 +748,12 @@ mod tests {
         );
         assert_eq!(CharStatements::DEL_INSTANCE.sql().matches('?').count(), 1);
         assert_eq!(CharStatements::INS_INSTANCE.sql().matches('?').count(), 4);
+        assert_eq!(CharStatements::SEL_RESPAWNS.sql().matches('?').count(), 2);
+        assert_eq!(CharStatements::REP_RESPAWN.sql().matches('?').count(), 5);
+        assert_eq!(CharStatements::DEL_RESPAWN.sql().matches('?').count(), 4);
+        assert_eq!(
+            CharStatements::DEL_ALL_RESPAWNS.sql().matches('?').count(),
+            2
+        );
     }
 }

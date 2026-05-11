@@ -996,6 +996,13 @@ impl InstanceLockMgr {
         stmt
     }
 
+    pub fn delete_all_respawns_statement(map_id: u32, instance_id: u32) -> PreparedStatement {
+        let mut stmt = PreparedStatement::new(CharStatements::DEL_ALL_RESPAWNS.sql());
+        stmt.set_u32(0, map_id);
+        stmt.set_u32(1, instance_id);
+        stmt
+    }
+
     pub fn delete_account_instance_lock_times_statement(account_id: u32) -> PreparedStatement {
         let mut stmt =
             PreparedStatement::new(CharStatements::DEL_ACCOUNT_INSTANCE_LOCK_TIMES.sql());
@@ -1793,6 +1800,13 @@ mod tests {
         assert_eq!(ins_instance.sql(), CharStatements::INS_INSTANCE.sql());
         assert!(matches!(ins_instance.params()[0], SqlParam::U32(9001)));
         assert!(matches!(&ins_instance.params()[1], SqlParam::String(s) if s == "shared"));
+
+        let del_respawns = InstanceLockMgr::delete_all_respawns_statement(631, 9001);
+        assert_eq!(del_respawns.sql(), CharStatements::DEL_ALL_RESPAWNS.sql());
+        assert!(matches!(
+            del_respawns.params(),
+            [SqlParam::U32(631), SqlParam::U32(9001)]
+        ));
 
         let extension = InstanceLockMgr::update_character_instance_lock_extension_statement(
             guid, &entries, true,

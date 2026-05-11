@@ -116,7 +116,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 **Depends on:**
 - `Maps` — `InstanceMap` is the runtime parent; `InstanceScript::instance` is an `InstanceMap*`. `MapManager::GenerateInstanceId` allocates the persistent ID.
 - `DataStores (DB2)` — `MapEntry`, `MapDifficultyEntry`, `DungeonEncounterEntry`, `WorldSafeLocsEntry` (entrance), `LFGDungeonEntry`.
-- `Database (CharacterDatabase)` — tables: `instance`, `character_instance_lock`, `gameobject_respawn`, `creature_respawn`, `account_instance_times` (account-wide raid IDs).
+- `Database (CharacterDatabase)` — tables: `instance`, `character_instance_lock`, `respawn`, `account_instance_times` (account-wide raid IDs).
 - `Groups` — `Group::GetLeaderGUID()` is the lock owner for grouped instances; group reset commands (`Group::ResetInstances`).
 - `LFG (LFGMgr)` — `UpdateLfgEncounterState` + dungeon-finished bookkeeping.
 - `World/Time` — reset hour from `worldserver.conf`, `GameTime::GetGameTime()`.
@@ -144,8 +144,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 | `instance` | `instanceId PK`, `data TEXT`, `completedEncountersMask INT`, `entranceWorldSafeLocId INT` | Authoritative state for ID-based (raid) locks |
 | `character_instance_lock` | `(guid, mapId, lockId) PK`, `instanceId`, `difficulty`, `data`, `completedEncountersMask`, `entranceWorldSafeLocId`, `expiryTime BIGINT`, `extended TINYINT` | Per-character lock view |
 | `account_instance_times` | per-account hourly limit on instance enter (3.x: max 5 per hour) | `Player::CheckInstanceCount` |
-| `gameobject_respawn` | `(spawnId, mapId, instanceId, respawnTime)` | Per-instance GO respawn (cleared on reset) |
-| `creature_respawn` | same shape | Per-instance creature respawn |
+| `respawn` | `(type, spawnId, respawnTime, mapId, instanceId)` | Per-instance creature/GO respawn rows (cleared on reset) |
 
 ### Prepared statements (CharacterDatabase, names from `CharacterDatabase.cpp`)
 
@@ -158,8 +157,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 | `CHAR_REP_CHARACTER_INSTANCE_LOCK` | REPLACE INTO `character_instance_lock` |
 | `CHAR_DEL_CHARACTER_INSTANCE_LOCK_BY_GUID` / `_BY_GUID_MAP_DIFFICULTY` | Lock removal (player delete, GM unbind) |
 | `CHAR_UPD_CHARACTER_INSTANCE_LOCK_EXTEND` | Toggle `extended` flag |
-| `CHAR_INS_GAMEOBJECT_RESPAWN` / `CHAR_DEL_GAMEOBJECT_RESPAWN_INSTANCE` | Per-instance respawn rows |
-| `CHAR_INS_CREATURE_RESPAWN` / `CHAR_DEL_CREATURE_RESPAWN_INSTANCE` | same |
+| `CHAR_SEL_RESPAWNS` / `CHAR_REP_RESPAWN` / `CHAR_DEL_RESPAWN` / `CHAR_DEL_ALL_RESPAWNS` | Unified per-instance respawn rows |
 
 ### DBC/DB2 stores read
 
@@ -225,6 +223,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 - `#NEXT.R8.INSTANCES.005` adds transaction-aware `UpdateInstanceLockExtensionForPlayer` and `ResetInstanceLocksForPlayer` wrappers that mutate the in-memory lock state and append the same C++ extension/force-expire update statements to a caller-owned `SqlTransaction`.
 - `#NEXT.R8.INSTANCES.006` adds C++ packet builders for `SMSG_INSTANCE_RESET` / `SMSG_INSTANCE_RESET_FAILED`, registers/dispatches `CMSG_RESET_INSTANCES`, preserves the C++ guard against resetting while inside an instanceable map, enforces group-leader-only reset, and connects the handler to `InstanceLockMgr::ResetInstanceLocksForPlayer` plus character DB transaction commit.
 - `#NEXT.R8.INSTANCES.007` adds C++ packet/read support for `SMSG_PENDING_RAID_LOCK`, `CMSG_INSTANCE_LOCK_RESPONSE`, and `SMSG_INSTANCE_SAVE_CREATED`, plus represented `Player::SetPendingBind` / `ConfirmPendingBind` / `RepopAtGraveyard` session state and handler dispatch for lock accept/decline.
+- `#NEXT.R8.INSTANCES.008` corrects the respawn-storage plan against this C++ fork and adds the real `CHAR_SEL_RESPAWNS`, `CHAR_REP_RESPAWN`, `CHAR_DEL_RESPAWN`, and `CHAR_DEL_ALL_RESPAWNS` SQL plus a Rust `CHAR_DEL_ALL_RESPAWNS` builder for `(mapId, instanceId)` purge.
 
 **What's implemented:**
 - `crates/wow-world/src/map_manager.rs` (per the active WIP commits) provides a `MapManager` global stub with placeholder for `GenerateInstanceId` (must verify), but no lock store and no script dispatch. (See WIP commit `f83c48d82`.)
@@ -239,7 +238,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 - All wire packets (Section 7).
 - Group-leader-as-lock-owner rule.
 - Account-wide instance-enter rate limit (`account_instance_times`).
-- Per-instance respawn purge on reset (`gameobject_respawn` / `creature_respawn` rows tagged with `instanceId`).
+- Per-instance respawn purge on reset (`respawn` rows tagged with `mapId` + `instanceId`).
 - LFG progress hook.
 - Combat-res tracker.
 - All ~120 dungeon/raid scripts (each a separate Trait/struct in Rust).
@@ -349,7 +348,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [~] **#INST.36** Implement `WorldSession::HandleResetInstancesOpcode` (`CMSG_RESET_INSTANCES`) → call `ResetInstanceLocksForPlayer` or `Group::ResetInstances` (M) — opcode registration/dispatch, packet builders, outside-instance guard, group-leader guard, lock reset transaction and reset notifications done; exact `m_recentInstances`/`m_ownedInstancesMgr` runtime map reset semantics pending.
 - [~] **#INST.37** Implement `SMSG_INSTANCE_RESET` / `_FAILED` / `SMSG_RAID_INSTANCE_MESSAGE` packet senders (M) — reset/reset-failed packet builders and represented sends done; raid-instance-message pending.
 - [~] **#INST.38** Implement `SMSG_PENDING_RAID_LOCK` + `CMSG_INSTANCE_LOCK_RESPONSE` round-trip (M) — packet layouts, handler dispatch, represented pending bind accept/decline state done; real prompt creation from `InstanceMap::AddPlayerToMap` and `ConfirmPendingBind` map binding pending.
-- [ ] **#INST.39** Implement instance respawn purge on reset (`gameobject_respawn` / `creature_respawn` rows by `instanceId`) (M)
+- [~] **#INST.39** Implement instance respawn purge on reset (`respawn` rows by `mapId` + `instanceId`) (M) — C++ `CHAR_DEL_ALL_RESPAWNS` SQL and Rust prepared statement builder done; real reset call-site pending with `InstanceMap`.
 - [ ] **#INST.40** Wire `InstanceMap::Update(diff)` → `InstanceScript::Update` + combat-res tick (L)
 - [x] **#INST.41** Audit & fix `MapManager::GenerateInstanceId` in WIP `map_manager.rs` (L) — contrasted with C++ `MapManager.cpp`: no mask OR is applied by this fork; Rust now reserves 0, registers loaded ids, returns the lowest free sequential id, and reuses freed ids.
 - [ ] **#INST.42** Add GM commands `.instance unbind`, `.instance reset`, `.instance stats` (M)
@@ -386,7 +385,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] Test: `IsEncounterInProgress()` returns true iff any boss in `IN_PROGRESS`.
 - [ ] Test: `account_instance_times` blocks the 6th distinct enter within 1 hour.
 - [ ] Test: shared-state instance lock — two players in same group see the same `completedEncountersMask` even if one lock row is older.
-- [ ] Test: `gameobject_respawn` rows for `instanceId=N` are deleted when the instance is reset.
+- [~] Test: `respawn` rows for `(mapId, instanceId)` are deleted when the instance is reset — statement-builder coverage done; integration through real reset call-site pending.
 
 ---
 
@@ -466,7 +465,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 **Hallazgos clave:**
 - `crates/wow-instances/` existe y contiene las constantes `INSTANCE_ID_HIGH_MASK`, `_LFG_MASK`, `_NORMAL_MASK`; `MapManager::GenerateInstanceId` fue contrastado y en C++ no usa esas máscaras.
 - Los 2 únicos call-sites de `add_creature(0,0,0,0,…)` están en tests del propio `map_manager.rs` (líneas 761, 774). Sin caller real, todavía falta conectar el allocator a la creación real de instancias.
-- `InstanceLockMgr` análogo: core in-memory creado en `#NEXT.R8.INSTANCES.001`; statements, builders, async load glue y weak-ref cleanup creados en `#NEXT.R8.INSTANCES.002`; shared manager inyectado en world-server/session; startup DB2 resolver/load creado en `#NEXT.R8.INSTANCES.003`; wrappers transaccionales de update/shared creados en `#NEXT.R8.INSTANCES.004`; wrappers transaccionales de extension/reset creados en `#NEXT.R8.INSTANCES.005`; handler representado de reset creado en `#NEXT.R8.INSTANCES.006`; call-sites de gameplay siguen pendientes.
+- `InstanceLockMgr` análogo: core in-memory creado en `#NEXT.R8.INSTANCES.001`; statements, builders, async load glue y weak-ref cleanup creados en `#NEXT.R8.INSTANCES.002`; shared manager inyectado en world-server/session; startup DB2 resolver/load creado en `#NEXT.R8.INSTANCES.003`; wrappers transaccionales de update/shared creados en `#NEXT.R8.INSTANCES.004`; wrappers transaccionales de extension/reset creados en `#NEXT.R8.INSTANCES.005`; handler representado de reset creado en `#NEXT.R8.INSTANCES.006`; SQL/builder de purge de respawns creado en `#NEXT.R8.INSTANCES.008`; call-sites de gameplay siguen pendientes.
 - `CMSG_REQUEST_RAID_INFO` registrado y responde `SMSG_INSTANCE_INFO`; lee el shared `InstanceLockMgr` cuando exista player GUID y resuelve locks cargados con `Map.db2`/`MapDifficulty.db2`, manteniendo fallback vacío si no hay locks. `CMSG_RESET_INSTANCES` registrado y responde `SMSG_INSTANCE_RESET`/`SMSG_INSTANCE_RESET_FAILED` desde locks persistidos representados. `CMSG_INSTANCE_LOCK_RESPONSE` registrado y consume estado pending-bind representado. Builders existentes: `SMSG_PENDING_RAID_LOCK`, `SMSG_INSTANCE_SAVE_CREATED`; faltan `SMSG_INSTANCE_ENCOUNTER_*` y creación real del pending desde `InstanceMap`.
 
 **Riesgo de UI hang silencioso:**
