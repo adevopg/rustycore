@@ -8,7 +8,7 @@ use wow_constants::{UnitState, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
     Creature, CreatureAiState, DistractMovementAction, EVENT_CHARGE_PREPATH, MovementGeneratorKind,
-    PointMovementAction, RotateMovementUpdate,
+    PointMovementAction, PointMovementInform, RotateMovementUpdate,
 };
 use wow_movement::{
     MoveSpline, MoveSplineInit, MoveSplineLaunchInput, MoveSplineStopInput, MoveSplineStopResult,
@@ -580,6 +580,46 @@ impl WorldCreature {
         };
         let (_, spline) = self.begin_facing_spline_like_cpp(update.facing_angle?)?;
         Some((update, spline))
+    }
+
+    pub fn finalize_distract_movement_like_cpp(&mut self, movement_inform: bool) -> bool {
+        let finalize = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let Some(generator) = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)
+            else {
+                return false;
+            };
+            generator.finalize_distract_like_cpp(movement_inform, true)
+        };
+
+        if finalize.set_home_orientation {
+            let current = self.position();
+            let home = self.home_position();
+            self.creature.set_ai_position(Position::new(
+                current.x,
+                current.y,
+                current.z,
+                home.orientation,
+            ));
+        }
+        finalize.set_home_orientation
+    }
+
+    pub fn finalize_rotate_movement_like_cpp(
+        &mut self,
+        movement_inform: bool,
+    ) -> Option<PointMovementInform> {
+        let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+        let generator = motion
+            .active_generators
+            .iter_mut()
+            .find(|generator| generator.kind == MovementGeneratorKind::Rotate)?;
+        generator
+            .finalize_rotate_like_cpp(movement_inform, true)
+            .inform
     }
 
     pub fn update_move_spline_like_cpp(&mut self) -> bool {
@@ -1766,6 +1806,20 @@ mod tests {
             .current_movement_generator();
         assert_eq!(generator.kind, MovementGeneratorKind::Distract);
         assert!(generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        creature
+            .creature
+            .set_ai_home_position(Position::new(10.0, 10.0, 0.0, 2.5));
+        {
+            let motion = &mut creature.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)
+                .expect("distract generator");
+            assert!(!generator.update_distract_like_cpp(true, 501));
+        }
+        assert!(creature.finalize_distract_movement_like_cpp(true));
+        assert!((creature.position().orientation - 2.5).abs() < 0.0001);
 
         creature
             .creature
@@ -1785,17 +1839,18 @@ mod tests {
             .tick_rotate_movement_like_cpp(250)
             .expect("rotate tick launches facing spline");
         assert!(update.keep_running);
+        let expected_rotate_angle = 2.5 + std::f32::consts::FRAC_PI_2;
         assert!(
             update
                 .facing_angle
-                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+                .is_some_and(|angle| (angle - expected_rotate_angle).abs() < 0.0001)
         );
         assert_eq!(
             spline.facing().kind,
             wow_movement::MonsterMoveType::FacingAngle
         );
         assert!(
-            (spline.facing().angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001,
+            (spline.facing().angle - expected_rotate_angle).abs() < 0.0001,
             "facing angle was {}",
             spline.facing().angle
         );
@@ -1808,6 +1863,13 @@ mod tests {
             .current_movement_generator();
         assert_eq!(generator.kind, MovementGeneratorKind::Rotate);
         assert_eq!(generator.duration_ms, Some(750));
+        assert_eq!(
+            creature.finalize_rotate_movement_like_cpp(true),
+            Some(PointMovementInform {
+                kind: MovementGeneratorKind::Rotate,
+                movement_id: 8,
+            })
+        );
     }
 
     #[test]
