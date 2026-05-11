@@ -13,6 +13,7 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use tracing::{debug, info, trace, warn};
 
+use crate::entity_update_bridge::player_values_update_to_update_object;
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::unit::Team;
 use wow_constants::{
@@ -42,8 +43,8 @@ use wow_entities::{
     ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG,
     NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, Player, PlayerEnchantTimeUpdate,
     PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
-    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, WorldObject, is_bag_pos,
-    is_equipment_packed_pos, make_item_pos,
+    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, VisibleItemValues, WorldObject,
+    is_bag_pos, is_equipment_packed_pos, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::LootStores;
@@ -2125,6 +2126,118 @@ impl WorldSession {
         }
 
         Some(player)
+    }
+
+    fn player_values_update_snapshot(&self) -> Option<Player> {
+        let mut player = self.direct_inventory_player_snapshot()?;
+        player.set_money(self.player_gold);
+
+        for slot in 0..19u8 {
+            let visible = self
+                .inventory_items
+                .get(&slot)
+                .map(|item| VisibleItemValues {
+                    item_id: item.entry_id as i32,
+                    item_appearance_mod_id: 0,
+                    item_visual: 0,
+                });
+            player.set_visible_item_slot(slot, visible);
+        }
+
+        for slot in 15..=17u8 {
+            let visible = self
+                .inventory_items
+                .get(&slot)
+                .map(|item| VisibleItemValues {
+                    item_id: item.entry_id as i32,
+                    item_appearance_mod_id: 0,
+                    item_visual: 0,
+                });
+            player
+                .unit_mut()
+                .set_virtual_item((slot - 15) as usize, visible);
+        }
+
+        for (&slot, item) in &self.buyback_items {
+            if (slot as usize) < PLAYER_SLOT_END {
+                player.set_inv_slot(slot as usize, item.guid);
+            }
+        }
+        for index in 0..BUYBACK_SLOT_COUNT {
+            player.set_buyback_price(index, self.buyback_price[index]);
+            player.set_buyback_timestamp(index, self.buyback_timestamp[index]);
+        }
+
+        player.clear_data_changes();
+        Some(player)
+    }
+
+    pub(crate) fn send_player_values_update_from_entity_bridge(
+        &self,
+        inv_slot_changes: &[(u8, ObjectGuid)],
+        visible_item_changes: &[(u8, i32, u16, u16)],
+        virtual_item_changes: &[(u8, i32, u16, u16)],
+        buyback_changes: &[(u8, u32, i64)],
+        coinage: Option<u64>,
+    ) {
+        let Some(guid) = self.player_guid else {
+            return;
+        };
+        let Some(mut player) = self.player_values_update_snapshot() else {
+            return;
+        };
+
+        if let Some(coinage) = coinage {
+            player.set_money(coinage);
+            player.mark_money_changed();
+        }
+
+        for &(slot, item_guid) in inv_slot_changes {
+            player.set_inv_slot(slot as usize, item_guid);
+            player.mark_inv_slot_changed(slot as usize);
+        }
+
+        for &(slot, item_id, appearance_mod_id, item_visual) in visible_item_changes {
+            let visible = (item_id != 0 || appearance_mod_id != 0 || item_visual != 0).then_some(
+                VisibleItemValues {
+                    item_id,
+                    item_appearance_mod_id: appearance_mod_id,
+                    item_visual,
+                },
+            );
+            player.set_visible_item_slot(slot, visible);
+            player.mark_visible_item_slot_changed(slot);
+        }
+
+        for &(index, item_id, appearance_mod_id, item_visual) in virtual_item_changes {
+            let visible = (item_id != 0 || appearance_mod_id != 0 || item_visual != 0).then_some(
+                VisibleItemValues {
+                    item_id,
+                    item_appearance_mod_id: appearance_mod_id,
+                    item_visual,
+                },
+            );
+            player.unit_mut().set_virtual_item(index as usize, visible);
+            player.unit_mut().mark_virtual_item_changed(index as usize);
+        }
+
+        for &(slot, price, timestamp) in buyback_changes {
+            if !(BUYBACK_SLOT_START..BUYBACK_SLOT_END).contains(&slot) {
+                continue;
+            }
+            let index = (slot - BUYBACK_SLOT_START) as usize;
+            player.set_buyback_price(index, price);
+            player.mark_buyback_price_changed(index);
+            player.set_buyback_timestamp(index, timestamp);
+            player.mark_buyback_timestamp_changed(index);
+        }
+
+        let update = player.values_update(true);
+        if let Some(packet) =
+            player_values_update_to_update_object(guid, self.current_map_id, &update)
+        {
+            self.send_packet(&packet);
+        }
     }
 
     pub(crate) fn can_destroy_direct_item_like_cpp(

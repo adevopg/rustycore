@@ -4818,16 +4818,11 @@ impl WorldSession {
         }
 
         if !created_new_stacks.is_empty() {
-            self.send_packet(&UpdateObject::player_values_update(
-                player_guid,
-                map_id,
-                created_new_stacks
-                    .iter()
-                    .map(|(stack, _, item_guid)| (stack.slot, *item_guid))
-                    .collect(),
-                Vec::new(),
-                Vec::new(),
-            ));
+            let changed_slots: Vec<_> = created_new_stacks
+                .iter()
+                .map(|(stack, _, item_guid)| (stack.slot, *item_guid))
+                .collect();
+            self.send_player_values_update_from_entity_bridge(&changed_slots, &[], &[], &[], None);
         }
 
         self.sync_player_registry_state_like_cpp();
@@ -5012,13 +5007,13 @@ impl WorldSession {
                 virtual_item_changes.push((slot - 15, 0i32, 0u16, 0u16));
             }
 
-            self.send_packet(&UpdateObject::player_values_update(
-                player_guid,
-                self.current_map_id,
-                vec![(slot, ObjectGuid::EMPTY)],
-                visible_item_changes,
-                virtual_item_changes,
-            ));
+            self.send_player_values_update_from_entity_bridge(
+                &[(slot, ObjectGuid::EMPTY)],
+                &visible_item_changes,
+                &virtual_item_changes,
+                &[],
+                None,
+            );
 
             if slot < 19 {
                 self.send_stat_update();

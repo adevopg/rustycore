@@ -3196,6 +3196,10 @@ impl Player {
         });
     }
 
+    pub fn mark_money_changed(&mut self) {
+        self.mark_active_player_data(ACTIVE_PLAYER_DATA_COINAGE_BIT);
+    }
+
     pub fn modify_money(&mut self, amount: i64) -> bool {
         if amount == 0 {
             return true;

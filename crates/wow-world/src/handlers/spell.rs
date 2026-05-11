@@ -46,7 +46,6 @@ use wow_packet::packets::loot::{
 use wow_packet::packets::spell::{
     CastFailed, CastSpellRequest, OpenItem, SpellCastVisual, SpellStartPkt, SpellTargetData,
 };
-use wow_packet::packets::update::UpdateObject;
 
 use crate::session::WorldSession;
 
@@ -648,13 +647,13 @@ impl WorldSession {
                 virtual_item_changes.push((slot - 15, 0i32, 0u16, 0u16));
             }
 
-            self.send_packet(&UpdateObject::player_values_update(
-                player_guid,
-                self.current_map_id,
-                vec![(slot, ObjectGuid::EMPTY)],
-                visible_item_changes,
-                virtual_item_changes,
-            ));
+            self.send_player_values_update_from_entity_bridge(
+                &[(slot, ObjectGuid::EMPTY)],
+                &visible_item_changes,
+                &virtual_item_changes,
+                &[],
+                None,
+            );
 
             if slot < 19 {
                 self.send_stat_update();

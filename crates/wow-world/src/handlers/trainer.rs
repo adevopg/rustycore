@@ -29,12 +29,11 @@ use wow_constants::ClientOpcodes;
 use wow_database::statements::character::CharStatements;
 use wow_database::statements::world::WorldStatements;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
+use wow_packet::ClientPacket;
 use wow_packet::packets::trainer::{
     LearnedSpells, TrainerBuyFailed, TrainerBuySpellRequest, TrainerListPacket, TrainerListRequest,
     TrainerListSpell,
 };
-use wow_packet::packets::update::UpdateObject;
-use wow_packet::{ClientPacket, ServerPacket};
 
 use crate::session::WorldSession;
 
@@ -392,8 +391,6 @@ impl WorldSession {
             None => return,
         };
 
-        let map_id = self.current_map_id;
-
         // ── Deduct gold ────────────────────────────────────────────────────
         self.player_gold -= money_cost as u64;
         let mut upd_money = char_db.prepare(CharStatements::UPD_CHAR_MONEY);
@@ -432,12 +429,13 @@ impl WorldSession {
         );
 
         // ── Send gold update to client ─────────────────────────────────────
-        self.send_packet(&UpdateObject::player_money_update(
-            player_guid,
-            map_id,
-            self.player_gold,
-            None,
-        ));
+        self.send_player_values_update_from_entity_bridge(
+            &[],
+            &[],
+            &[],
+            &[],
+            Some(self.player_gold),
+        );
 
         // ── Send SMSG_LEARNED_SPELLS ───────────────────────────────────────
         self.send_packet(&LearnedSpells::single(spell_id));

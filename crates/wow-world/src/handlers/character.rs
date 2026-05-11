@@ -4784,7 +4784,7 @@ impl WorldSession {
 
     fn apply_item_turnin_changes(
         &mut self,
-        player_guid: ObjectGuid,
+        _player_guid: ObjectGuid,
         map_id: u16,
         changes: &[ExtendedCostItemTurninChange],
     ) {
@@ -4826,13 +4826,13 @@ impl WorldSession {
 
         if !cleared_slots.is_empty() {
             self.sync_object_accessor_player();
-            self.send_packet(&UpdateObject::player_values_update(
-                player_guid,
-                map_id,
-                cleared_slots,
-                visible_item_changes,
-                virtual_item_changes,
-            ));
+            self.send_player_values_update_from_entity_bridge(
+                &cleared_slots,
+                &visible_item_changes,
+                &virtual_item_changes,
+                &[],
+                None,
+            );
         }
         if send_stat_update {
             self.send_stat_update();
@@ -5471,22 +5471,13 @@ impl WorldSession {
             ));
         }
 
-        // ── Send VALUES update: new inv slots + coinage ──
-        self.send_packet(&UpdateObject::player_money_update(
-            player_guid,
-            map_id,
-            self.player_gold,
-            None,
-        ));
-        if !changed_slots.is_empty() {
-            self.send_packet(&UpdateObject::player_values_update(
-                player_guid,
-                map_id,
-                changed_slots,
-                Vec::new(),
-                Vec::new(),
-            ));
-        }
+        self.send_player_values_update_from_entity_bridge(
+            &changed_slots,
+            &[],
+            &[],
+            &[],
+            Some(self.player_gold),
+        );
     }
 
     /// Handle CMSG_BUY_BACK_ITEM — player buys back an item from a vendor.
@@ -5690,13 +5681,13 @@ impl WorldSession {
                 moved_count,
             ));
         }
-        self.send_packet(&UpdateObject::player_values_buyback_update(
-            player_guid,
-            map_id,
-            inv_slot_changes,
-            vec![(buyback_slot, 0, 0)],
+        self.send_player_values_update_from_entity_bridge(
+            &inv_slot_changes,
+            &[],
+            &[],
+            &[(buyback_slot, 0, 0)],
             Some(self.player_gold),
-        ));
+        );
     }
 
     /// Handle CMSG_SELL_ITEM — player sells an item to a vendor.
@@ -6004,13 +5995,13 @@ impl WorldSession {
             .map(|item| item.guid)
             .unwrap_or(ObjectGuid::EMPTY);
         inv_slot_changes.push((buyback_slot, buyback_guid));
-        self.send_packet(&UpdateObject::player_values_buyback_update(
-            player_guid,
-            map_id,
-            inv_slot_changes,
-            vec![(buyback_slot, buyback_price, buyback_timestamp)],
+        self.send_player_values_update_from_entity_bridge(
+            &inv_slot_changes,
+            &[],
+            &[],
+            &[(buyback_slot, buyback_price, buyback_timestamp)],
             Some(self.player_gold),
-        ));
+        );
     }
 
     /// Handle CMSG_ITEM_PURCHASE_REFUND.
@@ -6479,13 +6470,6 @@ impl WorldSession {
             ));
         }
 
-        self.send_packet(&UpdateObject::player_money_update(
-            player_guid,
-            map_id,
-            self.player_gold,
-            None,
-        ));
-
         let mut changed_slots = Vec::new();
         changed_slots.push((refund_slot, ObjectGuid::EMPTY));
         changed_slots.extend(
@@ -6493,13 +6477,13 @@ impl WorldSession {
                 .iter()
                 .map(|(stack, _, item_guid)| (stack.slot, *item_guid)),
         );
-        self.send_packet(&UpdateObject::player_values_update(
-            player_guid,
-            map_id,
-            changed_slots,
-            Vec::new(),
-            Vec::new(),
-        ));
+        self.send_player_values_update_from_entity_bridge(
+            &changed_slots,
+            &[],
+            &[],
+            &[],
+            Some(self.player_gold),
+        );
 
         if refund_slot < 19 {
             self.send_stat_update();
@@ -6670,14 +6654,13 @@ impl WorldSession {
             }
         }
 
-        let update = UpdateObject::player_values_update(
-            player_guid,
-            self.current_map_id,
-            inv_slot_changes,
-            visible_item_changes,
-            virtual_item_changes,
+        self.send_player_values_update_from_entity_bridge(
+            &inv_slot_changes,
+            &visible_item_changes,
+            &virtual_item_changes,
+            &[],
+            None,
         );
-        self.send_packet(&update);
 
         // If any affected slot is a gear slot (0-18), recalculate and send stats
         if src < 19 || dst < 19 {
@@ -7003,14 +6986,13 @@ impl WorldSession {
             virtual_item_changes.push((slot - 15, 0i32, 0u16, 0u16));
         }
 
-        let update = UpdateObject::player_values_update(
-            player_guid,
-            self.current_map_id,
-            inv_slot_changes,
-            visible_item_changes,
-            virtual_item_changes,
+        self.send_player_values_update_from_entity_bridge(
+            &inv_slot_changes,
+            &visible_item_changes,
+            &virtual_item_changes,
+            &[],
+            None,
         );
-        self.send_packet(&update);
 
         // If destroyed item was in a gear slot (0-18), recalculate stats
         if slot < 19 {
