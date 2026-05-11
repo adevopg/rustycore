@@ -1540,9 +1540,14 @@ pub const MOVEMENTGENERATOR_FLAG_DEACTIVATED: u16 = 0x040;
 pub const MOVEMENTGENERATOR_FLAG_INFORM_ENABLED: u16 = 0x080;
 pub const MOVEMENTGENERATOR_FLAG_FINALIZED: u16 = 0x100;
 pub const MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH: u16 = 0x200;
+pub const MOVEMENTGENERATOR_FLAG_TRANSITORY: u16 =
+    MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING | MOVEMENTGENERATOR_FLAG_INTERRUPTED;
 pub const MOTIONMASTER_FLAG_INITIALIZATION_PENDING: u8 = 0x4;
 pub const MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING: u8 = 0x2;
 pub const MOTIONMASTER_FLAG_UPDATE: u8 = 0x1;
+pub const EVENT_CHARGE: u32 = 1003;
+pub const EVENT_JUMP: u32 = 1004;
+pub const EVENT_CHARGE_PREPATH: u32 = 1005;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MovementGeneratorRef {
@@ -1683,6 +1688,89 @@ impl MovementGeneratorRef {
         }
         None
     }
+
+    pub fn initialize_point_like_cpp(&mut self, can_move: bool) -> PointMovementAction {
+        self.flags &= !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+            | MOVEMENTGENERATOR_FLAG_TRANSITORY
+            | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+
+        if self.movement_id == EVENT_CHARGE_PREPATH {
+            return PointMovementAction::MarkRoamingMove;
+        }
+
+        if !can_move {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INTERRUPTED;
+            return PointMovementAction::StopMoving;
+        }
+
+        PointMovementAction::LaunchSpline
+    }
+
+    pub fn reset_point_like_cpp(&mut self, can_move: bool) -> PointMovementAction {
+        self.flags &= !(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.initialize_point_like_cpp(can_move)
+    }
+
+    pub fn update_point_like_cpp(
+        &mut self,
+        can_move: bool,
+        spline_finalized: bool,
+    ) -> PointMovementAction {
+        if self.movement_id == EVENT_CHARGE_PREPATH {
+            if spline_finalized {
+                self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+                return PointMovementAction::Finished;
+            }
+            return PointMovementAction::Continue;
+        }
+
+        if !can_move {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INTERRUPTED;
+            return PointMovementAction::StopMovingAndContinue;
+        }
+
+        if (self.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED) && spline_finalized)
+            || (self.has_flag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING) && !spline_finalized)
+        {
+            self.flags &=
+                !(MOVEMENTGENERATOR_FLAG_INTERRUPTED | MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING);
+            return PointMovementAction::RelaunchSpline;
+        }
+
+        if spline_finalized {
+            self.flags &= !MOVEMENTGENERATOR_FLAG_TRANSITORY;
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            return PointMovementAction::Finished;
+        }
+
+        PointMovementAction::Continue
+    }
+
+    pub fn deactivate_point_like_cpp(&mut self) -> PointMovementAction {
+        self.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        PointMovementAction::ClearRoamingMove
+    }
+
+    pub fn finalize_point_like_cpp(
+        &mut self,
+        active: bool,
+        movement_inform: bool,
+    ) -> PointMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        PointMovementFinalize {
+            clear_roaming_move: active,
+            inform: (movement_inform && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED))
+                .then_some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: if self.movement_id == EVENT_CHARGE_PREPATH {
+                        EVENT_CHARGE
+                    } else {
+                        self.movement_id
+                    },
+                }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1691,6 +1779,30 @@ pub struct GenericMovementInform {
     pub movement_id: u32,
     pub arrival_spell_id: Option<u32>,
     pub arrival_spell_target_guid: Option<ObjectGuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointMovementAction {
+    Continue,
+    MarkRoamingMove,
+    LaunchSpline,
+    RelaunchSpline,
+    StopMoving,
+    StopMovingAndContinue,
+    ClearRoamingMove,
+    Finished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointMovementInform {
+    pub kind: MovementGeneratorKind,
+    pub movement_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointMovementFinalize {
+    pub clear_roaming_move: bool,
+    pub inform: Option<PointMovementInform>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1902,6 +2014,7 @@ impl MotionSubsystem {
         self.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
                 .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
                 .with_base_unit_state(UnitState::ROAMING.bits())
                 .with_movement_id(movement_id),
         );
@@ -1911,6 +2024,7 @@ impl MotionSubsystem {
         self.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
                 .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
                 .with_base_unit_state(UnitState::CHARGING.bits())
                 .with_movement_id(movement_id),
         );
@@ -3100,6 +3214,7 @@ mod unit_subsystems_tests {
         assert_eq!(current.kind, MovementGeneratorKind::Point);
         assert_eq!(current.priority, MovementGeneratorPriority::Highest);
         assert_eq!(current.base_unit_state, UnitState::CHARGING.bits());
+        assert!(current.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
         assert_eq!(
             motion.base_unit_states.get(&UnitState::CHARGING.bits()),
             Some(&1)
@@ -3135,6 +3250,7 @@ mod unit_subsystems_tests {
         assert_eq!(current.priority, MovementGeneratorPriority::Normal);
         assert_eq!(current.base_unit_state, UnitState::ROAMING.bits());
         assert_eq!(current.movement_id, 9);
+        assert!(current.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
         assert_eq!(
             motion.base_unit_states.get(&UnitState::ROAMING.bits()),
             Some(&1)
@@ -3146,6 +3262,126 @@ mod unit_subsystems_tests {
             motion.base_unit_states.get(&UnitState::ROAMING.bits()),
             None
         );
+    }
+
+    #[test]
+    fn point_movement_generator_lifecycle_matches_cpp_shape() {
+        let mut generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(
+                    MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+                        | MOVEMENTGENERATOR_FLAG_DEACTIVATED,
+                )
+                .with_base_unit_state(UnitState::ROAMING.bits())
+                .with_movement_id(9);
+
+        assert_eq!(
+            generator.initialize_point_like_cpp(true),
+            PointMovementAction::LaunchSpline
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+
+        assert_eq!(
+            generator.update_point_like_cpp(true, false),
+            PointMovementAction::Continue
+        );
+        assert_eq!(
+            generator.update_point_like_cpp(true, true),
+            PointMovementAction::Finished
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        let finalized = generator.finalize_point_like_cpp(true, true);
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+        assert_eq!(
+            finalized,
+            PointMovementFinalize {
+                clear_roaming_move: true,
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: 9,
+                }),
+            }
+        );
+
+        let mut blocked =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
+        assert_eq!(
+            blocked.initialize_point_like_cpp(false),
+            PointMovementAction::StopMoving
+        );
+        assert!(blocked.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED));
+        assert_eq!(
+            blocked.update_point_like_cpp(false, false),
+            PointMovementAction::StopMovingAndContinue
+        );
+
+        let mut speed_update =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING);
+        assert_eq!(
+            speed_update.update_point_like_cpp(true, false),
+            PointMovementAction::RelaunchSpline
+        );
+        assert!(!speed_update.has_flag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING));
+
+        let mut interrupted =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INTERRUPTED);
+        assert_eq!(
+            interrupted.update_point_like_cpp(true, true),
+            PointMovementAction::RelaunchSpline
+        );
+        assert!(!interrupted.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED));
+    }
+
+    #[test]
+    fn point_movement_charge_prepath_informs_as_event_charge_like_cpp() {
+        let mut generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::CHARGING.bits())
+                .with_movement_id(EVENT_CHARGE_PREPATH);
+
+        assert_eq!(
+            generator.initialize_point_like_cpp(true),
+            PointMovementAction::MarkRoamingMove
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+
+        assert_eq!(
+            generator.update_point_like_cpp(true, false),
+            PointMovementAction::Continue
+        );
+        assert_eq!(
+            generator.update_point_like_cpp(true, true),
+            PointMovementAction::Finished
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        assert_eq!(
+            generator.finalize_point_like_cpp(true, true),
+            PointMovementFinalize {
+                clear_roaming_move: true,
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: EVENT_CHARGE,
+                }),
+            }
+        );
+
+        let mut deactivated =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active);
+        assert_eq!(
+            deactivated.deactivate_point_like_cpp(),
+            PointMovementAction::ClearRoamingMove
+        );
+        assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
     }
 
     #[test]

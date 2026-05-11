@@ -6,6 +6,7 @@
 > **Status:** ⚠️ partial — structural `MotionSubsystem` exists in `wow-entities`; first represented `PointMovementGenerator` state bridge exists, but executable generators are not fully ported
 > **Audited vs C++:** ✅ complete 2026-05-01
 > **Last updated:** 2026-05-11
+> **Contrast rule:** primary source is `/home/server/woltk-trinity-legacy`; if that fork is incomplete or suspect, use `/home/server/archived/woltk-trinity-core` only to validate 3.3.5 TrinityCore logic, and document the fallback explicitly.
 
 > Sub-doc of [`movement.md`](movement.md). Cross-links: [`movement-spline.md`](movement-spline.md) (consumed by every generator that drives a `MoveSplineInit`), [`movement-pathgen.md`](movement-pathgen.md) (called by chase/follow/point/waypoint to compute walkable paths), [`common-collision.md`](common-collision.md) (height/LOS clamps used by random/wander), [`ai-base.md`](ai-base.md) (CreatureAI is the primary caller of `MotionMaster::Move*`).
 
@@ -22,7 +23,8 @@ Current Rust status:
 - `#A06.8h.3e.3` ports represented `GenericMovementGenerator` lifecycle state: constructor fields, base unit state, duration/cyclic update rules, deactivation/finalization, inform payload and arrival-spell metadata.
 - `#A06.8h.3e.4` ports represented `MotionMaster::LaunchMoveSpline`, `MoveJump` and `MoveJumpWithGravity` wrapper semantics: invalid generator type rejection, generic effect movement creation, highest jump priority, `UNIT_STATE_JUMPING`, arrival-spell metadata and gravity-jump persist-on-death.
 - `#A06.8h.3e.5` ports represented `MoveKnockbackFrom` and `MoveFall` wrapper semantics: player/speed/height/root guards, generic effect movement creation, highest priority, knockback persist-on-death and player fall-info branch.
-- Still missing: concrete generator `Initialize/Update/Finalize` behavior, pathgen-backed destinations, `MovementInform`, follow/chase/flee/random/waypoint/taxi/spline-chain runtime logic, and generic MotionMaster delayed-action semantics.
+- `#A06.8h.3e.6` ports represented `PointMovementGenerator` lifecycle semantics: initialization/blocked movement/interruption/speed-update/finalize flags, `UNIT_STATE_ROAMING_MOVE` actions, and `EVENT_CHARGE_PREPATH` informing scripts as `EVENT_CHARGE`.
+- Still missing: executable generator behavior against a real `Unit`, pathgen-backed destinations, real `MovementInform` dispatch, follow/chase/flee/random/waypoint/taxi/spline-chain runtime logic, and generic MotionMaster delayed-action semantics.
 
 ---
 
@@ -526,7 +528,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-GEN.8** Implement `MotionMaster` core: stack per slot (`Vec<Box<dyn MovementGenerator>>`), `update(diff)` with delayed-action draining. (H)
 - [ ] **#MOVE-GEN.9** Wire `MotionMaster::add/remove/clear` + flag-gated deferral. (M)
 - [ ] **#MOVE-GEN.10** `IdleMovementGenerator` + `RotateMovementGenerator` + `DistractMovementGenerator` + `AssistanceDistractMovementGenerator`. (M)
-- [ ] **#MOVE-GEN.11** `PointMovementGenerator` (single-target move + `MovementInform(POINT, id)` callback). (M)
+- [ ] **#MOVE-GEN.11** `PointMovementGenerator` (single-target move + `MovementInform(POINT, id)` callback). Represented lifecycle/flags/inform mapping are ported; remaining work is executable destination/path generation, final orientation/facing target, spell-effect extras, `SignalFormationMovement`, real `CreatureAI::MovementInform`, and `AssistanceMovementGenerator`. (M)
 - [ ] **#MOVE-GEN.12** `RandomMovementGenerator` (wander radius + delay + water/oxygen check). (H)
 - [ ] **#MOVE-GEN.13** `AbstractFollower` helper + `FollowMovementGenerator`. (M)
 - [ ] **#MOVE-GEN.14** `ChaseMovementGenerator` (combat reposition + `ChaseRange`/`ChaseAngle`). (H)
@@ -538,7 +540,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-GEN.20** `FlightPathMovementGenerator` + `TaxiPath.dbc`/`TaxiPathNode.dbc` integration + `SMSG_FLIGHT_SPLINE_SYNC`. (XL)
 - [ ] **#MOVE-GEN.21** `SplineChainMovementGenerator` + `script_spline_chain_*` loader + `SplineChainResumeInfo`. (H)
 - [ ] **#MOVE-GEN.22** `GenericMovementGenerator` (lambda capture for one-shot custom splines). Represented state/lifecycle is ported: constructor flags/base state, duration/cyclic update, deactivation/finalization and inform payload. Remaining work: executable `FnOnce(MoveSplineInit)` launch against a real `Unit`, arrival `CastSpell`, and `CreatureAI::MovementInform`. (M)
-- [ ] **#MOVE-GEN.23** `MotionMaster::MoveJump` / `MoveCharge` / `MoveKnockbackFrom` / `MoveFall` (parabolic helpers — depend on movement-spline). Pure helper slice is done: Rust has C++-matched jump max-height and `CalculateJumpSpeeds` math. Represented wrapper slice is also done: `LaunchMoveSpline`, `MoveJump`, `MoveJumpWithGravity`, `MoveKnockbackFrom` and `MoveFall` create/guard `GenericMovementGenerator` state like C++. Remaining work is executable `MoveSplineInit`, real Unit speed selection, `MoveJumpTo`, spell effect extra data, pathgen charge/knockback raycast and fall height/hover lookup. (H)
+- [ ] **#MOVE-GEN.23** `MotionMaster::MoveJump` / `MoveCharge` / `MoveKnockbackFrom` / `MoveFall` (parabolic helpers — depend on movement-spline). Pure helper slice is done: Rust has C++-matched jump max-height and `CalculateJumpSpeeds` math. Represented wrapper slice is also done: `LaunchMoveSpline`, `MoveJump`, `MoveJumpWithGravity`, `MoveKnockbackFrom` and `MoveFall` create/guard generator state like C++, and `PointMovementGenerator` now covers charge/prepath lifecycle/inform mapping. Remaining work is executable `MoveSplineInit`, real Unit speed selection, `MoveJumpTo`, spell effect extra data, pathgen charge/knockback raycast and fall height/hover lookup. (H)
 - [ ] **#MOVE-GEN.24** Wire `Unit::MovementInform(type, id)` AI callback (cross-link with [`ai-base.md`](ai-base.md)). (M)
 - [ ] **#MOVE-GEN.25** Wire per-Unit `MotionMaster::update(diff)` into `MapManager` creature tick. (H)
 - [ ] **#MOVE-GEN.26** Replace `wow_ai::wander` linear-tween with `RandomMovementGenerator` push at spawn time. (M)
