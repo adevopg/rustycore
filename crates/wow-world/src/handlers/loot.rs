@@ -208,7 +208,7 @@ impl WorldSession {
         }
 
         if self
-            .player_position
+            .player_position_like_cpp()
             .is_some_and(|player| !player.is_within_dist(&creature_position, 30.0))
         {
             return;
@@ -669,7 +669,7 @@ impl WorldSession {
                 };
 
                 if self
-                    .player_position
+                    .player_position_like_cpp()
                     .is_some_and(|player| !player.is_within_dist(&creature_position, 30.0))
                 {
                     self.send_loot_error_like_cpp(

@@ -740,7 +740,9 @@ impl crate::session::WorldSession {
         );
 
         let Some(packet) = (|| {
-            let item = self.inventory_item_objects.get(&request.item_guid)?;
+            let item = self
+                .inventory_item_objects_like_cpp()
+                .get(&request.item_guid)?;
             if !item.is_refundable() || item.refund_recipient() != player_guid {
                 return None;
             }
@@ -956,7 +958,7 @@ impl crate::session::WorldSession {
         let Some(pending_bind) = self.pending_bind.take() else {
             info!(
                 account = self.account_id,
-                player_guid = ?self.player_guid,
+                player_guid = ?self.player_guid(),
                 "InstanceLockResponse without pending bind"
             );
             return;

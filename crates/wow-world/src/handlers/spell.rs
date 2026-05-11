@@ -353,7 +353,7 @@ impl WorldSession {
         };
 
         let is_wrapped = self
-            .inventory_item_objects
+            .inventory_item_objects_like_cpp()
             .get(&item.guid)
             .is_some_and(|runtime_item| runtime_item.is_wrapped());
 
@@ -376,7 +376,7 @@ impl WorldSession {
             }
 
             let item_is_locked = self
-                .inventory_item_objects
+                .inventory_item_objects_like_cpp()
                 .get(&item.guid)
                 .map_or(true, |item_object| item_object.is_locked());
             if item_is_locked {

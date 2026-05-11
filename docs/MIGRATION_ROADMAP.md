@@ -608,18 +608,21 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#031** `wow-world`/`wow-entities`: mover el runtime de criaturas usado por sesión a `WorldCreature`/`Creature` map-owned, contrastado contra C++ `Creature::Update`, `Creature::AIM_Create/AIM_Initialize` y `Unit::AIUpdateTick`. `WorldSession` deja de usar `HashMap<Guid, wow_ai::CreatureAI>` en runtime; combate, aggro, loot/gossip/vendor/taxi, respawn/corpse y visibilidad mutan o consultan el `MapManager`. Metadatos de loot/boss que estaban en `CreatureAI` pasan a `CreatureAiOwnershipState`. Queda solo un puente `cfg(test)` para tests legacy hasta limpiar fixtures.
 - [ ] **#032** Refactor `WorldSession` para tener player entity handle/controlador en vez de campos sueltos.
   - [x] **#032a** Crear `SessionPlayerController` como equivalente incremental de C++ `WorldSession::_player`/`SetPlayer`/`GetPlayer`: GUID, nombre, mapa, posición, raza, clase, nivel y sexo quedan sincronizados desde login/movement/teleport/logout, y los registros compartidos (`PlayerRegistry`/`ObjectAccessor`) leen por el controlador cuando existe.
-  - [ ] **#032b** Migrar runtime de jugador al controlador/player entity.
+  - [x] **#032b** Migrar runtime de jugador al controlador/player entity.
     - [x] **#032b1** Dinero, XP/NextLevelXP, selección, spells y `_currencyStorage` quedan reflejados en `SessionPlayerController` con getters/setters tipo C++ `Player::{GetMoney,SetMoney,GetXP,SetXP,SetSelection,GetSpellMap,_currencyStorage}`; login/trainer/loot/quest/registry usan la ruta canónica donde ya aplica.
     - [x] **#032b2** Migrar `m_items`/buyback/inventory item objects al controlador/player entity sin depender de `WorldSession` como owner de inventario.
       - [x] **#032b2a** Crear `SessionPlayerInventoryRuntime` dentro del controlador y alimentar desde login/logout/clear; snapshots de valores, `PlayerRegistry`, `ObjectAccessor`, `GetItemByPos` representado y planes directos de store/unequip leen por esta ruta canónica cuando existe.
       - [x] **#032b2b** Cambiar mutaciones directas de `character`/`loot`/`spell` sobre `inventory_items`, `buyback_items` e `inventory_item_objects` a mutadores canónicos sincronizados con `SessionPlayerInventoryRuntime`, contrastado contra C++ `Player::_StoreItem`, `QuickEquipItem`, `AddItemToBuyBackSlot` y `RemoveItemFromBuyBackSlot`.
       - [x] **#032b2c** Invertir el owner efectivo: los mutadores operan sobre `SessionPlayerInventoryRuntime` cuando existe controlador y los campos heredados de `WorldSession` quedan como espejo/compatibilidad hasta su retirada en `#032d`.
-  - [ ] **#032c** Cambiar handlers directos (`character`, `loot`, `trainer`, `spell`, `quest`, `chat`, `group`) a getters/mutators del controlador, contrastando cada bloque contra `Player`/`WorldSession` C++.
+  - [x] **#032c** Cambiar handlers directos (`character`, `loot`, `trainer`, `spell`, `quest`, `chat`, `group`) a getters/mutators del controlador, contrastando cada bloque contra `Player`/`WorldSession` C++.
     - [x] **#032c1** `chat`/`group`: reemplazar lecturas directas de GUID/nombre/mapa/posición por getters del controlador, equivalente a C++ `WorldSession::GetPlayer()->GetGUID()/GetName()/GetMapId()/GetPosition()`.
     - [x] **#032c2** `quest`/`spell`: reemplazar raza/clase/nivel/género/spells/inventario por getters canónicos y cubrir condiciones/quest availability.
     - [x] **#032c3** `loot`: reemplazar GUID/mapa/posición/nivel/clase/inventario por getters canónicos en roll/master-loot/store paths.
     - [x] **#032c4** `character`/`trainer`: reemplazar gold/currency/player metadata/inventory directos por mutadores/getters canónicos y cerrar residuos de login/logout.
   - [ ] **#032d** Retirar o hacer privados los campos heredados cuando dejen de ser fuente runtime, dejando solo puentes `cfg(test)` si aún son necesarios.
+    - [x] **#032d1** Cerrar residuos fuera de la lista original (`combat`, `social`, `misc`, `spell`, `loot`) que todavía leían GUID/posición/item runtime directamente en vez de C++ `GetPlayer()`/`GetItemByGuid()`.
+    - [ ] **#032d2** Encapsular accesos internos de `session.rs` que todavía usan campos legacy como fallback/runtime y separar claramente bootstrap/test de runtime canónico.
+    - [ ] **#032d3** Reducir visibilidad de campos heredados o moverlos detrás de helpers `cfg(test)` cuando ya no haya consumidores productivos directos.
 
 > Tras cerrar #032, el roadmap continúa con Fase 2 (Movement) y siguientes según la sección 4.
 

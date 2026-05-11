@@ -63,8 +63,8 @@ impl WorldSession {
             }
         };
 
-        let player_guid = match &self.player_guid {
-            Some(g) => g.clone(),
+        let player_guid = match self.player_guid() {
+            Some(g) => g,
             None => return,
         };
 
@@ -109,8 +109,8 @@ impl WorldSession {
 
     /// CMSG_ATTACK_STOP — client stops attacking.
     pub async fn handle_attack_stop(&mut self, _pkt: wow_packet::WorldPacket) {
-        let player_guid = match &self.player_guid {
-            Some(g) => g.clone(),
+        let player_guid = match self.player_guid() {
+            Some(g) => g,
             None => return,
         };
 
