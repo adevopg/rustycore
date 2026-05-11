@@ -699,7 +699,7 @@ mod tests {
     #[tokio::test]
     async fn opt_out_of_loot_sets_pass_on_group_loot_like_cpp() {
         let (mut session, send_rx) = make_session_with_send();
-        session.player_guid = Some(ObjectGuid::create_player(1, 42));
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 42)));
         assert!(!session.pass_on_group_loot);
 
         session

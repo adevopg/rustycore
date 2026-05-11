@@ -606,7 +606,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
 - [x] **#030g** `wow-entities`: base `Vehicle` kit from `Vehicle.*` and `VehicleDefines.h`: base unit GUID/type/position bridge, vehicle id/creature entry, status machine, seats/passenger info/addons/accessories/template structs, usable/available seat counting, pending join-event bridge, passenger add/remove/remove-all and `TransportBase` passenger position/offset formulas.
 - [x] **#030h** `wow-entities`: base `Transport` state from `Transport.*`, `TransportMgr.h`, `GameObject.*` and `SharedDefines.h`: `GameObject` shape with `SERVER_TIME|STATIONARY|ROTATION`, map-object-transport type, movement state, path leg/event/template structs, period/timer/path-progress client dynamic-flag encoding, dynamic/static passenger GUID sets, cleanup/unload shape, movement stop request bridge and `TransportBase` passenger position/offset formulas.
 - [x] **#031** `wow-world`/`wow-entities`: mover el runtime de criaturas usado por sesión a `WorldCreature`/`Creature` map-owned, contrastado contra C++ `Creature::Update`, `Creature::AIM_Create/AIM_Initialize` y `Unit::AIUpdateTick`. `WorldSession` deja de usar `HashMap<Guid, wow_ai::CreatureAI>` en runtime; combate, aggro, loot/gossip/vendor/taxi, respawn/corpse y visibilidad mutan o consultan el `MapManager`. Metadatos de loot/boss que estaban en `CreatureAI` pasan a `CreatureAiOwnershipState`. Queda solo un puente `cfg(test)` para tests legacy hasta limpiar fixtures.
-- [ ] **#032** Refactor `WorldSession` para tener player entity handle/controlador en vez de campos sueltos.
+- [x] **#032** Refactor `WorldSession` para tener player entity handle/controlador en vez de campos sueltos.
   - [x] **#032a** Crear `SessionPlayerController` como equivalente incremental de C++ `WorldSession::_player`/`SetPlayer`/`GetPlayer`: GUID, nombre, mapa, posición, raza, clase, nivel y sexo quedan sincronizados desde login/movement/teleport/logout, y los registros compartidos (`PlayerRegistry`/`ObjectAccessor`) leen por el controlador cuando existe.
   - [x] **#032b** Migrar runtime de jugador al controlador/player entity.
     - [x] **#032b1** Dinero, XP/NextLevelXP, selección, spells y `_currencyStorage` quedan reflejados en `SessionPlayerController` con getters/setters tipo C++ `Player::{GetMoney,SetMoney,GetXP,SetXP,SetSelection,GetSpellMap,_currencyStorage}`; login/trainer/loot/quest/registry usan la ruta canónica donde ya aplica.
@@ -619,10 +619,10 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
     - [x] **#032c2** `quest`/`spell`: reemplazar raza/clase/nivel/género/spells/inventario por getters canónicos y cubrir condiciones/quest availability.
     - [x] **#032c3** `loot`: reemplazar GUID/mapa/posición/nivel/clase/inventario por getters canónicos en roll/master-loot/store paths.
     - [x] **#032c4** `character`/`trainer`: reemplazar gold/currency/player metadata/inventory directos por mutadores/getters canónicos y cerrar residuos de login/logout.
-  - [ ] **#032d** Retirar o hacer privados los campos heredados cuando dejen de ser fuente runtime, dejando solo puentes `cfg(test)` si aún son necesarios.
+  - [x] **#032d** Retirar o hacer privados los campos heredados cuando dejen de ser fuente runtime, dejando solo puentes `cfg(test)` si aún son necesarios.
     - [x] **#032d1** Cerrar residuos fuera de la lista original (`combat`, `social`, `misc`, `spell`, `loot`) que todavía leían GUID/posición/item runtime directamente en vez de C++ `GetPlayer()`/`GetItemByGuid()`.
     - [x] **#032d2** Encapsular accesos internos de `session.rs` que todavía usan campos legacy como fallback/runtime y separar claramente bootstrap/test de runtime canónico.
-    - [ ] **#032d3** Reducir visibilidad de campos heredados o moverlos detrás de helpers `cfg(test)` cuando ya no haya consumidores productivos directos.
+    - [x] **#032d3** Reducir visibilidad de campos heredados o moverlos detrás de helpers `cfg(test)` cuando ya no haya consumidores productivos directos: los campos legacy de player runtime quedan privados en `WorldSession`; login/bootstrap y loot spec pasan por helpers C++-like, y los tests de handlers ya no escriben/leen esos campos directamente.
 
 > Tras cerrar #032, el roadmap continúa con Fase 2 (Movement) y siguientes según la sección 4.
 

@@ -586,17 +586,17 @@ pub struct WorldSession {
     pub(crate) level_played_time: u32,
     /// Player's current money in copper (1 gold = 10,000 copper).
     /// Loaded from `characters.money` on login; saved on logout + buy/sell.
-    pub(crate) player_gold: u64,
-    pub(crate) player_xp: u32,
+    player_gold: u64,
+    player_xp: u32,
     /// XP required to reach next level, cached from player_xp_for_level.
-    pub(crate) player_next_level_xp: u32,
+    player_next_level_xp: u32,
     /// Currently selected target GUID (SetSelection).
-    pub(crate) selection_guid: Option<wow_core::ObjectGuid>,
+    selection_guid: Option<wow_core::ObjectGuid>,
 
     /// GUID of the character currently logged in (set after login completes).
-    pub(crate) player_guid: Option<ObjectGuid>,
+    player_guid: Option<ObjectGuid>,
     /// Attached player controller, mirroring C++ `WorldSession::_player` ownership.
-    pub(crate) player_controller: Option<SessionPlayerController>,
+    player_controller: Option<SessionPlayerController>,
 
     /// Pending creature spawn request (set during login, processed async).
     pub(crate) pending_creature_spawn: Option<PendingCreatureSpawn>,
@@ -604,35 +604,35 @@ pub struct WorldSession {
     pub(crate) respawn_queue: Vec<PendingRespawn>,
 
     /// In-memory inventory: slot → (item ObjectGuid, entry_id, db_guid).
-    pub(crate) inventory_items: HashMap<u8, InventoryItem>,
+    inventory_items: HashMap<u8, InventoryItem>,
 
     /// In-memory buyback slots, kept separate from normal inventory like C++ `GetItemByGuid`.
-    pub(crate) buyback_items: HashMap<u8, InventoryItem>,
-    pub(crate) buyback_price: [u32; BUYBACK_SLOT_COUNT],
-    pub(crate) buyback_timestamp: [i64; BUYBACK_SLOT_COUNT],
-    pub(crate) current_buyback_slot: u8,
+    buyback_items: HashMap<u8, InventoryItem>,
+    buyback_price: [u32; BUYBACK_SLOT_COUNT],
+    buyback_timestamp: [i64; BUYBACK_SLOT_COUNT],
+    current_buyback_slot: u8,
 
     /// C++ `_currencyStorage`, keyed by CurrencyTypes.db2 ID.
-    pub(crate) player_currencies: HashMap<u32, PlayerCurrency>,
+    player_currencies: HashMap<u32, PlayerCurrency>,
 
     /// In-memory item objects keyed by item GUID, mirroring C++ `Player::m_items` ownership.
-    pub(crate) inventory_item_objects: HashMap<ObjectGuid, Item>,
+    inventory_item_objects: HashMap<ObjectGuid, Item>,
 
     /// Current map ID for VALUES update packets.
-    pub(crate) current_map_id: u16,
+    current_map_id: u16,
 
     /// Race of the currently logged-in character (set at login).
-    pub(crate) player_race: u8,
+    player_race: u8,
     /// Class of the currently logged-in character (set at login).
-    pub(crate) player_class: u8,
+    player_class: u8,
     /// Level of the currently logged-in character (set at login).
-    pub(crate) player_level: u8,
+    player_level: u8,
     /// Gender of the currently logged-in character (set at login).
-    pub(crate) player_gender: u8,
+    player_gender: u8,
     /// C++ ActivePlayerData::LootSpecID represented session state.
-    pub(crate) loot_specialization_id: u32,
+    loot_specialization_id: u32,
     /// All known spell IDs for the logged-in character (DB + DBC merged).
-    pub(crate) known_spells: Vec<i32>,
+    known_spells: Vec<i32>,
 
     // ── Dual-connection (realm + instance) ───────────────────────
     // After ConnectTo completes, the session uses the instance socket for
@@ -646,10 +646,10 @@ pub struct WorldSession {
 
     // ── Movement & World position ─────────────────────────────────
     /// Server-side position of the player (updated from CMSG_MOVE_*).
-    pub(crate) player_position: Option<wow_core::Position>,
+    player_position: Option<wow_core::Position>,
 
     /// Cached character name for chat messages.
-    pub(crate) player_name: Option<String>,
+    player_name: Option<String>,
 
     // Addon chat filtering state. Mirrors C++ WorldSession::_registeredAddonPrefixes
     // and _filterAddonMessages.
@@ -5008,6 +5008,32 @@ impl WorldSession {
         }
     }
 
+    pub(crate) fn set_loaded_player_name_like_cpp(&mut self, name: String) {
+        self.player_name = Some(name);
+    }
+
+    pub(crate) fn set_loaded_player_identity_like_cpp(
+        &mut self,
+        map_id: u16,
+        race: u8,
+        class: u8,
+        level: u8,
+        gender: u8,
+    ) {
+        self.current_map_id = map_id;
+        self.player_race = race;
+        self.player_class = class;
+        self.player_level = level;
+        self.player_gender = gender;
+        if let Some(controller) = &mut self.player_controller {
+            controller.map_id = map_id;
+            controller.race = race;
+            controller.class = class;
+            controller.set_level(level);
+            controller.gender = gender;
+        }
+    }
+
     pub(crate) fn attach_player_controller_like_cpp(
         &mut self,
         mut controller: SessionPlayerController,
@@ -5050,6 +5076,14 @@ impl WorldSession {
         self.player_level = level;
         if let Some(controller) = &mut self.player_controller {
             controller.set_level(level);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_player_class_like_cpp(&mut self, class: u8) {
+        self.player_class = class;
+        if let Some(controller) = &mut self.player_controller {
+            controller.class = class;
         }
     }
 
@@ -5216,6 +5250,15 @@ impl WorldSession {
             .as_ref()
             .map(SessionPlayerController::gender)
             .unwrap_or(self.player_gender)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loot_specialization_id_like_cpp(&self) -> u32 {
+        self.loot_specialization_id
+    }
+
+    pub(crate) fn set_loot_specialization_id_like_cpp(&mut self, spec_id: u32) {
+        self.loot_specialization_id = spec_id;
     }
 
     pub(crate) fn player_gold_like_cpp(&self) -> u64 {

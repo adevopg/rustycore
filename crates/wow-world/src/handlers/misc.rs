@@ -1141,7 +1141,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use wow_constants::ServerOpcodes;
-    use wow_core::ObjectGuid;
+    use wow_core::{ObjectGuid, Position};
     use wow_data::{MapDifficultyEntry, MapDifficultyStore, MapEntry, MapStore};
     use wow_packet::WorldPacket;
 
@@ -1223,7 +1223,7 @@ mod tests {
         );
 
         session.set_player_guid(Some(player_guid));
-        session.current_map_id = 0;
+        session.set_player_map_position_like_cpp(0, Position::ZERO);
         session.set_map_store(Arc::new(MapStore::from_entries([
             MapEntry {
                 id: 0,

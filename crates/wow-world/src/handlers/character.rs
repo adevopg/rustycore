@@ -2295,7 +2295,7 @@ impl WorldSession {
 
         let name: String = result.read_string(2);
         // Store character name for chat messages.
-        self.player_name = Some(name.clone());
+        self.set_loaded_player_name_like_cpp(name.clone());
         let race: u8 = result.read(3);
         let class: u8 = result.read(4);
         let gender: u8 = result.read(5);
@@ -2715,11 +2715,7 @@ impl WorldSession {
         }
 
         // Store current map and character info for VALUES updates + stat recalculation
-        self.current_map_id = map_id as u16;
-        self.player_race = race;
-        self.player_class = class;
-        self.player_level = level;
-        self.player_gender = gender;
+        self.set_loaded_player_identity_like_cpp(map_id as u16, race, class, level, gender);
         self.refresh_next_level_xp();
         // NOTE: known_spells is stored below after DBC merge (see "Merge DBC auto-learned spells")
 
@@ -7673,8 +7669,8 @@ impl WorldSession {
         self.set_state(crate::session::SessionState::LoggedIn);
         self.attach_player_controller_like_cpp(crate::session::SessionPlayerController::new(
             guid,
-            self.player_name
-                .clone()
+            self.player_name_like_cpp()
+                .map(ToOwned::to_owned)
                 .unwrap_or_else(|| format!("Player{}", guid.counter())),
             *position,
             map_id as u16,
@@ -8257,11 +8253,11 @@ mod tests {
             send_tx,
         );
         let player_guid = ObjectGuid::create_player(1, 1);
-        session.player_guid = Some(player_guid);
+        session.set_player_guid(Some(player_guid));
 
         for (slot, db_guid, count) in [(35, 10_u64, 4_u32), (36, 11_u64, 5_u32)] {
             let item_guid = ObjectGuid::create_item(1, db_guid as i64);
-            session.inventory_items.insert(
+            session.insert_inventory_item_like_cpp(
                 slot,
                 InventoryItem {
                     guid: item_guid,

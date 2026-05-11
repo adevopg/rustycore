@@ -2405,7 +2405,7 @@ impl WorldSession {
         }
 
         if packet.spec_id == 0 {
-            self.loot_specialization_id = 0;
+            self.set_loot_specialization_id_like_cpp(0);
             return;
         }
 
@@ -2419,7 +2419,7 @@ impl WorldSession {
             return;
         }
 
-        self.loot_specialization_id = packet.spec_id;
+        self.set_loot_specialization_id_like_cpp(packet.spec_id);
     }
 
     fn represented_master_loot_target_exists_like_cpp(&self, target: ObjectGuid) -> bool {
@@ -9651,7 +9651,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_creature_guid(19_016);
         session.set_player_guid(Some(player_guid));
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         let mut creature = test_creature(loot_guid, false);
         creature.current_pos = Position::new(31.0, 0.0, 0.0, 0.0);
         session.creatures.insert(loot_guid, creature);
@@ -9702,7 +9702,7 @@ mod tests {
         let secondary_guid = test_creature_guid(19_032);
         session.set_player_guid(Some(player_guid));
         session.set_enable_ae_loot_like_cpp(true);
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session
             .creatures
             .insert(main_guid, test_creature(main_guid, false));
@@ -10033,7 +10033,7 @@ mod tests {
         assert_eq!(sent.read_uint64().unwrap(), 0);
         assert_eq!(sent.read_uint64().unwrap(), 0);
         assert!(sent.read_bit().unwrap());
-        assert_eq!(session.player_gold, 0);
+        assert_eq!(session.player_gold_like_cpp(), 0);
         assert!(session.is_active_loot_guid(loot_guid));
     }
 
@@ -10157,7 +10157,7 @@ mod tests {
             wow_constants::ServerOpcodes::LootMoneyNotify as u16
         );
         assert_eq!(sent.read_uint64().unwrap(), 7);
-        assert_eq!(session.player_gold, 10);
+        assert_eq!(session.player_gold_like_cpp(), 10);
         assert_eq!(session.loot_table.get(&owner_one).unwrap().coins, 0);
         assert_eq!(session.loot_table.get(&owner_two).unwrap().coins, 0);
         assert!(session.active_loot_view_owners.contains(&owner_one));
@@ -10180,7 +10180,7 @@ mod tests {
         player_registry.insert(other_guid, broadcast_info(other_guid, other_tx));
 
         session.set_player_guid(Some(player_guid));
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session.group_guid = Some(group_guid);
         session.set_player_registry(player_registry);
         session.set_group_registry(group_registry, Arc::new(PendingInvites::default()));
@@ -10245,7 +10245,7 @@ mod tests {
         assert_eq!(sent.read_uint64().unwrap(), 4);
         assert_eq!(sent.read_uint64().unwrap(), 0);
         assert!(!sent.read_bit().unwrap());
-        assert_eq!(session.player_gold, 4);
+        assert_eq!(session.player_gold_like_cpp(), 4);
         assert_eq!(session.loot_table.get(&loot_guid).unwrap().coins, 0);
     }
 
@@ -10256,7 +10256,7 @@ mod tests {
         let loot_guid = test_creature_guid(19_003);
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session
             .creatures
             .insert(loot_guid, test_creature(loot_guid, false));
@@ -10317,7 +10317,7 @@ mod tests {
         let loot_guid = test_creature_guid(19_004);
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session
             .creatures
             .insert(loot_guid, test_creature(loot_guid, false));
@@ -10375,7 +10375,7 @@ mod tests {
         let loot_guid = test_creature_guid(19_005);
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session
             .creatures
             .insert(loot_guid, test_creature(loot_guid, false));
@@ -10445,7 +10445,7 @@ mod tests {
     async fn set_loot_specialization_matches_cpp_class_validation() {
         let (mut session, send_rx) = make_session_with_send();
         session.set_player_guid(Some(ObjectGuid::create_player(1, 42)));
-        session.player_class = 2;
+        session.set_player_class_like_cpp(2);
         session.set_chr_specialization_store(Arc::new(ChrSpecializationStore::from_entries([
             ChrSpecializationEntry {
                 id: 65,
@@ -10460,29 +10460,29 @@ mod tests {
         session
             .handle_set_loot_specialization(SetLootSpecialization { spec_id: 65 })
             .await;
-        assert_eq!(session.loot_specialization_id, 65);
+        assert_eq!(session.loot_specialization_id_like_cpp(), 65);
 
         session
             .handle_set_loot_specialization(SetLootSpecialization { spec_id: 71 })
             .await;
-        assert_eq!(session.loot_specialization_id, 65);
+        assert_eq!(session.loot_specialization_id_like_cpp(), 65);
 
         session
             .handle_set_loot_specialization(SetLootSpecialization { spec_id: 999 })
             .await;
-        assert_eq!(session.loot_specialization_id, 65);
+        assert_eq!(session.loot_specialization_id_like_cpp(), 65);
 
         session
             .handle_set_loot_specialization(SetLootSpecialization { spec_id: 0 })
             .await;
-        assert_eq!(session.loot_specialization_id, 0);
+        assert_eq!(session.loot_specialization_id_like_cpp(), 0);
         assert!(send_rx.try_recv().is_err());
     }
 
     #[tokio::test]
     async fn set_loot_specialization_without_loaded_player_is_ignored_like_cpp_status_guard() {
         let (mut session, _send_rx) = make_session_with_send();
-        session.player_class = 2;
+        session.set_player_class_like_cpp(2);
         session.set_chr_specialization_store(Arc::new(ChrSpecializationStore::from_entries([
             ChrSpecializationEntry {
                 id: 65,
@@ -10494,7 +10494,7 @@ mod tests {
             .handle_set_loot_specialization(SetLootSpecialization { spec_id: 65 })
             .await;
 
-        assert_eq!(session.loot_specialization_id, 0);
+        assert_eq!(session.loot_specialization_id_like_cpp(), 0);
     }
 
     #[tokio::test]
@@ -10852,7 +10852,7 @@ mod tests {
         session.set_player_guid(Some(master_guid));
         session.set_active_loot_guid(loot_owner);
         install_limited_test_item_template(&mut session, 700, 1);
-        session.inventory_items.insert(
+        session.insert_inventory_item_like_cpp(
             35,
             InventoryItem {
                 guid: item_guid,
@@ -11053,7 +11053,7 @@ mod tests {
 
         target_session.set_player_guid(Some(target_guid));
         install_limited_test_item_template(&mut target_session, 701, 1);
-        target_session.inventory_items.insert(
+        target_session.insert_inventory_item_like_cpp(
             35,
             InventoryItem {
                 guid: existing_item_guid,
@@ -11193,7 +11193,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_creature_guid(19_008);
         session.set_player_guid(Some(player_guid));
-        session.player_position = Some(Position::ZERO);
+        session.set_player_position_like_cpp(Position::ZERO);
         session.set_active_loot_guid(loot_guid);
 
         let mut creature = test_creature(loot_guid, false);
