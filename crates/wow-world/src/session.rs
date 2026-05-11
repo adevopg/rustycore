@@ -15,6 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
+use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
@@ -1123,7 +1124,10 @@ pub enum RepresentedAuraEffectLikeCpp {
     Hover,
     SafeFall,
     Fly,
+    Ghost,
+    MountedFlightSpeed,
     ModifyFallDamagePct,
+    WaterWalk,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -6181,6 +6185,154 @@ impl WorldSession {
         status.guid == player_guid && status.position.is_valid_map_coord_like_cpp()
     }
 
+    pub(crate) fn validate_and_sanitize_movement_ack_status_represented_like_cpp(
+        &self,
+        status: &mut wow_packet::packets::movement::MovementInfo,
+    ) -> bool {
+        if !self.validate_movement_ack_status_like_cpp(status) {
+            return false;
+        }
+
+        self.sanitize_movement_info_flags_represented_like_cpp(status);
+        true
+    }
+
+    pub(crate) fn sanitize_movement_info_flags_represented_like_cpp(
+        &self,
+        movement_info: &mut wow_packet::packets::movement::MovementInfo,
+    ) -> MovementFlag {
+        let mut removed = MovementFlag::empty();
+        let remove_flags = |movement_info: &mut wow_packet::packets::movement::MovementInfo,
+                            removed: &mut MovementFlag,
+                            flags: MovementFlag| {
+            movement_info.flags.remove(flags);
+            *removed |= flags;
+        };
+
+        let root_allowed_by_fixed_vehicle_like_cpp = false;
+        if movement_info.flags.contains(MovementFlag::ROOT) {
+            if root_allowed_by_fixed_vehicle_like_cpp {
+                if movement_info.flags.intersects(MovementFlag::MASK_MOVING) {
+                    remove_flags(movement_info, &mut removed, MovementFlag::MASK_MOVING);
+                }
+            } else {
+                remove_flags(movement_info, &mut removed, MovementFlag::ROOT);
+            }
+        }
+
+        if movement_info.flags.contains(MovementFlag::HOVER)
+            && !self.has_represented_aura_effect_like_cpp(RepresentedAuraEffectLikeCpp::Hover)
+        {
+            remove_flags(movement_info, &mut removed, MovementFlag::HOVER);
+        }
+
+        if movement_info
+            .flags
+            .contains(MovementFlag::ASCENDING | MovementFlag::DESCENDING)
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::ASCENDING | MovementFlag::DESCENDING,
+            );
+        }
+
+        if movement_info
+            .flags
+            .contains(MovementFlag::LEFT | MovementFlag::RIGHT)
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::LEFT | MovementFlag::RIGHT,
+            );
+        }
+
+        if movement_info
+            .flags
+            .contains(MovementFlag::STRAFE_LEFT | MovementFlag::STRAFE_RIGHT)
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::STRAFE_LEFT | MovementFlag::STRAFE_RIGHT,
+            );
+        }
+
+        if movement_info
+            .flags
+            .contains(MovementFlag::PITCH_UP | MovementFlag::PITCH_DOWN)
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::PITCH_UP | MovementFlag::PITCH_DOWN,
+            );
+        }
+
+        if movement_info
+            .flags
+            .contains(MovementFlag::FORWARD | MovementFlag::BACKWARD)
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::FORWARD | MovementFlag::BACKWARD,
+            );
+        }
+
+        if movement_info.flags.contains(MovementFlag::WATER_WALK)
+            && !self.has_represented_aura_effect_like_cpp(RepresentedAuraEffectLikeCpp::WaterWalk)
+            && !self.has_represented_aura_effect_like_cpp(RepresentedAuraEffectLikeCpp::Ghost)
+        {
+            remove_flags(movement_info, &mut removed, MovementFlag::WATER_WALK);
+        }
+
+        if movement_info.flags.contains(MovementFlag::FALLING_SLOW)
+            && !self.has_represented_aura_effect_like_cpp(RepresentedAuraEffectLikeCpp::FeatherFall)
+        {
+            remove_flags(movement_info, &mut removed, MovementFlag::FALLING_SLOW);
+        }
+
+        if movement_info
+            .flags
+            .intersects(MovementFlag::FLYING | MovementFlag::CAN_FLY)
+            && !self.player_game_master_like_cpp
+            && !self.has_represented_aura_effect_like_cpp(RepresentedAuraEffectLikeCpp::Fly)
+            && !self.has_represented_aura_effect_like_cpp(
+                RepresentedAuraEffectLikeCpp::MountedFlightSpeed,
+            )
+        {
+            remove_flags(
+                movement_info,
+                &mut removed,
+                MovementFlag::FLYING | MovementFlag::CAN_FLY,
+            );
+        }
+
+        if movement_info
+            .flags
+            .intersects(MovementFlag::DISABLE_GRAVITY | MovementFlag::CAN_FLY)
+            && movement_info.flags.contains(MovementFlag::FALLING)
+        {
+            remove_flags(movement_info, &mut removed, MovementFlag::FALLING);
+        }
+
+        let has_step_up_elevation_like_cpp =
+            movement_info.step_up_start_elevation.abs() > f32::EPSILON;
+        if movement_info.flags.contains(MovementFlag::SPLINE_ELEVATION)
+            && !has_step_up_elevation_like_cpp
+        {
+            remove_flags(movement_info, &mut removed, MovementFlag::SPLINE_ELEVATION);
+        }
+
+        if has_step_up_elevation_like_cpp {
+            movement_info.flags.insert(MovementFlag::SPLINE_ELEVATION);
+        }
+
+        removed
+    }
+
     pub(crate) fn record_movement_ack_event_like_cpp(&mut self, event: MovementAckEventLikeCpp) {
         self.movement_ack_events_like_cpp.push(event);
     }
@@ -6188,9 +6340,9 @@ impl WorldSession {
     pub(crate) fn apply_knock_back_ack_like_cpp(
         &mut self,
         opcode: ClientOpcodes,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
     ) -> bool {
-        if !self.validate_movement_ack_status_like_cpp(&ack.status) {
+        if !self.validate_and_sanitize_movement_ack_status_represented_like_cpp(&mut ack.status) {
             self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
                 opcode,
                 mover_guid: ack.status.guid,
@@ -6255,10 +6407,11 @@ impl WorldSession {
     pub(crate) fn record_validated_movement_ack_like_cpp(
         &mut self,
         opcode: ClientOpcodes,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
         speed: Option<f32>,
     ) -> bool {
-        let accepted = self.validate_movement_ack_status_like_cpp(&ack.status);
+        let accepted =
+            self.validate_and_sanitize_movement_ack_status_represented_like_cpp(&mut ack.status);
         self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
             opcode,
             mover_guid: ack.status.guid,
@@ -6276,10 +6429,10 @@ impl WorldSession {
 
     pub(crate) fn record_apply_movement_force_ack_like_cpp(
         &mut self,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
         force: &wow_packet::packets::movement::MovementForce,
     ) -> bool {
-        if !self.validate_movement_ack_status_like_cpp(&ack.status) {
+        if !self.validate_and_sanitize_movement_ack_status_represented_like_cpp(&mut ack.status) {
             self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
                 opcode: ClientOpcodes::MoveApplyMovementForceAck,
                 mover_guid: ack.status.guid,
@@ -6313,10 +6466,10 @@ impl WorldSession {
 
     pub(crate) fn record_remove_movement_force_ack_like_cpp(
         &mut self,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
         force_id: ObjectGuid,
     ) -> bool {
-        if !self.validate_movement_ack_status_like_cpp(&ack.status) {
+        if !self.validate_and_sanitize_movement_ack_status_represented_like_cpp(&mut ack.status) {
             self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
                 opcode: ClientOpcodes::MoveRemoveMovementForceAck,
                 mover_guid: ack.status.guid,
@@ -6350,10 +6503,10 @@ impl WorldSession {
 
     pub(crate) fn record_move_spline_done_like_cpp(
         &mut self,
-        status: &wow_packet::packets::movement::MovementInfo,
+        status: &mut wow_packet::packets::movement::MovementInfo,
         spline_id: i32,
     ) -> bool {
-        let accepted = self.validate_movement_ack_status_like_cpp(status);
+        let accepted = self.validate_and_sanitize_movement_ack_status_represented_like_cpp(status);
         self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
             opcode: ClientOpcodes::MoveSplineDone,
             mover_guid: status.guid,
@@ -6371,7 +6524,7 @@ impl WorldSession {
 
     pub(crate) fn handle_move_spline_done_taxi_like_cpp(
         &mut self,
-        status: &wow_packet::packets::movement::MovementInfo,
+        status: &mut wow_packet::packets::movement::MovementInfo,
         spline_id: i32,
     ) -> MoveSplineDoneTaxiActionLikeCpp {
         if !self.record_move_spline_done_like_cpp(status, spline_id) {
@@ -6811,7 +6964,7 @@ impl WorldSession {
     pub(crate) fn handle_force_speed_change_ack_like_cpp(
         &mut self,
         opcode: ClientOpcodes,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
         speed: f32,
     ) -> bool {
         let Some(move_type) = Self::movement_speed_ack_move_type_like_cpp(opcode) else {
@@ -6887,7 +7040,7 @@ impl WorldSession {
     pub(crate) fn handle_movement_force_mod_magnitude_ack_like_cpp(
         &mut self,
         opcode: ClientOpcodes,
-        ack: &wow_packet::packets::movement::MovementAck,
+        ack: &mut wow_packet::packets::movement::MovementAck,
         speed: f32,
     ) -> bool {
         if !self.record_validated_movement_ack_like_cpp(opcode, ack, Some(speed)) {

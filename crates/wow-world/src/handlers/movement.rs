@@ -305,17 +305,17 @@ impl WorldSession {
     pub async fn handle_movement_ack_message(
         &mut self,
         opcode: ClientOpcodes,
-        pkt: MovementAckMessage,
+        mut pkt: MovementAckMessage,
     ) {
         trace!(account = self.account_id, ?opcode, "MovementAckMessage");
-        self.record_validated_movement_ack_like_cpp(opcode, &pkt.ack, None);
+        self.record_validated_movement_ack_like_cpp(opcode, &mut pkt.ack, None);
     }
 
     /// Handle C++ `HandleForceSpeedChangeAck` and movement-force magnitude ACKs.
     pub async fn handle_movement_speed_ack(
         &mut self,
         opcode: ClientOpcodes,
-        pkt: MovementSpeedAck,
+        mut pkt: MovementSpeedAck,
     ) {
         trace!(
             account = self.account_id,
@@ -324,9 +324,9 @@ impl WorldSession {
             "MovementSpeedAck"
         );
         let accepted = if matches!(opcode, ClientOpcodes::MoveSetModMovementForceMagnitudeAck) {
-            self.handle_movement_force_mod_magnitude_ack_like_cpp(opcode, &pkt.ack, pkt.speed)
+            self.handle_movement_force_mod_magnitude_ack_like_cpp(opcode, &mut pkt.ack, pkt.speed)
         } else {
-            self.handle_force_speed_change_ack_like_cpp(opcode, &pkt.ack, pkt.speed)
+            self.handle_force_speed_change_ack_like_cpp(opcode, &mut pkt.ack, pkt.speed)
         };
 
         if accepted && matches!(opcode, ClientOpcodes::MoveSetModMovementForceMagnitudeAck) {
@@ -344,13 +344,13 @@ impl WorldSession {
     }
 
     /// Handle C++ `HandleMoveKnockBackAck`.
-    pub async fn handle_move_knock_back_ack(&mut self, pkt: MoveKnockBackAck) {
+    pub async fn handle_move_knock_back_ack(&mut self, mut pkt: MoveKnockBackAck) {
         trace!(
             account = self.account_id,
             has_speeds = pkt.speeds.is_some(),
             "MoveKnockBackAck"
         );
-        if self.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &pkt.ack) {
+        if self.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &mut pkt.ack) {
             let mut status = pkt.ack.status.clone();
             status.time = self.player_movement_time_like_cpp();
             self.broadcast_to_movement_set_like_cpp(
@@ -361,7 +361,10 @@ impl WorldSession {
     }
 
     /// Handle C++ `HandleSetCollisionHeightAck`.
-    pub async fn handle_move_set_collision_height_ack(&mut self, pkt: MoveSetCollisionHeightAck) {
+    pub async fn handle_move_set_collision_height_ack(
+        &mut self,
+        mut pkt: MoveSetCollisionHeightAck,
+    ) {
         trace!(
             account = self.account_id,
             height = pkt.height,
@@ -371,19 +374,22 @@ impl WorldSession {
         );
         self.record_validated_movement_ack_like_cpp(
             ClientOpcodes::MoveSetCollisionHeightAck,
-            &pkt.data,
+            &mut pkt.data,
             None,
         );
     }
 
     /// Handle C++ `HandleMoveApplyMovementForceAck` bookkeeping until movement-force broadcasts exist.
-    pub async fn handle_move_apply_movement_force_ack(&mut self, pkt: MoveApplyMovementForceAck) {
+    pub async fn handle_move_apply_movement_force_ack(
+        &mut self,
+        mut pkt: MoveApplyMovementForceAck,
+    ) {
         trace!(
             account = self.account_id,
             force = ?pkt.force.id,
             "MoveApplyMovementForceAck"
         );
-        if self.record_apply_movement_force_ack_like_cpp(&pkt.ack, &pkt.force) {
+        if self.record_apply_movement_force_ack_like_cpp(&mut pkt.ack, &pkt.force) {
             let mut status = pkt.ack.status.clone();
             if let Some(adjusted_time) = self.latest_movement_ack_adjusted_time_like_cpp() {
                 status.time = adjusted_time;
@@ -400,13 +406,16 @@ impl WorldSession {
     }
 
     /// Handle C++ `HandleMoveRemoveMovementForceAck` bookkeeping until movement-force broadcasts exist.
-    pub async fn handle_move_remove_movement_force_ack(&mut self, pkt: MoveRemoveMovementForceAck) {
+    pub async fn handle_move_remove_movement_force_ack(
+        &mut self,
+        mut pkt: MoveRemoveMovementForceAck,
+    ) {
         trace!(
             account = self.account_id,
             force = ?pkt.id,
             "MoveRemoveMovementForceAck"
         );
-        if self.record_remove_movement_force_ack_like_cpp(&pkt.ack, pkt.id) {
+        if self.record_remove_movement_force_ack_like_cpp(&mut pkt.ack, pkt.id) {
             let mut status = pkt.ack.status.clone();
             if let Some(adjusted_time) = self.latest_movement_ack_adjusted_time_like_cpp() {
                 status.time = adjusted_time;
@@ -443,13 +452,13 @@ impl WorldSession {
     }
 
     /// Handle C++ `HandleMoveSplineDoneOpcode` bookkeeping until taxi runtime is complete.
-    pub async fn handle_move_spline_done(&mut self, pkt: MoveSplineDone) {
+    pub async fn handle_move_spline_done(&mut self, mut pkt: MoveSplineDone) {
         trace!(
             account = self.account_id,
             spline_id = pkt.spline_id,
             "MoveSplineDone"
         );
-        self.handle_move_spline_done_taxi_like_cpp(&pkt.status, pkt.spline_id);
+        self.handle_move_spline_done_taxi_like_cpp(&mut pkt.status, pkt.spline_id);
     }
 
     /// Handle C++ `HandleMoveTeleportAck` bookkeeping until near-teleport runtime is complete.
@@ -473,6 +482,7 @@ mod tests {
         MovementSpeedAckActionLikeCpp, RepresentedAuraEffectLikeCpp,
         RepresentedTaxiFlightNodeLikeCpp, UnitMoveTypeLikeCpp,
     };
+    use wow_constants::movement::MovementFlag;
     use wow_constants::unit::UnitFlags;
     use wow_core::ObjectGuid;
 
@@ -724,12 +734,12 @@ mod tests {
             position: wow_core::Position::new(10.0, 20.0, 30.0, 1.5),
             ..MovementInfo::default()
         };
-        let ack = wow_packet::packets::movement::MovementAck {
+        let mut ack = wow_packet::packets::movement::MovementAck {
             status: status.clone(),
             ack_index: 7,
         };
 
-        assert!(session.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &ack));
+        assert!(session.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &mut ack));
         assert_eq!(session.player_position_like_cpp(), Some(status.position));
         assert_eq!(session.movement_ack_events_like_cpp().len(), 1);
         assert!(session.movement_ack_events_like_cpp()[0].accepted);
@@ -773,7 +783,7 @@ mod tests {
         );
         session.set_player_guid(Some(guid));
 
-        let ack = wow_packet::packets::movement::MovementAck {
+        let mut ack = wow_packet::packets::movement::MovementAck {
             status: MovementInfo {
                 guid,
                 time: 1_000,
@@ -792,7 +802,7 @@ mod tests {
             force_type: wow_packet::packets::movement::MovementForceType::Gravity,
         };
 
-        assert!(session.record_apply_movement_force_ack_like_cpp(&ack, &force));
+        assert!(session.record_apply_movement_force_ack_like_cpp(&mut ack, &force));
         assert_eq!(session.movement_ack_events_like_cpp().len(), 1);
         assert_eq!(
             session.movement_ack_events_like_cpp()[0].opcode,
@@ -812,7 +822,7 @@ mod tests {
                 .is_some()
         );
 
-        assert!(session.record_remove_movement_force_ack_like_cpp(&ack, force_guid));
+        assert!(session.record_remove_movement_force_ack_like_cpp(&mut ack, force_guid));
         assert_eq!(
             session.movement_ack_events_like_cpp()[1].opcode,
             ClientOpcodes::MoveRemoveMovementForceAck
@@ -828,7 +838,7 @@ mod tests {
         let mut session = make_session();
         let guid = ObjectGuid::create_player(1, 42);
         session.set_player_guid(Some(guid));
-        let ack = wow_packet::packets::movement::MovementAck {
+        let mut ack = wow_packet::packets::movement::MovementAck {
             status: MovementInfo {
                 guid,
                 time: 1_000,
@@ -842,7 +852,7 @@ mod tests {
         session.set_forced_speed_changes_like_cpp(UnitMoveTypeLikeCpp::Run, 2);
         assert!(session.handle_force_speed_change_ack_like_cpp(
             ClientOpcodes::MoveForceRunSpeedChangeAck,
-            &ack,
+            &mut ack,
             1.0,
         ));
         let first = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -852,7 +862,7 @@ mod tests {
 
         assert!(session.handle_force_speed_change_ack_like_cpp(
             ClientOpcodes::MoveForceRunSpeedChangeAck,
-            &ack,
+            &mut ack,
             6.0,
         ));
         let corrected = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -863,7 +873,7 @@ mod tests {
         session.set_player_on_transport_like_cpp(true);
         assert!(session.handle_force_speed_change_ack_like_cpp(
             ClientOpcodes::MoveForceRunSpeedChangeAck,
-            &ack,
+            &mut ack,
             8.0,
         ));
         let transport = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -873,7 +883,7 @@ mod tests {
         session.set_player_on_transport_like_cpp(false);
         assert!(!session.handle_force_speed_change_ack_like_cpp(
             ClientOpcodes::MoveForceRunSpeedChangeAck,
-            &ack,
+            &mut ack,
             8.0,
         ));
         let kicked = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -888,7 +898,7 @@ mod tests {
         session.set_player_guid(Some(guid));
         session.set_movement_force_mod_magnitude_changes_like_cpp(1);
         session.set_movement_force_mod_magnitude_like_cpp(1.25);
-        let ack = wow_packet::packets::movement::MovementAck {
+        let mut ack = wow_packet::packets::movement::MovementAck {
             status: MovementInfo {
                 guid,
                 time: 1_000,
@@ -900,7 +910,7 @@ mod tests {
 
         assert!(session.handle_movement_force_mod_magnitude_ack_like_cpp(
             ClientOpcodes::MoveSetModMovementForceMagnitudeAck,
-            &ack,
+            &mut ack,
             1.25,
         ));
         let accepted = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -910,7 +920,7 @@ mod tests {
         session.set_movement_force_mod_magnitude_changes_like_cpp(1);
         assert!(!session.handle_movement_force_mod_magnitude_ack_like_cpp(
             ClientOpcodes::MoveSetModMovementForceMagnitudeAck,
-            &ack,
+            &mut ack,
             1.5,
         ));
         let kicked = session.movement_speed_ack_events_like_cpp().last().unwrap();
@@ -932,14 +942,14 @@ mod tests {
         );
         session.set_player_pvp_hostile_like_cpp(true);
 
-        let status = MovementInfo {
+        let mut status = MovementInfo {
             guid,
             time: 1_000,
             position: wow_core::Position::new(1.0, 2.0, 30.0, 0.5),
             ..MovementInfo::default()
         };
 
-        let action = session.handle_move_spline_done_taxi_like_cpp(&status, 55);
+        let action = session.handle_move_spline_done_taxi_like_cpp(&mut status, 55);
         assert_eq!(action, MoveSplineDoneTaxiActionLikeCpp::FinalCleanup);
         assert!(session.taxi_destinations_like_cpp().is_empty());
         assert!(!session.taxi_mounted_like_cpp());
@@ -973,14 +983,14 @@ mod tests {
             }),
         );
 
-        let status = MovementInfo {
+        let mut status = MovementInfo {
             guid,
             time: 1_000,
             position: wow_core::Position::new(1.0, 2.0, 3.0, 1.0),
             ..MovementInfo::default()
         };
 
-        let action = session.handle_move_spline_done_taxi_like_cpp(&status, 56);
+        let action = session.handle_move_spline_done_taxi_like_cpp(&mut status, 56);
         assert_eq!(action, MoveSplineDoneTaxiActionLikeCpp::TeleportRequested);
         assert_eq!(session.player_map_id_like_cpp(), 1);
         assert_eq!(
@@ -1054,6 +1064,104 @@ mod tests {
         assert_eq!(session.player_position_like_cpp(), Some(original_position));
         assert_eq!(session.temporary_pet_resummon_requests_like_cpp(), 0);
         assert_eq!(session.delayed_operations_processed_like_cpp(), 0);
+    }
+
+    #[test]
+    fn validate_movement_info_sanitizes_representable_cpp_flag_violations() {
+        let session = make_session();
+        let mut info = MovementInfo {
+            flags: MovementFlag::FORWARD
+                | MovementFlag::BACKWARD
+                | MovementFlag::LEFT
+                | MovementFlag::RIGHT
+                | MovementFlag::ASCENDING
+                | MovementFlag::DESCENDING
+                | MovementFlag::HOVER
+                | MovementFlag::WATER_WALK
+                | MovementFlag::FALLING_SLOW
+                | MovementFlag::FLYING
+                | MovementFlag::CAN_FLY
+                | MovementFlag::DISABLE_GRAVITY
+                | MovementFlag::FALLING
+                | MovementFlag::SPLINE_ELEVATION,
+            step_up_start_elevation: 0.0,
+            ..MovementInfo::default()
+        };
+
+        let removed = session.sanitize_movement_info_flags_represented_like_cpp(&mut info);
+        assert!(removed.contains(MovementFlag::FORWARD | MovementFlag::BACKWARD));
+        assert!(removed.contains(MovementFlag::LEFT | MovementFlag::RIGHT));
+        assert!(removed.contains(MovementFlag::ASCENDING | MovementFlag::DESCENDING));
+        assert!(removed.contains(MovementFlag::HOVER));
+        assert!(removed.contains(MovementFlag::WATER_WALK));
+        assert!(removed.contains(MovementFlag::FALLING_SLOW));
+        assert!(removed.contains(MovementFlag::FLYING | MovementFlag::CAN_FLY));
+        assert!(removed.contains(MovementFlag::FALLING));
+        assert!(removed.contains(MovementFlag::SPLINE_ELEVATION));
+        assert_eq!(info.flags, MovementFlag::DISABLE_GRAVITY);
+    }
+
+    #[test]
+    fn validate_movement_info_keeps_represented_allowed_aura_flags() {
+        let mut session = make_session();
+        session
+            .visible_auras
+            .insert(1, fall_aura(1, RepresentedAuraEffectLikeCpp::Hover, 0, 1.0));
+        session.visible_auras.insert(
+            2,
+            fall_aura(2, RepresentedAuraEffectLikeCpp::FeatherFall, 0, 1.0),
+        );
+        session
+            .visible_auras
+            .insert(3, fall_aura(3, RepresentedAuraEffectLikeCpp::Fly, 0, 1.0));
+        session.visible_auras.insert(
+            4,
+            fall_aura(4, RepresentedAuraEffectLikeCpp::WaterWalk, 0, 1.0),
+        );
+        let mut info = MovementInfo {
+            flags: MovementFlag::HOVER
+                | MovementFlag::WATER_WALK
+                | MovementFlag::FALLING_SLOW
+                | MovementFlag::FLYING
+                | MovementFlag::CAN_FLY,
+            step_up_start_elevation: 1.0,
+            ..MovementInfo::default()
+        };
+
+        let removed = session.sanitize_movement_info_flags_represented_like_cpp(&mut info);
+        assert!(removed.is_empty());
+        assert!(info.flags.contains(MovementFlag::HOVER));
+        assert!(info.flags.contains(MovementFlag::WATER_WALK));
+        assert!(info.flags.contains(MovementFlag::FALLING_SLOW));
+        assert!(
+            info.flags
+                .contains(MovementFlag::FLYING | MovementFlag::CAN_FLY)
+        );
+        assert!(info.flags.contains(MovementFlag::SPLINE_ELEVATION));
+    }
+
+    #[test]
+    fn movement_ack_validation_sanitizes_status_flags_like_cpp() {
+        let mut session = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(guid));
+        let mut ack = wow_packet::packets::movement::MovementAck {
+            status: MovementInfo {
+                guid,
+                flags: MovementFlag::HOVER | MovementFlag::WATER_WALK,
+                position: wow_core::Position::new(10.0, 20.0, 30.0, 1.5),
+                ..MovementInfo::default()
+            },
+            ack_index: 12,
+        };
+
+        assert!(session.record_validated_movement_ack_like_cpp(
+            ClientOpcodes::MoveHoverAck,
+            &mut ack,
+            None
+        ));
+        assert!(ack.status.flags.is_empty());
+        assert!(session.movement_ack_events_like_cpp()[0].accepted);
     }
 
     fn broadcast_info(
