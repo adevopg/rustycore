@@ -7,7 +7,8 @@ use wow_constants::movement::MovementFlag;
 use wow_constants::{UnitState, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
-    Creature, CreatureAiState, EVENT_CHARGE_PREPATH, MovementGeneratorKind, PointMovementAction,
+    Creature, CreatureAiState, DistractMovementAction, EVENT_CHARGE_PREPATH, MovementGeneratorKind,
+    PointMovementAction, RotateMovementUpdate,
 };
 use wow_movement::{
     MoveSpline, MoveSplineInit, MoveSplineLaunchInput, MoveSplineStopInput, MoveSplineStopResult,
@@ -479,6 +480,106 @@ impl WorldCreature {
             }
             _ => None,
         }
+    }
+
+    pub fn begin_facing_spline_like_cpp(
+        &mut self,
+        facing_angle: f32,
+    ) -> Option<(Position, MoveSpline)> {
+        let spline_id = self.spline_id().saturating_add(1);
+        let current = self.position();
+        let active_spline_position = self
+            .active_move_spline
+            .as_ref()
+            .filter(|spline| !spline.finalized() && !spline.on_transport)
+            .and_then(MoveSpline::compute_position);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_to(current);
+        init.set_facing_angle(facing_angle);
+
+        let now_ms = self.now_ms();
+        let mut spline = self
+            .active_move_spline
+            .take()
+            .unwrap_or_else(MoveSpline::new);
+        let launch = init
+            .launch(
+                &mut spline,
+                MoveSplineLaunchInput {
+                    current_position: current,
+                    active_spline_position,
+                    movement_flags: MovementFlag::NONE,
+                    selected_speed: 2.5,
+                    run_speed: 2.5,
+                    assistance_speed_factor: 1.0,
+                    on_transport: false,
+                },
+            )
+            .ok()?;
+        let duration_ms = launch.duration_ms.max(1) as u32;
+        {
+            let ai = self.creature.ai_ownership_mut();
+            ai.move_target = Some(current);
+            ai.move_start_ms = now_ms;
+            ai.move_duration_ms = duration_ms;
+            ai.spline_id = spline_id;
+        }
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .launch_spline(
+                spline_id,
+                duration_ms,
+                position_to_i32_tuple(current),
+                false,
+                false,
+                None,
+            );
+        self.active_move_spline = Some(spline.clone());
+        Some((launch.real_position, spline))
+    }
+
+    pub fn begin_distract_movement_like_cpp(
+        &mut self,
+        timer_ms: u32,
+        orientation: f32,
+        owner_is_standing: bool,
+    ) -> Option<(DistractMovementAction, Position, MoveSpline)> {
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .move_distract_like_cpp(timer_ms);
+
+        let action = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)?;
+            generator.initialize_distract_like_cpp(owner_is_standing)
+        };
+        let (from, spline) = self.begin_facing_spline_like_cpp(orientation)?;
+        Some((action, from, spline))
+    }
+
+    pub fn tick_rotate_movement_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> Option<(RotateMovementUpdate, MoveSpline)> {
+        let update = {
+            let current_orientation = self.position().orientation;
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Rotate)?;
+            generator.update_rotate_like_cpp(true, diff_ms, current_orientation)
+        };
+        let (_, spline) = self.begin_facing_spline_like_cpp(update.facing_angle?)?;
+        Some((update, spline))
     }
 
     pub fn update_move_spline_like_cpp(&mut self) -> bool {
@@ -1617,6 +1718,96 @@ mod tests {
         assert_eq!(generator.kind, MovementGeneratorKind::Point);
         assert_eq!(generator.movement_id, EVENT_CHARGE_PREPATH);
         assert_eq!(generator.base_unit_state, UnitState::CHARGING.bits());
+    }
+
+    #[test]
+    fn world_creature_begin_distract_and_rotate_launch_facing_splines_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54325);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+
+        let (action, from, spline) = creature
+            .begin_distract_movement_like_cpp(500, 1.25, false)
+            .expect("distract launches facing spline");
+
+        assert_eq!(
+            action,
+            DistractMovementAction {
+                stand_up: true,
+                launch_facing_spline: true,
+            }
+        );
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert_eq!(
+            spline.facing().kind,
+            wow_movement::MonsterMoveType::FacingAngle
+        );
+        assert!((spline.facing().angle - 1.25).abs() < 0.0001);
+        assert!(spline.spline_is_facing_only);
+        assert_eq!(creature.spline_id(), spline.id());
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Distract);
+        assert!(generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INITIALIZED));
+
+        creature
+            .creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .clear_active();
+        assert!(
+            creature
+                .creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .move_rotate_like_cpp(8, 1_000, wow_entities::RotateDirection::Left)
+        );
+        let (update, spline) = creature
+            .tick_rotate_movement_like_cpp(250)
+            .expect("rotate tick launches facing spline");
+        assert!(update.keep_running);
+        assert!(
+            update
+                .facing_angle
+                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+        );
+        assert_eq!(
+            spline.facing().kind,
+            wow_movement::MonsterMoveType::FacingAngle
+        );
+        assert!(
+            (spline.facing().angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001,
+            "facing angle was {}",
+            spline.facing().angle
+        );
+        assert!(spline.spline_is_facing_only);
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Rotate);
+        assert_eq!(generator.duration_ms, Some(750));
     }
 
     #[test]
