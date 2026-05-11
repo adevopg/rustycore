@@ -517,7 +517,7 @@ pub struct DungeonScoreSummaryValuesUpdate {
     pub runs: Vec<DungeonScoreMapSummaryValuesUpdate>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkillInfoValuesUpdate {
     pub skill_info_mask: [u32; 57],
     pub skill_line_id: [u16; 256],
@@ -685,7 +685,7 @@ pub struct PerksVendorItemValuesUpdate {
     pub disabled: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActivePlayerDataValuesUpdate {
     pub active_player_data_mask: [u32; 48],
     pub sort_bags_right_to_left: bool,
@@ -1019,6 +1019,7 @@ pub struct PlayerDataValuesDeltaUpdate {
     pub changed_object_type_mask: u32,
     pub object_data: Option<ObjectDataValuesUpdate>,
     pub unit_data: Option<UnitDataValuesDeltaUpdate>,
+    pub active_player_data: Option<ActivePlayerDataValuesUpdate>,
     pub player_data_mask: [u32; 4],
     pub customizations: Vec<ChrCustomizationChoiceValuesUpdate>,
     pub customizations_update_mask: Option<Vec<u32>>,
@@ -1067,6 +1068,7 @@ impl Default for PlayerDataValuesDeltaUpdate {
             changed_object_type_mask: VALUES_TYPE_PLAYER,
             object_data: None,
             unit_data: None,
+            active_player_data: None,
             player_data_mask: [0; 4],
             customizations: Vec::new(),
             customizations_update_mask: None,
@@ -5731,6 +5733,12 @@ fn write_full_player_values_update_block(
         write_player_data_values_update_section(&mut val_buf, data);
     }
 
+    if data.changed_object_type_mask & VALUES_TYPE_ACTIVE_PLAYER != 0 {
+        if let Some(active_player_data) = &data.active_player_data {
+            write_active_player_data_values_update_section(&mut val_buf, active_player_data);
+        }
+    }
+
     let val_data = val_buf.into_data();
     buf.write_uint32(val_data.len() as u32);
     buf.write_bytes(&val_data);
@@ -8087,6 +8095,48 @@ mod tests {
         assert_eq!(u16::from_le_bytes(bytes[21..23].try_into().unwrap()), 2);
         assert_eq!(u16::from_le_bytes(bytes[23..25].try_into().unwrap()), 3);
         assert_eq!(bytes.len(), 25);
+    }
+
+    #[test]
+    fn full_player_values_update_block_can_append_active_player_section_like_cpp() {
+        let mut active_data = ActivePlayerDataValuesUpdate {
+            coinage: 1234,
+            ..Default::default()
+        };
+        set_active_player_bit(&mut active_data, 0);
+        set_active_player_bit(&mut active_data, 28);
+
+        let mut data = PlayerDataValuesDeltaUpdate {
+            changed_object_type_mask: VALUES_TYPE_PLAYER | VALUES_TYPE_ACTIVE_PLAYER,
+            active_player_data: Some(active_data),
+            ..Default::default()
+        };
+        data.player_data_mask[1] = (1 << 29) | (1 << 30);
+        data.visible_items[0] = VisibleItemValuesUpdate {
+            visible_item_mask: 0x0F,
+            item_id: 19019,
+            appearance_mod_id: 2,
+            item_visual: 3,
+        };
+
+        let mut block = WorldPacket::new_empty();
+        write_full_player_values_update_block(&mut block, &ObjectGuid::EMPTY, &data);
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_PLAYER | VALUES_TYPE_ACTIVE_PLAYER
+        );
+        assert_eq!(&bytes[11..16], &[0x26, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(bytes[16], 0xF0);
+        assert_eq!(i32::from_le_bytes(bytes[17..21].try_into().unwrap()), 19019);
+        assert_eq!(&bytes[25..29], &[0x01, 0x00, 0x00, 0x00]);
+        assert_eq!(&bytes[29..31], &[0x00, 0x00]);
+        assert_eq!(&bytes[31..35], &[0x10, 0x00, 0x00, 0x01]);
+        assert_eq!(u64::from_le_bytes(bytes[35..43].try_into().unwrap()), 1234);
+        assert_eq!(bytes.len(), 43);
     }
 
     #[test]
