@@ -82,6 +82,17 @@ pub struct DynamicObjectDataValuesUpdate {
     pub cast_time_ms: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneObjectDataValuesUpdate {
+    pub changed_object_type_mask: u32,
+    pub object_data: Option<ObjectDataValuesUpdate>,
+    pub scene_object_data_mask: u32,
+    pub script_package_id: i32,
+    pub rnd_seed_val: u32,
+    pub created_by: ObjectGuid,
+    pub scene_type: u32,
+}
+
 // ── ItemCreateData ──────────────────────────────────────────────────
 
 /// Data needed to build an Item CREATE_OBJECT block for the client.
@@ -1498,6 +1509,11 @@ pub enum UpdateBlock {
         guid: ObjectGuid,
         data: DynamicObjectDataValuesUpdate,
     },
+    /// VALUES update for SceneObjectData.
+    SceneObjectValuesUpdate {
+        guid: ObjectGuid,
+        data: SceneObjectDataValuesUpdate,
+    },
     /// Out-of-range destroy (removes object from client view without full destroy).
     DestroyOutOfRange { guid: ObjectGuid },
 }
@@ -1791,6 +1807,21 @@ impl UpdateObject {
         }
     }
 
+    /// Create a VALUES update for `UF::SceneObjectData`.
+    pub fn scene_object_values_update(
+        guid: ObjectGuid,
+        map_id: u16,
+        data: SceneObjectDataValuesUpdate,
+    ) -> Self {
+        Self {
+            map_id,
+            num_updates: 1,
+            destroy_guids: Vec::new(),
+            out_of_range_guids: Vec::new(),
+            blocks: vec![UpdateBlock::SceneObjectValuesUpdate { guid, data }],
+        }
+    }
+
     /// Create an UpdateObject with item CREATE blocks.
     ///
     /// Each item gets its own block. Sent BEFORE the player CREATE packet
@@ -1926,6 +1957,9 @@ impl ServerPacket for UpdateObject {
                 }
                 UpdateBlock::DynamicObjectValuesUpdate { guid, data } => {
                     write_dynamic_object_values_update_block(&mut blocks_buf, guid, *data);
+                }
+                UpdateBlock::SceneObjectValuesUpdate { guid, data } => {
+                    write_scene_object_values_update_block(&mut blocks_buf, guid, *data);
                 }
                 UpdateBlock::DestroyOutOfRange { .. } => {
                     // Handled via destroy_guids / out_of_range_guids, not as a block.
@@ -2485,6 +2519,7 @@ fn write_object_values_update_block(
 
 const VALUES_TYPE_OBJECT: u32 = 1 << 0;
 const VALUES_TYPE_DYNAMIC_OBJECT: u32 = 1 << 9;
+const VALUES_TYPE_SCENE_OBJECT: u32 = 1 << 12;
 
 fn write_object_data_values_update_section(buf: &mut WorldPacket, data: ObjectDataValuesUpdate) {
     let mask = data.object_data_mask & 0x0F;
@@ -2555,6 +2590,60 @@ fn write_dynamic_object_values_update_block(
             }
             if mask & 0x40 != 0 {
                 val_buf.write_uint32(data.cast_time_ms);
+            }
+        }
+    }
+
+    let val_data = val_buf.into_data();
+    buf.write_uint32(val_data.len() as u32);
+    buf.write_bytes(&val_data);
+}
+
+fn write_scene_object_values_update_block(
+    buf: &mut WorldPacket,
+    guid: &ObjectGuid,
+    data: SceneObjectDataValuesUpdate,
+) {
+    buf.write_uint8(UpdateType::Values as u8);
+    buf.write_packed_guid(guid);
+
+    let mut val_buf = WorldPacket::new_empty();
+    val_buf.write_uint32(data.changed_object_type_mask);
+
+    if data.changed_object_type_mask & VALUES_TYPE_OBJECT != 0 {
+        if let Some(object_data) = data.object_data {
+            write_object_data_values_update_section(&mut val_buf, object_data);
+        } else {
+            write_object_data_values_update_section(
+                &mut val_buf,
+                ObjectDataValuesUpdate {
+                    changed_object_type_mask: VALUES_TYPE_OBJECT,
+                    object_data_mask: 0,
+                    entry_id: 0,
+                    dynamic_flags: 0,
+                    scale: 0.0,
+                },
+            );
+        }
+    }
+
+    if data.changed_object_type_mask & VALUES_TYPE_SCENE_OBJECT != 0 {
+        let mask = data.scene_object_data_mask & 0x1F;
+        val_buf.write_bits(mask, 5);
+        val_buf.flush_bits();
+
+        if mask & 0x01 != 0 {
+            if mask & 0x02 != 0 {
+                val_buf.write_int32(data.script_package_id);
+            }
+            if mask & 0x04 != 0 {
+                val_buf.write_uint32(data.rnd_seed_val);
+            }
+            if mask & 0x08 != 0 {
+                val_buf.write_packed_guid(&data.created_by);
+            }
+            if mask & 0x10 != 0 {
+                val_buf.write_uint32(data.scene_type);
             }
         }
     }
@@ -3297,6 +3386,42 @@ mod tests {
             123_456
         );
         assert_eq!(bytes.len(), 31);
+    }
+
+    #[test]
+    fn scene_object_values_update_block_matches_cpp_sceneobjectdata_delta_shape() {
+        let mut block = WorldPacket::new_empty();
+        write_scene_object_values_update_block(
+            &mut block,
+            &ObjectGuid::EMPTY,
+            SceneObjectDataValuesUpdate {
+                changed_object_type_mask: VALUES_TYPE_SCENE_OBJECT,
+                object_data: None,
+                scene_object_data_mask: 0b1_1111,
+                script_package_id: 77,
+                rnd_seed_val: 0xAABB_CCDD,
+                created_by: ObjectGuid::EMPTY,
+                scene_type: 1,
+            },
+        );
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 19);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_SCENE_OBJECT
+        );
+        assert_eq!(bytes[11], 0b1111_1000);
+        assert_eq!(i32::from_le_bytes(bytes[12..16].try_into().unwrap()), 77);
+        assert_eq!(
+            u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+            0xAABB_CCDD
+        );
+        assert_eq!(&bytes[20..22], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[22..26].try_into().unwrap()), 1);
+        assert_eq!(bytes.len(), 26);
     }
 
     #[test]
