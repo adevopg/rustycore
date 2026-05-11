@@ -1265,6 +1265,12 @@ impl InstanceScriptBase {
         self.bosses.get(boss_id as usize)
     }
 
+    pub fn is_encounter_in_progress_like_cpp(&self) -> bool {
+        self.bosses
+            .iter()
+            .any(|boss| boss.state == EncounterState::InProgress)
+    }
+
     pub fn boss_state(&self, boss_id: u32) -> EncounterState {
         self.boss(boss_id)
             .map(|boss| boss.state)
@@ -1430,6 +1436,38 @@ impl InstanceScriptBase {
             .dungeon_encounter_for_difficulty(store, self.difficulty_id)
     }
 
+    pub fn is_encounter_completed_like_cpp(
+        &self,
+        store: &DungeonEncounterStore,
+        dungeon_encounter_id: u32,
+    ) -> bool {
+        self.bosses.iter().any(|boss| {
+            boss.dungeon_encounters
+                .iter()
+                .flatten()
+                .filter_map(|encounter_id| store.get(*encounter_id))
+                .any(|encounter| encounter.id == dungeon_encounter_id)
+                && boss.state == EncounterState::Done
+        })
+    }
+
+    pub fn is_encounter_completed_in_mask_by_boss_id_like_cpp(
+        &self,
+        store: &DungeonEncounterStore,
+        completed_encounters_mask: u32,
+        boss_id: u32,
+    ) -> bool {
+        let Some(encounter) = self.boss_dungeon_encounter(store, boss_id) else {
+            return false;
+        };
+        let Ok(bit) = u32::try_from(encounter.bit) else {
+            return false;
+        };
+
+        (completed_encounters_mask & (1u32 << bit)) != 0
+            && self.boss_state(boss_id) == EncounterState::Done
+    }
+
     /// C++ `InstanceScript::GetBossDungeonEncounter(Creature const*)` after
     /// the `dynamic_cast<BossAI const*>` succeeds.
     pub fn boss_dungeon_encounter_for_boss_ai<'a, T: BossAiLikeCpp>(
@@ -1451,12 +1489,16 @@ mod tests {
     }
 
     fn encounter(id: u32, difficulty_id: i32) -> DungeonEncounterEntry {
+        encounter_with_bit(id, difficulty_id, 0)
+    }
+
+    fn encounter_with_bit(id: u32, difficulty_id: i32, bit: i8) -> DungeonEncounterEntry {
         DungeonEncounterEntry {
             id,
             map_id: 631,
             difficulty_id,
             order_index: 0,
-            bit: 0,
+            bit,
             flags: 0,
             faction: -1,
         }
@@ -2387,6 +2429,49 @@ mod tests {
                 .unwrap_err(),
             InstanceScriptDataLoadError::AdditionalDataUnexpectedValueType
         );
+    }
+
+    #[test]
+    fn instance_script_encounter_progress_helpers_match_cpp() {
+        let mut script = InstanceScriptBase::new(4, 2);
+
+        assert!(!script.is_encounter_in_progress_like_cpp());
+        script.set_boss_state_like_cpp(1, EncounterState::InProgress);
+        assert!(script.is_encounter_in_progress_like_cpp());
+        script.set_boss_state_like_cpp(1, EncounterState::Done);
+        assert!(!script.is_encounter_in_progress_like_cpp());
+    }
+
+    #[test]
+    fn instance_script_encounter_completed_by_dungeon_encounter_id_matches_cpp() {
+        let store = DungeonEncounterStore::from_entries([
+            encounter_with_bit(10, 4, 1),
+            encounter_with_bit(20, 4, 2),
+        ]);
+        let mut script = InstanceScriptBase::new(4, 2);
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+        script.load_dungeon_encounter_data(&store, 1, [20, 0, 0, 0]);
+
+        assert!(!script.is_encounter_completed_like_cpp(&store, 10));
+        script.set_boss_state_like_cpp(0, EncounterState::Done);
+        assert!(script.is_encounter_completed_like_cpp(&store, 10));
+        assert!(!script.is_encounter_completed_like_cpp(&store, 20));
+        assert!(!script.is_encounter_completed_like_cpp(&store, 99));
+    }
+
+    #[test]
+    fn instance_script_encounter_completed_mask_by_boss_id_matches_cpp() {
+        let store = DungeonEncounterStore::from_entries([encounter_with_bit(10, 4, 3)]);
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+
+        script.set_boss_state_like_cpp(0, EncounterState::InProgress);
+        assert!(!script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 3, 0));
+
+        script.set_boss_state_like_cpp(0, EncounterState::Done);
+        assert!(script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 3, 0));
+        assert!(!script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 2, 0));
+        assert!(!script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 3, 99));
     }
 
     #[test]
