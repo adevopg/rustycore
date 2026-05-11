@@ -312,6 +312,299 @@ pub struct ContainerDataValuesUpdate {
     pub slots: [ObjectGuid; 36],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassiveSpellHistoryValuesUpdate {
+    pub spell_id: i32,
+    pub aura_spell_id: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UnitChannelValuesUpdate {
+    pub spell_id: i32,
+    pub spell_visual_id: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VisibleItemValuesUpdate {
+    pub visible_item_mask: u32,
+    pub item_id: i32,
+    pub appearance_mod_id: u16,
+    pub item_visual: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitDataValuesDeltaUpdate {
+    pub changed_object_type_mask: u32,
+    pub object_data: Option<ObjectDataValuesUpdate>,
+    pub unit_data_mask: [u32; 8],
+    pub state_world_effect_ids: Vec<u32>,
+    pub passive_spells: Vec<PassiveSpellHistoryValuesUpdate>,
+    pub passive_spells_update_mask: Option<Vec<u32>>,
+    pub world_effects: Vec<i32>,
+    pub world_effects_update_mask: Option<Vec<u32>>,
+    pub channel_objects: Vec<ObjectGuid>,
+    pub channel_objects_update_mask: Option<Vec<u32>>,
+    pub health: i64,
+    pub max_health: i64,
+    pub display_id: i32,
+    pub state_spell_visual_id: u32,
+    pub state_anim_id: u32,
+    pub state_anim_kit_id: u32,
+    pub charm: ObjectGuid,
+    pub summon: ObjectGuid,
+    pub critter: ObjectGuid,
+    pub charmed_by: ObjectGuid,
+    pub summoned_by: ObjectGuid,
+    pub created_by: ObjectGuid,
+    pub demon_creator: ObjectGuid,
+    pub look_at_controller_target: ObjectGuid,
+    pub target: ObjectGuid,
+    pub battle_pet_companion_guid: ObjectGuid,
+    pub battle_pet_db_id: u64,
+    pub channel_data: UnitChannelValuesUpdate,
+    pub summoned_by_home_realm: u32,
+    pub race: u8,
+    pub class_id: u8,
+    pub player_class_id: u8,
+    pub sex: u8,
+    pub display_power: u8,
+    pub override_display_power_id: u32,
+    pub level: i32,
+    pub effective_level: i32,
+    pub content_tuning_id: i32,
+    pub scaling_level_min: i32,
+    pub scaling_level_max: i32,
+    pub scaling_level_delta: i32,
+    pub scaling_faction_group: i32,
+    pub scaling_health_item_level_curve_id: i32,
+    pub scaling_damage_item_level_curve_id: i32,
+    pub faction_template: i32,
+    pub flags: u32,
+    pub flags2: u32,
+    pub flags3: u32,
+    pub aura_state: u32,
+    pub ranged_attack_round_base_time: u32,
+    pub bounding_radius: f32,
+    pub combat_reach: f32,
+    pub display_scale: f32,
+    pub native_display_id: i32,
+    pub native_display_scale: f32,
+    pub mount_display_id: i32,
+    pub min_damage: f32,
+    pub max_damage: f32,
+    pub min_off_hand_damage: f32,
+    pub max_off_hand_damage: f32,
+    pub stand_state: u8,
+    pub pet_talent_points: u8,
+    pub vis_flags: u8,
+    pub anim_tier: u8,
+    pub pet_number: u32,
+    pub pet_name_timestamp: u32,
+    pub pet_experience: u32,
+    pub pet_next_level_experience: u32,
+    pub mod_casting_speed: f32,
+    pub mod_spell_haste: f32,
+    pub mod_haste: f32,
+    pub mod_ranged_haste: f32,
+    pub mod_haste_regen: f32,
+    pub mod_time_rate: f32,
+    pub created_by_spell: i32,
+    pub emote_state: i32,
+    pub training_points_used: i16,
+    pub training_points_total: i16,
+    pub base_mana: i32,
+    pub base_health: i32,
+    pub sheathe_state: u8,
+    pub pvp_flags: u8,
+    pub pet_flags: u8,
+    pub shapeshift_form: u8,
+    pub attack_power: i32,
+    pub attack_power_mod_pos: i32,
+    pub attack_power_mod_neg: i32,
+    pub attack_power_multiplier: f32,
+    pub ranged_attack_power: i32,
+    pub ranged_attack_power_mod_pos: i32,
+    pub ranged_attack_power_mod_neg: i32,
+    pub ranged_attack_power_multiplier: f32,
+    pub set_attack_speed_aura: i32,
+    pub lifesteal: f32,
+    pub min_ranged_damage: f32,
+    pub max_ranged_damage: f32,
+    pub max_health_modifier: f32,
+    pub hover_height: f32,
+    pub min_item_level_cutoff: i32,
+    pub min_item_level: i32,
+    pub max_item_level: i32,
+    pub wild_battle_pet_level: i32,
+    pub battle_pet_companion_name_timestamp: u32,
+    pub interact_spell_id: i32,
+    pub scale_duration: i32,
+    pub looks_like_mount_id: i32,
+    pub looks_like_creature_id: i32,
+    pub look_at_controller_id: i32,
+    pub perks_vendor_item_id: i32,
+    pub guild_guid: ObjectGuid,
+    pub skinning_owner_guid: ObjectGuid,
+    pub flight_capability_id: i32,
+    pub glide_event_speed_divisor: f32,
+    pub current_area_id: u32,
+    pub combo_target: ObjectGuid,
+    pub npc_flags: [u32; 2],
+    pub power_regen_flat_modifier: [f32; 10],
+    pub power_regen_interrupted_flat_modifier: [f32; 10],
+    pub power: [i32; 10],
+    pub max_power: [i32; 10],
+    pub mod_power_regen: [f32; 10],
+    pub virtual_items: [VisibleItemValuesUpdate; 3],
+    pub attack_round_base_time: [u32; 2],
+    pub stats: [i32; 5],
+    pub stat_pos_buff: [i32; 5],
+    pub stat_neg_buff: [i32; 5],
+    pub resistances: [i32; 7],
+    pub power_cost_modifier: [i32; 7],
+    pub power_cost_multiplier: [f32; 7],
+    pub resistance_buff_mods_positive: [i32; 7],
+    pub resistance_buff_mods_negative: [i32; 7],
+}
+
+impl Default for UnitDataValuesDeltaUpdate {
+    fn default() -> Self {
+        Self {
+            changed_object_type_mask: VALUES_TYPE_UNIT,
+            object_data: None,
+            unit_data_mask: [0; 8],
+            state_world_effect_ids: Vec::new(),
+            passive_spells: Vec::new(),
+            passive_spells_update_mask: None,
+            world_effects: Vec::new(),
+            world_effects_update_mask: None,
+            channel_objects: Vec::new(),
+            channel_objects_update_mask: None,
+            health: 0,
+            max_health: 0,
+            display_id: 0,
+            state_spell_visual_id: 0,
+            state_anim_id: 0,
+            state_anim_kit_id: 0,
+            charm: ObjectGuid::EMPTY,
+            summon: ObjectGuid::EMPTY,
+            critter: ObjectGuid::EMPTY,
+            charmed_by: ObjectGuid::EMPTY,
+            summoned_by: ObjectGuid::EMPTY,
+            created_by: ObjectGuid::EMPTY,
+            demon_creator: ObjectGuid::EMPTY,
+            look_at_controller_target: ObjectGuid::EMPTY,
+            target: ObjectGuid::EMPTY,
+            battle_pet_companion_guid: ObjectGuid::EMPTY,
+            battle_pet_db_id: 0,
+            channel_data: UnitChannelValuesUpdate::default(),
+            summoned_by_home_realm: 0,
+            race: 0,
+            class_id: 0,
+            player_class_id: 0,
+            sex: 0,
+            display_power: 0,
+            override_display_power_id: 0,
+            level: 0,
+            effective_level: 0,
+            content_tuning_id: 0,
+            scaling_level_min: 0,
+            scaling_level_max: 0,
+            scaling_level_delta: 0,
+            scaling_faction_group: 0,
+            scaling_health_item_level_curve_id: 0,
+            scaling_damage_item_level_curve_id: 0,
+            faction_template: 0,
+            flags: 0,
+            flags2: 0,
+            flags3: 0,
+            aura_state: 0,
+            ranged_attack_round_base_time: 0,
+            bounding_radius: 0.0,
+            combat_reach: 0.0,
+            display_scale: 0.0,
+            native_display_id: 0,
+            native_display_scale: 0.0,
+            mount_display_id: 0,
+            min_damage: 0.0,
+            max_damage: 0.0,
+            min_off_hand_damage: 0.0,
+            max_off_hand_damage: 0.0,
+            stand_state: 0,
+            pet_talent_points: 0,
+            vis_flags: 0,
+            anim_tier: 0,
+            pet_number: 0,
+            pet_name_timestamp: 0,
+            pet_experience: 0,
+            pet_next_level_experience: 0,
+            mod_casting_speed: 0.0,
+            mod_spell_haste: 0.0,
+            mod_haste: 0.0,
+            mod_ranged_haste: 0.0,
+            mod_haste_regen: 0.0,
+            mod_time_rate: 0.0,
+            created_by_spell: 0,
+            emote_state: 0,
+            training_points_used: 0,
+            training_points_total: 0,
+            base_mana: 0,
+            base_health: 0,
+            sheathe_state: 0,
+            pvp_flags: 0,
+            pet_flags: 0,
+            shapeshift_form: 0,
+            attack_power: 0,
+            attack_power_mod_pos: 0,
+            attack_power_mod_neg: 0,
+            attack_power_multiplier: 0.0,
+            ranged_attack_power: 0,
+            ranged_attack_power_mod_pos: 0,
+            ranged_attack_power_mod_neg: 0,
+            ranged_attack_power_multiplier: 0.0,
+            set_attack_speed_aura: 0,
+            lifesteal: 0.0,
+            min_ranged_damage: 0.0,
+            max_ranged_damage: 0.0,
+            max_health_modifier: 0.0,
+            hover_height: 0.0,
+            min_item_level_cutoff: 0,
+            min_item_level: 0,
+            max_item_level: 0,
+            wild_battle_pet_level: 0,
+            battle_pet_companion_name_timestamp: 0,
+            interact_spell_id: 0,
+            scale_duration: 0,
+            looks_like_mount_id: 0,
+            looks_like_creature_id: 0,
+            look_at_controller_id: 0,
+            perks_vendor_item_id: 0,
+            guild_guid: ObjectGuid::EMPTY,
+            skinning_owner_guid: ObjectGuid::EMPTY,
+            flight_capability_id: 0,
+            glide_event_speed_divisor: 0.0,
+            current_area_id: 0,
+            combo_target: ObjectGuid::EMPTY,
+            npc_flags: [0; 2],
+            power_regen_flat_modifier: [0.0; 10],
+            power_regen_interrupted_flat_modifier: [0.0; 10],
+            power: [0; 10],
+            max_power: [0; 10],
+            mod_power_regen: [0.0; 10],
+            virtual_items: [VisibleItemValuesUpdate::default(); 3],
+            attack_round_base_time: [0; 2],
+            stats: [0; 5],
+            stat_pos_buff: [0; 5],
+            stat_neg_buff: [0; 5],
+            resistances: [0; 7],
+            power_cost_modifier: [0; 7],
+            power_cost_multiplier: [0.0; 7],
+            resistance_buff_mods_positive: [0; 7],
+            resistance_buff_mods_negative: [0; 7],
+        }
+    }
+}
+
 // ── ItemCreateData ──────────────────────────────────────────────────
 
 /// Data needed to build an Item CREATE_OBJECT block for the client.
@@ -1758,6 +2051,11 @@ pub enum UpdateBlock {
         guid: ObjectGuid,
         data: ItemDataValuesDeltaUpdate,
     },
+    /// VALUES update for UnitData.
+    UnitValuesUpdate {
+        guid: ObjectGuid,
+        data: UnitDataValuesDeltaUpdate,
+    },
     /// VALUES update for ContainerData, optionally including ItemData.
     ContainerValuesUpdate {
         guid: ObjectGuid,
@@ -2146,6 +2444,21 @@ impl UpdateObject {
         }
     }
 
+    /// Create a full VALUES update for `UF::UnitData`.
+    pub fn unit_values_update(
+        guid: ObjectGuid,
+        map_id: u16,
+        data: UnitDataValuesDeltaUpdate,
+    ) -> Self {
+        Self {
+            map_id,
+            num_updates: 1,
+            destroy_guids: Vec::new(),
+            out_of_range_guids: Vec::new(),
+            blocks: vec![UpdateBlock::UnitValuesUpdate { guid, data }],
+        }
+    }
+
     /// Create a VALUES update for `UF::ContainerData`, with optional `ItemData`.
     pub fn container_values_update(
         guid: ObjectGuid,
@@ -2314,6 +2627,9 @@ impl ServerPacket for UpdateObject {
                 }
                 UpdateBlock::FullItemValuesUpdate { guid, data } => {
                     write_full_item_values_update_block(&mut blocks_buf, guid, data);
+                }
+                UpdateBlock::UnitValuesUpdate { guid, data } => {
+                    write_full_unit_values_update_block(&mut blocks_buf, guid, data);
                 }
                 UpdateBlock::ContainerValuesUpdate { guid, data } => {
                     write_container_values_update_block(&mut blocks_buf, guid, data);
@@ -2877,6 +3193,7 @@ fn write_object_values_update_block(
 const VALUES_TYPE_OBJECT: u32 = 1 << 0;
 const VALUES_TYPE_ITEM: u32 = 1 << 1;
 const VALUES_TYPE_CONTAINER: u32 = 1 << 2;
+const VALUES_TYPE_UNIT: u32 = 1 << 5;
 const VALUES_TYPE_GAME_OBJECT: u32 = 1 << 8;
 const VALUES_TYPE_DYNAMIC_OBJECT: u32 = 1 << 9;
 const VALUES_TYPE_CORPSE: u32 = 1 << 10;
@@ -3588,6 +3905,26 @@ fn write_update_field_blocks_mask(buf: &mut WorldPacket, mask: u64, block_count:
     }
 }
 
+fn write_update_field_blocks_mask_u32(
+    buf: &mut WorldPacket,
+    blocks: &[u32],
+    block_count_bits: u32,
+) {
+    let mut blocks_mask = 0u32;
+    for (block, value) in blocks.iter().enumerate() {
+        if *value != 0 {
+            blocks_mask |= 1 << block;
+        }
+    }
+
+    buf.write_bits(blocks_mask, block_count_bits);
+    for value in blocks {
+        if *value != 0 {
+            buf.write_bits(*value, 32);
+        }
+    }
+}
+
 fn field_mask_has(mask: u64, bit: usize) -> bool {
     mask & (1u64 << bit) != 0
 }
@@ -3888,6 +4225,499 @@ fn write_container_values_update_block(
 
     if data.changed_object_type_mask & VALUES_TYPE_CONTAINER != 0 {
         write_container_data_values_update_section(&mut val_buf, data);
+    }
+
+    let val_data = val_buf.into_data();
+    buf.write_uint32(val_data.len() as u32);
+    buf.write_bytes(&val_data);
+}
+
+fn unit_mask_has(data: &UnitDataValuesDeltaUpdate, bit: usize) -> bool {
+    let block = bit / 32;
+    let offset = bit % 32;
+    data.unit_data_mask.get(block).copied().unwrap_or(0) & (1 << offset) != 0
+}
+
+fn write_passive_spell_history_values_update(
+    buf: &mut WorldPacket,
+    data: &PassiveSpellHistoryValuesUpdate,
+) {
+    buf.write_int32(data.spell_id);
+    buf.write_int32(data.aura_spell_id);
+}
+
+fn write_unit_channel_values_update(buf: &mut WorldPacket, data: &UnitChannelValuesUpdate) {
+    buf.write_int32(data.spell_id);
+    buf.write_int32(data.spell_visual_id);
+}
+
+fn write_visible_item_values_update(buf: &mut WorldPacket, data: &VisibleItemValuesUpdate) {
+    let mask = data.visible_item_mask & 0x0F;
+    buf.write_bits(mask, 4);
+    buf.flush_bits();
+
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            buf.write_int32(data.item_id);
+        }
+        if mask & 0x04 != 0 {
+            buf.write_uint16(data.appearance_mod_id);
+        }
+        if mask & 0x08 != 0 {
+            buf.write_uint16(data.item_visual);
+        }
+    }
+}
+
+fn write_unit_data_values_update_section(buf: &mut WorldPacket, data: &UnitDataValuesDeltaUpdate) {
+    write_update_field_blocks_mask_u32(buf, &data.unit_data_mask, 8);
+
+    if unit_mask_has(data, 0) && unit_mask_has(data, 1) {
+        buf.write_bits(data.state_world_effect_ids.len() as u32, 32);
+        for effect_id in &data.state_world_effect_ids {
+            buf.write_uint32(*effect_id);
+        }
+    }
+    buf.flush_bits();
+
+    if unit_mask_has(data, 0) {
+        if unit_mask_has(data, 2) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.passive_spells.len(),
+                data.passive_spells_update_mask.as_deref(),
+            );
+        }
+        if unit_mask_has(data, 3) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.world_effects.len(),
+                data.world_effects_update_mask.as_deref(),
+            );
+        }
+        if unit_mask_has(data, 4) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.channel_objects.len(),
+                data.channel_objects_update_mask.as_deref(),
+            );
+        }
+    }
+    buf.flush_bits();
+
+    if unit_mask_has(data, 0) {
+        if unit_mask_has(data, 2) {
+            for (index, spell) in data.passive_spells.iter().enumerate() {
+                if dynamic_mask_has_index(data.passive_spells_update_mask.as_deref(), index) {
+                    write_passive_spell_history_values_update(buf, spell);
+                }
+            }
+        }
+        if unit_mask_has(data, 3) {
+            write_changed_i32_dynamic_values(
+                buf,
+                &data.world_effects,
+                data.world_effects_update_mask.as_deref(),
+            );
+        }
+        if unit_mask_has(data, 4) {
+            for (index, guid) in data.channel_objects.iter().enumerate() {
+                if dynamic_mask_has_index(data.channel_objects_update_mask.as_deref(), index) {
+                    buf.write_packed_guid(guid);
+                }
+            }
+        }
+        if unit_mask_has(data, 5) {
+            buf.write_int64(data.health);
+        }
+        if unit_mask_has(data, 6) {
+            buf.write_int64(data.max_health);
+        }
+        if unit_mask_has(data, 7) {
+            buf.write_int32(data.display_id);
+        }
+        if unit_mask_has(data, 8) {
+            buf.write_uint32(data.state_spell_visual_id);
+        }
+        if unit_mask_has(data, 9) {
+            buf.write_uint32(data.state_anim_id);
+        }
+        if unit_mask_has(data, 10) {
+            buf.write_uint32(data.state_anim_kit_id);
+        }
+        for (bit, guid) in [
+            (11, &data.charm),
+            (12, &data.summon),
+            (13, &data.critter),
+            (14, &data.charmed_by),
+            (15, &data.summoned_by),
+            (16, &data.created_by),
+            (17, &data.demon_creator),
+            (18, &data.look_at_controller_target),
+            (19, &data.target),
+            (20, &data.battle_pet_companion_guid),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_packed_guid(guid);
+            }
+        }
+        if unit_mask_has(data, 21) {
+            buf.write_uint64(data.battle_pet_db_id);
+        }
+        if unit_mask_has(data, 22) {
+            write_unit_channel_values_update(buf, &data.channel_data);
+        }
+        if unit_mask_has(data, 23) {
+            buf.write_uint32(data.summoned_by_home_realm);
+        }
+        if unit_mask_has(data, 24) {
+            buf.write_uint8(data.race);
+        }
+        if unit_mask_has(data, 25) {
+            buf.write_uint8(data.class_id);
+        }
+        if unit_mask_has(data, 26) {
+            buf.write_uint8(data.player_class_id);
+        }
+        if unit_mask_has(data, 27) {
+            buf.write_uint8(data.sex);
+        }
+        if unit_mask_has(data, 28) {
+            buf.write_uint8(data.display_power);
+        }
+        if unit_mask_has(data, 29) {
+            buf.write_uint32(data.override_display_power_id);
+        }
+        if unit_mask_has(data, 30) {
+            buf.write_int32(data.level);
+        }
+        if unit_mask_has(data, 31) {
+            buf.write_int32(data.effective_level);
+        }
+    }
+
+    if unit_mask_has(data, 32) {
+        for (bit, value) in [
+            (33, data.content_tuning_id),
+            (34, data.scaling_level_min),
+            (35, data.scaling_level_max),
+            (36, data.scaling_level_delta),
+            (37, data.scaling_faction_group),
+            (38, data.scaling_health_item_level_curve_id),
+            (39, data.scaling_damage_item_level_curve_id),
+            (40, data.faction_template),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 41) {
+            buf.write_uint32(data.flags);
+        }
+        if unit_mask_has(data, 42) {
+            buf.write_uint32(data.flags2);
+        }
+        if unit_mask_has(data, 43) {
+            buf.write_uint32(data.flags3);
+        }
+        if unit_mask_has(data, 44) {
+            buf.write_uint32(data.aura_state);
+        }
+        if unit_mask_has(data, 45) {
+            buf.write_uint32(data.ranged_attack_round_base_time);
+        }
+        for (bit, value) in [
+            (46, data.bounding_radius),
+            (47, data.combat_reach),
+            (48, data.display_scale),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_float(value);
+            }
+        }
+        if unit_mask_has(data, 49) {
+            buf.write_int32(data.native_display_id);
+        }
+        if unit_mask_has(data, 50) {
+            buf.write_float(data.native_display_scale);
+        }
+        if unit_mask_has(data, 51) {
+            buf.write_int32(data.mount_display_id);
+        }
+        for (bit, value) in [
+            (52, data.min_damage),
+            (53, data.max_damage),
+            (54, data.min_off_hand_damage),
+            (55, data.max_off_hand_damage),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_float(value);
+            }
+        }
+        for (bit, value) in [
+            (56, data.stand_state),
+            (57, data.pet_talent_points),
+            (58, data.vis_flags),
+            (59, data.anim_tier),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_uint8(value);
+            }
+        }
+        for (bit, value) in [
+            (60, data.pet_number),
+            (61, data.pet_name_timestamp),
+            (62, data.pet_experience),
+            (63, data.pet_next_level_experience),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_uint32(value);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 64) {
+        for (bit, value) in [
+            (65, data.mod_casting_speed),
+            (66, data.mod_spell_haste),
+            (67, data.mod_haste),
+            (68, data.mod_ranged_haste),
+            (69, data.mod_haste_regen),
+            (70, data.mod_time_rate),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_float(value);
+            }
+        }
+        for (bit, value) in [(71, data.created_by_spell), (72, data.emote_state)] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 73) {
+            buf.write_int16(data.training_points_used);
+        }
+        if unit_mask_has(data, 74) {
+            buf.write_int16(data.training_points_total);
+        }
+        if unit_mask_has(data, 75) {
+            buf.write_int32(data.base_mana);
+        }
+        if unit_mask_has(data, 76) {
+            buf.write_int32(data.base_health);
+        }
+        for (bit, value) in [
+            (77, data.sheathe_state),
+            (78, data.pvp_flags),
+            (79, data.pet_flags),
+            (80, data.shapeshift_form),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_uint8(value);
+            }
+        }
+        for (bit, value) in [
+            (81, data.attack_power),
+            (82, data.attack_power_mod_pos),
+            (83, data.attack_power_mod_neg),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 84) {
+            buf.write_float(data.attack_power_multiplier);
+        }
+        for (bit, value) in [
+            (85, data.ranged_attack_power),
+            (86, data.ranged_attack_power_mod_pos),
+            (87, data.ranged_attack_power_mod_neg),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 88) {
+            buf.write_float(data.ranged_attack_power_multiplier);
+        }
+        if unit_mask_has(data, 89) {
+            buf.write_int32(data.set_attack_speed_aura);
+        }
+        for (bit, value) in [
+            (90, data.lifesteal),
+            (91, data.min_ranged_damage),
+            (92, data.max_ranged_damage),
+            (93, data.max_health_modifier),
+            (94, data.hover_height),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_float(value);
+            }
+        }
+        if unit_mask_has(data, 95) {
+            buf.write_int32(data.min_item_level_cutoff);
+        }
+    }
+
+    if unit_mask_has(data, 96) {
+        for (bit, value) in [
+            (97, data.min_item_level),
+            (98, data.max_item_level),
+            (99, data.wild_battle_pet_level),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 100) {
+            buf.write_uint32(data.battle_pet_companion_name_timestamp);
+        }
+        for (bit, value) in [
+            (101, data.interact_spell_id),
+            (102, data.scale_duration),
+            (103, data.looks_like_mount_id),
+            (104, data.looks_like_creature_id),
+            (105, data.look_at_controller_id),
+            (106, data.perks_vendor_item_id),
+        ] {
+            if unit_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if unit_mask_has(data, 107) {
+            buf.write_packed_guid(&data.guild_guid);
+        }
+        if unit_mask_has(data, 108) {
+            buf.write_packed_guid(&data.skinning_owner_guid);
+        }
+        if unit_mask_has(data, 109) {
+            buf.write_int32(data.flight_capability_id);
+        }
+        if unit_mask_has(data, 110) {
+            buf.write_float(data.glide_event_speed_divisor);
+        }
+        if unit_mask_has(data, 111) {
+            buf.write_uint32(data.current_area_id);
+        }
+        if unit_mask_has(data, 112) {
+            buf.write_packed_guid(&data.combo_target);
+        }
+    }
+
+    if unit_mask_has(data, 113) {
+        for i in 0..2 {
+            if unit_mask_has(data, 114 + i) {
+                buf.write_uint32(data.npc_flags[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 116) {
+        for i in 0..10 {
+            if unit_mask_has(data, 117 + i) {
+                buf.write_float(data.power_regen_flat_modifier[i]);
+            }
+            if unit_mask_has(data, 127 + i) {
+                buf.write_float(data.power_regen_interrupted_flat_modifier[i]);
+            }
+            if unit_mask_has(data, 137 + i) {
+                buf.write_int32(data.power[i]);
+            }
+            if unit_mask_has(data, 147 + i) {
+                buf.write_int32(data.max_power[i]);
+            }
+            if unit_mask_has(data, 157 + i) {
+                buf.write_float(data.mod_power_regen[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 167) {
+        for i in 0..3 {
+            if unit_mask_has(data, 168 + i) {
+                write_visible_item_values_update(buf, &data.virtual_items[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 171) {
+        for i in 0..2 {
+            if unit_mask_has(data, 172 + i) {
+                buf.write_uint32(data.attack_round_base_time[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 174) {
+        for i in 0..5 {
+            if unit_mask_has(data, 175 + i) {
+                buf.write_int32(data.stats[i]);
+            }
+            if unit_mask_has(data, 180 + i) {
+                buf.write_int32(data.stat_pos_buff[i]);
+            }
+            if unit_mask_has(data, 185 + i) {
+                buf.write_int32(data.stat_neg_buff[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 190) {
+        for i in 0..7 {
+            if unit_mask_has(data, 191 + i) {
+                buf.write_int32(data.resistances[i]);
+            }
+            if unit_mask_has(data, 198 + i) {
+                buf.write_int32(data.power_cost_modifier[i]);
+            }
+            if unit_mask_has(data, 205 + i) {
+                buf.write_float(data.power_cost_multiplier[i]);
+            }
+        }
+    }
+
+    if unit_mask_has(data, 212) {
+        for i in 0..7 {
+            if unit_mask_has(data, 213 + i) {
+                buf.write_int32(data.resistance_buff_mods_positive[i]);
+            }
+            if unit_mask_has(data, 220 + i) {
+                buf.write_int32(data.resistance_buff_mods_negative[i]);
+            }
+        }
+    }
+}
+
+fn write_full_unit_values_update_block(
+    buf: &mut WorldPacket,
+    guid: &ObjectGuid,
+    data: &UnitDataValuesDeltaUpdate,
+) {
+    buf.write_uint8(UpdateType::Values as u8);
+    buf.write_packed_guid(guid);
+
+    let mut val_buf = WorldPacket::new_empty();
+    val_buf.write_uint32(data.changed_object_type_mask);
+
+    if data.changed_object_type_mask & VALUES_TYPE_OBJECT != 0 {
+        if let Some(object_data) = data.object_data {
+            write_object_data_values_update_section(&mut val_buf, object_data);
+        } else {
+            write_object_data_values_update_section(
+                &mut val_buf,
+                ObjectDataValuesUpdate {
+                    changed_object_type_mask: VALUES_TYPE_OBJECT,
+                    object_data_mask: 0,
+                    entry_id: 0,
+                    dynamic_flags: 0,
+                    scale: 0.0,
+                },
+            );
+        }
+    }
+
+    if data.changed_object_type_mask & VALUES_TYPE_UNIT != 0 {
+        write_unit_data_values_update_section(&mut val_buf, data);
     }
 
     let val_data = val_buf.into_data();
@@ -5012,6 +5842,62 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 16);
         assert_eq!(&bytes[20..22], &[0, 0]);
         assert_eq!(bytes.len(), 22);
+    }
+
+    #[test]
+    fn full_unit_values_update_block_matches_cpp_unitdata_health_delta_shape() {
+        let mut data = UnitDataValuesDeltaUpdate {
+            health: 77,
+            max_health: 99,
+            ..Default::default()
+        };
+        data.unit_data_mask[0] = (1 << 0) | (1 << 5) | (1 << 6);
+
+        let mut block = WorldPacket::new_empty();
+        write_full_unit_values_update_block(&mut block, &ObjectGuid::EMPTY, &data);
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 25);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_UNIT
+        );
+        assert_eq!(&bytes[11..16], &[0x01, 0x00, 0x00, 0x00, 0x61]);
+        assert_eq!(i64::from_le_bytes(bytes[16..24].try_into().unwrap()), 77);
+        assert_eq!(i64::from_le_bytes(bytes[24..32].try_into().unwrap()), 99);
+        assert_eq!(bytes.len(), 32);
+    }
+
+    #[test]
+    fn full_unit_values_update_block_matches_cpp_unitdata_virtual_item_delta_shape() {
+        let mut data = UnitDataValuesDeltaUpdate::default();
+        data.unit_data_mask[5] = (1 << 7) | (1 << 8);
+        data.virtual_items[0] = VisibleItemValuesUpdate {
+            visible_item_mask: 0x0F,
+            item_id: 19019,
+            appearance_mod_id: 2,
+            item_visual: 3,
+        };
+
+        let mut block = WorldPacket::new_empty();
+        write_full_unit_values_update_block(&mut block, &ObjectGuid::EMPTY, &data);
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 18);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_UNIT
+        );
+        assert_eq!(&bytes[11..16], &[0x20, 0x00, 0x00, 0x01, 0x80]);
+        assert_eq!(bytes[16], 0xF0);
+        assert_eq!(i32::from_le_bytes(bytes[17..21].try_into().unwrap()), 19019);
+        assert_eq!(u16::from_le_bytes(bytes[21..23].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(bytes[23..25].try_into().unwrap()), 3);
+        assert_eq!(bytes.len(), 25);
     }
 
     #[test]
