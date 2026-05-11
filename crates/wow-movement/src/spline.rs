@@ -147,6 +147,12 @@ pub struct SpellEffectExtraData {
     pub parabolic_curve_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AnimTierTransition {
+    pub tier_transition_id: u32,
+    pub anim_tier: u8,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoveSplineInitArgs {
     pub path: Vec<Position>,
@@ -161,6 +167,7 @@ pub struct MoveSplineInitArgs {
     pub spline_id: u32,
     pub initial_orientation: f32,
     pub spell_effect_extra: Option<SpellEffectExtraData>,
+    pub anim_tier: Option<AnimTierTransition>,
     pub walk: bool,
     pub has_velocity: bool,
     pub transform_for_transport: bool,
@@ -181,6 +188,7 @@ impl Default for MoveSplineInitArgs {
             spline_id: 0,
             initial_orientation: 0.0,
             spell_effect_extra: None,
+            anim_tier: None,
             walk: false,
             has_velocity: false,
             transform_for_transport: true,
@@ -277,6 +285,27 @@ impl SplineData {
     fn current_destination(&self, point_idx: i32) -> Option<Position> {
         (!self.is_empty()).then(|| self.point(point_idx + 1))
     }
+
+    fn compute_index_in_bounds(&self, length: i32) -> i32 {
+        let mut index = self.first;
+        while index + 1 < self.last && self.lengths[(index + 1) as usize] < length {
+            index += 1;
+        }
+        index
+    }
+
+    fn compute_index_percent(&self, t: f32) -> (i32, f32) {
+        debug_assert!((0.0..=1.0).contains(&t));
+        let length = (t * self.duration() as f32) as i32;
+        let index = self.compute_index_in_bounds(length);
+        let segment_duration = self.segment_duration(index);
+        let u = if segment_duration > 0 {
+            (length - self.lengths[index as usize]) as f32 / segment_duration as f32
+        } else {
+            1.0
+        };
+        (index, u)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -293,6 +322,7 @@ pub struct MoveSpline {
     point_idx_offset: i32,
     velocity: f32,
     spell_effect_extra: Option<SpellEffectExtraData>,
+    anim_tier: Option<AnimTierTransition>,
     pub on_transport: bool,
     pub spline_is_facing_only: bool,
 }
@@ -312,6 +342,7 @@ impl Default for MoveSpline {
             point_idx_offset: 0,
             velocity: 0.0,
             spell_effect_extra: None,
+            anim_tier: None,
             on_transport: false,
             spline_is_facing_only: false,
         }
@@ -341,6 +372,7 @@ impl MoveSpline {
             && args.facing.kind != MonsterMoveType::Normal
             && distance_3d(args.path[0], args.path[1]) < 0.1;
         self.velocity = args.velocity;
+        self.anim_tier = args.anim_tier;
 
         if args.flags.contains(MoveSplineFlag::DONE) {
             self.spline = SplineData::default();
@@ -410,6 +442,26 @@ impl MoveSpline {
     #[must_use]
     pub const fn velocity(&self) -> f32 {
         self.velocity
+    }
+
+    #[must_use]
+    pub const fn effect_start_time_ms(&self) -> i32 {
+        self.effect_start_time_ms
+    }
+
+    #[must_use]
+    pub const fn vertical_acceleration(&self) -> f32 {
+        self.vertical_acceleration
+    }
+
+    #[must_use]
+    pub const fn spell_effect_extra(&self) -> Option<SpellEffectExtraData> {
+        self.spell_effect_extra
+    }
+
+    #[must_use]
+    pub const fn anim_tier(&self) -> Option<AnimTierTransition> {
+        self.anim_tier
     }
 
     #[must_use]
@@ -486,6 +538,16 @@ impl MoveSpline {
         self.compute_position_at(time_point, point_index)
     }
 
+    #[must_use]
+    pub fn compute_position_percent(&self, t: f32) -> Option<Position> {
+        if !(0.0..=1.0).contains(&t) || self.spline.is_empty() {
+            return None;
+        }
+        let time_point = (t * self.duration_ms() as f32) as i32;
+        let (point_index, u) = self.spline.compute_index_percent(t);
+        self.compute_position_with_u(time_point, point_index, u)
+    }
+
     fn update_state_once(&mut self, diff_ms: &mut i32) -> SplineUpdateResult {
         if self.finalized() {
             *diff_ms = 0;
@@ -504,10 +566,14 @@ impl MoveSpline {
                 return SplineUpdateResult::NextSegment;
             }
             if self.spline.cyclic {
+                let old_duration = self.duration_ms();
                 self.point_idx = self.spline.first;
-                let duration = self.duration_ms();
-                if duration > 0 {
-                    self.time_passed_ms %= duration;
+                if old_duration > 0 {
+                    self.time_passed_ms %= old_duration;
+                }
+
+                if self.flags.contains(MoveSplineFlag::ENTER_CYCLE) {
+                    self.rebuild_enter_cycle_spline_preserving_duration(old_duration);
                 }
                 return SplineUpdateResult::NextCycle;
             }
@@ -572,6 +638,19 @@ impl MoveSpline {
             1.0
         };
 
+        self.compute_position_with_u(time_point, point_index, u)
+    }
+
+    fn compute_position_with_u(
+        &self,
+        time_point: i32,
+        point_index: i32,
+        u: f32,
+    ) -> Option<Position> {
+        if self.spline.is_empty() {
+            return None;
+        }
+
         let mut current = if self.spline.smooth {
             evaluate_catmullrom(&self.spline, point_index, u)
         } else {
@@ -635,6 +714,49 @@ impl MoveSpline {
         let z_now = self.spline.point(self.spline.first).z
             - compute_fall_elevation(ms_to_sec(time_point), false, 0.0);
         *z = z_now.max(final_destination.z);
+    }
+
+    fn rebuild_enter_cycle_spline_preserving_duration(&mut self, old_duration: i32) {
+        self.flags.remove(MoveSplineFlag::ENTER_CYCLE);
+        if old_duration <= 0 || self.spline.last <= self.spline.first + 2 {
+            return;
+        }
+
+        let path: Vec<_> = ((self.spline.first + 1)..self.spline.last)
+            .map(|index| self.spline.point(index))
+            .collect();
+        if path.len() <= 1 {
+            return;
+        }
+
+        let mut args = MoveSplineInitArgs {
+            path,
+            facing: self.facing,
+            flags: self.flags,
+            path_idx_offset: self.point_idx_offset,
+            velocity: 1.0,
+            spline_id: self.id,
+            initial_orientation: self.initial_orientation,
+            spell_effect_extra: self.spell_effect_extra,
+            anim_tier: self.anim_tier,
+            has_velocity: true,
+            transform_for_transport: self.on_transport,
+            ..MoveSplineInitArgs::default()
+        };
+
+        if args.validate().is_err() {
+            return;
+        }
+
+        let mut temp_spline = Self::new();
+        if temp_spline.initialize(&args).is_err() {
+            return;
+        }
+
+        args.velocity = temp_spline.duration_ms() as f32 / old_duration as f32;
+        if args.validate().is_ok() {
+            self.init_spline(&args);
+        }
     }
 }
 
@@ -921,6 +1043,34 @@ mod tests {
     }
 
     #[test]
+    fn compute_position_percent_uses_cpp_spline_index_rules() {
+        let args = MoveSplineInitArgs {
+            path: vec![
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(10.0, 0.0, 0.0),
+                Position::xyz(10.0, 10.0, 0.0),
+            ],
+            velocity: 10.0,
+            ..MoveSplineInitArgs::default()
+        };
+        let mut spline = MoveSpline::new();
+        spline.initialize(&args).unwrap();
+
+        let start = spline.compute_position_percent(0.0).unwrap();
+        let mid = spline.compute_position_percent(0.5).unwrap();
+        let end = spline.compute_position_percent(1.0).unwrap();
+
+        assert!(start.x.abs() < f32::EPSILON);
+        assert!(start.y.abs() < f32::EPSILON);
+        assert!(mid.x > 9.9);
+        assert!(mid.y.abs() < 0.1);
+        assert!((end.x - 10.0).abs() < f32::EPSILON);
+        assert!((end.y - 10.0).abs() < f32::EPSILON);
+        assert!(spline.compute_position_percent(-0.1).is_none());
+        assert!(spline.compute_position_percent(1.1).is_none());
+    }
+
+    #[test]
     fn cyclic_spline_wraps_without_finalizing() {
         let args = MoveSplineInitArgs {
             path: vec![
@@ -958,5 +1108,68 @@ mod tests {
             .compute_position_offset(spline.duration_ms() / 2)
             .unwrap();
         assert!(mid.z > 3.9 && mid.z < 4.1);
+    }
+
+    #[test]
+    fn animation_tier_transition_matches_cpp_effect_start_storage() {
+        let mut flags = MoveSplineFlag::PARABOLIC | MoveSplineFlag::FALLING_SLOW;
+        flags.enable_animation();
+        let args = MoveSplineInitArgs {
+            path: vec![Position::xyz(0.0, 0.0, 0.0), Position::xyz(10.0, 0.0, 0.0)],
+            flags,
+            velocity: 10.0,
+            effect_start_time_ms: 250,
+            anim_tier: Some(AnimTierTransition {
+                tier_transition_id: 77,
+                anim_tier: 3,
+            }),
+            ..MoveSplineInitArgs::default()
+        };
+        let mut spline = MoveSpline::new();
+        spline.initialize(&args).unwrap();
+
+        assert!(spline.flags().contains(MoveSplineFlag::ANIMATION));
+        assert!(!spline.flags().intersects(
+            MoveSplineFlag::PARABOLIC | MoveSplineFlag::FALLING | MoveSplineFlag::FALLING_SLOW
+        ));
+        assert_eq!(
+            spline.anim_tier(),
+            Some(AnimTierTransition {
+                tier_transition_id: 77,
+                anim_tier: 3
+            })
+        );
+        assert_eq!(spline.effect_start_time_ms(), 250);
+    }
+
+    #[test]
+    fn cyclic_enter_cycle_rewrites_path_and_preserves_duration_like_cpp() {
+        let args = MoveSplineInitArgs {
+            path: vec![
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(10.0, 0.0, 0.0),
+                Position::xyz(10.0, 10.0, 0.0),
+                Position::xyz(0.0, 10.0, 0.0),
+            ],
+            flags: MoveSplineFlag::CYCLIC | MoveSplineFlag::ENTER_CYCLE,
+            velocity: 10.0,
+            ..MoveSplineInitArgs::default()
+        };
+        let mut spline = MoveSpline::new();
+        spline.initialize(&args).unwrap();
+        let old_duration = spline.duration_ms();
+        let old_point_count = spline.spline.points.len();
+
+        let results = spline.update_state(old_duration);
+
+        assert_eq!(results.last(), Some(&SplineUpdateResult::NextCycle));
+        assert!(!spline.flags().contains(MoveSplineFlag::ENTER_CYCLE));
+        assert_eq!(spline.duration_ms(), old_duration);
+        assert!(spline.spline.points.len() < old_point_count);
+        assert_eq!(
+            spline.spline.point(spline.spline.first),
+            Position::xyz(10.0, 0.0, 0.0)
+        );
+        assert!(!spline.finalized());
     }
 }

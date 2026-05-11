@@ -222,7 +222,7 @@ The actual byte layout (compressed packed deltas vs `UncompressedPath`, paraboli
 
 **What's missing vs C++:**
 - **Unit integration** — the active Rust world still uses the old `MoveSplineState` shell in `wow-entities`; the new `wow-movement::MoveSpline` is not yet owned/ticked by Unit.
-- **`MoveSpline` completion** — first core exists, but `Enter_Cycle` path rewrite preserving the previous duration, `AnimTierTransition`, DB2 curve application for spell parabolic/progress curves and broader fixtures are still pending.
+- **`MoveSpline` completion** — first core exists, and `Enter_Cycle` path rewrite preserving the previous duration plus `AnimTierTransition` modeling are now ported. DB2 curve application for spell parabolic/progress curves and broader fixtures are still pending.
 - **`MoveSplineInit`** — the fluent builder does not exist. No `MoveTo`, no `MovebyPath`, no `SetParabolic`, no `SetFall`, no `SetCyclic`, no `SetSmooth`, no `Launch`, no `Stop`.
 - **`TransportPathTransform`** — no global ↔ transport-local conversion. Transport offsets in `MovementInfo` are read but never re-applied to a server-driven path (because no server-driven path exists).
 - **Packet mapping from real `MoveSpline`** — `SMSG_ON_MONSTER_MOVE` DTO exists, but `MovementPackets.cpp::InitializeSplineData` equivalent is not connected to the new runtime; optional filter/spell/jump/anim blocks are not emitted from runtime state.
@@ -333,12 +333,12 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [x] **#MOVE-SPL.1** Create `crates/wow-movement` skeleton and active `spline.rs` module. (L)
 - [x] **#MOVE-SPL.2** Port `MoveSplineFlag` as `bitflags! struct MoveSplineFlag: u32` with all 32 named bits + `Mask_No_Monster_Move` + `Mask_Unused` + the `EnableAnimation/EnableParabolic/EnableFlying/EnableFalling/EnableCatmullRom/EnableTransportEnter|Exit` setters that clear sibling flags. Hex-value tests. (M)
 - [x] **#MOVE-SPL.3** Port Location semantics onto `wow_core::Position` (`x/y/z/orientation`) for the first runtime core. (L)
-- [ ] **#MOVE-SPL.4** Port full `Movement::FacingInfo` + `MonsterMoveType` enum + `SpellEffectExtraData` + `AnimTierTransition`. `FacingInfo`, `MonsterMoveType` and `SpellEffectExtraData` exist; `AnimTierTransition` and packet-extra mapping remain pending. (L)
+- [x] **#MOVE-SPL.4** Port full `Movement::FacingInfo` + `MonsterMoveType` enum + `SpellEffectExtraData` + `AnimTierTransition` as runtime data structs. Packet-extra mapping remains under `#A06.8h.3c`. (L)
 - [x] **#MOVE-SPL.5** Port `MoveSplineInitArgs` as POD; `Validate(unit)` + `_checkPathLengths` without Unit logging side effects. (M)
 - [x] **#MOVE-SPL.6** Port `SplineBase` core needed by `MoveSpline`: `points`, `index_lo/hi`, smooth/linear mode, cyclic, `initial_orientation`, `steps_per_segment=3`. (M)
 - [x] **#MOVE-SPL.7** Port linear evaluator: `eval_percent_linear`, `eval_derivative_linear`, `seg_length_linear`. C++ still stores via CatmullRom-style virtual points; Rust mirrors that storage. (M)
 - [x] **#MOVE-SPL.8** Port Catmull-Rom evaluator: `eval_percent_catmullrom`, `eval_derivative_catmullrom`, `seg_length_catmullrom`, `init_catmullrom` with virtual endpoints. (H)
-- [x] **#MOVE-SPL.9** Port `Spline<i32>` arc-length wrapper shape: `lengths: Vec<i32>`, `init_lengths`, `length(idx)` and segment durations. Full `compute_index(t)` helper is still pending until broader callers need it. (H)
+- [x] **#MOVE-SPL.9** Port `Spline<i32>` arc-length wrapper shape: `lengths: Vec<i32>`, `init_lengths`, `length(idx)`, segment durations and `compute_index(t)` / percent evaluation rules from `SplineImpl.h`. (H)
 - [x] **#MOVE-SPL.10** Port `MoveSpline` core: state struct + `Initialize(args)` + `init_spline` + `_updateState(&mut diff)` + `UpdateResult` enum. (H)
 - [x] **#MOVE-SPL.11** Port `MoveSpline::ComputePosition(time_offset)` + `computeParabolicElevation` + `computeFallElevation`. (M)
 - [x] **#MOVE-SPL.12** Port `Movement::computeFallTime` + `computeFallElevation` (free fns, gravity = 19.291105f). (M)
