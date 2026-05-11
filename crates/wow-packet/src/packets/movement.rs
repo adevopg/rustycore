@@ -592,6 +592,49 @@ impl ServerPacket for MoveUpdateRemoveMovementForce {
 }
 
 #[derive(Debug, Clone)]
+pub struct MoveUpdateKnockBack {
+    pub status: MovementInfo,
+}
+
+impl ServerPacket for MoveUpdateKnockBack {
+    const OPCODE: ServerOpcodes = ServerOpcodes::MoveUpdateKnockBack;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        self.status.write(pkt);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveSkipTime {
+    pub mover_guid: ObjectGuid,
+    pub time_skipped: u32,
+}
+
+impl ServerPacket for MoveSkipTime {
+    const OPCODE: ServerOpcodes = ServerOpcodes::MoveSkipTime;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.mover_guid);
+        pkt.write_uint32(self.time_skipped);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveUpdateModMovementForceMagnitude {
+    pub status: MovementInfo,
+    pub speed: f32,
+}
+
+impl ServerPacket for MoveUpdateModMovementForceMagnitude {
+    const OPCODE: ServerOpcodes = ServerOpcodes::MoveUpdateModMovementForceMagnitude;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        self.status.write(pkt);
+        pkt.write_float(self.speed);
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MoveTimeSkipped {
     pub mover_guid: ObjectGuid,
     pub time_skipped: u32,
@@ -1011,5 +1054,66 @@ mod tests {
         assert_eq!(remove.ack.status.guid, player_guid);
         assert_eq!(remove.ack.ack_index, 34);
         assert_eq!(remove.id, force_guid);
+    }
+
+    #[test]
+    fn movement_ack_update_packets_write_cpp_field_order() {
+        let guid = ObjectGuid::create_player(1, 42);
+        let info = MovementInfo {
+            guid,
+            time: 1234,
+            position: Position::new(1.0, 2.0, 3.0, 4.0),
+            ..MovementInfo::default()
+        };
+        let force = MovementForce {
+            id: ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 0, 0, 9, 88),
+            origin: [1.0, 2.0, 3.0],
+            direction: [4.0, 5.0, 6.0],
+            transport_id: 7,
+            magnitude: 8.5,
+            unused_910: 9,
+            force_type: MovementForceType::Gravity,
+        };
+
+        let update = MoveUpdateApplyMovementForce {
+            status: info.clone(),
+            force: force.clone(),
+        };
+        let bytes = update.to_bytes();
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let decoded_info = MovementInfo::read(&mut pkt).unwrap();
+        let decoded_force = MovementForce::read(&mut pkt).unwrap();
+        assert_eq!(decoded_info.guid, guid);
+        assert_eq!(decoded_force, force);
+
+        let remove = MoveUpdateRemoveMovementForce {
+            status: info.clone(),
+            trigger_guid: force.id,
+        };
+        let bytes = remove.to_bytes();
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let decoded_info = MovementInfo::read(&mut pkt).unwrap();
+        let decoded_guid = pkt.read_packed_guid().unwrap();
+        assert_eq!(decoded_info.guid, guid);
+        assert_eq!(decoded_guid, force.id);
+
+        let skipped = MoveSkipTime {
+            mover_guid: guid,
+            time_skipped: 250,
+        };
+        let bytes = skipped.to_bytes();
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert_eq!(pkt.read_uint32().unwrap(), 250);
+
+        let magnitude = MoveUpdateModMovementForceMagnitude {
+            status: info,
+            speed: 1.25,
+        };
+        let bytes = magnitude.to_bytes();
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let decoded_info = MovementInfo::read(&mut pkt).unwrap();
+        assert_eq!(decoded_info.guid, guid);
+        assert_eq!(pkt.read_float().unwrap(), 1.25);
     }
 }

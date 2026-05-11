@@ -22,9 +22,10 @@ use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ServerPacket;
 use wow_packet::packets::movement::{
     ClientPlayerMovement, MoveApplyMovementForceAck, MoveInitActiveMoverComplete, MoveKnockBackAck,
-    MoveRemoveMovementForceAck, MoveSetCollisionHeightAck, MoveSplineDone, MoveTeleportAck,
-    MoveTimeSkipped, MoveUpdate, MovementAckMessage, MovementInfo, MovementSpeedAck,
-    SetActiveMover,
+    MoveRemoveMovementForceAck, MoveSetCollisionHeightAck, MoveSkipTime, MoveSplineDone,
+    MoveTeleportAck, MoveTimeSkipped, MoveUpdate, MoveUpdateApplyMovementForce,
+    MoveUpdateKnockBack, MoveUpdateModMovementForceMagnitude, MoveUpdateRemoveMovementForce,
+    MovementAckMessage, MovementInfo, MovementSpeedAck, SetActiveMover,
 };
 
 use crate::session::{
@@ -322,7 +323,20 @@ impl WorldSession {
             speed = pkt.speed,
             "MovementSpeedAck"
         );
-        self.record_validated_movement_ack_like_cpp(opcode, &pkt.ack, Some(pkt.speed));
+        let accepted =
+            self.record_validated_movement_ack_like_cpp(opcode, &pkt.ack, Some(pkt.speed));
+        if accepted && matches!(opcode, ClientOpcodes::MoveSetModMovementForceMagnitudeAck) {
+            let mut status = pkt.ack.status.clone();
+            status.time = self.adjust_client_movement_time_like_cpp(status.time);
+            self.broadcast_to_movement_set_like_cpp(
+                MoveUpdateModMovementForceMagnitude {
+                    status,
+                    speed: pkt.speed,
+                }
+                .to_bytes(),
+                false,
+            );
+        }
     }
 
     /// Handle C++ `HandleMoveKnockBackAck`.
@@ -332,7 +346,14 @@ impl WorldSession {
             has_speeds = pkt.speeds.is_some(),
             "MoveKnockBackAck"
         );
-        self.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &pkt.ack);
+        if self.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &pkt.ack) {
+            let mut status = pkt.ack.status.clone();
+            status.time = self.player_movement_time_like_cpp();
+            self.broadcast_to_movement_set_like_cpp(
+                MoveUpdateKnockBack { status }.to_bytes(),
+                false,
+            );
+        }
     }
 
     /// Handle C++ `HandleSetCollisionHeightAck`.
@@ -358,7 +379,20 @@ impl WorldSession {
             force = ?pkt.force.id,
             "MoveApplyMovementForceAck"
         );
-        self.record_apply_movement_force_ack_like_cpp(&pkt.ack, &pkt.force);
+        if self.record_apply_movement_force_ack_like_cpp(&pkt.ack, &pkt.force) {
+            let mut status = pkt.ack.status.clone();
+            if let Some(adjusted_time) = self.latest_movement_ack_adjusted_time_like_cpp() {
+                status.time = adjusted_time;
+            }
+            self.broadcast_to_movement_set_like_cpp(
+                MoveUpdateApplyMovementForce {
+                    status,
+                    force: pkt.force,
+                }
+                .to_bytes(),
+                false,
+            );
+        }
     }
 
     /// Handle C++ `HandleMoveRemoveMovementForceAck` bookkeeping until movement-force broadcasts exist.
@@ -368,7 +402,20 @@ impl WorldSession {
             force = ?pkt.id,
             "MoveRemoveMovementForceAck"
         );
-        self.record_remove_movement_force_ack_like_cpp(&pkt.ack, pkt.id);
+        if self.record_remove_movement_force_ack_like_cpp(&pkt.ack, pkt.id) {
+            let mut status = pkt.ack.status.clone();
+            if let Some(adjusted_time) = self.latest_movement_ack_adjusted_time_like_cpp() {
+                status.time = adjusted_time;
+            }
+            self.broadcast_to_movement_set_like_cpp(
+                MoveUpdateRemoveMovementForce {
+                    status,
+                    trigger_guid: pkt.id,
+                }
+                .to_bytes(),
+                false,
+            );
+        }
     }
 
     /// Handle C++ `HandleMoveTimeSkippedOpcode`.
@@ -379,7 +426,16 @@ impl WorldSession {
             time_skipped = pkt.time_skipped,
             "MoveTimeSkipped"
         );
-        self.apply_move_time_skipped_like_cpp(pkt.mover_guid, pkt.time_skipped);
+        if self.apply_move_time_skipped_like_cpp(pkt.mover_guid, pkt.time_skipped) {
+            self.broadcast_to_movement_set_like_cpp(
+                MoveSkipTime {
+                    mover_guid: pkt.mover_guid,
+                    time_skipped: pkt.time_skipped,
+                }
+                .to_bytes(),
+                false,
+            );
+        }
     }
 
     /// Handle C++ `HandleMoveSplineDoneOpcode` bookkeeping until taxi runtime is complete.
@@ -756,6 +812,67 @@ mod tests {
             session.movement_ack_events_like_cpp()[1].movement_force_id,
             Some(force_guid)
         );
+    }
+
+    fn broadcast_info(
+        guid: ObjectGuid,
+        send_tx: flume::Sender<Vec<u8>>,
+    ) -> wow_network::PlayerBroadcastInfo {
+        let (command_tx, _command_rx) = flume::bounded(1);
+        wow_network::PlayerBroadcastInfo {
+            map_id: 0,
+            position: wow_core::Position::ZERO,
+            send_tx,
+            command_tx,
+            active_loot_rolls: Vec::new(),
+            pass_on_group_loot: false,
+            enchanting_skill: 0,
+            known_spells: Vec::new(),
+            active_quest_statuses: Default::default(),
+            active_quest_objective_counts: Default::default(),
+            rewarded_quests: Default::default(),
+            inventory_item_counts: Default::default(),
+            player_name: format!("Player{}", guid.counter()),
+            account_id: guid.counter() as u32,
+            race: 1,
+            class: 1,
+            sex: 0,
+            level: 1,
+            display_id: 49,
+            visible_items: [(0, 0, 0); 19],
+        }
+    }
+
+    #[tokio::test]
+    async fn move_time_skipped_broadcasts_skip_time_to_other_players_like_cpp() {
+        let mut session = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        let other_guid = ObjectGuid::create_player(1, 43);
+        let registry = std::sync::Arc::new(wow_network::PlayerRegistry::default());
+        let (self_tx, self_rx) = flume::bounded(1);
+        let (other_tx, other_rx) = flume::bounded(1);
+
+        session.set_player_guid(Some(guid));
+        session.set_player_registry(std::sync::Arc::clone(&registry));
+        session.set_player_movement_time_like_cpp(100);
+        registry.insert(guid, broadcast_info(guid, self_tx));
+        registry.insert(other_guid, broadcast_info(other_guid, other_tx));
+
+        session
+            .handle_move_time_skipped(wow_packet::packets::movement::MoveTimeSkipped {
+                mover_guid: guid,
+                time_skipped: 25,
+            })
+            .await;
+
+        assert!(self_rx.try_recv().is_err());
+        let bytes = other_rx.try_recv().unwrap();
+        let pkt = wow_packet::WorldPacket::from_bytes(&bytes);
+        assert_eq!(
+            pkt.server_opcode(),
+            Some(wow_constants::ServerOpcodes::MoveSkipTime)
+        );
+        assert_eq!(session.player_movement_time_like_cpp(), 125);
     }
 }
 

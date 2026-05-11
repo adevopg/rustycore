@@ -3400,6 +3400,24 @@ impl WorldSession {
         self.player_registry.as_ref()
     }
 
+    pub(crate) fn broadcast_to_movement_set_like_cpp(&self, bytes: Vec<u8>, include_self: bool) {
+        let (Some(guid), Some(registry)) = (self.player_guid(), self.player_registry()) else {
+            return;
+        };
+        let current_map_id = self.player_map_id_like_cpp();
+
+        for entry in registry.iter() {
+            let (other_guid, other_info): (&ObjectGuid, &PlayerBroadcastInfo) = entry.pair();
+            if !include_self && *other_guid == guid {
+                continue;
+            }
+            if other_info.map_id != current_map_id {
+                continue;
+            }
+            let _ = other_info.send_tx.send(bytes.clone());
+        }
+    }
+
     /// Set the shared group registry and pending invites.
     pub fn set_group_registry(&mut self, reg: Arc<GroupRegistry>, invites: Arc<PendingInvites>) {
         self.group_registry = Some(reg);
@@ -6201,9 +6219,14 @@ impl WorldSession {
         &self.movement_ack_events_like_cpp
     }
 
-    #[cfg(test)]
     pub(crate) fn player_movement_time_like_cpp(&self) -> u32 {
         self.player_movement_time_like_cpp
+    }
+
+    pub(crate) fn latest_movement_ack_adjusted_time_like_cpp(&self) -> Option<u32> {
+        self.movement_ack_events_like_cpp
+            .last()
+            .and_then(|event| event.adjusted_time)
     }
 
     pub(crate) fn interrupt_non_melee_spell_cast_for_loot_like_cpp(&mut self) -> bool {
