@@ -228,9 +228,9 @@ pub use unit::{
 };
 pub use unit_subsystems::{
     AiSubsystem, AppliedAuraRef, AuraRef, AuraSubsystem, CURRENT_FIRST_NON_MELEE_SPELL,
-    CURRENT_MAX_SPELL, CharmInfoState, CharmType, CombatSubsystem, ControlSubsystem,
-    CurrentSpellRef, CurrentSpellSlot, INFINITY_COOLDOWN_DELAY_MS, MAX_SPELL_CHARM,
-    MAX_SPELL_SCHOOL, MAX_SUMMON_SLOT, MAX_TOTEM_SLOT as MAX_UNIT_TOTEM_SLOT,
+    CURRENT_MAX_SPELL, CharmInfoState, CharmType, CombatReferenceState, CombatSubsystem,
+    ControlSubsystem, CurrentSpellRef, CurrentSpellSlot, INFINITY_COOLDOWN_DELAY_MS,
+    MAX_SPELL_CHARM, MAX_SPELL_SCHOOL, MAX_SUMMON_SLOT, MAX_TOTEM_SLOT as MAX_UNIT_TOTEM_SLOT,
     MAX_UNIT_ACTION_BAR_INDEX, MOTIONMASTER_FLAG_INITIALIZATION_PENDING,
     MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING, MOTIONMASTER_FLAG_UPDATE,
     MOVEMENTGENERATOR_FLAG_DEACTIVATED, MOVEMENTGENERATOR_FLAG_FINALIZED,
@@ -240,11 +240,12 @@ pub use unit_subsystems::{
     MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH, MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING,
     MOVEMENTGENERATOR_FLAG_TIMED_PAUSED, MotionSubsystem, MoveSplineState, MovementGeneratorKind,
     MovementGeneratorMode, MovementGeneratorPriority, MovementGeneratorRef, MovementSlot,
-    OwnedAuraRef, SUMMON_SLOT_MINIPET, SUMMON_SLOT_PET, SUMMON_SLOT_QUEST,
+    OwnedAuraRef, PVP_COMBAT_TIMEOUT_MS, SUMMON_SLOT_MINIPET, SUMMON_SLOT_PET, SUMMON_SLOT_QUEST,
     SUMMON_SLOT_TOTEM as UNIT_SUMMON_SLOT_TOTEM, SUMMON_SLOT_TOTEM_2 as UNIT_SUMMON_SLOT_TOTEM_2,
     SUMMON_SLOT_TOTEM_3 as UNIT_SUMMON_SLOT_TOTEM_3,
     SUMMON_SLOT_TOTEM_4 as UNIT_SUMMON_SLOT_TOTEM_4, SpellChargeState, SpellCooldown, SpellHistory,
-    SpellSubsystem, UnitSubsystems, VehicleKitState, VehicleSubsystem,
+    SpellSubsystem, THREAT_UPDATE_INTERVAL_MS, ThreatOnlineState, ThreatReferenceState,
+    ThreatTauntState, UnitSubsystems, VehicleKitState, VehicleSubsystem,
 };
 pub use update_fields::{
     ACTIVE_PLAYER_DATA_BITS, AREA_TRIGGER_DATA_BITS, CONTAINER_DATA_BITS, CONVERSATION_DATA_BITS,

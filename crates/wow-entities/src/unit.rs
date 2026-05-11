@@ -706,6 +706,12 @@ mod tests {
         assert!(unit.subsystems().spells.current_spells.is_empty());
         assert!(unit.subsystems().spells.history.cooldowns.is_empty());
         assert!(unit.subsystems().combat.threat.is_empty());
+        assert!(unit.subsystems().combat.threat_refs.is_empty());
+        assert!(unit.subsystems().combat.threatened_by_me.is_empty());
+        assert!(unit.subsystems().combat.pve_refs.is_empty());
+        assert!(unit.subsystems().combat.pvp_refs.is_empty());
+        assert_eq!(unit.subsystems().combat.current_victim_guid, None);
+        assert_eq!(unit.subsystems().combat.fixate_guid, None);
         assert!(unit.subsystems().combat.attackers.is_empty());
         assert_eq!(unit.subsystems().combat.attacking_guid, None);
         assert!(!unit.subsystems().combat.combat_disallowed);

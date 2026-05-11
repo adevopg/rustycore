@@ -638,39 +638,509 @@ impl SpellSubsystem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+pub const THREAT_UPDATE_INTERVAL_MS: u32 = 1_000;
+pub const PVP_COMBAT_TIMEOUT_MS: u32 = 5_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ThreatOnlineState {
+    Offline = 0,
+    Suppressed = 1,
+    Online = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ThreatTauntState {
+    Detaunt = 0,
+    None = 1,
+    Taunt = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThreatReferenceState {
+    pub base_amount: f32,
+    pub temp_modifier: i32,
+    pub online_state: ThreatOnlineState,
+    pub taunt_state: ThreatTauntState,
+}
+
+impl Default for ThreatReferenceState {
+    fn default() -> Self {
+        Self {
+            base_amount: 0.0,
+            temp_modifier: 0,
+            online_state: ThreatOnlineState::Offline,
+            taunt_state: ThreatTauntState::None,
+        }
+    }
+}
+
+impl ThreatReferenceState {
+    pub fn threat(&self) -> f32 {
+        (self.base_amount + self.temp_modifier as f32).max(0.0)
+    }
+
+    pub const fn is_online(&self) -> bool {
+        matches!(self.online_state, ThreatOnlineState::Online)
+    }
+
+    pub const fn is_available(&self) -> bool {
+        !matches!(self.online_state, ThreatOnlineState::Offline)
+    }
+
+    pub const fn is_offline(&self) -> bool {
+        matches!(self.online_state, ThreatOnlineState::Offline)
+    }
+
+    pub const fn is_suppressed(&self) -> bool {
+        matches!(self.online_state, ThreatOnlineState::Suppressed)
+    }
+
+    pub const fn is_taunting(&self) -> bool {
+        matches!(self.taunt_state, ThreatTauntState::Taunt)
+    }
+
+    pub const fn is_detaunted(&self) -> bool {
+        matches!(self.taunt_state, ThreatTauntState::Detaunt)
+    }
+
+    pub fn add_threat(&mut self, amount: f32) {
+        if amount != 0.0 {
+            self.base_amount = (self.base_amount + amount).max(0.0);
+        }
+    }
+
+    pub fn scale_threat(&mut self, factor: f32) {
+        self.base_amount *= factor.max(0.0);
+    }
+
+    pub fn modify_threat_by_percent(&mut self, percent: i32) {
+        if percent != 0 {
+            self.scale_threat(0.01 * (100 + percent) as f32);
+        }
+    }
+
+    pub fn set_taunt_state(&mut self, taunt_state: ThreatTauntState) {
+        self.taunt_state = taunt_state;
+    }
+
+    pub fn set_online_state(&mut self, online_state: ThreatOnlineState) {
+        self.online_state = online_state;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CombatReferenceState {
+    pub pvp: bool,
+    pub suppressed_for_owner: bool,
+    pub timeout_ms: Option<u32>,
+}
+
+impl CombatReferenceState {
+    pub const fn pve() -> Self {
+        Self {
+            pvp: false,
+            suppressed_for_owner: false,
+            timeout_ms: None,
+        }
+    }
+
+    pub const fn pvp() -> Self {
+        Self {
+            pvp: true,
+            suppressed_for_owner: false,
+            timeout_ms: Some(PVP_COMBAT_TIMEOUT_MS),
+        }
+    }
+
+    pub fn refresh(&mut self) {
+        self.suppressed_for_owner = false;
+        if self.pvp {
+            self.timeout_ms = Some(PVP_COMBAT_TIMEOUT_MS);
+        }
+    }
+
+    pub fn suppress_for_owner(&mut self) {
+        self.suppressed_for_owner = true;
+    }
+
+    pub fn update_pvp_timer(&mut self, diff_ms: u32) -> bool {
+        if !self.pvp {
+            return true;
+        }
+        let Some(timer) = self.timeout_ms.as_mut() else {
+            return true;
+        };
+        if *timer <= diff_ms {
+            return false;
+        }
+        *timer -= diff_ms;
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CombatSubsystem {
     pub threat: HashMap<ObjectGuid, f32>,
+    pub threat_refs: HashMap<ObjectGuid, ThreatReferenceState>,
+    pub threatened_by_me: HashMap<ObjectGuid, ThreatReferenceState>,
+    pub current_victim_guid: Option<ObjectGuid>,
+    pub fixate_guid: Option<ObjectGuid>,
+    pub owner_can_have_threat_list: bool,
+    pub need_client_update: bool,
+    pub threat_update_timer_ms: u32,
+    pub pve_refs: HashMap<ObjectGuid, CombatReferenceState>,
+    pub pvp_refs: HashMap<ObjectGuid, CombatReferenceState>,
     pub attackers: HashSet<ObjectGuid>,
     pub attacking_guid: Option<ObjectGuid>,
     pub combat_disallowed: bool,
 }
 
+impl Default for CombatSubsystem {
+    fn default() -> Self {
+        Self {
+            threat: HashMap::new(),
+            threat_refs: HashMap::new(),
+            threatened_by_me: HashMap::new(),
+            current_victim_guid: None,
+            fixate_guid: None,
+            owner_can_have_threat_list: false,
+            need_client_update: false,
+            threat_update_timer_ms: THREAT_UPDATE_INTERVAL_MS,
+            pve_refs: HashMap::new(),
+            pvp_refs: HashMap::new(),
+            attackers: HashSet::new(),
+            attacking_guid: None,
+            combat_disallowed: false,
+        }
+    }
+}
+
 impl CombatSubsystem {
+    pub fn initialize_threat_list_capability(&mut self, can_have_threat_list: bool) {
+        self.owner_can_have_threat_list = can_have_threat_list;
+    }
+
     pub fn add_threat(&mut self, target: ObjectGuid, amount: f32) -> f32 {
-        let value = self.threat.entry(target).or_insert(0.0);
-        *value += amount;
-        *value
+        let threat_ref = self.threat_refs.entry(target).or_insert_with(|| {
+            let mut threat_ref = ThreatReferenceState::default();
+            threat_ref.set_online_state(ThreatOnlineState::Online);
+            threat_ref
+        });
+        threat_ref.add_threat(amount);
+        let value = threat_ref.threat();
+        self.threat.insert(target, value);
+        self.need_client_update = true;
+        if self.current_victim_guid.is_none() && threat_ref.is_available() {
+            self.current_victim_guid = Some(target);
+        }
+        value
     }
 
     pub fn set_threat(&mut self, target: ObjectGuid, value: f32) {
-        self.threat.insert(target, value);
+        let threat_ref = self.threat_refs.entry(target).or_insert_with(|| {
+            let mut threat_ref = ThreatReferenceState::default();
+            threat_ref.set_online_state(ThreatOnlineState::Online);
+            threat_ref
+        });
+        threat_ref.base_amount = value.max(0.0);
+        self.threat.insert(target, threat_ref.threat());
+        self.need_client_update = true;
     }
 
     pub fn threat_value(&self, target: ObjectGuid) -> Option<f32> {
-        self.threat.get(&target).copied()
+        self.threat_ref(target).map(ThreatReferenceState::threat)
     }
 
     pub fn remove_threat(&mut self, target: ObjectGuid) -> Option<f32> {
-        self.threat.remove(&target)
+        let removed = self.threat_refs.remove(&target).map(|state| state.threat());
+        self.threat.remove(&target);
+        self.threatened_by_me.remove(&target);
+        if self.current_victim_guid == Some(target) {
+            self.current_victim_guid = None;
+        }
+        if self.fixate_guid == Some(target) {
+            self.fixate_guid = None;
+        }
+        removed
     }
 
     pub fn clear_threat(&mut self) {
         self.threat.clear();
+        self.threat_refs.clear();
+        self.current_victim_guid = None;
+        self.fixate_guid = None;
+        self.need_client_update = true;
     }
 
     pub fn is_threatened_by(&self, target: ObjectGuid) -> bool {
-        self.threat.contains_key(&target)
+        self.is_threatened_by_with_offline(target, false)
+    }
+
+    pub fn is_threatened_by_with_offline(&self, target: ObjectGuid, include_offline: bool) -> bool {
+        self.threat_refs
+            .get(&target)
+            .is_some_and(|threat_ref| include_offline || threat_ref.is_available())
+    }
+
+    pub fn threat_ref(&self, target: ObjectGuid) -> Option<&ThreatReferenceState> {
+        self.threat_refs.get(&target)
+    }
+
+    pub fn threat_ref_mut(&mut self, target: ObjectGuid) -> Option<&mut ThreatReferenceState> {
+        self.threat_refs.get_mut(&target)
+    }
+
+    pub fn scale_threat(&mut self, target: ObjectGuid, factor: f32) -> Option<f32> {
+        let threat_ref = self.threat_refs.get_mut(&target)?;
+        threat_ref.scale_threat(factor);
+        let value = threat_ref.threat();
+        self.threat.insert(target, value);
+        self.need_client_update = true;
+        Some(value)
+    }
+
+    pub fn modify_threat_by_percent(&mut self, target: ObjectGuid, percent: i32) -> Option<f32> {
+        let threat_ref = self.threat_refs.get_mut(&target)?;
+        threat_ref.modify_threat_by_percent(percent);
+        let value = threat_ref.threat();
+        self.threat.insert(target, value);
+        self.need_client_update = true;
+        Some(value)
+    }
+
+    pub fn reset_all_threat(&mut self) {
+        for (guid, threat_ref) in &mut self.threat_refs {
+            threat_ref.scale_threat(0.0);
+            self.threat.insert(*guid, threat_ref.threat());
+        }
+        self.need_client_update = true;
+    }
+
+    pub fn threat_list_size(&self) -> usize {
+        self.threat_refs.len()
+    }
+
+    pub fn is_threat_list_empty(&self, include_offline: bool) -> bool {
+        if include_offline {
+            return self.threat_refs.is_empty();
+        }
+        self.threat_refs
+            .values()
+            .all(|threat_ref| !threat_ref.is_available())
+    }
+
+    pub fn sorted_threat_guids(&self) -> Vec<ObjectGuid> {
+        let mut refs: Vec<_> = self
+            .threat_refs
+            .iter()
+            .map(|(guid, threat_ref)| (*guid, *threat_ref))
+            .collect();
+        refs.sort_by(|(left_guid, left), (right_guid, right)| {
+            compare_threat_refs(*right, *left).then_with(|| {
+                (left_guid.high_value(), left_guid.low_value())
+                    .cmp(&(right_guid.high_value(), right_guid.low_value()))
+            })
+        });
+        refs.into_iter().map(|(guid, _)| guid).collect()
+    }
+
+    pub fn set_threat_online_state(
+        &mut self,
+        target: ObjectGuid,
+        online_state: ThreatOnlineState,
+    ) -> bool {
+        let Some(threat_ref) = self.threat_refs.get_mut(&target) else {
+            return false;
+        };
+        threat_ref.set_online_state(online_state);
+        self.need_client_update = true;
+        true
+    }
+
+    pub fn set_threat_taunt_state(
+        &mut self,
+        target: ObjectGuid,
+        taunt_state: ThreatTauntState,
+    ) -> bool {
+        let Some(threat_ref) = self.threat_refs.get_mut(&target) else {
+            return false;
+        };
+        threat_ref.set_taunt_state(taunt_state);
+        self.need_client_update = true;
+        true
+    }
+
+    pub fn fixate_target(&mut self, target: Option<ObjectGuid>) -> bool {
+        if let Some(target) = target {
+            if !self.threat_refs.contains_key(&target) {
+                return false;
+            }
+            self.fixate_guid = Some(target);
+        } else {
+            self.fixate_guid = None;
+        }
+        true
+    }
+
+    pub fn reselect_victim(
+        &mut self,
+        old_victim_is_melee: bool,
+        highest_is_melee: bool,
+    ) -> Option<ObjectGuid> {
+        if let Some(fixate) = self.fixate_guid {
+            if self
+                .threat_refs
+                .get(&fixate)
+                .is_some_and(ThreatReferenceState::is_available)
+            {
+                self.current_victim_guid = Some(fixate);
+                return Some(fixate);
+            }
+        }
+
+        let sorted = self.sorted_threat_guids();
+        let highest_guid = sorted
+            .into_iter()
+            .find(|guid| self.threat_refs[guid].is_available())?;
+        let Some(old_guid) = self.current_victim_guid else {
+            self.current_victim_guid = Some(highest_guid);
+            return Some(highest_guid);
+        };
+        let Some(old_ref) = self.threat_refs.get(&old_guid).copied() else {
+            self.current_victim_guid = Some(highest_guid);
+            return Some(highest_guid);
+        };
+        if !old_ref.is_available() || old_guid == highest_guid {
+            self.current_victim_guid = Some(highest_guid);
+            return Some(highest_guid);
+        }
+
+        let highest_ref = self.threat_refs[&highest_guid];
+        let threshold = if old_victim_is_melee || highest_is_melee {
+            1.1
+        } else {
+            1.3
+        };
+        if old_ref.threat() * threshold < highest_ref.threat() {
+            self.current_victim_guid = Some(highest_guid);
+        }
+        self.current_victim_guid
+    }
+
+    pub fn put_threatened_by_me_ref(
+        &mut self,
+        owner: ObjectGuid,
+        threat_ref: ThreatReferenceState,
+    ) {
+        self.threatened_by_me.insert(owner, threat_ref);
+    }
+
+    pub fn purge_threatened_by_me_ref(
+        &mut self,
+        owner: ObjectGuid,
+    ) -> Option<ThreatReferenceState> {
+        self.threatened_by_me.remove(&owner)
+    }
+
+    pub fn is_threatening_anyone(&self, include_offline: bool) -> bool {
+        if include_offline {
+            return !self.threatened_by_me.is_empty();
+        }
+        self.threatened_by_me
+            .values()
+            .any(ThreatReferenceState::is_available)
+    }
+
+    pub fn is_threatening_to(&self, owner: ObjectGuid, include_offline: bool) -> bool {
+        self.threatened_by_me
+            .get(&owner)
+            .is_some_and(|threat_ref| include_offline || threat_ref.is_available())
+    }
+
+    pub fn set_in_combat_with(
+        &mut self,
+        target: ObjectGuid,
+        both_player_controlled: bool,
+        add_target_suppressed: bool,
+    ) -> bool {
+        if let Some(reference) = self.pvp_refs.get_mut(&target) {
+            reference.refresh();
+            return !reference.suppressed_for_owner;
+        }
+        if let Some(reference) = self.pve_refs.get_mut(&target) {
+            reference.refresh();
+            return !reference.suppressed_for_owner;
+        }
+
+        let mut reference = if both_player_controlled {
+            CombatReferenceState::pvp()
+        } else {
+            CombatReferenceState::pve()
+        };
+        if add_target_suppressed {
+            reference.suppress_for_owner();
+        }
+        if reference.pvp {
+            self.pvp_refs.insert(target, reference);
+        } else {
+            self.pve_refs.insert(target, reference);
+        }
+        true
+    }
+
+    pub fn is_in_combat_with(&self, target: ObjectGuid) -> bool {
+        self.pve_refs.contains_key(&target) || self.pvp_refs.contains_key(&target)
+    }
+
+    pub fn has_pve_combat(&self) -> bool {
+        self.pve_refs
+            .values()
+            .any(|reference| !reference.suppressed_for_owner)
+    }
+
+    pub fn has_pvp_combat(&self) -> bool {
+        self.pvp_refs
+            .values()
+            .any(|reference| !reference.suppressed_for_owner)
+    }
+
+    pub fn has_combat(&self) -> bool {
+        self.has_pve_combat() || self.has_pvp_combat()
+    }
+
+    pub fn suppress_pvp_combat(&mut self) {
+        for reference in self.pvp_refs.values_mut() {
+            reference.suppress_for_owner();
+        }
+    }
+
+    pub fn update_pvp_combat(&mut self, diff_ms: u32) -> Vec<ObjectGuid> {
+        let expired: Vec<_> = self
+            .pvp_refs
+            .iter_mut()
+            .filter_map(|(guid, reference)| (!reference.update_pvp_timer(diff_ms)).then_some(*guid))
+            .collect();
+        for guid in &expired {
+            self.pvp_refs.remove(guid);
+        }
+        expired
+    }
+
+    pub fn end_all_pve_combat(&mut self) {
+        self.pve_refs.clear();
+        self.clear_threat();
+        self.threatened_by_me.clear();
+    }
+
+    pub fn end_all_pvp_combat(&mut self) {
+        self.pvp_refs.clear();
+    }
+
+    pub fn end_all_combat(&mut self) {
+        self.end_all_pve_combat();
+        self.end_all_pvp_combat();
     }
 
     pub fn add_attacker(&mut self, attacker: ObjectGuid) -> bool {
@@ -689,6 +1159,20 @@ impl CombatSubsystem {
     pub fn set_attacking(&mut self, victim: Option<ObjectGuid>) {
         self.attacking_guid = victim;
     }
+}
+
+fn compare_threat_refs(
+    left: ThreatReferenceState,
+    right: ThreatReferenceState,
+) -> std::cmp::Ordering {
+    left.online_state
+        .cmp(&right.online_state)
+        .then_with(|| left.taunt_state.cmp(&right.taunt_state))
+        .then_with(|| {
+            left.threat()
+                .partial_cmp(&right.threat())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1734,6 +2218,7 @@ mod unit_subsystems_tests {
         let attacker = guid(10);
 
         assert!(!combat.combat_disallowed);
+        assert_eq!(combat.threat_update_timer_ms, THREAT_UPDATE_INTERVAL_MS);
         assert_eq!(combat.add_threat(attacker, 5.0), 5.0);
         assert_eq!(combat.add_threat(attacker, 2.5), 7.5);
         assert!(combat.is_threatened_by(attacker));
@@ -1751,6 +2236,132 @@ mod unit_subsystems_tests {
         combat.clear_attackers();
         assert!(combat.attackers.is_empty());
         assert_eq!(combat.attacking_guid, None);
+    }
+
+    #[test]
+    fn threat_refs_sort_and_scale_like_cpp_threat_manager_shape() {
+        let mut combat = CombatSubsystem::default();
+        let low = guid(20);
+        let high = guid(21);
+        let taunter = guid(22);
+        let offline = guid(23);
+
+        combat.initialize_threat_list_capability(true);
+        assert!(combat.owner_can_have_threat_list);
+        assert_eq!(combat.add_threat(low, 100.0), 100.0);
+        assert_eq!(combat.add_threat(high, 120.0), 120.0);
+        assert_eq!(combat.add_threat(taunter, 1.0), 1.0);
+        assert_eq!(combat.add_threat(offline, 999.0), 999.0);
+        assert!(combat.set_threat_taunt_state(taunter, ThreatTauntState::Taunt));
+        assert!(combat.set_threat_online_state(offline, ThreatOnlineState::Offline));
+
+        assert_eq!(
+            combat.sorted_threat_guids(),
+            vec![taunter, high, low, offline]
+        );
+        assert_eq!(combat.threat_list_size(), 4);
+        assert!(!combat.is_threat_list_empty(false));
+        assert!(combat.is_threatened_by_with_offline(offline, true));
+        assert!(!combat.is_threatened_by(offline));
+
+        assert_eq!(combat.modify_threat_by_percent(high, -50), Some(60.0));
+        assert_eq!(combat.scale_threat(low, 2.0), Some(200.0));
+        assert_eq!(combat.threat_value(low), Some(200.0));
+        assert_eq!(
+            combat.threat_ref(low).map(|state| state.threat()),
+            Some(200.0)
+        );
+
+        combat.reset_all_threat();
+        assert_eq!(combat.threat_value(low), Some(0.0));
+        assert!(combat.need_client_update);
+    }
+
+    #[test]
+    fn threat_reselect_victim_matches_cpp_110_130_and_fixate_shape() {
+        let mut combat = CombatSubsystem::default();
+        let current = guid(30);
+        let ranged = guid(31);
+        let melee = guid(32);
+
+        combat.add_threat(current, 100.0);
+        combat.current_victim_guid = Some(current);
+        combat.add_threat(ranged, 120.0);
+        assert_eq!(combat.reselect_victim(false, false), Some(current));
+
+        combat.set_threat(ranged, 131.0);
+        assert_eq!(combat.reselect_victim(false, false), Some(ranged));
+
+        combat.current_victim_guid = Some(current);
+        combat.set_threat(ranged, 120.0);
+        assert_eq!(combat.reselect_victim(false, true), Some(ranged));
+
+        combat.add_threat(melee, 1.0);
+        assert!(combat.fixate_target(Some(melee)));
+        assert_eq!(combat.reselect_victim(false, false), Some(melee));
+        assert!(combat.fixate_target(None));
+        assert!(!combat.fixate_target(Some(guid(99))));
+    }
+
+    #[test]
+    fn combat_refs_track_pve_pvp_suppression_and_timeout_like_cpp() {
+        let mut combat = CombatSubsystem::default();
+        let creature = guid(40);
+        let player = guid(41);
+
+        assert!(combat.set_in_combat_with(creature, false, false));
+        assert!(combat.has_pve_combat());
+        assert!(combat.is_in_combat_with(creature));
+
+        assert!(combat.set_in_combat_with(player, true, false));
+        assert!(combat.has_pvp_combat());
+        assert_eq!(
+            combat
+                .pvp_refs
+                .get(&player)
+                .and_then(|reference| reference.timeout_ms),
+            Some(PVP_COMBAT_TIMEOUT_MS)
+        );
+
+        combat.suppress_pvp_combat();
+        assert!(!combat.has_pvp_combat());
+        assert!(combat.set_in_combat_with(player, true, false));
+        assert!(combat.has_pvp_combat());
+
+        assert!(
+            combat
+                .update_pvp_combat(PVP_COMBAT_TIMEOUT_MS - 1)
+                .is_empty()
+        );
+        assert_eq!(combat.update_pvp_combat(1), vec![player]);
+        assert!(!combat.has_pvp_combat());
+
+        combat.end_all_pve_combat();
+        assert!(!combat.has_pve_combat());
+        assert!(!combat.has_combat());
+    }
+
+    #[test]
+    fn threatened_by_me_refs_follow_cpp_reverse_lookup_shape() {
+        let mut combat = CombatSubsystem::default();
+        let owner = guid(50);
+        let mut reference = ThreatReferenceState::default();
+        reference.set_online_state(ThreatOnlineState::Suppressed);
+        reference.base_amount = 10.0;
+
+        combat.put_threatened_by_me_ref(owner, reference);
+        assert!(combat.is_threatening_anyone(false));
+        assert!(combat.is_threatening_to(owner, false));
+        combat
+            .threatened_by_me
+            .get_mut(&owner)
+            .expect("reverse threat ref")
+            .set_online_state(ThreatOnlineState::Offline);
+        reference.set_online_state(ThreatOnlineState::Offline);
+        assert!(!combat.is_threatening_anyone(false));
+        assert!(combat.is_threatening_anyone(true));
+        assert_eq!(combat.purge_threatened_by_me_ref(owner), Some(reference));
+        assert!(!combat.is_threatening_anyone(true));
     }
 
     #[test]
