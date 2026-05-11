@@ -168,6 +168,12 @@ pub(crate) struct SessionPlayerController {
     class: u8,
     level: u8,
     gender: u8,
+    gold: u64,
+    xp: u32,
+    next_level_xp: u32,
+    selection_guid: Option<ObjectGuid>,
+    known_spells: Vec<i32>,
+    currencies: HashMap<u32, PlayerCurrency>,
 }
 
 impl SessionPlayerController {
@@ -190,6 +196,12 @@ impl SessionPlayerController {
             class,
             level,
             gender,
+            gold: 0,
+            xp: 0,
+            next_level_xp: 400,
+            selection_guid: None,
+            known_spells: Vec::new(),
+            currencies: HashMap::new(),
         }
     }
 
@@ -225,6 +237,31 @@ impl SessionPlayerController {
         self.gender
     }
 
+    pub(crate) fn gold(&self) -> u64 {
+        self.gold
+    }
+
+    pub(crate) fn xp(&self) -> u32 {
+        self.xp
+    }
+
+    pub(crate) fn next_level_xp(&self) -> u32 {
+        self.next_level_xp
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn selection_guid(&self) -> Option<ObjectGuid> {
+        self.selection_guid
+    }
+
+    pub(crate) fn known_spells(&self) -> &[i32] {
+        &self.known_spells
+    }
+
+    pub(crate) fn currencies(&self) -> &HashMap<u32, PlayerCurrency> {
+        &self.currencies
+    }
+
     fn set_map_position(&mut self, map_id: u16, position: wow_core::Position) {
         self.map_id = map_id;
         self.position = position;
@@ -232,6 +269,36 @@ impl SessionPlayerController {
 
     fn set_level(&mut self, level: u8) {
         self.level = level;
+    }
+
+    fn set_gold(&mut self, gold: u64) {
+        self.gold = gold;
+    }
+
+    fn set_xp(&mut self, xp: u32) {
+        self.xp = xp;
+    }
+
+    fn set_next_level_xp(&mut self, xp: u32) {
+        self.next_level_xp = xp;
+    }
+
+    fn set_selection_guid(&mut self, guid: Option<ObjectGuid>) {
+        self.selection_guid = guid;
+    }
+
+    fn set_known_spells(&mut self, spells: Vec<i32>) {
+        self.known_spells = spells;
+    }
+
+    fn learn_spell(&mut self, spell_id: i32) {
+        if !self.known_spells.contains(&spell_id) {
+            self.known_spells.push(spell_id);
+        }
+    }
+
+    fn set_currencies(&mut self, currencies: HashMap<u32, PlayerCurrency>) {
+        self.currencies = currencies;
     }
 }
 
@@ -1568,7 +1635,7 @@ impl WorldSession {
 
     /// C++ `Player::GetCurrencyQuantity`.
     pub(crate) fn player_currency_quantity(&self, currency_id: u32) -> u32 {
-        self.player_currencies
+        self.player_currencies_like_cpp()
             .get(&currency_id)
             .map(|currency| currency.quantity)
             .unwrap_or(0)
@@ -1655,7 +1722,7 @@ impl WorldSession {
         }
 
         let scaler = entry.scaler().max(1) as u32;
-        Ok(Some(PlayerCurrencyDelta {
+        let delta = PlayerCurrencyDelta {
             currency_id,
             quantity: currency.quantity,
             amount: applied,
@@ -1664,7 +1731,9 @@ impl WorldSession {
             max_quantity: (max_quantity != 0).then_some(max_quantity),
             total_earned: entry.has_total_earned().then_some(currency.earned_quantity),
             suppress_chat_log: entry.is_suppressing_chat_log(false),
-        }))
+        };
+        self.sync_player_currencies_like_cpp();
+        Ok(Some(delta))
     }
 
     /// C++ `Player::AddCurrency(..., CurrencyGainSource::ItemRefund)`.
@@ -1720,7 +1789,7 @@ impl WorldSession {
 
         let scaler = entry.scaler().max(1) as u32;
         let max_quantity = currency_max_quantity_cpp(&entry, currency);
-        Ok(Some(PlayerCurrencyDelta {
+        let delta = PlayerCurrencyDelta {
             currency_id,
             quantity: currency.quantity,
             amount,
@@ -1729,7 +1798,9 @@ impl WorldSession {
             max_quantity: (max_quantity != 0).then_some(max_quantity),
             total_earned: entry.has_total_earned().then_some(currency.earned_quantity),
             suppress_chat_log: entry.is_suppressing_chat_log(false),
-        }))
+        };
+        self.sync_player_currencies_like_cpp();
+        Ok(Some(delta))
     }
 
     /// C++ `Player::RemoveCurrency` underflow guard for vendor costs.
@@ -1750,6 +1821,7 @@ impl WorldSession {
         if currency.state != PlayerCurrencyState::New {
             currency.state = PlayerCurrencyState::Changed;
         }
+        self.sync_player_currencies_like_cpp();
         true
     }
 
@@ -1802,6 +1874,7 @@ impl WorldSession {
                 PlayerCurrencyState::Unchanged | PlayerCurrencyState::Removed => {}
             }
         }
+        self.sync_player_currencies_like_cpp();
     }
 
     /// Set the item appearance store for this session.
@@ -2179,7 +2252,7 @@ impl WorldSession {
 
     fn player_values_update_snapshot(&self) -> Option<Player> {
         let mut player = self.direct_inventory_player_snapshot()?;
-        player.set_money(self.player_gold);
+        player.set_money(self.player_gold_like_cpp());
 
         for slot in 0..19u8 {
             let visible = self
@@ -2686,7 +2759,7 @@ impl WorldSession {
     /// Save current player gold to the characters DB.
     pub(crate) async fn save_player_gold(&self) {
         use wow_database::CharStatements;
-        let guid = match self.player_guid {
+        let guid = match self.player_guid() {
             Some(g) => g.counter() as u32,
             None => return,
         };
@@ -2695,7 +2768,7 @@ impl WorldSession {
             None => return,
         };
         let mut stmt = char_db.prepare(CharStatements::UPD_CHAR_MONEY);
-        stmt.set_u64(0, self.player_gold);
+        stmt.set_u64(0, self.player_gold_like_cpp());
         stmt.set_u32(1, guid);
         let _ = char_db.execute(&stmt).await;
     }
@@ -2709,7 +2782,7 @@ impl WorldSession {
         if xp == 0 {
             return;
         }
-        if self.player_level >= 80 {
+        if self.player_level_like_cpp() >= 80 {
             return;
         } // max level
 
@@ -2722,12 +2795,16 @@ impl WorldSession {
             group_bonus: 1.0,
         });
 
-        self.player_xp = self.player_xp.saturating_add(xp);
+        self.set_player_xp_like_cpp(self.player_xp_like_cpp().saturating_add(xp));
 
         // Level up loop — C# while (newXP >= nextLvlXP && !IsMaxLevel())
-        while self.player_xp >= self.player_next_level_xp && self.player_level < 80 {
-            self.player_xp -= self.player_next_level_xp;
-            let new_level = self.player_level + 1;
+        while self.player_xp_like_cpp() >= self.player_next_level_xp_like_cpp()
+            && self.player_level_like_cpp() < 80
+        {
+            self.set_player_xp_like_cpp(
+                self.player_xp_like_cpp() - self.player_next_level_xp_like_cpp(),
+            );
+            let new_level = self.player_level_like_cpp() + 1;
 
             info!(account = self.account_id, new_level, "Player leveled up");
 
@@ -2746,13 +2823,13 @@ impl WorldSession {
             self.refresh_next_level_xp();
 
             // Persist new level to DB
-            if let Some(guid) = self.player_guid {
+            if let Some(guid) = self.player_guid() {
                 let char_db = self.char_db().map(Arc::clone);
                 if let Some(db) = char_db {
                     use wow_database::CharStatements;
                     let mut stmt = db.prepare(CharStatements::UPD_CHAR_LEVEL);
-                    stmt.set_u8(0, self.player_level);
-                    stmt.set_u32(1, self.player_xp);
+                    stmt.set_u8(0, self.player_level_like_cpp());
+                    stmt.set_u32(1, self.player_xp_like_cpp());
                     stmt.set_u32(2, guid.counter() as u32);
                     let _ = db.execute(&stmt).await;
                 }
@@ -2760,12 +2837,12 @@ impl WorldSession {
         }
 
         // Persist current XP
-        if let Some(guid) = self.player_guid {
+        if let Some(guid) = self.player_guid() {
             let char_db = self.char_db().map(Arc::clone);
             if let Some(db) = char_db {
                 use wow_database::CharStatements;
                 let mut stmt = db.prepare(CharStatements::UPD_CHAR_XP);
-                stmt.set_u32(0, self.player_xp);
+                stmt.set_u32(0, self.player_xp_like_cpp());
                 stmt.set_u32(1, guid.counter() as u32);
                 let _ = db.execute(&stmt).await;
             }
@@ -2775,7 +2852,7 @@ impl WorldSession {
     /// XP reward for killing a creature.
     /// C# ref: Formulas.XPGain / Formulas.BaseGain
     pub(crate) fn creature_kill_xp(&self, mob_level: u8) -> u32 {
-        let pl = self.player_level as i32;
+        let pl = self.player_level_like_cpp() as i32;
         let ml = mob_level as i32;
 
         // nBaseExp by content level (WotLK = 71-80 content)
@@ -2940,8 +3017,8 @@ impl WorldSession {
     /// Update player_next_level_xp from the table based on current level.
     pub(crate) fn refresh_next_level_xp(&mut self) {
         if let Some(table) = &self.player_xp_table {
-            let lvl = self.player_level as usize;
-            self.player_next_level_xp = table.get(lvl).copied().unwrap_or(u32::MAX);
+            let lvl = self.player_level_like_cpp() as usize;
+            self.set_player_next_level_xp_like_cpp(table.get(lvl).copied().unwrap_or(u32::MAX));
         }
     }
 
@@ -2949,7 +3026,7 @@ impl WorldSession {
     /// C# ref: Quest::XPValue(player, questLevel, xpDifficulty, xpMultiplier)
     pub(crate) fn calculate_quest_xp(&self, difficulty: u32, quest_level: i32) -> u32 {
         if let Some(store) = &self.quest_xp_store {
-            store.calculate_xp(quest_level, self.player_level, difficulty)
+            store.calculate_xp(quest_level, self.player_level_like_cpp(), difficulty)
         } else {
             // Fallback if DB2 not loaded
             const XP_TABLE: [u32; 10] = [0, 50, 100, 200, 400, 650, 1000, 1500, 2500, 4000];
@@ -3058,7 +3135,7 @@ impl WorldSession {
                     .collect(),
                 pass_on_group_loot: self.pass_on_group_loot,
                 enchanting_skill: self.represented_enchanting_skill,
-                known_spells: self.known_spells.clone(),
+                known_spells: self.known_spells_like_cpp().to_vec(),
                 active_quest_statuses: self
                     .player_quests
                     .iter()
@@ -3099,7 +3176,7 @@ impl WorldSession {
                 .collect();
             info.pass_on_group_loot = self.pass_on_group_loot;
             info.enchanting_skill = self.represented_enchanting_skill;
-            info.known_spells = self.known_spells.clone();
+            info.known_spells = self.known_spells_like_cpp().to_vec();
             info.active_quest_statuses = self
                 .player_quests
                 .iter()
@@ -4742,8 +4819,14 @@ impl WorldSession {
 
     pub(crate) fn attach_player_controller_like_cpp(
         &mut self,
-        controller: SessionPlayerController,
+        mut controller: SessionPlayerController,
     ) {
+        controller.set_gold(self.player_gold);
+        controller.set_xp(self.player_xp);
+        controller.set_next_level_xp(self.player_next_level_xp);
+        controller.set_selection_guid(self.selection_guid);
+        controller.set_known_spells(self.known_spells.clone());
+        controller.set_currencies(self.player_currencies.clone());
         self.player_guid = Some(controller.guid());
         self.player_name = Some(controller.name().to_string());
         self.player_position = Some(controller.position());
@@ -4775,6 +4858,56 @@ impl WorldSession {
         self.player_level = level;
         if let Some(controller) = &mut self.player_controller {
             controller.set_level(level);
+        }
+    }
+
+    pub(crate) fn set_player_gold_like_cpp(&mut self, gold: u64) {
+        self.player_gold = gold;
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_gold(gold);
+        }
+    }
+
+    pub(crate) fn set_player_xp_like_cpp(&mut self, xp: u32) {
+        self.player_xp = xp;
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_xp(xp);
+        }
+    }
+
+    pub(crate) fn set_player_next_level_xp_like_cpp(&mut self, xp: u32) {
+        self.player_next_level_xp = xp;
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_next_level_xp(xp);
+        }
+    }
+
+    pub(crate) fn set_selection_guid_like_cpp(&mut self, guid: Option<ObjectGuid>) {
+        self.selection_guid = guid;
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_selection_guid(guid);
+        }
+    }
+
+    pub(crate) fn set_known_spells_like_cpp(&mut self, spells: Vec<i32>) {
+        self.known_spells = spells.clone();
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_known_spells(spells);
+        }
+    }
+
+    pub(crate) fn learn_known_spell_like_cpp(&mut self, spell_id: i32) {
+        if !self.known_spells.contains(&spell_id) {
+            self.known_spells.push(spell_id);
+        }
+        if let Some(controller) = &mut self.player_controller {
+            controller.learn_spell(spell_id);
+        }
+    }
+
+    pub(crate) fn sync_player_currencies_like_cpp(&mut self) {
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_currencies(self.player_currencies.clone());
         }
     }
 
@@ -4825,6 +4958,49 @@ impl WorldSession {
             .as_ref()
             .map(SessionPlayerController::gender)
             .unwrap_or(self.player_gender)
+    }
+
+    pub(crate) fn player_gold_like_cpp(&self) -> u64 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::gold)
+            .unwrap_or(self.player_gold)
+    }
+
+    pub(crate) fn player_xp_like_cpp(&self) -> u32 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::xp)
+            .unwrap_or(self.player_xp)
+    }
+
+    pub(crate) fn player_next_level_xp_like_cpp(&self) -> u32 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::next_level_xp)
+            .unwrap_or(self.player_next_level_xp)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn selection_guid_like_cpp(&self) -> Option<ObjectGuid> {
+        self.player_controller
+            .as_ref()
+            .and_then(SessionPlayerController::selection_guid)
+            .or(self.selection_guid)
+    }
+
+    pub(crate) fn known_spells_like_cpp(&self) -> &[i32] {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::known_spells)
+            .unwrap_or(&self.known_spells)
+    }
+
+    pub(crate) fn player_currencies_like_cpp(&self) -> &HashMap<u32, PlayerCurrency> {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::currencies)
+            .unwrap_or(&self.player_currencies)
     }
 
     pub fn set_player_alive_like_cpp(&mut self, alive: bool) {
@@ -5917,6 +6093,23 @@ mod tests {
         let (mut session, _pkt_tx, _send_rx) = make_session();
         let guid = ObjectGuid::create_player(1, 42);
         let start = Position::new(1.0, 2.0, 3.0, 4.0);
+        session.set_player_gold_like_cpp(1234);
+        session.set_player_xp_like_cpp(55);
+        session.set_player_next_level_xp_like_cpp(4000);
+        session.set_selection_guid_like_cpp(Some(test_creature_guid(77)));
+        session.set_known_spells_like_cpp(vec![118, 133]);
+        session.player_currencies.insert(
+            395,
+            PlayerCurrency {
+                state: PlayerCurrencyState::Unchanged,
+                quantity: 9,
+                weekly_quantity: 0,
+                tracked_quantity: 0,
+                increased_cap_quantity: 0,
+                earned_quantity: 9,
+                flags: 0,
+            },
+        );
 
         session.attach_player_controller_like_cpp(SessionPlayerController::new(
             guid,
@@ -5937,6 +6130,15 @@ mod tests {
         assert_eq!(session.player_class_like_cpp(), 8);
         assert_eq!(session.player_level_like_cpp(), 70);
         assert_eq!(session.player_gender_like_cpp(), 0);
+        assert_eq!(session.player_gold_like_cpp(), 1234);
+        assert_eq!(session.player_xp_like_cpp(), 55);
+        assert_eq!(session.player_next_level_xp_like_cpp(), 4000);
+        assert_eq!(
+            session.selection_guid_like_cpp(),
+            Some(test_creature_guid(77))
+        );
+        assert_eq!(session.known_spells_like_cpp(), &[118, 133]);
+        assert_eq!(session.player_currency_quantity(395), 9);
         assert_eq!(session.player_guid, Some(guid));
         assert_eq!(session.player_name.as_deref(), Some("Jaina"));
         assert_eq!(session.player_position, Some(start));
@@ -5945,10 +6147,16 @@ mod tests {
         let moved = Position::new(5.0, 6.0, 7.0, 8.0);
         session.set_player_map_position_like_cpp(1, moved);
         session.set_player_level_like_cpp(71);
+        session.set_player_gold_like_cpp(2000);
+        session.set_player_xp_like_cpp(66);
+        session.learn_known_spell_like_cpp(116);
 
         assert_eq!(session.player_position_like_cpp(), Some(moved));
         assert_eq!(session.player_map_id_like_cpp(), 1);
         assert_eq!(session.player_level_like_cpp(), 71);
+        assert_eq!(session.player_gold_like_cpp(), 2000);
+        assert_eq!(session.player_xp_like_cpp(), 66);
+        assert!(session.known_spells_like_cpp().contains(&116));
         assert_eq!(session.player_position, Some(moved));
         assert_eq!(session.current_map_id, 1);
         assert_eq!(session.player_level, 71);

@@ -522,7 +522,7 @@ impl crate::session::WorldSession {
         let target_guid = pkt
             .read_packed_guid()
             .unwrap_or(wow_core::ObjectGuid::EMPTY);
-        self.selection_guid = Some(target_guid);
+        self.set_selection_guid_like_cpp(Some(target_guid));
         info!(
             "SetSelection: account {} → {:?}",
             self.account_id, target_guid

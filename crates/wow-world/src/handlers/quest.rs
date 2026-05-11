@@ -680,7 +680,7 @@ impl WorldSession {
         // Give gold reward
         let money = quest.reward_money_difficulty;
         if money > 0 {
-            self.player_gold = self.player_gold.saturating_add(money as u64);
+            self.set_player_gold_like_cpp(self.player_gold_like_cpp().saturating_add(money as u64));
             self.save_player_gold().await;
         }
 

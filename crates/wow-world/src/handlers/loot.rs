@@ -887,7 +887,10 @@ impl WorldSession {
             }
         }
 
-        self.player_gold = self.player_gold.saturating_add(player_money_delta);
+        self.set_player_gold_like_cpp(
+            self.player_gold_like_cpp()
+                .saturating_add(player_money_delta),
+        );
         self.save_player_gold().await;
 
         for (loot_guid, _, _) in &money_by_loot {

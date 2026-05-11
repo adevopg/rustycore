@@ -2320,8 +2320,8 @@ impl WorldSession {
         // Cols: 15=totaltime, 16=leveltime, 17=money (bigint unsigned).
         self.total_played_time = result.try_read::<u32>(15).unwrap_or(0);
         self.level_played_time = result.try_read::<u32>(16).unwrap_or(0);
-        self.player_gold = result.try_read::<u64>(17).unwrap_or(0);
-        self.player_xp = result.try_read::<u32>(18).unwrap_or(0);
+        self.set_player_gold_like_cpp(result.try_read::<u64>(17).unwrap_or(0));
+        self.set_player_xp_like_cpp(result.try_read::<u32>(18).unwrap_or(0));
 
         // Load equipped items for visible display + inventory objects
         let mut visible_items = [(0i32, 0u16, 0u16); 19];
@@ -2565,6 +2565,7 @@ impl WorldSession {
                         self.player_currencies.len(),
                         guid
                     );
+                    self.sync_player_currencies_like_cpp();
                 }
                 Err(e) => {
                     warn!("Failed to load currencies for {:?}: {}", guid, e);
@@ -2678,7 +2679,7 @@ impl WorldSession {
         }
 
         // Store final known_spells in session for later use (ShowTradeSkill, etc.)
-        self.known_spells = known_spells.clone();
+        self.set_known_spells_like_cpp(known_spells.clone());
 
         // ── Load action buttons from character_action ──
         // Column types: button=tinyint unsigned, action=int unsigned, type=tinyint unsigned
