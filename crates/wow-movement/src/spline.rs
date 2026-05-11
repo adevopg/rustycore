@@ -153,6 +153,12 @@ pub struct AnimTierTransition {
     pub anim_tier: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MonsterMovePathData {
+    pub points: Vec<Position>,
+    pub packed_deltas: Vec<[f32; 3]>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoveSplineInitArgs {
     pub path: Vec<Position>,
@@ -425,6 +431,11 @@ impl MoveSpline {
     }
 
     #[must_use]
+    pub const fn facing(&self) -> FacingInfo {
+        self.facing
+    }
+
+    #[must_use]
     pub const fn time_passed_ms(&self) -> i32 {
         self.time_passed_ms
     }
@@ -477,6 +488,56 @@ impl MoveSpline {
     #[must_use]
     pub fn final_destination(&self) -> Option<Position> {
         self.spline.final_destination()
+    }
+
+    #[must_use]
+    pub fn monster_move_path_data(&self) -> MonsterMovePathData {
+        let point_count = self.spline.points.len();
+        if point_count < 3 {
+            return MonsterMovePathData::default();
+        }
+
+        let last_idx = point_count - 3;
+        if self.flags.contains(MoveSplineFlag::UNCOMPRESSED_PATH) {
+            let mut points = Vec::new();
+            if self.flags.contains(MoveSplineFlag::CYCLIC) {
+                points.push(self.spline.points[1]);
+                for index in 0..last_idx {
+                    points.push(self.spline.points[index + 1]);
+                }
+            } else {
+                for index in 0..last_idx {
+                    points.push(self.spline.points[index + 2]);
+                }
+            }
+            return MonsterMovePathData {
+                points,
+                packed_deltas: Vec::new(),
+            };
+        }
+
+        let real_path = &self.spline.points[1..];
+        let points = vec![real_path[last_idx]];
+
+        let mut packed_deltas = Vec::new();
+        if last_idx > 1 {
+            let first = real_path[0];
+            let last = real_path[last_idx];
+            let middle = Position::xyz(
+                first.x.midpoint(last.x),
+                first.y.midpoint(last.y),
+                first.z.midpoint(last.z),
+            );
+
+            for point in &real_path[1..last_idx] {
+                packed_deltas.push([middle.x - point.x, middle.y - point.y, middle.z - point.z]);
+            }
+        }
+
+        MonsterMovePathData {
+            points,
+            packed_deltas,
+        }
     }
 
     #[must_use]
@@ -1171,5 +1232,58 @@ mod tests {
             Position::xyz(10.0, 0.0, 0.0)
         );
         assert!(!spline.finalized());
+    }
+
+    #[test]
+    fn monster_move_path_data_compresses_like_cpp_initialize_spline_data() {
+        let args = MoveSplineInitArgs {
+            path: vec![
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(10.0, 0.0, 0.0),
+                Position::xyz(20.0, 0.0, 0.0),
+                Position::xyz(30.0, 0.0, 0.0),
+            ],
+            velocity: 10.0,
+            ..MoveSplineInitArgs::default()
+        };
+        let mut spline = MoveSpline::new();
+        spline.initialize(&args).unwrap();
+
+        let path_data = spline.monster_move_path_data();
+
+        assert_eq!(path_data.points, vec![Position::xyz(30.0, 0.0, 0.0)]);
+        assert_eq!(
+            path_data.packed_deltas,
+            vec![[5.0, 0.0, 0.0], [-5.0, 0.0, 0.0]]
+        );
+    }
+
+    #[test]
+    fn monster_move_path_data_uncompressed_cyclic_matches_cpp_point_rules() {
+        let args = MoveSplineInitArgs {
+            path: vec![
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(10.0, 0.0, 0.0),
+                Position::xyz(10.0, 10.0, 0.0),
+            ],
+            flags: MoveSplineFlag::CYCLIC | MoveSplineFlag::UNCOMPRESSED_PATH,
+            velocity: 10.0,
+            ..MoveSplineInitArgs::default()
+        };
+        let mut spline = MoveSpline::new();
+        spline.initialize(&args).unwrap();
+
+        let path_data = spline.monster_move_path_data();
+
+        assert_eq!(
+            path_data.points,
+            vec![
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(0.0, 0.0, 0.0),
+                Position::xyz(10.0, 0.0, 0.0),
+                Position::xyz(10.0, 10.0, 0.0),
+            ]
+        );
+        assert!(path_data.packed_deltas.is_empty());
     }
 }

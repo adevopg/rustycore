@@ -3208,6 +3208,7 @@ dependencies = [
  "tracing",
  "wow-constants",
  "wow-core",
+ "wow-movement",
 ]
 
 [[package]]

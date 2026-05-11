@@ -333,7 +333,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [x] **#MOVE-SPL.1** Create `crates/wow-movement` skeleton and active `spline.rs` module. (L)
 - [x] **#MOVE-SPL.2** Port `MoveSplineFlag` as `bitflags! struct MoveSplineFlag: u32` with all 32 named bits + `Mask_No_Monster_Move` + `Mask_Unused` + the `EnableAnimation/EnableParabolic/EnableFlying/EnableFalling/EnableCatmullRom/EnableTransportEnter|Exit` setters that clear sibling flags. Hex-value tests. (M)
 - [x] **#MOVE-SPL.3** Port Location semantics onto `wow_core::Position` (`x/y/z/orientation`) for the first runtime core. (L)
-- [x] **#MOVE-SPL.4** Port full `Movement::FacingInfo` + `MonsterMoveType` enum + `SpellEffectExtraData` + `AnimTierTransition` as runtime data structs. Packet-extra mapping remains under `#A06.8h.3c`. (L)
+- [x] **#MOVE-SPL.4** Port full `Movement::FacingInfo` + `MonsterMoveType` enum + `SpellEffectExtraData` + `AnimTierTransition` as runtime data structs; packet-extra mapping completed in `#A06.8h.3c.1`. (L)
 - [x] **#MOVE-SPL.5** Port `MoveSplineInitArgs` as POD; `Validate(unit)` + `_checkPathLengths` without Unit logging side effects. (M)
 - [x] **#MOVE-SPL.6** Port `SplineBase` core needed by `MoveSpline`: `points`, `index_lo/hi`, smooth/linear mode, cyclic, `initial_orientation`, `steps_per_segment=3`. (M)
 - [x] **#MOVE-SPL.7** Port linear evaluator: `eval_percent_linear`, `eval_derivative_linear`, `seg_length_linear`. C++ still stores via CatmullRom-style virtual points; Rust mirrors that storage. (M)
@@ -347,7 +347,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-SPL.15** Port `MoveSplineInit::Launch` (validate → commit `MoveSpline::Initialize` → send packet → return spline ID) + `Stop`. (H)
 - [ ] **#MOVE-SPL.16** Port `TransportPathTransform` functor (global ↔ transport-local). (M)
 - [ ] **#MOVE-SPL.17** Port `SplineChainLink` + `SplineChainResumeInfo` POD. (L)
-- [ ] **#MOVE-SPL.18** Extend `crates/wow-packet/src/packets/movement.rs` `SMSG_ON_MONSTER_MOVE` writer to emit: facing types (`MONSTER_MOVE_FACING_SPOT/TARGET/ANGLE`), packed deltas vs `UncompressedPath`, `Cyclic` flag, parabolic extra block (amplitude or vertical_acceleration + start_time), anim-transition extra, fade-time. (XL — split per feature)
+- [x] **#MOVE-SPL.18** Extend `crates/wow-packet/src/packets/movement.rs` `SMSG_ON_MONSTER_MOVE` writer to emit: facing types (`MONSTER_MOVE_FACING_SPOT/TARGET/ANGLE`), packed deltas vs `UncompressedPath`, `Cyclic`/`Enter_Cycle` packet flags, `SplineFilter`, spell visual extra data, jump extra data, anim-transition extra and fade-time. Covered by `#A06.8h.3c.1`; runtime Unit hookup remains under `#MOVE-SPL.20`. (XL — split per feature)
 - [ ] **#MOVE-SPL.19** Round-trip test: serialize a `MoveSpline` via writer + decode bytes against a captured packet from a real client session. (M)
 - [ ] **#MOVE-SPL.20** Hook `MoveSpline::updateState(diff)` into the per-Unit tick (consumed by `MotionMaster::Update`); produce `Unit::Relocate` calls each segment. (H)
 
