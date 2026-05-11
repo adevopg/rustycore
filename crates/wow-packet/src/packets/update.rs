@@ -544,6 +544,41 @@ impl Default for SkillInfoValuesUpdate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ResearchValuesUpdate {
+    pub research_project_id: i16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RestInfoValuesUpdate {
+    pub rest_info_mask: u8,
+    pub threshold: u32,
+    pub state_id: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PvpInfoValuesUpdate {
+    pub pvp_info_mask: u32,
+    pub disqualified: bool,
+    pub bracket: i8,
+    pub pvp_rating_id: i32,
+    pub weekly_played: u32,
+    pub weekly_won: u32,
+    pub season_played: u32,
+    pub season_won: u32,
+    pub rating: u32,
+    pub weekly_best_rating: u32,
+    pub season_best_rating: u32,
+    pub pvp_tier_id: u32,
+    pub weekly_best_win_pvp_tier_id: u32,
+    pub field_28: u32,
+    pub field_2c: u32,
+    pub weekly_rounds_played: u32,
+    pub weekly_rounds_won: u32,
+    pub season_rounds_played: u32,
+    pub season_rounds_won: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerDataValuesDeltaUpdate {
     pub changed_object_type_mask: u32,
@@ -5494,6 +5529,90 @@ pub fn write_skill_info_values_update(buf: &mut WorldPacket, data: &SkillInfoVal
     }
 }
 
+pub fn write_research_values_update(buf: &mut WorldPacket, data: ResearchValuesUpdate) {
+    buf.write_int16(data.research_project_id);
+}
+
+pub fn write_rest_info_values_update(buf: &mut WorldPacket, data: RestInfoValuesUpdate) {
+    let mask = data.rest_info_mask & 0x07;
+    buf.write_bits(mask as u32, 3);
+
+    buf.flush_bits();
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            buf.write_uint32(data.threshold);
+        }
+        if mask & 0x04 != 0 {
+            buf.write_uint8(data.state_id);
+        }
+    }
+}
+
+pub fn write_pvp_info_values_update(buf: &mut WorldPacket, data: PvpInfoValuesUpdate) {
+    let mask = data.pvp_info_mask & 0x0007_FFFF;
+    buf.write_bits(mask, 19);
+
+    if mask & 0x01 != 0 && mask & 0x02 != 0 {
+        buf.write_bit(data.disqualified);
+    }
+    buf.flush_bits();
+
+    if mask & 0x01 != 0 {
+        if mask & 0x0000_0004 != 0 {
+            buf.write_int8(data.bracket);
+        }
+        if mask & 0x0000_0008 != 0 {
+            buf.write_int32(data.pvp_rating_id);
+        }
+        if mask & 0x0000_0010 != 0 {
+            buf.write_uint32(data.weekly_played);
+        }
+        if mask & 0x0000_0020 != 0 {
+            buf.write_uint32(data.weekly_won);
+        }
+        if mask & 0x0000_0040 != 0 {
+            buf.write_uint32(data.season_played);
+        }
+        if mask & 0x0000_0080 != 0 {
+            buf.write_uint32(data.season_won);
+        }
+        if mask & 0x0000_0100 != 0 {
+            buf.write_uint32(data.rating);
+        }
+        if mask & 0x0000_0200 != 0 {
+            buf.write_uint32(data.weekly_best_rating);
+        }
+        if mask & 0x0000_0400 != 0 {
+            buf.write_uint32(data.season_best_rating);
+        }
+        if mask & 0x0000_0800 != 0 {
+            buf.write_uint32(data.pvp_tier_id);
+        }
+        if mask & 0x0000_1000 != 0 {
+            buf.write_uint32(data.weekly_best_win_pvp_tier_id);
+        }
+        if mask & 0x0000_2000 != 0 {
+            buf.write_uint32(data.field_28);
+        }
+        if mask & 0x0000_4000 != 0 {
+            buf.write_uint32(data.field_2c);
+        }
+        if mask & 0x0000_8000 != 0 {
+            buf.write_uint32(data.weekly_rounds_played);
+        }
+        if mask & 0x0001_0000 != 0 {
+            buf.write_uint32(data.weekly_rounds_won);
+        }
+        if mask & 0x0002_0000 != 0 {
+            buf.write_uint32(data.season_rounds_played);
+        }
+        if mask & 0x0004_0000 != 0 {
+            buf.write_uint32(data.season_rounds_won);
+        }
+    }
+    buf.flush_bits();
+}
+
 /// ActivePlayerData VALUES update for the runtime paths currently emitted by
 /// RustyCore: InvSlots[141], buyback, coinage and combat stats.
 ///
@@ -6683,6 +6802,56 @@ mod tests {
         assert_eq!(
             u16::from_le_bytes(bytes[bytes.len() - 2..].try_into().unwrap()),
             75
+        );
+    }
+
+    #[test]
+    fn active_player_nested_simple_values_update_match_cpp_order() {
+        let mut research = WorldPacket::new_empty();
+        write_research_values_update(
+            &mut research,
+            ResearchValuesUpdate {
+                research_project_id: -123,
+            },
+        );
+        assert_eq!(
+            i16::from_le_bytes(research.into_data().try_into().unwrap()),
+            -123
+        );
+
+        let mut rest = WorldPacket::new_empty();
+        write_rest_info_values_update(
+            &mut rest,
+            RestInfoValuesUpdate {
+                rest_info_mask: 0x07,
+                threshold: 10_000,
+                state_id: 3,
+            },
+        );
+        let rest_bytes = rest.into_data();
+        assert_eq!(rest_bytes[0] & 0xE0, 0xE0); // 3-bit mask 0b111
+        assert_eq!(
+            u32::from_le_bytes(rest_bytes[1..5].try_into().unwrap()),
+            10_000
+        );
+        assert_eq!(rest_bytes[5], 3);
+
+        let mut pvp = WorldPacket::new_empty();
+        write_pvp_info_values_update(
+            &mut pvp,
+            PvpInfoValuesUpdate {
+                pvp_info_mask: 0x0F,
+                disqualified: true,
+                bracket: -1,
+                pvp_rating_id: 42,
+                ..Default::default()
+            },
+        );
+        let pvp_bytes = pvp.into_data();
+        assert_eq!(pvp_bytes[pvp_bytes.len() - 5], 0xFFu8); // Bracket i8
+        assert_eq!(
+            i32::from_le_bytes(pvp_bytes[pvp_bytes.len() - 4..].try_into().unwrap()),
+            42
         );
     }
 
