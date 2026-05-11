@@ -3957,6 +3957,9 @@ impl WorldSession {
             ClientOpcodes::RequestRaidInfo => {
                 self.handle_request_raid_info(pkt).await;
             }
+            ClientOpcodes::ResetInstances => {
+                self.handle_reset_instances(pkt).await;
+            }
             ClientOpcodes::RequestConquestFormulaConstants => {
                 self.handle_request_conquest_formula_constants(pkt).await;
             }

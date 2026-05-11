@@ -50,6 +50,37 @@ impl ServerPacket for InstanceInfo {
     }
 }
 
+/// C++ `WorldPackets::Instance::InstanceReset` / `SMSG_INSTANCE_RESET`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceReset {
+    pub map_id: u32,
+}
+
+impl ServerPacket for InstanceReset {
+    const OPCODE: ServerOpcodes = ServerOpcodes::InstanceReset;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_uint32(self.map_id);
+    }
+}
+
+/// C++ `WorldPackets::Instance::InstanceResetFailed` / `SMSG_INSTANCE_RESET_FAILED`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceResetFailed {
+    pub map_id: u32,
+    pub reset_failed_reason: u8,
+}
+
+impl ServerPacket for InstanceResetFailed {
+    const OPCODE: ServerOpcodes = ServerOpcodes::InstanceResetFailed;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_uint32(self.map_id);
+        pkt.write_bits(u32::from(self.reset_failed_reason), 2);
+        pkt.flush_bits();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +123,27 @@ mod tests {
                 0x80, // Locked=true, Extended=false
             ]
         );
+    }
+
+    #[test]
+    fn instance_reset_serialization_matches_cpp() {
+        let mut pkt = WorldPacket::new_server(ServerOpcodes::InstanceReset);
+
+        InstanceReset { map_id: 631 }.write(&mut pkt);
+
+        assert_eq!(&pkt.data()[2..], &[0x77, 0x02, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn instance_reset_failed_serialization_matches_cpp_map_then_two_reason_bits() {
+        let mut pkt = WorldPacket::new_server(ServerOpcodes::InstanceResetFailed);
+
+        InstanceResetFailed {
+            map_id: 631,
+            reset_failed_reason: 1,
+        }
+        .write(&mut pkt);
+
+        assert_eq!(&pkt.data()[2..], &[0x77, 0x02, 0x00, 0x00, 0x40]);
     }
 }

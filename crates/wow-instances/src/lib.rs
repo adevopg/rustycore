@@ -285,6 +285,20 @@ pub struct InstanceLockMgr {
 }
 
 impl InstanceLockMgr {
+    pub fn player_lock_map_difficulties(&self, player_guid: ObjectGuid) -> Vec<(u32, u8)> {
+        let Some(player_locks) = self.instance_locks_by_player.get(&player_guid) else {
+            return Vec::new();
+        };
+
+        let mut map_difficulties = player_locks
+            .values()
+            .map(|lock| (lock.map_id, lock.difficulty_id))
+            .collect::<Vec<_>>();
+        map_difficulties.sort_unstable();
+        map_difficulties.dedup();
+        map_difficulties
+    }
+
     pub async fn load_from_database_like_cpp(
         &mut self,
         character_db: &CharacterDatabase,
@@ -2001,6 +2015,25 @@ mod tests {
             mgr.find_active_instance_lock_at(player(1), &entries, now)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn player_lock_map_difficulties_are_unique_and_sorted() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+        let schedule = ResetSchedule::default();
+        let now = 10 * 86_400;
+
+        mgr.update_instance_lock_for_player_at(
+            player(1),
+            &entries,
+            update_event(100, None),
+            schedule,
+            now,
+        );
+
+        assert_eq!(mgr.player_lock_map_difficulties(player(1)), vec![(631, 4)]);
+        assert!(mgr.player_lock_map_difficulties(player(2)).is_empty());
     }
 
     #[test]
