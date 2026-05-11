@@ -89,8 +89,8 @@ impl WorldSession {
         };
 
         // Validate: GUID must match our player character.
-        if let Some(ref player_guid) = self.player_guid {
-            if info.info.guid != *player_guid && !info.info.guid.is_empty() {
+        if let Some(player_guid) = self.player_guid() {
+            if info.info.guid != player_guid && !info.info.guid.is_empty() {
                 warn!(
                     account = self.account_id,
                     "Movement GUID mismatch: expected {:?}, got {:?}", player_guid, info.info.guid
@@ -110,7 +110,7 @@ impl WorldSession {
         }
 
         // Update server-side player position.
-        self.player_position = Some(info.info.position);
+        self.set_player_position_like_cpp(info.info.position);
         // Keep the broadcast registry in sync so chat range checks are accurate.
         self.update_registry_position();
         trace!(
@@ -132,19 +132,20 @@ impl WorldSession {
         // self.check_creature_aggro().await;
 
         // Broadcast movement to other players on the same map.
-        if let (Some(guid), Some(registry)) = (self.player_guid, self.player_registry()) {
+        if let (Some(guid), Some(registry)) = (self.player_guid(), self.player_registry()) {
             use wow_core::ObjectGuid;
             use wow_network::PlayerBroadcastInfo;
 
             let move_update = MoveUpdate { info: info.info };
             let bytes = move_update.to_bytes();
+            let current_map_id = self.player_map_id_like_cpp();
 
             for entry in registry.iter() {
                 let (other_guid, other_info): (&ObjectGuid, &PlayerBroadcastInfo) = entry.pair();
                 if *other_guid == guid {
                     continue;
                 }
-                if other_info.map_id != self.current_map_id {
+                if other_info.map_id != current_map_id {
                     continue;
                 }
                 let _ = other_info.send_tx.send(bytes.clone());
@@ -165,8 +166,8 @@ impl WorldSession {
 
         // Validate: in a single‑player session, the active mover must be
         // the player's own GUID (or empty, meaning "no unit moving").
-        if let Some(ref player_guid) = self.player_guid {
-            if !pkt.active_mover.is_empty() && pkt.active_mover != *player_guid {
+        if let Some(player_guid) = self.player_guid() {
+            if !pkt.active_mover.is_empty() && pkt.active_mover != player_guid {
                 warn!(
                     account = self.account_id,
                     "SetActiveMover GUID mismatch: expected {:?}, got {:?}",

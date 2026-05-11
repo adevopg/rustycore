@@ -555,8 +555,7 @@ impl crate::session::WorldSession {
         );
 
         // Update internal state
-        self.current_map_id = new_map as u16;
-        self.player_position = Some(new_pos);
+        self.set_player_map_position_like_cpp(new_map as u16, new_pos);
         self.update_registry_position();
 
         // SMSG_NEW_WORLD — place player in new world
@@ -731,7 +730,7 @@ impl crate::session::WorldSession {
                 return;
             }
         };
-        let Some(player_guid) = self.player_guid else {
+        let Some(player_guid) = self.player_guid() else {
             return;
         };
         let current_total_played_time = self.total_played_time.saturating_add(
@@ -788,7 +787,7 @@ impl crate::session::WorldSession {
     pub async fn handle_battle_pet_request_journal(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_arena_team_roster(&mut self, _pkt: wow_packet::WorldPacket) {}
     pub async fn handle_request_raid_info(&mut self, _pkt: wow_packet::WorldPacket) {
-        let locks = match (self.player_guid, self.instance_lock_mgr.as_ref()) {
+        let locks = match (self.player_guid(), self.instance_lock_mgr.as_ref()) {
             (Some(player_guid), Some(instance_lock_mgr)) => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -847,13 +846,13 @@ impl crate::session::WorldSession {
 
     /// C++ `WorldSession::HandleResetInstancesOpcode`.
     pub async fn handle_reset_instances(&mut self, _pkt: wow_packet::WorldPacket) {
-        let Some(player_guid) = self.player_guid else {
+        let Some(player_guid) = self.player_guid() else {
             return;
         };
 
         if self
             .map_store()
-            .and_then(|store| store.get(u32::from(self.current_map_id)))
+            .and_then(|store| store.get(u32::from(self.player_map_id_like_cpp())))
             .is_some_and(|map| map.instance_type != 0)
         {
             return;

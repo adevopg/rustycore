@@ -7641,10 +7641,19 @@ impl WorldSession {
 
         // 30. Set session state to LoggedIn, store player GUID and initial position.
         self.set_state(crate::session::SessionState::LoggedIn);
-        self.set_player_guid(Some(guid));
+        self.attach_player_controller_like_cpp(crate::session::SessionPlayerController::new(
+            guid,
+            self.player_name
+                .clone()
+                .unwrap_or_else(|| format!("Player{}", guid.counter())),
+            *position,
+            map_id as u16,
+            race,
+            class,
+            level,
+            sex,
+        ));
         self.login_time = Some(std::time::Instant::now());
-        // Store initial position for aggro checks / movement tracking.
-        self.player_position = Some(*position);
         // Clear per-session loot/visibility state for fresh login. Creatures
         // remain map-owned, matching C++ Map ownership.
         self.visible_creatures.clear();

@@ -158,6 +158,83 @@ pub fn new_shared_object_accessor() -> SharedObjectAccessor {
     Arc::new(RwLock::new(ObjectAccessor::default()))
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SessionPlayerController {
+    guid: ObjectGuid,
+    name: String,
+    position: wow_core::Position,
+    map_id: u16,
+    race: u8,
+    class: u8,
+    level: u8,
+    gender: u8,
+}
+
+impl SessionPlayerController {
+    pub(crate) fn new(
+        guid: ObjectGuid,
+        name: String,
+        position: wow_core::Position,
+        map_id: u16,
+        race: u8,
+        class: u8,
+        level: u8,
+        gender: u8,
+    ) -> Self {
+        Self {
+            guid,
+            name,
+            position,
+            map_id,
+            race,
+            class,
+            level,
+            gender,
+        }
+    }
+
+    pub(crate) fn guid(&self) -> ObjectGuid {
+        self.guid
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn position(&self) -> wow_core::Position {
+        self.position
+    }
+
+    pub(crate) fn map_id(&self) -> u16 {
+        self.map_id
+    }
+
+    pub(crate) fn race(&self) -> u8 {
+        self.race
+    }
+
+    pub(crate) fn class(&self) -> u8 {
+        self.class
+    }
+
+    pub(crate) fn level(&self) -> u8 {
+        self.level
+    }
+
+    pub(crate) fn gender(&self) -> u8 {
+        self.gender
+    }
+
+    fn set_map_position(&mut self, map_id: u16, position: wow_core::Position) {
+        self.map_id = map_id;
+        self.position = position;
+    }
+
+    fn set_level(&mut self, level: u8) {
+        self.level = level;
+    }
+}
+
 /// Current state of the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
@@ -388,6 +465,8 @@ pub struct WorldSession {
 
     /// GUID of the character currently logged in (set after login completes).
     pub(crate) player_guid: Option<ObjectGuid>,
+    /// Attached player controller, mirroring C++ `WorldSession::_player` ownership.
+    pub(crate) player_controller: Option<SessionPlayerController>,
 
     /// Pending creature spawn request (set during login, processed async).
     pub(crate) pending_creature_spawn: Option<PendingCreatureSpawn>,
@@ -802,6 +881,7 @@ impl WorldSession {
             player_xp_table: None,
             selection_guid: None,
             player_guid: None,
+            player_controller: None,
             pending_creature_spawn: None,
             respawn_queue: Vec::new(),
             inventory_items: HashMap::new(),
@@ -2662,7 +2742,7 @@ impl WorldSession {
                 num_new_talents: 0,
             });
 
-            self.player_level = new_level;
+            self.set_player_level_like_cpp(new_level);
             self.refresh_next_level_xp();
 
             // Persist new level to DB
@@ -2946,13 +3026,18 @@ impl WorldSession {
     pub(crate) fn register_in_player_registry(&self) {
         use crate::handlers::character::default_display_id;
         let (Some(guid), Some(pos), Some(name), Some(reg)) = (
-            self.player_guid,
-            self.player_position,
-            &self.player_name,
+            self.player_guid(),
+            self.player_position_like_cpp(),
+            self.player_name_like_cpp(),
             &self.player_registry,
         ) else {
             return;
         };
+        let map_id = self.player_map_id_like_cpp();
+        let race = self.player_race_like_cpp();
+        let class = self.player_class_like_cpp();
+        let gender = self.player_gender_like_cpp();
+        let level = self.player_level_like_cpp();
         let mut visible_items = [(0i32, 0u16, 0u16); 19];
         for (slot, item) in &self.inventory_items {
             if (*slot as usize) < 19 {
@@ -2962,7 +3047,7 @@ impl WorldSession {
         reg.insert(
             guid,
             PlayerBroadcastInfo {
-                map_id: self.current_map_id,
+                map_id,
                 position: pos,
                 send_tx: self.send_tx.clone(),
                 command_tx: self.session_command_tx.clone(),
@@ -2986,24 +3071,24 @@ impl WorldSession {
                     .collect(),
                 rewarded_quests: self.rewarded_quests.clone(),
                 inventory_item_counts: self.represented_inventory_item_counts_like_cpp(),
-                player_name: name.clone(),
+                player_name: name.to_string(),
                 account_id: self.account_id,
-                race: self.player_race,
-                class: self.player_class,
-                sex: self.player_gender,
-                level: self.player_level,
-                display_id: default_display_id(self.player_race, self.player_gender),
+                race,
+                class,
+                sex: gender,
+                level,
+                display_id: default_display_id(race, gender),
                 visible_items,
             },
         );
         debug!(
             "Registered player {:?} ({}) in broadcast registry (map {})",
-            guid, name, self.current_map_id
+            guid, name, map_id
         );
     }
 
     pub(crate) fn sync_player_registry_state_like_cpp(&self) {
-        let (Some(guid), Some(registry)) = (self.player_guid, &self.player_registry) else {
+        let (Some(guid), Some(registry)) = (self.player_guid(), &self.player_registry) else {
             return;
         };
         if let Some(mut info) = registry.get_mut(&guid) {
@@ -3031,16 +3116,21 @@ impl WorldSession {
     }
 
     fn object_accessor_player_object(&self) -> Option<WorldObject> {
-        let (Some(guid), Some(pos), Some(name)) =
-            (self.player_guid, self.player_position, &self.player_name)
-        else {
+        let (Some(guid), Some(pos), Some(name)) = (
+            self.player_guid(),
+            self.player_position_like_cpp(),
+            self.player_name_like_cpp(),
+        ) else {
             return None;
         };
 
         let mut object = WorldObject::new(true, TypeId::Player, TypeMask::PLAYER);
         object.object_mut().create(guid);
         object.set_name(name);
-        if object.set_map(u32::from(self.current_map_id), 0).is_err() {
+        if object
+            .set_map(u32::from(self.player_map_id_like_cpp()), 0)
+            .is_err()
+        {
             return None;
         }
         object.relocate(pos);
@@ -3065,7 +3155,7 @@ impl WorldSession {
         let Some(object) = self.object_accessor_player_object() else {
             return;
         };
-        let Some(name) = &self.player_name else {
+        let Some(name) = self.player_name_like_cpp() else {
             return;
         };
 
@@ -3080,7 +3170,7 @@ impl WorldSession {
     }
 
     pub(crate) fn unregister_from_object_accessor(&self) {
-        let (Some(guid), Some(accessor)) = (self.player_guid, &self.object_accessor) else {
+        let (Some(guid), Some(accessor)) = (self.player_guid(), &self.object_accessor) else {
             return;
         };
         accessor.write().remove_player(guid);
@@ -3094,7 +3184,7 @@ impl WorldSession {
     }
 
     pub async fn cleanup_shared_runtime_state_on_disconnect_like_cpp(&mut self) {
-        if let Some(player_guid) = self.player_guid
+        if let Some(player_guid) = self.player_guid()
             && !self.active_loot_guid.is_empty()
         {
             self.close_active_loot_windows_like_cpp(player_guid);
@@ -3105,7 +3195,7 @@ impl WorldSession {
     /// Remove this session from the player registry.
     /// Called on logout or disconnect.
     pub(crate) fn unregister_from_player_registry(&self) {
-        let (Some(guid), Some(reg)) = (self.player_guid, &self.player_registry) else {
+        let (Some(guid), Some(reg)) = (self.player_guid(), &self.player_registry) else {
             return;
         };
         reg.remove(&guid);
@@ -3116,19 +3206,20 @@ impl WorldSession {
     /// Called whenever `player_position` changes.
     pub(crate) fn update_registry_position(&self) {
         let (Some(guid), Some(pos), Some(reg)) = (
-            self.player_guid,
-            self.player_position,
+            self.player_guid(),
+            self.player_position_like_cpp(),
             &self.player_registry,
         ) else {
             return;
         };
+        let map_id = self.player_map_id_like_cpp();
         if let Some(mut entry) = reg.get_mut(&guid) {
             entry.position = pos;
-            entry.map_id = self.current_map_id;
+            entry.map_id = map_id;
         }
         if let Some(accessor) = &self.object_accessor {
             if let Some(object) = accessor.write().player_object_mut(guid) {
-                object.world_relocate(u32::from(self.current_map_id), pos);
+                object.world_relocate(u32::from(map_id), pos);
             }
         }
     }
@@ -4644,6 +4735,96 @@ impl WorldSession {
     /// Set the logged-in player GUID.
     pub fn set_player_guid(&mut self, guid: Option<ObjectGuid>) {
         self.player_guid = guid;
+        if guid.is_none() {
+            self.player_controller = None;
+        }
+    }
+
+    pub(crate) fn attach_player_controller_like_cpp(
+        &mut self,
+        controller: SessionPlayerController,
+    ) {
+        self.player_guid = Some(controller.guid());
+        self.player_name = Some(controller.name().to_string());
+        self.player_position = Some(controller.position());
+        self.current_map_id = controller.map_id();
+        self.player_race = controller.race();
+        self.player_class = controller.class();
+        self.player_level = controller.level();
+        self.player_gender = controller.gender();
+        self.player_controller = Some(controller);
+    }
+
+    pub(crate) fn set_player_map_position_like_cpp(
+        &mut self,
+        map_id: u16,
+        position: wow_core::Position,
+    ) {
+        self.current_map_id = map_id;
+        self.player_position = Some(position);
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_map_position(map_id, position);
+        }
+    }
+
+    pub(crate) fn set_player_position_like_cpp(&mut self, position: wow_core::Position) {
+        self.set_player_map_position_like_cpp(self.current_map_id, position);
+    }
+
+    pub(crate) fn set_player_level_like_cpp(&mut self, level: u8) {
+        self.player_level = level;
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_level(level);
+        }
+    }
+
+    pub(crate) fn player_name_like_cpp(&self) -> Option<&str> {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::name)
+            .or(self.player_name.as_deref())
+    }
+
+    pub(crate) fn player_position_like_cpp(&self) -> Option<wow_core::Position> {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::position)
+            .or(self.player_position)
+    }
+
+    pub(crate) fn player_map_id_like_cpp(&self) -> u16 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::map_id)
+            .unwrap_or(self.current_map_id)
+    }
+
+    pub(crate) fn player_race_like_cpp(&self) -> u8 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::race)
+            .unwrap_or(self.player_race)
+    }
+
+    pub(crate) fn player_class_like_cpp(&self) -> u8 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::class)
+            .unwrap_or(self.player_class)
+    }
+
+    pub(crate) fn player_level_like_cpp(&self) -> u8 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::level)
+            .unwrap_or(self.player_level)
+    }
+
+    pub(crate) fn player_gender_like_cpp(&self) -> u8 {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::gender)
+            .unwrap_or(self.player_gender)
     }
 
     pub fn set_player_alive_like_cpp(&mut self, alive: bool) {
@@ -4660,7 +4841,10 @@ impl WorldSession {
 
     /// Get the logged-in player GUID.
     pub fn player_guid(&self) -> Option<ObjectGuid> {
-        self.player_guid
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::guid)
+            .or(self.player_guid)
     }
 
     /// Complete the logout: send LogoutComplete and mark session for disconnect.
@@ -4669,7 +4853,7 @@ impl WorldSession {
 
         info!("Logout complete for account {}", self.account_id);
         self.send_packet(&LogoutComplete);
-        self.player_guid = None;
+        self.set_player_guid(None);
         self.state = SessionState::Authed;
     }
 
@@ -5075,13 +5259,20 @@ impl WorldSession {
         use wow_packet::ServerPacket;
         use wow_packet::packets::update::{PlayerCombatStats, UpdateObject};
 
-        let Some(guid) = self.player_guid else { return };
+        let Some(guid) = self.player_guid() else {
+            return;
+        };
         let Some(registry) = &self.player_registry else {
             return;
         };
-        let Some(pos) = self.player_position else {
+        let Some(pos) = self.player_position_like_cpp() else {
             return;
         };
+        let map_id = self.player_map_id_like_cpp();
+        let race = self.player_race_like_cpp();
+        let class = self.player_class_like_cpp();
+        let gender = self.player_gender_like_cpp();
+        let level = self.player_level_like_cpp();
 
         // Build visible_items from this player's equipped inventory.
         let mut visible_items = [(0i32, 0u16, 0u16); 19];
@@ -5097,13 +5288,13 @@ impl WorldSession {
         use crate::handlers::character::default_display_id;
         let update = UpdateObject::create_player(
             guid,
-            self.player_race,
-            self.player_class,
-            self.player_gender,
-            self.player_level,
-            default_display_id(self.player_race, self.player_gender),
+            race,
+            class,
+            gender,
+            level,
+            default_display_id(race, gender),
             &pos,
-            self.current_map_id,
+            map_id,
             0,     // zone_id (would need to track)
             false, // is_self: other players see this as a regular player, not ActivePlayer
             visible_items,
@@ -5128,7 +5319,7 @@ impl WorldSession {
                 continue;
             }
             // Only send to players on the same map
-            if broadcast_info.map_id != self.current_map_id {
+            if broadcast_info.map_id != map_id {
                 continue;
             }
 
@@ -5144,7 +5335,7 @@ impl WorldSession {
         if broadcast_count > 0 {
             info!(
                 "Broadcasted CreatePlayer for {:?} to {} players on map {}",
-                guid, broadcast_count, self.current_map_id
+                guid, broadcast_count, map_id
             );
         }
     }
@@ -5154,12 +5345,15 @@ impl WorldSession {
         use wow_packet::ServerPacket;
         use wow_packet::packets::update::UpdateObject;
 
-        let Some(guid) = self.player_guid else { return };
+        let Some(guid) = self.player_guid() else {
+            return;
+        };
         let Some(registry) = &self.player_registry else {
             return;
         };
+        let map_id = self.player_map_id_like_cpp();
 
-        let destroy = UpdateObject::destroy_objects(vec![guid], self.current_map_id);
+        let destroy = UpdateObject::destroy_objects(vec![guid], map_id);
         let bytes = destroy.to_bytes();
 
         let mut count = 0usize;
@@ -5168,7 +5362,7 @@ impl WorldSession {
             if *other_guid == guid {
                 continue;
             }
-            if info.map_id != self.current_map_id {
+            if info.map_id != map_id {
                 continue;
             }
             if info.send_tx.send(bytes.clone()).is_ok() {
@@ -5190,10 +5384,13 @@ impl WorldSession {
     pub(crate) fn receive_other_players_on_map(&self) {
         use wow_packet::packets::update::{PlayerCombatStats, UpdateObject};
 
-        let Some(guid) = self.player_guid else { return };
+        let Some(guid) = self.player_guid() else {
+            return;
+        };
         let Some(registry) = &self.player_registry else {
             return;
         };
+        let map_id = self.player_map_id_like_cpp();
 
         let empty_inv_slots = [ObjectGuid::EMPTY; 141];
         let empty_skills = Vec::new();
@@ -5206,7 +5403,7 @@ impl WorldSession {
             let (other_guid, broadcast_info) = entry.pair();
 
             // Skip self and players on different maps
-            if *other_guid == guid || broadcast_info.map_id != self.current_map_id {
+            if *other_guid == guid || broadcast_info.map_id != map_id {
                 continue;
             }
 
@@ -5242,7 +5439,7 @@ impl WorldSession {
         if player_count > 0 {
             info!(
                 "Received CREATE blocks from {} other players on map {} for {:?}",
-                player_count, self.current_map_id, guid
+                player_count, map_id, guid
             );
         }
     }
@@ -5257,11 +5454,11 @@ impl WorldSession {
             return;
         }
 
-        let player_pos = match self.player_position {
+        let player_pos = match self.player_position_like_cpp() {
             Some(p) => p,
             None => return,
         };
-        let player_guid = match self.player_guid {
+        let player_guid = match self.player_guid() {
             Some(g) => g,
             None => return,
         };
@@ -5713,6 +5910,52 @@ mod tests {
 
     fn test_creature_guid(counter: i64) -> ObjectGuid {
         ObjectGuid::create_world_object(wow_core::guid::HighGuid::Creature, 0, 1, 0, 0, 1, counter)
+    }
+
+    #[test]
+    fn session_player_controller_tracks_cpp_attached_player_identity() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        let start = Position::new(1.0, 2.0, 3.0, 4.0);
+
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            guid,
+            "Jaina".to_string(),
+            start,
+            571,
+            1,
+            8,
+            70,
+            0,
+        ));
+
+        assert_eq!(session.player_guid(), Some(guid));
+        assert_eq!(session.player_name_like_cpp(), Some("Jaina"));
+        assert_eq!(session.player_position_like_cpp(), Some(start));
+        assert_eq!(session.player_map_id_like_cpp(), 571);
+        assert_eq!(session.player_race_like_cpp(), 1);
+        assert_eq!(session.player_class_like_cpp(), 8);
+        assert_eq!(session.player_level_like_cpp(), 70);
+        assert_eq!(session.player_gender_like_cpp(), 0);
+        assert_eq!(session.player_guid, Some(guid));
+        assert_eq!(session.player_name.as_deref(), Some("Jaina"));
+        assert_eq!(session.player_position, Some(start));
+        assert_eq!(session.current_map_id, 571);
+
+        let moved = Position::new(5.0, 6.0, 7.0, 8.0);
+        session.set_player_map_position_like_cpp(1, moved);
+        session.set_player_level_like_cpp(71);
+
+        assert_eq!(session.player_position_like_cpp(), Some(moved));
+        assert_eq!(session.player_map_id_like_cpp(), 1);
+        assert_eq!(session.player_level_like_cpp(), 71);
+        assert_eq!(session.player_position, Some(moved));
+        assert_eq!(session.current_map_id, 1);
+        assert_eq!(session.player_level, 71);
+
+        session.set_player_guid(None);
+        assert_eq!(session.player_guid(), None);
+        assert!(session.player_controller.is_none());
     }
 
     fn test_creature_create_data(
