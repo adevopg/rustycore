@@ -13,7 +13,8 @@ use std::{
 use wow_core::{ObjectGuid, guid::HighGuid};
 use wow_data::{DungeonEncounterEntry, DungeonEncounterStore};
 use wow_database::{
-    CharStatements, CharacterDatabase, DatabaseError, PreparedStatement, StatementDef,
+    CharStatements, CharacterDatabase, DatabaseError, PreparedStatement, SqlTransaction,
+    StatementDef,
 };
 
 /// C++ `MAX_DUNGEON_ENCOUNTERS_PER_BOSS`.
@@ -633,6 +634,37 @@ impl InstanceLockMgr {
             .get(&entries.key())
     }
 
+    /// C++ `InstanceLockMgr::UpdateInstanceLockForPlayer(trans, ...)`.
+    ///
+    /// Mutates the in-memory lock first, then appends
+    /// `CHAR_DEL_CHARACTER_INSTANCE_LOCK` + `CHAR_INS_CHARACTER_INSTANCE_LOCK`
+    /// to the caller-owned transaction.
+    pub fn update_instance_lock_for_player_tx_at(
+        &mut self,
+        tx: &mut SqlTransaction,
+        player_guid: ObjectGuid,
+        entries: &MapDb2Entries,
+        update_event: InstanceLockUpdateEvent,
+        schedule: ResetSchedule,
+        now: InstanceResetTime,
+    ) -> Option<InstanceLock> {
+        let lock = self
+            .update_instance_lock_for_player_at(player_guid, entries, update_event, schedule, now)?
+            .clone();
+
+        tx.append(Self::delete_character_instance_lock_statement(
+            player_guid,
+            entries,
+        ));
+        tx.append(Self::insert_character_instance_lock_statement(
+            player_guid,
+            entries,
+            &lock,
+        ));
+
+        Some(lock)
+    }
+
     pub fn can_join_instance_lock_at(
         &self,
         player_guid: ObjectGuid,
@@ -684,6 +716,23 @@ impl InstanceLockMgr {
             data.data.entrance_world_safe_loc_id = entrance_id;
         }
         Some(data.clone())
+    }
+
+    /// C++ `InstanceLockMgr::UpdateSharedInstanceLock(trans, ...)`.
+    ///
+    /// Mutates shared lock data first, then appends `CHAR_DEL_INSTANCE` +
+    /// `CHAR_INS_INSTANCE` to the caller-owned transaction.
+    pub fn update_shared_instance_lock_tx(
+        &mut self,
+        tx: &mut SqlTransaction,
+        update_event: InstanceLockUpdateEvent,
+    ) -> Option<SharedInstanceLockData> {
+        let shared_data = self.update_shared_instance_lock(update_event)?;
+
+        tx.append(Self::delete_instance_statement(shared_data.instance_id));
+        tx.append(Self::insert_instance_statement(&shared_data));
+
+        Some(shared_data)
     }
 
     pub fn cleanup_unreferenced_shared_instance_lock_data_like_cpp(
@@ -1310,6 +1359,28 @@ mod tests {
     }
 
     #[test]
+    fn update_instance_lock_tx_appends_delete_insert_like_cpp() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+        let mut tx = SqlTransaction::new();
+
+        let lock = mgr
+            .update_instance_lock_for_player_tx_at(
+                &mut tx,
+                player(1),
+                &entries,
+                update_event(9001, Some(1)),
+                ResetSchedule::default(),
+                100,
+            )
+            .unwrap();
+
+        assert_eq!(tx.len(), 2);
+        assert_eq!(lock.instance_id, 9001);
+        assert_eq!(lock.data.completed_encounters_mask, 0b110);
+    }
+
+    #[test]
     fn update_instance_lock_replaces_expired_non_extended_lock_like_cpp() {
         let entries = raid_entries();
         let mut mgr = InstanceLockMgr::default();
@@ -1575,6 +1646,29 @@ mod tests {
                 .is_none()
         );
         assert_eq!(mgr.statistics().instance_count, 1);
+    }
+
+    #[test]
+    fn update_shared_instance_lock_tx_appends_delete_insert_like_cpp() {
+        let entries = raid_entries();
+        let mut mgr = InstanceLockMgr::default();
+        let mut tx = SqlTransaction::new();
+
+        mgr.create_instance_lock_for_new_instance_at(
+            player(1),
+            &entries,
+            9001,
+            ResetSchedule::default(),
+            100,
+        );
+
+        let shared = mgr
+            .update_shared_instance_lock_tx(&mut tx, update_event(9001, Some(2)))
+            .unwrap();
+
+        assert_eq!(tx.len(), 2);
+        assert_eq!(shared.instance_id, 9001);
+        assert_eq!(shared.data.completed_encounters_mask, 0b100);
     }
 
     #[test]
