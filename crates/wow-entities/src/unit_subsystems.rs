@@ -1548,6 +1548,8 @@ pub const MOTIONMASTER_FLAG_UPDATE: u8 = 0x1;
 pub const EVENT_CHARGE: u32 = 1003;
 pub const EVENT_JUMP: u32 = 1004;
 pub const EVENT_CHARGE_PREPATH: u32 = 1005;
+pub const EVENT_ASSIST_MOVE: u32 = 1009;
+pub const CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP: u32 = 1_500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MovementGeneratorRef {
@@ -1771,6 +1773,39 @@ impl MovementGeneratorRef {
                 }),
         }
     }
+
+    pub fn finalize_assistance_like_cpp(
+        &mut self,
+        active: bool,
+        movement_inform: bool,
+        owner_is_creature: bool,
+        owner_is_alive: bool,
+    ) -> AssistanceMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        let can_inform = movement_inform
+            && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+            && owner_is_creature;
+        AssistanceMovementFinalize {
+            clear_roaming_move: active,
+            set_no_call_assistance: can_inform.then_some(false),
+            call_assistance: can_inform,
+            seek_assistance_distract_ms: (can_inform && owner_is_alive)
+                .then_some(CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP),
+        }
+    }
+
+    pub fn finalize_assistance_distract_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> AssistanceDistractFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        AssistanceDistractFinalize {
+            set_react_aggressive: movement_inform
+                && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+                && owner_is_creature,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1803,6 +1838,28 @@ pub struct PointMovementInform {
 pub struct PointMovementFinalize {
     pub clear_roaming_move: bool,
     pub inform: Option<PointMovementInform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssistanceMovementFinalize {
+    pub clear_roaming_move: bool,
+    pub set_no_call_assistance: Option<bool>,
+    pub call_assistance: bool,
+    pub seek_assistance_distract_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssistanceDistractFinalize {
+    pub set_react_aggressive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeekAssistancePlan {
+    pub attack_stop: bool,
+    pub cast_stop: bool,
+    pub do_not_reacquire_spell_focus_target: bool,
+    pub set_react_passive: bool,
+    pub generator_added: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2017,6 +2074,36 @@ impl MotionSubsystem {
                 .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
                 .with_base_unit_state(UnitState::ROAMING.bits())
                 .with_movement_id(movement_id),
+        );
+    }
+
+    pub fn move_seek_assistance_like_cpp(&mut self) -> SeekAssistancePlan {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Assistance, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::ROAMING.bits())
+                .with_movement_id(EVENT_ASSIST_MOVE),
+        );
+        SeekAssistancePlan {
+            attack_stop: true,
+            cast_stop: true,
+            do_not_reacquire_spell_focus_target: true,
+            set_react_passive: true,
+            generator_added: true,
+        }
+    }
+
+    pub fn move_seek_assistance_distract_like_cpp(&mut self, timer_ms: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(
+                MovementGeneratorKind::AssistanceDistract,
+                MovementSlot::Active,
+            )
+            .with_priority(MovementGeneratorPriority::Normal)
+            .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+            .with_base_unit_state(UnitState::DISTRACTED.bits())
+            .with_duration_ms(timer_ms),
         );
     }
 
@@ -3382,6 +3469,69 @@ mod unit_subsystems_tests {
             PointMovementAction::ClearRoamingMove
         );
         assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+    }
+
+    #[test]
+    fn assistance_movement_generators_match_cpp_constructor_and_finalize_shape() {
+        let mut motion = MotionSubsystem::default();
+
+        assert_eq!(
+            motion.move_seek_assistance_like_cpp(),
+            SeekAssistancePlan {
+                attack_stop: true,
+                cast_stop: true,
+                do_not_reacquire_spell_focus_target: true,
+                set_react_passive: true,
+                generator_added: true,
+            }
+        );
+
+        let assist = motion.current_movement_generator();
+        assert_eq!(assist.kind, MovementGeneratorKind::Assistance);
+        assert_eq!(assist.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(assist.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(assist.movement_id, EVENT_ASSIST_MOVE);
+        assert!(assist.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+
+        let mut finalized = assist.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            finalized.finalize_assistance_like_cpp(true, true, true, true),
+            AssistanceMovementFinalize {
+                clear_roaming_move: true,
+                set_no_call_assistance: Some(false),
+                call_assistance: true,
+                seek_assistance_distract_ms: Some(CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP),
+            }
+        );
+        assert!(finalized.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut non_creature = assist.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            non_creature.finalize_assistance_like_cpp(true, true, false, true),
+            AssistanceMovementFinalize {
+                clear_roaming_move: true,
+                set_no_call_assistance: None,
+                call_assistance: false,
+                seek_assistance_distract_ms: None,
+            }
+        );
+
+        motion.move_seek_assistance_distract_like_cpp(777);
+        let distract = motion.current_movement_generator();
+        assert_eq!(distract.kind, MovementGeneratorKind::AssistanceDistract);
+        assert_eq!(distract.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(distract.base_unit_state, UnitState::DISTRACTED.bits());
+        assert_eq!(distract.duration_ms, Some(777));
+        assert!(distract.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+
+        let mut distract_finalized = distract.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            distract_finalized.finalize_assistance_distract_like_cpp(true, true),
+            AssistanceDistractFinalize {
+                set_react_aggressive: true,
+            }
+        );
+        assert!(distract_finalized.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
     }
 
     #[test]
