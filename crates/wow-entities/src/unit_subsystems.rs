@@ -1927,10 +1927,101 @@ impl MotionSubsystem {
         duration_ms: u32,
         arrival_spell: Option<(u32, ObjectGuid)>,
     ) {
+        self.add_generic_movement(
+            kind,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Normal,
+            UnitState::ROAMING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            arrival_spell,
+        );
+    }
+
+    pub fn launch_move_spline_like_cpp(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        priority: MovementGeneratorPriority,
+        duration_ms: u32,
+    ) -> bool {
+        let trinity_type = kind.trinity_id();
+        if trinity_type == 3 || trinity_type >= 19 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            kind,
+            movement_id,
+            duration_ms,
+            priority,
+            UnitState::ROAMING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            None,
+        );
+        true
+    }
+
+    pub fn move_jump_like_cpp(
+        &mut self,
+        movement_id: u32,
+        duration_ms: u32,
+        speed_xy: f32,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) -> bool {
+        if speed_xy < 0.01 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            UnitState::JUMPING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            arrival_spell,
+        );
+        true
+    }
+
+    pub fn move_jump_with_gravity_like_cpp(
+        &mut self,
+        movement_id: u32,
+        duration_ms: u32,
+        speed_xy: f32,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) -> bool {
+        if speed_xy < 0.01 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            UnitState::JUMPING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH,
+            arrival_spell,
+        );
+        true
+    }
+
+    fn add_generic_movement(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        duration_ms: u32,
+        priority: MovementGeneratorPriority,
+        base_unit_state: u32,
+        flags: u16,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) {
         let mut generator = MovementGeneratorRef::new(kind, MovementSlot::Active)
-            .with_priority(MovementGeneratorPriority::Normal)
-            .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
-            .with_base_unit_state(UnitState::ROAMING.bits())
+            .with_priority(priority)
+            .with_flags(flags)
+            .with_base_unit_state(base_unit_state)
             .with_movement_id(movement_id)
             .with_duration_ms(duration_ms);
         if let Some((spell_id, target_guid)) = arrival_spell {
@@ -3067,6 +3158,78 @@ mod unit_subsystems_tests {
         deactivated.initialize_generic_like_cpp();
         assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
         assert!(!deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+    }
+
+    #[test]
+    fn launch_move_spline_like_cpp_rejects_invalid_generator_types() {
+        let mut motion = MotionSubsystem::default();
+
+        assert!(!motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Custom(3),
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(!motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Custom(19),
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Point,
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        let generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Point);
+        assert_eq!(generator.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(generator.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(generator.movement_id, 7);
+        assert_eq!(generator.duration_ms, Some(250));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+    }
+
+    #[test]
+    fn move_jump_generators_match_cpp_priority_state_and_persist_flags() {
+        let mut motion = MotionSubsystem::default();
+        let target = guid(99);
+
+        assert!(!motion.move_jump_like_cpp(1, 500, 0.009, Some((777, target))));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(motion.move_jump_like_cpp(1, 500, 0.01, Some((777, target))));
+        let jump = motion.current_movement_generator();
+        assert_eq!(jump.kind, MovementGeneratorKind::Effect);
+        assert_eq!(jump.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(jump.base_unit_state, UnitState::JUMPING.bits());
+        assert_eq!(jump.movement_id, 1);
+        assert_eq!(jump.duration_ms, Some(500));
+        assert_eq!(jump.arrival_spell_id, 777);
+        assert_eq!(jump.arrival_spell_target_guid, target);
+        assert!(jump.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(!jump.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::JUMPING.bits()),
+            Some(&1)
+        );
+
+        assert!(motion.move_jump_with_gravity_like_cpp(2, 600, 1.0, None));
+        let gravity_jump = motion.current_movement_generator();
+        assert_eq!(gravity_jump.kind, MovementGeneratorKind::Effect);
+        assert_eq!(gravity_jump.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(gravity_jump.base_unit_state, UnitState::JUMPING.bits());
+        assert_eq!(gravity_jump.movement_id, 2);
+        assert_eq!(gravity_jump.duration_ms, Some(600));
+        assert_eq!(gravity_jump.arrival_spell_id, 0);
+        assert_eq!(gravity_jump.arrival_spell_target_guid, ObjectGuid::EMPTY);
+        assert!(gravity_jump.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(gravity_jump.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
     }
 
     #[test]
