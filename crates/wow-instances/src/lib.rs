@@ -1341,6 +1341,8 @@ pub struct InstanceScriptBase {
     bosses: Vec<BossInfo>,
     persistent_values: Vec<(String, PersistentInstanceScriptValue)>,
     combat_resurrections: CombatResurrectionTracker,
+    entrance_id: u32,
+    temporary_entrance_id: u32,
 }
 
 impl InstanceScriptBase {
@@ -1351,6 +1353,8 @@ impl InstanceScriptBase {
             bosses: vec![BossInfo::default(); boss_count],
             persistent_values: Vec::new(),
             combat_resurrections: CombatResurrectionTracker::default(),
+            entrance_id: 0,
+            temporary_entrance_id: 0,
         }
     }
 
@@ -1487,6 +1491,42 @@ impl InstanceScriptBase {
 
     pub fn use_combat_resurrection_like_cpp(&mut self) -> CombatResurrectionEvent {
         self.combat_resurrections.use_charge_like_cpp()
+    }
+
+    pub fn set_entrance_location_like_cpp(&mut self, world_safe_location_id: u32) {
+        self.entrance_id = world_safe_location_id;
+        self.temporary_entrance_id = 0;
+    }
+
+    pub fn set_temporary_entrance_location_like_cpp(&mut self, world_safe_location_id: u32) {
+        self.temporary_entrance_id = world_safe_location_id;
+    }
+
+    pub const fn entrance_location_like_cpp(&self) -> u32 {
+        if self.temporary_entrance_id != 0 {
+            self.temporary_entrance_id
+        } else {
+            self.entrance_id
+        }
+    }
+
+    pub const fn compute_entrance_location_for_completed_encounters_like_cpp(
+        &self,
+        _completed_encounters_mask: u32,
+    ) -> Option<u32> {
+        None
+    }
+
+    pub fn entrance_location_for_completed_encounters_like_cpp(
+        &self,
+        is_using_encounter_locks: bool,
+        completed_encounters_mask: u32,
+    ) -> Option<u32> {
+        if !is_using_encounter_locks {
+            return Some(self.entrance_id);
+        }
+
+        self.compute_entrance_location_for_completed_encounters_like_cpp(completed_encounters_mask)
     }
 
     pub fn get_save_data_like_cpp(&self) -> String {
@@ -2822,6 +2862,36 @@ mod tests {
         assert_eq!(
             script.combat_resurrections(),
             CombatResurrectionTracker::default()
+        );
+    }
+
+    #[test]
+    fn entrance_location_prefers_temporary_and_set_clears_temporary_like_cpp() {
+        let mut script = InstanceScriptBase::new(4, 1);
+
+        assert_eq!(script.entrance_location_like_cpp(), 0);
+        script.set_entrance_location_like_cpp(100);
+        assert_eq!(script.entrance_location_like_cpp(), 100);
+
+        script.set_temporary_entrance_location_like_cpp(200);
+        assert_eq!(script.entrance_location_like_cpp(), 200);
+
+        script.set_entrance_location_like_cpp(300);
+        assert_eq!(script.entrance_location_like_cpp(), 300);
+    }
+
+    #[test]
+    fn entrance_location_for_completed_encounters_matches_cpp_base_behavior() {
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.set_entrance_location_like_cpp(100);
+
+        assert_eq!(
+            script.entrance_location_for_completed_encounters_like_cpp(false, 0xFF),
+            Some(100)
+        );
+        assert_eq!(
+            script.entrance_location_for_completed_encounters_like_cpp(true, 0xFF),
+            None
         );
     }
 
