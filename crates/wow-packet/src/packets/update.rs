@@ -467,6 +467,153 @@ pub struct UnitDataValuesDeltaUpdate {
     pub resistance_buff_mods_negative: [i32; 7],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuestLogValuesUpdate {
+    pub quest_log_mask: u32,
+    pub end_time: i64,
+    pub quest_id: i32,
+    pub state_flags: u32,
+    pub objective_progress: [u16; 24],
+}
+
+impl Default for QuestLogValuesUpdate {
+    fn default() -> Self {
+        Self {
+            quest_log_mask: 0,
+            end_time: 0,
+            quest_id: 0,
+            state_flags: 0,
+            objective_progress: [0; 24],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ArenaCooldownValuesUpdate {
+    pub arena_cooldown_mask: u32,
+    pub spell_id: i32,
+    pub item_id: i32,
+    pub charges: i32,
+    pub flags: u32,
+    pub start_time: u32,
+    pub end_time: u32,
+    pub next_charge_time: u32,
+    pub max_charges: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DungeonScoreMapSummaryValuesUpdate {
+    pub challenge_mode_id: i32,
+    pub map_score: f32,
+    pub best_run_level: i32,
+    pub best_run_duration_ms: i32,
+    pub finished_success: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DungeonScoreSummaryValuesUpdate {
+    pub overall_score_current_season: f32,
+    pub ladder_score_current_season: f32,
+    pub runs: Vec<DungeonScoreMapSummaryValuesUpdate>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerDataValuesDeltaUpdate {
+    pub changed_object_type_mask: u32,
+    pub object_data: Option<ObjectDataValuesUpdate>,
+    pub unit_data: Option<UnitDataValuesDeltaUpdate>,
+    pub player_data_mask: [u32; 4],
+    pub customizations: Vec<ChrCustomizationChoiceValuesUpdate>,
+    pub customizations_update_mask: Option<Vec<u32>>,
+    pub arena_cooldowns: Vec<ArenaCooldownValuesUpdate>,
+    pub arena_cooldowns_update_mask: Option<Vec<u32>>,
+    pub visual_item_replacements: Vec<i32>,
+    pub visual_item_replacements_update_mask: Option<Vec<u32>>,
+    pub duel_arbiter: ObjectGuid,
+    pub wow_account: ObjectGuid,
+    pub loot_target_guid: ObjectGuid,
+    pub player_flags: u32,
+    pub player_flags_ex: u32,
+    pub guild_rank_id: u32,
+    pub guild_delete_date: u32,
+    pub guild_level: i32,
+    pub num_bank_slots: u8,
+    pub native_sex: u8,
+    pub inebriation: u8,
+    pub pvp_title: u8,
+    pub arena_faction: u8,
+    pub pvp_rank: u8,
+    pub field_88: i32,
+    pub duel_team: u32,
+    pub guild_time_stamp: i32,
+    pub player_title: i32,
+    pub fake_inebriation: i32,
+    pub virtual_player_realm: u32,
+    pub current_spec_id: u32,
+    pub taxi_mount_anim_kit_id: i32,
+    pub current_battle_pet_breed_quality: u8,
+    pub honor_level: i32,
+    pub logout_time: i64,
+    pub current_battle_pet_species_id: i32,
+    pub bnet_account: ObjectGuid,
+    pub dungeon_score: DungeonScoreSummaryValuesUpdate,
+    pub party_type: [u8; 2],
+    pub quest_log: [QuestLogValuesUpdate; 25],
+    pub visible_items: [VisibleItemValuesUpdate; 19],
+    pub avg_item_level: [f32; 6],
+    pub field_3120: [u32; 19],
+}
+
+impl Default for PlayerDataValuesDeltaUpdate {
+    fn default() -> Self {
+        Self {
+            changed_object_type_mask: VALUES_TYPE_PLAYER,
+            object_data: None,
+            unit_data: None,
+            player_data_mask: [0; 4],
+            customizations: Vec::new(),
+            customizations_update_mask: None,
+            arena_cooldowns: Vec::new(),
+            arena_cooldowns_update_mask: None,
+            visual_item_replacements: Vec::new(),
+            visual_item_replacements_update_mask: None,
+            duel_arbiter: ObjectGuid::EMPTY,
+            wow_account: ObjectGuid::EMPTY,
+            loot_target_guid: ObjectGuid::EMPTY,
+            player_flags: 0,
+            player_flags_ex: 0,
+            guild_rank_id: 0,
+            guild_delete_date: 0,
+            guild_level: 0,
+            num_bank_slots: 0,
+            native_sex: 0,
+            inebriation: 0,
+            pvp_title: 0,
+            arena_faction: 0,
+            pvp_rank: 0,
+            field_88: 0,
+            duel_team: 0,
+            guild_time_stamp: 0,
+            player_title: 0,
+            fake_inebriation: 0,
+            virtual_player_realm: 0,
+            current_spec_id: 0,
+            taxi_mount_anim_kit_id: 0,
+            current_battle_pet_breed_quality: 0,
+            honor_level: 0,
+            logout_time: 0,
+            current_battle_pet_species_id: 0,
+            bnet_account: ObjectGuid::EMPTY,
+            dungeon_score: DungeonScoreSummaryValuesUpdate::default(),
+            party_type: [0; 2],
+            quest_log: [QuestLogValuesUpdate::default(); 25],
+            visible_items: [VisibleItemValuesUpdate::default(); 19],
+            avg_item_level: [0.0; 6],
+            field_3120: [0; 19],
+        }
+    }
+}
+
 impl Default for UnitDataValuesDeltaUpdate {
     fn default() -> Self {
         Self {
@@ -2056,6 +2203,11 @@ pub enum UpdateBlock {
         guid: ObjectGuid,
         data: UnitDataValuesDeltaUpdate,
     },
+    /// VALUES update for PlayerData, optionally including UnitData.
+    FullPlayerValuesUpdate {
+        guid: ObjectGuid,
+        data: PlayerDataValuesDeltaUpdate,
+    },
     /// VALUES update for ContainerData, optionally including ItemData.
     ContainerValuesUpdate {
         guid: ObjectGuid,
@@ -2459,6 +2611,21 @@ impl UpdateObject {
         }
     }
 
+    /// Create a full VALUES update for `UF::PlayerData`.
+    pub fn full_player_values_update(
+        guid: ObjectGuid,
+        map_id: u16,
+        data: PlayerDataValuesDeltaUpdate,
+    ) -> Self {
+        Self {
+            map_id,
+            num_updates: 1,
+            destroy_guids: Vec::new(),
+            out_of_range_guids: Vec::new(),
+            blocks: vec![UpdateBlock::FullPlayerValuesUpdate { guid, data }],
+        }
+    }
+
     /// Create a VALUES update for `UF::ContainerData`, with optional `ItemData`.
     pub fn container_values_update(
         guid: ObjectGuid,
@@ -2630,6 +2797,9 @@ impl ServerPacket for UpdateObject {
                 }
                 UpdateBlock::UnitValuesUpdate { guid, data } => {
                     write_full_unit_values_update_block(&mut blocks_buf, guid, data);
+                }
+                UpdateBlock::FullPlayerValuesUpdate { guid, data } => {
+                    write_full_player_values_update_block(&mut blocks_buf, guid, data);
                 }
                 UpdateBlock::ContainerValuesUpdate { guid, data } => {
                     write_container_values_update_block(&mut blocks_buf, guid, data);
@@ -3194,6 +3364,7 @@ const VALUES_TYPE_OBJECT: u32 = 1 << 0;
 const VALUES_TYPE_ITEM: u32 = 1 << 1;
 const VALUES_TYPE_CONTAINER: u32 = 1 << 2;
 const VALUES_TYPE_UNIT: u32 = 1 << 5;
+const VALUES_TYPE_PLAYER: u32 = 1 << 6;
 const VALUES_TYPE_GAME_OBJECT: u32 = 1 << 8;
 const VALUES_TYPE_DYNAMIC_OBJECT: u32 = 1 << 9;
 const VALUES_TYPE_CORPSE: u32 = 1 << 10;
@@ -4725,6 +4896,319 @@ fn write_full_unit_values_update_block(
     buf.write_bytes(&val_data);
 }
 
+fn player_mask_has(data: &PlayerDataValuesDeltaUpdate, bit: usize) -> bool {
+    let block = bit / 32;
+    let offset = bit % 32;
+    data.player_data_mask.get(block).copied().unwrap_or(0) & (1 << offset) != 0
+}
+
+fn write_quest_log_values_update(buf: &mut WorldPacket, data: &QuestLogValuesUpdate) {
+    let mask = u64::from(data.quest_log_mask & 0x1FFF_FFFF);
+    write_update_field_blocks_mask(buf, mask, 1);
+    buf.flush_bits();
+
+    if field_mask_has(mask, 0) {
+        if field_mask_has(mask, 1) {
+            buf.write_int64(data.end_time);
+        }
+        if field_mask_has(mask, 2) {
+            buf.write_int32(data.quest_id);
+        }
+        if field_mask_has(mask, 3) {
+            buf.write_uint32(data.state_flags);
+        }
+    }
+    if field_mask_has(mask, 4) {
+        for (index, progress) in data.objective_progress.iter().enumerate() {
+            if field_mask_has(mask, 5 + index) {
+                buf.write_uint16(*progress);
+            }
+        }
+    }
+}
+
+fn write_quest_log_values_create(buf: &mut WorldPacket, data: &QuestLogValuesUpdate) {
+    buf.write_int64(data.end_time);
+    buf.write_int32(data.quest_id);
+    buf.write_uint32(data.state_flags);
+    for progress in &data.objective_progress {
+        buf.write_uint16(*progress);
+    }
+}
+
+fn write_arena_cooldown_values_update(buf: &mut WorldPacket, data: &ArenaCooldownValuesUpdate) {
+    let mask = data.arena_cooldown_mask & 0x01FF;
+    buf.write_bits(mask, 9);
+    buf.flush_bits();
+
+    if mask & 0x001 != 0 {
+        if mask & 0x002 != 0 {
+            buf.write_int32(data.spell_id);
+        }
+        if mask & 0x004 != 0 {
+            buf.write_int32(data.item_id);
+        }
+        if mask & 0x008 != 0 {
+            buf.write_int32(data.charges);
+        }
+        if mask & 0x010 != 0 {
+            buf.write_uint32(data.flags);
+        }
+        if mask & 0x020 != 0 {
+            buf.write_uint32(data.start_time);
+        }
+        if mask & 0x040 != 0 {
+            buf.write_uint32(data.end_time);
+        }
+        if mask & 0x080 != 0 {
+            buf.write_uint32(data.next_charge_time);
+        }
+        if mask & 0x100 != 0 {
+            buf.write_uint8(data.max_charges);
+        }
+    }
+}
+
+fn write_dungeon_score_summary_values_update(
+    buf: &mut WorldPacket,
+    data: &DungeonScoreSummaryValuesUpdate,
+) {
+    buf.write_float(data.overall_score_current_season);
+    buf.write_float(data.ladder_score_current_season);
+    buf.write_uint32(data.runs.len() as u32);
+    for run in &data.runs {
+        buf.write_int32(run.challenge_mode_id);
+        buf.write_float(run.map_score);
+        buf.write_int32(run.best_run_level);
+        buf.write_int32(run.best_run_duration_ms);
+        buf.write_bit(run.finished_success);
+        buf.flush_bits();
+    }
+}
+
+fn write_player_data_values_update_section(
+    buf: &mut WorldPacket,
+    data: &PlayerDataValuesDeltaUpdate,
+) {
+    write_update_field_blocks_mask_u32(buf, &data.player_data_mask, 4);
+
+    // C++ currently returns false from IsQuestLogChangesMaskSkipped().
+    let no_quest_log_changes_mask = false;
+    buf.write_bit(no_quest_log_changes_mask);
+
+    if player_mask_has(data, 0) {
+        if player_mask_has(data, 1) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.customizations.len(),
+                data.customizations_update_mask.as_deref(),
+            );
+        }
+        if player_mask_has(data, 2) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.arena_cooldowns.len(),
+                data.arena_cooldowns_update_mask.as_deref(),
+            );
+        }
+        if player_mask_has(data, 3) {
+            write_dynamic_field_update_mask(
+                buf,
+                data.visual_item_replacements.len(),
+                data.visual_item_replacements_update_mask.as_deref(),
+            );
+        }
+    }
+    buf.flush_bits();
+
+    if player_mask_has(data, 0) {
+        if player_mask_has(data, 1) {
+            for (index, customization) in data.customizations.iter().enumerate() {
+                if dynamic_mask_has_index(data.customizations_update_mask.as_deref(), index) {
+                    write_chr_customization_choice_values_update(buf, customization);
+                }
+            }
+        }
+        if player_mask_has(data, 2) {
+            for (index, cooldown) in data.arena_cooldowns.iter().enumerate() {
+                if dynamic_mask_has_index(data.arena_cooldowns_update_mask.as_deref(), index) {
+                    write_arena_cooldown_values_update(buf, cooldown);
+                }
+            }
+        }
+        if player_mask_has(data, 3) {
+            write_changed_i32_dynamic_values(
+                buf,
+                &data.visual_item_replacements,
+                data.visual_item_replacements_update_mask.as_deref(),
+            );
+        }
+        for (bit, guid) in [
+            (4, &data.duel_arbiter),
+            (5, &data.wow_account),
+            (6, &data.loot_target_guid),
+        ] {
+            if player_mask_has(data, bit) {
+                buf.write_packed_guid(guid);
+            }
+        }
+        for (bit, value) in [
+            (7, data.player_flags),
+            (8, data.player_flags_ex),
+            (9, data.guild_rank_id),
+            (10, data.guild_delete_date),
+        ] {
+            if player_mask_has(data, bit) {
+                buf.write_uint32(value);
+            }
+        }
+        if player_mask_has(data, 11) {
+            buf.write_int32(data.guild_level);
+        }
+        for (bit, value) in [
+            (12, data.num_bank_slots),
+            (13, data.native_sex),
+            (14, data.inebriation),
+            (15, data.pvp_title),
+            (16, data.arena_faction),
+            (17, data.pvp_rank),
+        ] {
+            if player_mask_has(data, bit) {
+                buf.write_uint8(value);
+            }
+        }
+        if player_mask_has(data, 18) {
+            buf.write_int32(data.field_88);
+        }
+        if player_mask_has(data, 19) {
+            buf.write_uint32(data.duel_team);
+        }
+        for (bit, value) in [
+            (20, data.guild_time_stamp),
+            (21, data.player_title),
+            (22, data.fake_inebriation),
+        ] {
+            if player_mask_has(data, bit) {
+                buf.write_int32(value);
+            }
+        }
+        if player_mask_has(data, 23) {
+            buf.write_uint32(data.virtual_player_realm);
+        }
+        if player_mask_has(data, 24) {
+            buf.write_uint32(data.current_spec_id);
+        }
+        if player_mask_has(data, 25) {
+            buf.write_int32(data.taxi_mount_anim_kit_id);
+        }
+        if player_mask_has(data, 26) {
+            buf.write_uint8(data.current_battle_pet_breed_quality);
+        }
+        if player_mask_has(data, 27) {
+            buf.write_int32(data.honor_level);
+        }
+        if player_mask_has(data, 28) {
+            buf.write_int64(data.logout_time);
+        }
+        if player_mask_has(data, 29) {
+            buf.write_int32(data.current_battle_pet_species_id);
+        }
+        if player_mask_has(data, 30) {
+            buf.write_packed_guid(&data.bnet_account);
+        }
+        if player_mask_has(data, 31) {
+            write_dungeon_score_summary_values_update(buf, &data.dungeon_score);
+        }
+    }
+
+    if player_mask_has(data, 32) {
+        for i in 0..2 {
+            if player_mask_has(data, 33 + i) {
+                buf.write_uint8(data.party_type[i]);
+            }
+        }
+    }
+
+    if player_mask_has(data, 35) {
+        for i in 0..25 {
+            if player_mask_has(data, 36 + i) {
+                if no_quest_log_changes_mask {
+                    write_quest_log_values_create(buf, &data.quest_log[i]);
+                } else {
+                    write_quest_log_values_update(buf, &data.quest_log[i]);
+                }
+            }
+        }
+    }
+
+    if player_mask_has(data, 61) {
+        for i in 0..19 {
+            if player_mask_has(data, 62 + i) {
+                write_visible_item_values_update(buf, &data.visible_items[i]);
+            }
+        }
+    }
+
+    if player_mask_has(data, 81) {
+        for i in 0..6 {
+            if player_mask_has(data, 82 + i) {
+                buf.write_float(data.avg_item_level[i]);
+            }
+        }
+    }
+
+    if player_mask_has(data, 88) {
+        for i in 0..19 {
+            if player_mask_has(data, 89 + i) {
+                buf.write_uint32(data.field_3120[i]);
+            }
+        }
+    }
+}
+
+fn write_full_player_values_update_block(
+    buf: &mut WorldPacket,
+    guid: &ObjectGuid,
+    data: &PlayerDataValuesDeltaUpdate,
+) {
+    buf.write_uint8(UpdateType::Values as u8);
+    buf.write_packed_guid(guid);
+
+    let mut val_buf = WorldPacket::new_empty();
+    val_buf.write_uint32(data.changed_object_type_mask);
+
+    if data.changed_object_type_mask & VALUES_TYPE_OBJECT != 0 {
+        if let Some(object_data) = data.object_data {
+            write_object_data_values_update_section(&mut val_buf, object_data);
+        } else {
+            write_object_data_values_update_section(
+                &mut val_buf,
+                ObjectDataValuesUpdate {
+                    changed_object_type_mask: VALUES_TYPE_OBJECT,
+                    object_data_mask: 0,
+                    entry_id: 0,
+                    dynamic_flags: 0,
+                    scale: 0.0,
+                },
+            );
+        }
+    }
+
+    if data.changed_object_type_mask & VALUES_TYPE_UNIT != 0 {
+        if let Some(unit_data) = &data.unit_data {
+            write_unit_data_values_update_section(&mut val_buf, unit_data);
+        }
+    }
+
+    if data.changed_object_type_mask & VALUES_TYPE_PLAYER != 0 {
+        write_player_data_values_update_section(&mut val_buf, data);
+    }
+
+    let val_data = val_buf.into_data();
+    buf.write_uint32(val_data.len() as u32);
+    buf.write_bytes(&val_data);
+}
+
 /// UnitData VALUES update: VirtualItems[3] and/or stat fields.
 ///
 /// C# UnitData.WriteUpdate format:
@@ -5893,6 +6377,36 @@ mod tests {
             VALUES_TYPE_UNIT
         );
         assert_eq!(&bytes[11..16], &[0x20, 0x00, 0x00, 0x01, 0x80]);
+        assert_eq!(bytes[16], 0xF0);
+        assert_eq!(i32::from_le_bytes(bytes[17..21].try_into().unwrap()), 19019);
+        assert_eq!(u16::from_le_bytes(bytes[21..23].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(bytes[23..25].try_into().unwrap()), 3);
+        assert_eq!(bytes.len(), 25);
+    }
+
+    #[test]
+    fn full_player_values_update_block_matches_cpp_playerdata_visible_item_delta_shape() {
+        let mut data = PlayerDataValuesDeltaUpdate::default();
+        data.player_data_mask[1] = (1 << 29) | (1 << 30);
+        data.visible_items[0] = VisibleItemValuesUpdate {
+            visible_item_mask: 0x0F,
+            item_id: 19019,
+            appearance_mod_id: 2,
+            item_visual: 3,
+        };
+
+        let mut block = WorldPacket::new_empty();
+        write_full_player_values_update_block(&mut block, &ObjectGuid::EMPTY, &data);
+
+        let bytes = block.into_data();
+        assert_eq!(bytes[0], UpdateType::Values as u8);
+        assert_eq!(&bytes[1..3], &[0, 0]);
+        assert_eq!(u32::from_le_bytes(bytes[3..7].try_into().unwrap()), 18);
+        assert_eq!(
+            u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+            VALUES_TYPE_PLAYER
+        );
+        assert_eq!(&bytes[11..16], &[0x26, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(bytes[16], 0xF0);
         assert_eq!(i32::from_le_bytes(bytes[17..21].try_into().unwrap()), 19019);
         assert_eq!(u16::from_le_bytes(bytes[21..23].try_into().unwrap()), 2);
