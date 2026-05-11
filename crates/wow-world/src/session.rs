@@ -291,6 +291,10 @@ impl SessionPlayerController {
         &self.inventory
     }
 
+    fn inventory_mut(&mut self) -> &mut SessionPlayerInventoryRuntime {
+        &mut self.inventory
+    }
+
     fn set_map_position(&mut self, map_id: u16, position: wow_core::Position) {
         self.map_id = map_id;
         self.position = position;
@@ -2170,11 +2174,10 @@ impl WorldSession {
     }
 
     pub(crate) fn insert_inventory_item_object(&mut self, item: Item) -> Option<Item> {
-        let previous = self
-            .inventory_item_objects
-            .insert(item.object().guid(), item);
-        self.sync_player_inventory_like_cpp();
-        previous
+        let item_guid = item.object().guid();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.item_objects.insert(item_guid, item)
+        })
     }
 
     pub(crate) fn update_inventory_item_object_like_cpp(
@@ -2182,49 +2185,50 @@ impl WorldSession {
         item_guid: ObjectGuid,
         update: impl FnOnce(&mut Item),
     ) -> bool {
-        let Some(item) = self.inventory_item_objects.get_mut(&item_guid) else {
-            return false;
-        };
-        update(item);
-        self.sync_player_inventory_like_cpp();
-        true
+        let mut update = Some(update);
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            let Some(item) = inventory.item_objects.get_mut(&item_guid) else {
+                return false;
+            };
+            if let Some(update) = update.take() {
+                update(item);
+            }
+            true
+        })
     }
 
     pub(crate) fn remove_inventory_item_object(&mut self, item_guid: ObjectGuid) -> Option<Item> {
-        let removed = self.inventory_item_objects.remove(&item_guid);
-        self.sync_player_inventory_like_cpp();
-        removed
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.item_objects.remove(&item_guid)
+        })
     }
 
     pub(crate) fn set_inventory_item_object_slot(&mut self, item_guid: ObjectGuid, slot: u8) {
-        if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+        self.update_inventory_item_object_like_cpp(item_guid, |item| {
             item.set_slot(slot);
-        }
-        self.sync_player_inventory_like_cpp();
+        });
     }
 
     pub(crate) fn clear_inventory_items_and_objects_like_cpp(&mut self) {
-        self.inventory_items.clear();
-        self.inventory_item_objects.clear();
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.inventory_items.clear();
+            inventory.item_objects.clear();
+        });
     }
 
     pub(crate) fn clear_all_inventory_runtime_like_cpp(&mut self) {
-        self.inventory_items.clear();
-        self.buyback_items.clear();
-        self.buyback_price = [0; BUYBACK_SLOT_COUNT];
-        self.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
-        self.current_buyback_slot = BUYBACK_SLOT_START;
-        self.inventory_item_objects.clear();
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            *inventory = SessionPlayerInventoryRuntime::default();
+        });
     }
 
     pub(crate) fn clear_buyback_runtime_like_cpp(&mut self) {
-        self.buyback_items.clear();
-        self.buyback_price = [0; BUYBACK_SLOT_COUNT];
-        self.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
-        self.current_buyback_slot = BUYBACK_SLOT_START;
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.buyback_items.clear();
+            inventory.buyback_price = [0; BUYBACK_SLOT_COUNT];
+            inventory.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
+            inventory.current_buyback_slot = BUYBACK_SLOT_START;
+        });
     }
 
     pub(crate) fn insert_inventory_item_like_cpp(
@@ -2232,15 +2236,15 @@ impl WorldSession {
         slot: u8,
         item: InventoryItem,
     ) -> Option<InventoryItem> {
-        let previous = self.inventory_items.insert(slot, item);
-        self.sync_player_inventory_like_cpp();
-        previous
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.inventory_items.insert(slot, item)
+        })
     }
 
     pub(crate) fn remove_inventory_item_like_cpp(&mut self, slot: u8) -> Option<InventoryItem> {
-        let removed = self.inventory_items.remove(&slot);
-        self.sync_player_inventory_like_cpp();
-        removed
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.inventory_items.remove(&slot)
+        })
     }
 
     pub(crate) fn insert_buyback_item_like_cpp(
@@ -2248,20 +2252,21 @@ impl WorldSession {
         slot: u8,
         item: InventoryItem,
     ) -> Option<InventoryItem> {
-        let previous = self.buyback_items.insert(slot, item);
-        self.sync_player_inventory_like_cpp();
-        previous
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.buyback_items.insert(slot, item)
+        })
     }
 
     pub(crate) fn remove_buyback_item_like_cpp(&mut self, slot: u8) -> Option<InventoryItem> {
-        let removed = self.buyback_items.remove(&slot);
-        self.sync_player_inventory_like_cpp();
-        removed
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.buyback_items.remove(&slot)
+        })
     }
 
     pub(crate) fn set_current_buyback_slot_like_cpp(&mut self, slot: u8) {
-        self.current_buyback_slot = slot;
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.current_buyback_slot = slot;
+        });
     }
 
     pub(crate) fn set_buyback_slot_metadata_like_cpp(
@@ -2274,9 +2279,10 @@ impl WorldSession {
             return;
         }
         let index = (slot - BUYBACK_SLOT_START) as usize;
-        self.buyback_price[index] = price;
-        self.buyback_timestamp[index] = timestamp;
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            inventory.buyback_price[index] = price;
+            inventory.buyback_timestamp[index] = timestamp;
+        });
     }
 
     pub(crate) fn clear_buyback_slot_metadata_like_cpp(&mut self, slot: u8) {
@@ -2290,17 +2296,18 @@ impl WorldSession {
         entry_id: u32,
         inventory_type: Option<u8>,
     ) -> bool {
-        let Some(inventory_item) = self
-            .inventory_items
-            .get_mut(&slot)
-            .filter(|inventory_item| inventory_item.guid == item_guid)
-        else {
-            return false;
-        };
-        inventory_item.entry_id = entry_id;
-        inventory_item.inventory_type = inventory_type;
-        self.sync_player_inventory_like_cpp();
-        true
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            let Some(inventory_item) = inventory
+                .inventory_items
+                .get_mut(&slot)
+                .filter(|inventory_item| inventory_item.guid == item_guid)
+            else {
+                return false;
+            };
+            inventory_item.entry_id = entry_id;
+            inventory_item.inventory_type = inventory_type;
+            true
+        })
     }
 
     pub(crate) fn is_buyback_slot(slot: u8) -> bool {
@@ -2316,14 +2323,13 @@ impl WorldSession {
     ) {
         if bag == INVENTORY_SLOT_BAG_0
             && self
-                .inventory_items
+                .inventory_items_like_cpp()
                 .get(&slot)
                 .is_some_and(|item| item.guid == item_guid)
         {
-            self.inventory_items.remove(&slot);
+            self.remove_inventory_item_like_cpp(slot);
         }
         self.remove_inventory_item_object(item_guid);
-        self.sync_player_inventory_like_cpp();
         self.sync_object_accessor_player();
         self.sync_player_registry_state_like_cpp();
     }
@@ -2407,10 +2413,11 @@ impl WorldSession {
     }
 
     pub(crate) fn advance_buyback_slot_cpp(&mut self) {
-        if self.current_buyback_slot < BUYBACK_SLOT_END - 1 {
-            self.current_buyback_slot += 1;
-        }
-        self.sync_player_inventory_like_cpp();
+        self.mutate_player_inventory_runtime_like_cpp(|inventory| {
+            if inventory.current_buyback_slot < BUYBACK_SLOT_END - 1 {
+                inventory.current_buyback_slot += 1;
+            }
+        });
     }
 
     fn direct_inventory_player_snapshot(&self) -> Option<Player> {
@@ -3438,9 +3445,7 @@ impl WorldSession {
     pub fn cleanup_shared_runtime_state(&mut self) {
         self.unregister_from_player_registry();
         self.unregister_from_object_accessor();
-        self.inventory_items.clear();
-        self.inventory_item_objects.clear();
-        self.sync_player_inventory_like_cpp();
+        self.clear_inventory_items_and_objects_like_cpp();
     }
 
     pub async fn cleanup_shared_runtime_state_on_disconnect_like_cpp(&mut self) {
@@ -5115,6 +5120,38 @@ impl WorldSession {
         }
     }
 
+    fn mirror_player_inventory_runtime_to_legacy_like_cpp(
+        &mut self,
+        inventory: &SessionPlayerInventoryRuntime,
+    ) {
+        self.inventory_items = inventory.inventory_items.clone();
+        self.buyback_items = inventory.buyback_items.clone();
+        self.buyback_price = inventory.buyback_price;
+        self.buyback_timestamp = inventory.buyback_timestamp;
+        self.current_buyback_slot = inventory.current_buyback_slot;
+        self.inventory_item_objects = inventory.item_objects.clone();
+    }
+
+    pub(crate) fn mutate_player_inventory_runtime_like_cpp<R>(
+        &mut self,
+        update: impl FnOnce(&mut SessionPlayerInventoryRuntime) -> R,
+    ) -> R {
+        if self.player_controller.is_some() {
+            let (result, inventory) = {
+                let controller = self.player_controller.as_mut().expect("checked above");
+                let result = update(controller.inventory_mut());
+                (result, controller.inventory().clone())
+            };
+            self.mirror_player_inventory_runtime_to_legacy_like_cpp(&inventory);
+            result
+        } else {
+            let mut inventory = self.session_player_inventory_runtime_like_cpp();
+            let result = update(&mut inventory);
+            self.mirror_player_inventory_runtime_to_legacy_like_cpp(&inventory);
+            result
+        }
+    }
+
     pub(crate) fn player_name_like_cpp(&self) -> Option<&str> {
         self.player_controller
             .as_ref()
@@ -6417,7 +6454,8 @@ mod tests {
         session.set_player_xp_like_cpp(66);
         session.learn_known_spell_like_cpp(116);
         session.inventory_items.remove(&23);
-        session.sync_player_inventory_like_cpp();
+        assert!(session.inventory_items_like_cpp().contains_key(&23));
+        session.remove_inventory_item_like_cpp(23);
 
         assert_eq!(session.player_position_like_cpp(), Some(moved));
         assert_eq!(session.player_map_id_like_cpp(), 1);
