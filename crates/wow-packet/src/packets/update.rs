@@ -579,6 +579,98 @@ pub struct PvpInfoValuesUpdate {
     pub season_rounds_won: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CharacterRestrictionValuesUpdate {
+    pub field_0: i32,
+    pub field_4: i32,
+    pub field_8: i32,
+    pub restriction_type: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SpellPctModByLabelValuesUpdate {
+    pub mod_index: i32,
+    pub modifier_value: f32,
+    pub label_id: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpellFlatModByLabelValuesUpdate {
+    pub mod_index: i32,
+    pub modifier_value: i32,
+    pub label_id: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CategoryCooldownModValuesUpdate {
+    pub spell_category_id: i32,
+    pub mod_cooldown: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WeeklySpellUseValuesUpdate {
+    pub spell_category_id: i32,
+    pub uses: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompletedProjectValuesUpdate {
+    pub completed_project_mask: u8,
+    pub project_id: u32,
+    pub first_completed: i64,
+    pub completion_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ResearchHistoryValuesUpdate {
+    pub research_history_mask: u8,
+    pub completed_projects: Vec<CompletedProjectValuesUpdate>,
+    pub completed_projects_update_mask: Option<Vec<u32>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TraitEntryValuesUpdate {
+    pub trait_node_id: i32,
+    pub trait_node_entry_id: i32,
+    pub rank: i32,
+    pub granted_ranks: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TraitConfigValuesUpdate {
+    pub trait_config_mask: u16,
+    pub entries: Vec<TraitEntryValuesUpdate>,
+    pub entries_update_mask: Option<Vec<u32>>,
+    pub id: i32,
+    pub name: String,
+    pub config_type: i32,
+    pub skill_line_id: i32,
+    pub chr_specialization_id: i32,
+    pub combat_config_flags: i32,
+    pub local_identifier: i32,
+    pub trait_system_id: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StablePetInfoValuesUpdate {
+    pub stable_pet_mask: u8,
+    pub pet_slot: u32,
+    pub pet_number: u32,
+    pub creature_id: u32,
+    pub display_id: u32,
+    pub experience_level: u32,
+    pub name: String,
+    pub pet_flags: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StableInfoValuesUpdate {
+    pub stable_info_mask: u8,
+    pub pets: Vec<StablePetInfoValuesUpdate>,
+    pub pets_update_mask: Option<Vec<u32>>,
+    pub stable_master: ObjectGuid,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerDataValuesDeltaUpdate {
     pub changed_object_type_mask: u32,
@@ -5613,6 +5705,216 @@ pub fn write_pvp_info_values_update(buf: &mut WorldPacket, data: PvpInfoValuesUp
     buf.flush_bits();
 }
 
+pub fn write_character_restriction_values_update(
+    buf: &mut WorldPacket,
+    data: CharacterRestrictionValuesUpdate,
+) {
+    buf.write_int32(data.field_0);
+    buf.write_int32(data.field_4);
+    buf.write_int32(data.field_8);
+    buf.write_bits(u32::from(data.restriction_type), 5);
+    buf.flush_bits();
+}
+
+pub fn write_spell_pct_mod_by_label_values_update(
+    buf: &mut WorldPacket,
+    data: SpellPctModByLabelValuesUpdate,
+) {
+    buf.write_int32(data.mod_index);
+    buf.write_float(data.modifier_value);
+    buf.write_int32(data.label_id);
+}
+
+pub fn write_spell_flat_mod_by_label_values_update(
+    buf: &mut WorldPacket,
+    data: SpellFlatModByLabelValuesUpdate,
+) {
+    buf.write_int32(data.mod_index);
+    buf.write_int32(data.modifier_value);
+    buf.write_int32(data.label_id);
+}
+
+pub fn write_category_cooldown_mod_values_update(
+    buf: &mut WorldPacket,
+    data: CategoryCooldownModValuesUpdate,
+) {
+    buf.write_int32(data.spell_category_id);
+    buf.write_int32(data.mod_cooldown);
+}
+
+pub fn write_weekly_spell_use_values_update(
+    buf: &mut WorldPacket,
+    data: WeeklySpellUseValuesUpdate,
+) {
+    buf.write_int32(data.spell_category_id);
+    buf.write_uint8(data.uses);
+}
+
+pub fn write_completed_project_values_update(
+    buf: &mut WorldPacket,
+    data: CompletedProjectValuesUpdate,
+) {
+    let mask = data.completed_project_mask & 0x0F;
+    buf.write_bits(mask as u32, 4);
+
+    buf.flush_bits();
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            buf.write_uint32(data.project_id);
+        }
+        if mask & 0x04 != 0 {
+            buf.write_int64(data.first_completed);
+        }
+        if mask & 0x08 != 0 {
+            buf.write_uint32(data.completion_count);
+        }
+    }
+}
+
+pub fn write_research_history_values_update(
+    buf: &mut WorldPacket,
+    data: &ResearchHistoryValuesUpdate,
+) {
+    let mask = data.research_history_mask & 0x03;
+    buf.write_bits(mask as u32, 2);
+
+    if mask & 0x01 != 0 && mask & 0x02 != 0 {
+        write_dynamic_field_update_mask(
+            buf,
+            data.completed_projects.len(),
+            data.completed_projects_update_mask.as_deref(),
+        );
+    }
+    buf.flush_bits();
+
+    if mask & 0x01 != 0 && mask & 0x02 != 0 {
+        for (index, project) in data.completed_projects.iter().enumerate() {
+            if dynamic_mask_has_index(data.completed_projects_update_mask.as_deref(), index) {
+                write_completed_project_values_update(buf, *project);
+            }
+        }
+    }
+}
+
+pub fn write_trait_entry_values_update(buf: &mut WorldPacket, data: TraitEntryValuesUpdate) {
+    buf.write_int32(data.trait_node_id);
+    buf.write_int32(data.trait_node_entry_id);
+    buf.write_int32(data.rank);
+    buf.write_int32(data.granted_ranks);
+}
+
+pub fn write_trait_config_values_update(buf: &mut WorldPacket, data: &TraitConfigValuesUpdate) {
+    let mask = data.trait_config_mask & 0x0FFF;
+    buf.write_bits(mask as u32, 12);
+
+    if mask & 0x001 != 0 && mask & 0x002 != 0 {
+        write_dynamic_field_update_mask(
+            buf,
+            data.entries.len(),
+            data.entries_update_mask.as_deref(),
+        );
+    }
+    buf.flush_bits();
+
+    if mask & 0x001 != 0 {
+        if mask & 0x002 != 0 {
+            for (index, entry) in data.entries.iter().enumerate() {
+                if dynamic_mask_has_index(data.entries_update_mask.as_deref(), index) {
+                    write_trait_entry_values_update(buf, *entry);
+                }
+            }
+        }
+        if mask & 0x004 != 0 {
+            buf.write_int32(data.id);
+        }
+    }
+    if mask & 0x010 != 0 {
+        if mask & 0x020 != 0 {
+            buf.write_int32(data.config_type);
+        }
+        if mask & 0x040 != 0 && data.config_type == 2 {
+            buf.write_int32(data.skill_line_id);
+        }
+        if mask & 0x080 != 0 && data.config_type == 1 {
+            buf.write_int32(data.chr_specialization_id);
+        }
+    }
+    if mask & 0x100 != 0 {
+        if mask & 0x200 != 0 && data.config_type == 1 {
+            buf.write_int32(data.combat_config_flags);
+        }
+        if mask & 0x400 != 0 && data.config_type == 1 {
+            buf.write_int32(data.local_identifier);
+        }
+        if mask & 0x800 != 0 && data.config_type == 3 {
+            buf.write_int32(data.trait_system_id);
+        }
+    }
+    if mask & 0x001 != 0 && mask & 0x008 != 0 {
+        buf.write_bits(data.name.len() as u32, 9);
+        buf.write_string(&data.name);
+    }
+    buf.flush_bits();
+}
+
+pub fn write_stable_pet_info_values_update(
+    buf: &mut WorldPacket,
+    data: &StablePetInfoValuesUpdate,
+) {
+    let mask = data.stable_pet_mask;
+    buf.write_bits(mask as u32, 8);
+
+    buf.flush_bits();
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            buf.write_uint32(data.pet_slot);
+        }
+        if mask & 0x04 != 0 {
+            buf.write_uint32(data.pet_number);
+        }
+        if mask & 0x08 != 0 {
+            buf.write_uint32(data.creature_id);
+        }
+        if mask & 0x10 != 0 {
+            buf.write_uint32(data.display_id);
+        }
+        if mask & 0x20 != 0 {
+            buf.write_uint32(data.experience_level);
+        }
+        if mask & 0x80 != 0 {
+            buf.write_uint8(data.pet_flags);
+        }
+        if mask & 0x40 != 0 {
+            buf.write_bits(data.name.len() as u32, 8);
+            buf.write_string(&data.name);
+        }
+    }
+    buf.flush_bits();
+}
+
+pub fn write_stable_info_values_update(buf: &mut WorldPacket, data: &StableInfoValuesUpdate) {
+    let mask = data.stable_info_mask & 0x07;
+    buf.write_bits(mask as u32, 3);
+
+    if mask & 0x01 != 0 && mask & 0x02 != 0 {
+        write_dynamic_field_update_mask(buf, data.pets.len(), data.pets_update_mask.as_deref());
+    }
+    buf.flush_bits();
+
+    if mask & 0x01 != 0 {
+        if mask & 0x02 != 0 {
+            for (index, pet) in data.pets.iter().enumerate() {
+                if dynamic_mask_has_index(data.pets_update_mask.as_deref(), index) {
+                    write_stable_pet_info_values_update(buf, pet);
+                }
+            }
+        }
+        if mask & 0x04 != 0 {
+            buf.write_packed_guid(&data.stable_master);
+        }
+    }
+}
+
 /// ActivePlayerData VALUES update for the runtime paths currently emitted by
 /// RustyCore: InvSlots[141], buyback, coinage and combat stats.
 ///
@@ -6853,6 +7155,159 @@ mod tests {
             i32::from_le_bytes(pvp_bytes[pvp_bytes.len() - 4..].try_into().unwrap()),
             42
         );
+    }
+
+    #[test]
+    fn active_player_dynamic_entry_values_update_match_cpp_order() {
+        let mut restriction = WorldPacket::new_empty();
+        write_character_restriction_values_update(
+            &mut restriction,
+            CharacterRestrictionValuesUpdate {
+                field_0: 1,
+                field_4: 2,
+                field_8: 3,
+                restriction_type: 17,
+            },
+        );
+        let restriction_bytes = restriction.into_data();
+        assert_eq!(
+            i32::from_le_bytes(restriction_bytes[0..4].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            i32::from_le_bytes(restriction_bytes[4..8].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            i32::from_le_bytes(restriction_bytes[8..12].try_into().unwrap()),
+            3
+        );
+        assert_eq!(restriction_bytes[12] & 0xF8, 0x88); // 5-bit type 17.
+
+        let mut pct = WorldPacket::new_empty();
+        write_spell_pct_mod_by_label_values_update(
+            &mut pct,
+            SpellPctModByLabelValuesUpdate {
+                mod_index: 4,
+                modifier_value: 1.5,
+                label_id: 6,
+            },
+        );
+        let pct_bytes = pct.into_data();
+        assert_eq!(i32::from_le_bytes(pct_bytes[0..4].try_into().unwrap()), 4);
+        assert_eq!(f32::from_le_bytes(pct_bytes[4..8].try_into().unwrap()), 1.5);
+        assert_eq!(i32::from_le_bytes(pct_bytes[8..12].try_into().unwrap()), 6);
+
+        let mut flat = WorldPacket::new_empty();
+        write_spell_flat_mod_by_label_values_update(
+            &mut flat,
+            SpellFlatModByLabelValuesUpdate {
+                mod_index: 7,
+                modifier_value: 8,
+                label_id: 9,
+            },
+        );
+        assert_eq!(flat.into_data(), [7, 0, 0, 0, 8, 0, 0, 0, 9, 0, 0, 0]);
+
+        let mut cooldown = WorldPacket::new_empty();
+        write_category_cooldown_mod_values_update(
+            &mut cooldown,
+            CategoryCooldownModValuesUpdate {
+                spell_category_id: 10,
+                mod_cooldown: 11,
+            },
+        );
+        assert_eq!(cooldown.into_data(), [10, 0, 0, 0, 11, 0, 0, 0]);
+
+        let mut weekly = WorldPacket::new_empty();
+        write_weekly_spell_use_values_update(
+            &mut weekly,
+            WeeklySpellUseValuesUpdate {
+                spell_category_id: 12,
+                uses: 13,
+            },
+        );
+        assert_eq!(weekly.into_data(), [12, 0, 0, 0, 13]);
+    }
+
+    #[test]
+    fn active_player_dynamic_nested_values_update_match_cpp_order() {
+        let mut research_history = WorldPacket::new_empty();
+        write_research_history_values_update(
+            &mut research_history,
+            &ResearchHistoryValuesUpdate {
+                research_history_mask: 0x03,
+                completed_projects: vec![CompletedProjectValuesUpdate {
+                    completed_project_mask: 0x0F,
+                    project_id: 101,
+                    first_completed: 202,
+                    completion_count: 3,
+                }],
+                completed_projects_update_mask: None,
+            },
+        );
+        let rh = research_history.into_data();
+        assert_eq!(
+            u32::from_le_bytes(rh[rh.len() - 16..rh.len() - 12].try_into().unwrap()),
+            101
+        );
+        assert_eq!(
+            i64::from_le_bytes(rh[rh.len() - 12..rh.len() - 4].try_into().unwrap()),
+            202
+        );
+        assert_eq!(
+            u32::from_le_bytes(rh[rh.len() - 4..].try_into().unwrap()),
+            3
+        );
+
+        let mut trait_config = WorldPacket::new_empty();
+        write_trait_config_values_update(
+            &mut trait_config,
+            &TraitConfigValuesUpdate {
+                trait_config_mask: 0x07F,
+                entries: vec![TraitEntryValuesUpdate {
+                    trait_node_id: 1,
+                    trait_node_entry_id: 2,
+                    rank: 3,
+                    granted_ranks: 4,
+                }],
+                entries_update_mask: None,
+                id: 55,
+                name: "Spec".to_string(),
+                config_type: 2,
+                skill_line_id: 777,
+                ..Default::default()
+            },
+        );
+        let tc = trait_config.into_data();
+        assert!(tc.windows(4).any(|window| window == [1, 0, 0, 0]));
+        assert!(tc.windows(4).any(|window| window == [55, 0, 0, 0]));
+        assert!(tc.windows(4).any(|window| window == 777u32.to_le_bytes()));
+        assert!(tc.windows(4).any(|window| window == b"Spec"));
+
+        let mut stable = WorldPacket::new_empty();
+        write_stable_info_values_update(
+            &mut stable,
+            &StableInfoValuesUpdate {
+                stable_info_mask: 0x07,
+                pets: vec![StablePetInfoValuesUpdate {
+                    stable_pet_mask: 0xFF,
+                    pet_slot: 1,
+                    pet_number: 2,
+                    creature_id: 3,
+                    display_id: 4,
+                    experience_level: 5,
+                    name: "Pet".to_string(),
+                    pet_flags: 6,
+                }],
+                pets_update_mask: None,
+                stable_master: ObjectGuid::EMPTY,
+            },
+        );
+        let stable_bytes = stable.into_data();
+        assert!(stable_bytes.windows(4).any(|window| window == [1, 0, 0, 0]));
+        assert!(stable_bytes.windows(4).any(|window| window == [5, 0, 0, 0]));
+        assert!(stable_bytes.windows(3).any(|window| window == b"Pet"));
     }
 
     #[test]
