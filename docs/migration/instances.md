@@ -228,6 +228,7 @@ NOTE: `InstanceSaveMgr` no longer exists as a separate class in this WoLK 3.4.3 
 - `#NEXT.R8.INSTANCES.010` adds C++ packet builders for `SMSG_INSTANCE_ENCOUNTER_ENGAGE_UNIT`, `_DISENGAGE_UNIT`, `_CHANGE_PRIORITY`, `_START`, `_END`, `_IN_COMBAT_RESURRECTION`, `_GAIN_COMBAT_RESURRECTION_CHARGE`, and `SMSG_BOSS_KILL`, including packed-guid and empty-payload coverage.
 - `#NEXT.R8.INSTANCES.011` adds the pure C++ `InstanceScript::Create`, `InstanceScriptDataReader::Load`, `InstanceScriptDataWriter::FillData/GetString`, and numeric `PersistentInstanceScriptValue` save/load core: header check, boss-state array, transient-state normalization, strict error cases, and compact C++-ordered JSON output.
 - `#NEXT.R8.INSTANCES.012` adds pure C++ `InstanceScript` encounter query helpers: `IsEncounterInProgress`, `IsEncounterCompleted`, `IsEncounterCompletedInMaskByBossId`, and `GetEncounterCount`-equivalent boss count behavior.
+- `#NEXT.R8.INSTANCES.013` adds pure C++ `InstanceScript::SetBossState` transition planning: `TO_BE_DECIDED` load initialization, unchanged/no-regression guards, alive world-boss-minion DONE guard, combat-res/start/end/player-notify flags, encounter-id derived update-lock/criteria/boss-kill/LFG flags, and door/minion/spawn-group follow-up flag.
 
 **What's implemented:**
 - `crates/wow-world/src/map_manager.rs` (per the active WIP commits) provides a `MapManager` global stub with placeholder for `GenerateInstanceId` (must verify), but no lock store and no script dispatch. (See WIP commit `f83c48d82`.)
@@ -335,7 +336,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] **#INST.19** Port `BossInfo`, `DoorData`, `DoorInfo`, `MinionData`, `MinionInfo`, `ObjectData`, `DungeonEncounterData`, `BossBoundaryEntry` (M)
 - [ ] **#INST.20** Define `InstanceScript` trait + default impl struct (`bosses`, `doors`, `minions`, `_creature_info`, `_go_info`, `_object_guids`, `_persistent_values`, `_entrance_id`, `_combat_res_*`) (H)
 - [~] **#INST.21** Implement `Create`, `Load(json)`, `GetSaveData()` w/ `serde_json` mirroring `InstanceScriptData.cpp` (header + bosses[] + persistent) (H) — pure C++ JSON reader/writer, transient-state normalization, and numeric persistent values done; `AfterDataLoad`, spawn-group updates, and map call-sites pending.
-- [ ] **#INST.22** Implement `SetBossState(id, state)` w/ door/minion/spawn-group/LFG hooks + save-trigger + `InstanceMap::UpdateInstanceLock` (H)
+- [~] **#INST.22** Implement `SetBossState(id, state)` w/ door/minion/spawn-group/LFG hooks + save-trigger + `InstanceMap::UpdateInstanceLock` (H) — pure C++ state-transition guards and side-effect plan done; actual `InstanceMap` execution, criteria, LFG, doors/minions, and DB update call-site pending.
 - [ ] **#INST.23** Implement `OnCreatureCreate/Remove` and `OnGameObjectCreate/Remove` w/ `_creature_info` + `_go_info` lookups (M)
 - [x] **#INST.24** Implement `IsEncounterInProgress`, `IsEncounterCompleted`, `IsEncounterCompletedInMaskByBossId`, `GetEncounterCount` (L)
 - [ ] **#INST.25** Implement `UpdateDoorState`, `UpdateMinionState`, `HandleGameObject`, `DoUseDoorOrButton`, `DoCloseDoorOrButton`, `DoRespawnGameObject` (M)
@@ -384,7 +385,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] Test: `CanJoinInstanceLock` returns `TRANSFER_ABORT_LOCKED_TO_DIFFERENT_INSTANCE` when player has lock to instanceId X but tries to enter Y of same `(mapId, lockId)`.
 - [ ] Test: `extended=true` lets player join a lock that is past `_expiryTime` but not past `effectiveExpiryTime` (= next reset).
 - [ ] Test: `ResetInstanceLocksForPlayer` skips locks where `IsInUse()` (active map) and reports them in `locksFailedToReset`.
-- [ ] Test: `InstanceScript::SetBossState(id, DONE)` flips door states per `EncounterDoorBehavior` and updates `completedEncountersMask`.
+- [~] Test: `InstanceScript::SetBossState(id, DONE)` flips door states per `EncounterDoorBehavior` and updates `completedEncountersMask` — DONE transition side-effect plan and encounter id resolution covered; real door/minion mutation and DB mask update pending.
 - [~] Test: `Load(GetSaveData())` round-trips boss states + persistent values losslessly (JSON stable) — JSON shape, load normalization, persistent numeric load, and C++ error cases covered; full InstanceMap integration pending.
 - [x] Test: `IsEncounterInProgress()` returns true iff any boss in `IN_PROGRESS`.
 - [ ] Test: `account_instance_times` blocks the 6th distinct enter within 1 hour.

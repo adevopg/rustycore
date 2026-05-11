@@ -1162,6 +1162,27 @@ pub enum InstanceScriptDataLoadError {
     AdditionalDataUnexpectedValueType,
 }
 
+/// Side effects C++ `InstanceScript::SetBossState` performs after a valid state
+/// transition. Runtime callers still own the actual `InstanceMap` operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BossStateTransitionPlan {
+    pub boss_id: u32,
+    pub previous_state: EncounterState,
+    pub new_state: EncounterState,
+    pub initialize_combat_resurrections: bool,
+    pub reset_combat_resurrections: bool,
+    pub send_encounter_start: bool,
+    pub send_encounter_end: bool,
+    pub notify_players_start: bool,
+    pub notify_players_end: bool,
+    pub dungeon_encounter_id: Option<u32>,
+    pub update_lock: bool,
+    pub update_criteria: bool,
+    pub send_boss_kill_credit: bool,
+    pub update_lfg: bool,
+    pub update_doors_minions_and_spawn_groups: bool,
+}
+
 /// C++ `DungeonEncounterData`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DungeonEncounterData {
@@ -1283,6 +1304,55 @@ impl InstanceScriptBase {
         };
         boss.state = state;
         true
+    }
+
+    pub fn set_boss_state_planned_like_cpp(
+        &mut self,
+        store: &DungeonEncounterStore,
+        boss_id: u32,
+        state: EncounterState,
+        has_alive_world_boss_minion: bool,
+    ) -> Option<BossStateTransitionPlan> {
+        let boss = self.bosses.get_mut(boss_id as usize)?;
+        let previous_state = boss.state;
+
+        if previous_state == EncounterState::ToBeDecided {
+            boss.state = state;
+            return None;
+        }
+        if previous_state == state || previous_state == EncounterState::Done {
+            return None;
+        }
+        if state == EncounterState::Done && has_alive_world_boss_minion {
+            return None;
+        }
+
+        let dungeon_encounter_id = boss
+            .dungeon_encounter_for_difficulty(store, self.difficulty_id)
+            .map(|encounter| encounter.id)
+            .filter(|_| state == EncounterState::Done);
+        boss.state = state;
+
+        Some(BossStateTransitionPlan {
+            boss_id,
+            previous_state,
+            new_state: state,
+            initialize_combat_resurrections: state == EncounterState::InProgress,
+            reset_combat_resurrections: matches!(
+                state,
+                EncounterState::Fail | EncounterState::Done
+            ),
+            send_encounter_start: state == EncounterState::InProgress,
+            send_encounter_end: matches!(state, EncounterState::Fail | EncounterState::Done),
+            notify_players_start: state == EncounterState::InProgress,
+            notify_players_end: matches!(state, EncounterState::Fail | EncounterState::Done),
+            dungeon_encounter_id,
+            update_lock: dungeon_encounter_id.is_some(),
+            update_criteria: dungeon_encounter_id.is_some(),
+            send_boss_kill_credit: dungeon_encounter_id.is_some(),
+            update_lfg: dungeon_encounter_id.is_some(),
+            update_doors_minions_and_spawn_groups: true,
+        })
     }
 
     pub fn create_like_cpp(&mut self) {
@@ -2472,6 +2542,99 @@ mod tests {
         assert!(script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 3, 0));
         assert!(!script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 2, 0));
         assert!(!script.is_encounter_completed_in_mask_by_boss_id_like_cpp(&store, 1 << 3, 99));
+    }
+
+    #[test]
+    fn set_boss_state_loading_initializes_without_effects_like_cpp() {
+        let store = DungeonEncounterStore::from_entries([encounter_with_bit(10, 4, 3)]);
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+
+        let plan =
+            script.set_boss_state_planned_like_cpp(&store, 0, EncounterState::NotStarted, false);
+
+        assert!(plan.is_none());
+        assert_eq!(script.boss_state(0), EncounterState::NotStarted);
+    }
+
+    #[test]
+    fn set_boss_state_in_progress_plans_cpp_start_effects() {
+        let store = DungeonEncounterStore::from_entries([encounter_with_bit(10, 4, 3)]);
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.create_like_cpp();
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+
+        let plan = script
+            .set_boss_state_planned_like_cpp(&store, 0, EncounterState::InProgress, false)
+            .unwrap();
+
+        assert_eq!(plan.previous_state, EncounterState::NotStarted);
+        assert_eq!(plan.new_state, EncounterState::InProgress);
+        assert!(plan.initialize_combat_resurrections);
+        assert!(plan.send_encounter_start);
+        assert!(plan.notify_players_start);
+        assert!(!plan.reset_combat_resurrections);
+        assert!(!plan.send_encounter_end);
+        assert_eq!(plan.dungeon_encounter_id, None);
+        assert!(plan.update_doors_minions_and_spawn_groups);
+    }
+
+    #[test]
+    fn set_boss_state_done_plans_cpp_completion_effects() {
+        let store = DungeonEncounterStore::from_entries([encounter_with_bit(10, 4, 3)]);
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.create_like_cpp();
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+
+        let plan = script
+            .set_boss_state_planned_like_cpp(&store, 0, EncounterState::Done, false)
+            .unwrap();
+
+        assert_eq!(script.boss_state(0), EncounterState::Done);
+        assert!(plan.reset_combat_resurrections);
+        assert!(plan.send_encounter_end);
+        assert!(plan.notify_players_end);
+        assert_eq!(plan.dungeon_encounter_id, Some(10));
+        assert!(plan.update_lock);
+        assert!(plan.update_criteria);
+        assert!(plan.send_boss_kill_credit);
+        assert!(plan.update_lfg);
+        assert!(plan.update_doors_minions_and_spawn_groups);
+    }
+
+    #[test]
+    fn set_boss_state_blocks_cpp_invalid_transitions() {
+        let store = DungeonEncounterStore::from_entries([encounter_with_bit(10, 4, 3)]);
+        let mut script = InstanceScriptBase::new(4, 1);
+        script.create_like_cpp();
+        script.load_dungeon_encounter_data(&store, 0, [10, 0, 0, 0]);
+
+        assert!(
+            script
+                .set_boss_state_planned_like_cpp(&store, 99, EncounterState::Done, false)
+                .is_none()
+        );
+        assert!(
+            script
+                .set_boss_state_planned_like_cpp(&store, 0, EncounterState::NotStarted, false)
+                .is_none()
+        );
+        assert!(
+            script
+                .set_boss_state_planned_like_cpp(&store, 0, EncounterState::Done, true)
+                .is_none()
+        );
+        assert_eq!(script.boss_state(0), EncounterState::NotStarted);
+
+        script
+            .set_boss_state_planned_like_cpp(&store, 0, EncounterState::Done, false)
+            .unwrap();
+        assert!(
+            script
+                .set_boss_state_planned_like_cpp(&store, 0, EncounterState::Fail, false)
+                .is_none()
+        );
+        assert_eq!(script.boss_state(0), EncounterState::Done);
     }
 
     #[test]
