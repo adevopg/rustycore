@@ -10,6 +10,7 @@ pub struct Position {
 }
 
 impl Position {
+    pub const GRID_SIZE_LIKE_CPP: f32 = 533.3333;
     pub const MAP_SIZE_LIKE_CPP: f32 = 533.3333 * 64.0;
     pub const MAP_HALFSIZE_LIKE_CPP: f32 = Self::MAP_SIZE_LIKE_CPP / 2.0;
 

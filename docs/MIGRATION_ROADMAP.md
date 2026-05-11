@@ -470,7 +470,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
   - [x] **#A06.1** Corregir `MovementInfo::write` para que `hasFallData = falling flags || fallTime != 0` y `hasFallDirection = falling flags`, como `MovementPackets.cpp`.
   - [x] **#A06.2** Representar `standingOnGameObjectGUID` e `inertia` en `MovementInfo`; no descartarlos al leer ni forzarlos a `false` al escribir.
   - [x] **#A06.3** Endurecer validación mínima de `handle_movement`: GUID cargado y exactamente el jugador actual, más `Position::is_valid_map_coord_like_cpp()` para X/Y/Z/orientación; los guards de teleport/movespline quedan ligados al runtime Movement/Map cuando existan equivalentes.
-  - [ ] **#A06.4** Validar/normalizar transport: offset ±75, distancia > grid tras teleport, world coord con transport, reset si no existe transport/vehicle.
+  - [x] **#A06.4** Validar transport sin integración `TransportBase` completa: offset ±75, distancia > grid tras teleport y world coord con transport. El reset/add-remove real de passenger queda para Transport/Map runtime.
   - [ ] **#A06.5** Portar `AdjustClientMovementTime` o puente temporal documentado con time-sync antes de rebroadcast.
   - [ ] **#A06.6** Separar side effects C++ de movement: fall damage, aura interrupts, pet unsummon, sit-to-stand, under-map damage y jump procs.
   - [ ] **#A06.7** Portar efectos de `MoveInitActiveMoverComplete`: local flag, transport server time y visibility update.

@@ -114,6 +114,41 @@ impl WorldSession {
             return;
         }
 
+        if let Some(transport) = &info.info.transport {
+            if self.player_position_like_cpp().is_some_and(|current| {
+                pos.distance_2d(&current) > wow_core::Position::GRID_SIZE_LIKE_CPP
+            }) {
+                trace!(
+                    account = self.account_id,
+                    "Ignoring stale transport movement after large position delta"
+                );
+                return;
+            }
+
+            if transport.x.abs() > 75.0 || transport.y.abs() > 75.0 || transport.z.abs() > 75.0 {
+                trace!(
+                    account = self.account_id,
+                    "Ignoring movement with invalid transport offset"
+                );
+                return;
+            }
+
+            if !wow_core::Position::new(
+                pos.x + transport.x,
+                pos.y + transport.y,
+                pos.z + transport.z,
+                pos.orientation + transport.o,
+            )
+            .is_valid_map_coord_like_cpp()
+            {
+                trace!(
+                    account = self.account_id,
+                    "Ignoring movement with invalid world transport coordinate"
+                );
+                return;
+            }
+        }
+
         // Update server-side player position.
         self.set_player_position_like_cpp(info.info.position);
         // Keep the broadcast registry in sync so chat range checks are accurate.
