@@ -726,6 +726,7 @@ mod tests {
         );
         assert!(!unit.subsystems().motion.paused);
         assert!(!unit.subsystems().motion.spline.enabled);
+        assert!(unit.subsystems().motion.spline.finalized);
         assert_eq!(unit.subsystems().control.charmer_guid, None);
         assert_eq!(unit.subsystems().control.owner_guid, None);
         assert_eq!(unit.subsystems().control.minion_guid, None);
@@ -737,6 +738,7 @@ mod tests {
         assert_eq!(unit.subsystems().vehicle.vehicle_guid, None);
         assert_eq!(unit.subsystems().ai.active_ai, None);
         assert!(!unit.subsystems().ai.locked);
+        assert!(!unit.subsystems().ai.scheduled_change_pending);
         assert!(!unit.unit_data_changes_mask().is_any_set());
     }
 

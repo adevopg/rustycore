@@ -1615,18 +1615,30 @@ impl MovementGeneratorRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveSplineState {
     pub enabled: bool,
+    pub finalized: bool,
+    pub cyclic: bool,
+    pub on_transport: bool,
     pub spline_id: u32,
     pub progress_ms: u32,
     pub duration_ms: u32,
+    pub velocity: Option<u32>,
+    pub final_destination: Option<(i32, i32, i32)>,
+    pub current_destination: Option<(i32, i32, i32)>,
 }
 
 impl Default for MoveSplineState {
     fn default() -> Self {
         Self {
             enabled: false,
+            finalized: true,
+            cyclic: false,
+            on_transport: false,
             spline_id: 0,
             progress_ms: 0,
             duration_ms: 0,
+            velocity: None,
+            final_destination: None,
+            current_destination: None,
         }
     }
 }
@@ -1851,22 +1863,78 @@ impl MotionSubsystem {
 
     pub fn stop_moving(&mut self) {
         self.stopped = true;
-        self.spline.enabled = false;
-        self.spline.progress_ms = 0;
+        self.finalize_spline();
     }
 
     pub fn start_spline(&mut self, spline_id: u32, duration_ms: u32) {
         self.spline = MoveSplineState {
             enabled: true,
+            finalized: false,
+            cyclic: false,
+            on_transport: false,
             spline_id,
             progress_ms: 0,
             duration_ms,
+            velocity: None,
+            final_destination: None,
+            current_destination: None,
+        };
+        self.stopped = false;
+    }
+
+    pub fn launch_spline(
+        &mut self,
+        spline_id: u32,
+        duration_ms: u32,
+        destination: (i32, i32, i32),
+        cyclic: bool,
+        on_transport: bool,
+        velocity: Option<u32>,
+    ) {
+        self.spline = MoveSplineState {
+            enabled: true,
+            finalized: false,
+            cyclic,
+            on_transport,
+            spline_id,
+            progress_ms: 0,
+            duration_ms,
+            velocity,
+            final_destination: Some(destination),
+            current_destination: Some(destination),
         };
         self.stopped = false;
     }
 
     pub fn set_spline_progress(&mut self, progress_ms: u32) {
         self.spline.progress_ms = progress_ms.min(self.spline.duration_ms);
+        if self.spline.progress_ms >= self.spline.duration_ms && !self.spline.cyclic {
+            self.finalize_spline();
+        }
+    }
+
+    pub fn update_spline(&mut self, diff_ms: u32) -> bool {
+        if !self.spline.enabled || self.spline.finalized {
+            return false;
+        }
+        let next_progress = self.spline.progress_ms.saturating_add(diff_ms);
+        if self.spline.cyclic && self.spline.duration_ms > 0 {
+            self.spline.progress_ms = next_progress % self.spline.duration_ms;
+            return false;
+        }
+        self.set_spline_progress(next_progress);
+        self.spline.finalized
+    }
+
+    pub fn finalize_spline(&mut self) {
+        self.spline.enabled = false;
+        self.spline.finalized = true;
+        self.spline.progress_ms = self.spline.duration_ms;
+    }
+
+    pub fn interrupt_spline(&mut self) {
+        self.finalize_spline();
+        self.spline.current_destination = None;
     }
 
     fn sort_active_generators(&mut self) {
@@ -2245,14 +2313,23 @@ pub struct AiSubsystem {
     pub active_ai: Option<String>,
     pub ai_stack: Vec<String>,
     pub locked: bool,
+    pub scheduled_change_pending: bool,
+    pub update_ticks: u64,
+    pub last_update_diff_ms: u32,
 }
 
 impl AiSubsystem {
     pub fn set_active(&mut self, ai: Option<impl Into<String>>) {
-        self.active_ai = ai.map(Into::into);
+        if !self.locked {
+            self.active_ai = ai.map(Into::into);
+        }
     }
 
     pub fn push(&mut self, ai: impl Into<String>) {
+        if self.locked {
+            self.scheduled_change_pending = true;
+            return;
+        }
         if let Some(active) = self.active_ai.take() {
             self.ai_stack.push(active);
         }
@@ -2260,6 +2337,10 @@ impl AiSubsystem {
     }
 
     pub fn pop(&mut self) -> Option<String> {
+        if self.locked {
+            self.scheduled_change_pending = true;
+            return None;
+        }
         let popped = self.active_ai.take();
         self.active_ai = self.ai_stack.pop();
         popped
@@ -2267,6 +2348,49 @@ impl AiSubsystem {
 
     pub fn set_locked(&mut self, locked: bool) {
         self.locked = locked;
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.active_ai.is_some()
+    }
+
+    pub fn update_tick(&mut self, diff_ms: u32) -> bool {
+        let Some(_) = self.active_ai else {
+            return false;
+        };
+        self.locked = true;
+        self.update_ticks = self.update_ticks.saturating_add(1);
+        self.last_update_diff_ms = diff_ms;
+        self.locked = false;
+        true
+    }
+
+    pub fn schedule_change(&mut self) {
+        self.scheduled_change_pending = true;
+    }
+
+    pub fn apply_scheduled_change(&mut self, ai: impl Into<String>, charmed: bool) {
+        if self.locked {
+            self.scheduled_change_pending = true;
+            return;
+        }
+        if !charmed {
+            self.restore_disabled_ai();
+        }
+        self.push(ai);
+        self.scheduled_change_pending = false;
+    }
+
+    pub fn restore_disabled_ai(&mut self) {
+        while self
+            .active_ai
+            .as_deref()
+            .is_some_and(|ai| ai == "ScheduledChangeAI")
+        {
+            if self.pop().is_none() {
+                break;
+            }
+        }
     }
 }
 
@@ -2776,6 +2900,62 @@ mod unit_subsystems_tests {
         );
         assert!(motion.stopped);
         assert!(!motion.spline.enabled);
+    }
+
+    #[test]
+    fn move_spline_runtime_state_tracks_cpp_finalized_cyclic_and_destination_shape() {
+        let mut motion = MotionSubsystem::default();
+
+        assert!(motion.spline.finalized);
+        motion.launch_spline(77, 1_000, (10, 20, 30), false, true, Some(700));
+        assert!(motion.spline.enabled);
+        assert!(!motion.spline.finalized);
+        assert!(motion.spline.on_transport);
+        assert_eq!(motion.spline.final_destination, Some((10, 20, 30)));
+        assert_eq!(motion.spline.velocity, Some(700));
+        assert!(!motion.update_spline(999));
+        assert_eq!(motion.spline.progress_ms, 999);
+        assert!(motion.update_spline(1));
+        assert!(motion.spline.finalized);
+        assert!(!motion.spline.enabled);
+
+        motion.launch_spline(78, 1_000, (1, 2, 3), true, false, None);
+        assert!(!motion.update_spline(1_250));
+        assert!(motion.spline.enabled);
+        assert!(!motion.spline.finalized);
+        assert_eq!(motion.spline.progress_ms, 250);
+        motion.interrupt_spline();
+        assert!(motion.spline.finalized);
+        assert_eq!(motion.spline.current_destination, None);
+    }
+
+    #[test]
+    fn ai_stack_lock_and_scheduled_change_follow_cpp_unit_ai_shape() {
+        let mut ai = AiSubsystem::default();
+
+        assert!(!ai.is_enabled());
+        ai.set_active(Some("NullAI"));
+        assert!(ai.is_enabled());
+        assert!(ai.update_tick(50));
+        assert_eq!(ai.update_ticks, 1);
+        assert_eq!(ai.last_update_diff_ms, 50);
+
+        ai.push("CombatAI");
+        assert_eq!(ai.active_ai.as_deref(), Some("CombatAI"));
+        assert_eq!(ai.ai_stack, vec![String::from("NullAI")]);
+        assert_eq!(ai.pop().as_deref(), Some("CombatAI"));
+        assert_eq!(ai.active_ai.as_deref(), Some("NullAI"));
+
+        ai.set_locked(true);
+        ai.push("ScheduledChangeAI");
+        assert_eq!(ai.active_ai.as_deref(), Some("NullAI"));
+        assert!(ai.scheduled_change_pending);
+        ai.set_locked(false);
+        ai.apply_scheduled_change("ScheduledChangeAI", true);
+        assert_eq!(ai.active_ai.as_deref(), Some("ScheduledChangeAI"));
+        ai.apply_scheduled_change("RestoredAI", false);
+        assert_eq!(ai.active_ai.as_deref(), Some("RestoredAI"));
+        assert!(!ai.scheduled_change_pending);
     }
 
     #[test]
