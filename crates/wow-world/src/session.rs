@@ -126,6 +126,18 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub personal_loot_uses: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MovementAckEventLikeCpp {
+    pub opcode: ClientOpcodes,
+    pub mover_guid: ObjectGuid,
+    pub ack_index: Option<i32>,
+    pub adjusted_time: Option<u32>,
+    pub speed: Option<f32>,
+    pub time_skipped: Option<u32>,
+    pub spline_id: Option<i32>,
+    pub accepted: bool,
+}
+
 impl Default for RepresentedGameObjectUseState {
     fn default() -> Self {
         Self {
@@ -712,6 +724,8 @@ pub struct WorldSession {
     player_health_like_cpp: u32,
     /// Represented player max health used by movement/environmental side effects.
     player_max_health_like_cpp: u32,
+    /// Represented `Unit::m_movementInfo.time` for client movement ACK side effects.
+    player_movement_time_like_cpp: u32,
     /// C++ `Player::m_lastFallTime`.
     last_fall_time_like_cpp: u32,
     /// C++ `Player::m_lastFallZ`.
@@ -734,6 +748,8 @@ pub struct WorldSession {
     active_player_transport_server_time_like_cpp: i32,
     /// Count of visibility refreshes requested by movement initialization.
     movement_visibility_refresh_requests_like_cpp: u32,
+    /// ACKs accepted by represented movement handling until full Unit movement runtime/broadcasts exist.
+    movement_ack_events_like_cpp: Vec<MovementAckEventLikeCpp>,
 
     // ── Aura system ───────────────────────────────────────────────
     /// All visible auras on the player: slot (0-254) → AuraApplication
@@ -1139,6 +1155,7 @@ impl WorldSession {
             player_environmental_damage_immune_like_cpp: false,
             player_health_like_cpp: 100,
             player_max_health_like_cpp: 100,
+            player_movement_time_like_cpp: 0,
             last_fall_time_like_cpp: 0,
             last_fall_z_like_cpp: 0.0,
             fall_damage_events_like_cpp: Vec::new(),
@@ -1150,6 +1167,7 @@ impl WorldSession {
             active_player_local_flags_like_cpp: 0,
             active_player_transport_server_time_like_cpp: 0,
             movement_visibility_refresh_requests_like_cpp: 0,
+            movement_ack_events_like_cpp: Vec::new(),
             visible_auras: HashMap::new(),
             spell_store: None,
             quest_store: None,
@@ -4246,9 +4264,6 @@ impl WorldSession {
             ClientOpcodes::ChatJoinChannel => {
                 self.handle_chat_join_channel(pkt).await;
             }
-            ClientOpcodes::MoveTimeSkipped => {
-                self.handle_move_time_skipped(pkt).await;
-            }
             ClientOpcodes::DbQueryBulk => {
                 match wow_packet::packets::misc::DbQueryBulk::read(&mut pkt) {
                     Ok(query) => self.handle_db_query_bulk(query).await,
@@ -4470,6 +4485,74 @@ impl WorldSession {
                 match wow_packet::packets::movement::MoveInitActiveMoverComplete::read(&mut pkt) {
                     Ok(init) => self.handle_move_init_active_mover_complete(init).await,
                     Err(e) => warn!("Failed to read MoveInitActiveMoverComplete: {e}"),
+                }
+            }
+            ClientOpcodes::MoveCollisionDisableAck
+            | ClientOpcodes::MoveCollisionEnableAck
+            | ClientOpcodes::MoveEnableDoubleJumpAck
+            | ClientOpcodes::MoveEnableSwimToFlyTransAck
+            | ClientOpcodes::MoveFeatherFallAck
+            | ClientOpcodes::MoveForceRootAck
+            | ClientOpcodes::MoveForceUnrootAck
+            | ClientOpcodes::MoveGravityDisableAck
+            | ClientOpcodes::MoveGravityEnableAck
+            | ClientOpcodes::MoveHoverAck
+            | ClientOpcodes::MoveInertiaDisableAck
+            | ClientOpcodes::MoveInertiaEnableAck
+            | ClientOpcodes::MoveSetCanFlyAck
+            | ClientOpcodes::MoveSetCanTurnWhileFallingAck
+            | ClientOpcodes::MoveSetIgnoreMovementForcesAck
+            | ClientOpcodes::MoveWaterWalkAck => {
+                let opcode = pkt.client_opcode().unwrap_or(opcode);
+                match wow_packet::packets::movement::MovementAckMessage::read(&mut pkt) {
+                    Ok(ack) => self.handle_movement_ack_message(opcode, ack).await,
+                    Err(e) => warn!("Failed to read MovementAckMessage: {e}"),
+                }
+            }
+            ClientOpcodes::MoveForceWalkSpeedChangeAck
+            | ClientOpcodes::MoveForceRunSpeedChangeAck
+            | ClientOpcodes::MoveForceRunBackSpeedChangeAck
+            | ClientOpcodes::MoveForceSwimSpeedChangeAck
+            | ClientOpcodes::MoveForceSwimBackSpeedChangeAck
+            | ClientOpcodes::MoveForceTurnRateChangeAck
+            | ClientOpcodes::MoveForceFlightSpeedChangeAck
+            | ClientOpcodes::MoveForceFlightBackSpeedChangeAck
+            | ClientOpcodes::MoveForcePitchRateChangeAck
+            | ClientOpcodes::MoveSetModMovementForceMagnitudeAck => {
+                let opcode = pkt.client_opcode().unwrap_or(opcode);
+                match wow_packet::packets::movement::MovementSpeedAck::read(&mut pkt) {
+                    Ok(ack) => self.handle_movement_speed_ack(opcode, ack).await,
+                    Err(e) => warn!("Failed to read MovementSpeedAck: {e}"),
+                }
+            }
+            ClientOpcodes::MoveKnockBackAck => {
+                match wow_packet::packets::movement::MoveKnockBackAck::read(&mut pkt) {
+                    Ok(ack) => self.handle_move_knock_back_ack(ack).await,
+                    Err(e) => warn!("Failed to read MoveKnockBackAck: {e}"),
+                }
+            }
+            ClientOpcodes::MoveSetCollisionHeightAck => {
+                match wow_packet::packets::movement::MoveSetCollisionHeightAck::read(&mut pkt) {
+                    Ok(ack) => self.handle_move_set_collision_height_ack(ack).await,
+                    Err(e) => warn!("Failed to read MoveSetCollisionHeightAck: {e}"),
+                }
+            }
+            ClientOpcodes::MoveTimeSkipped => {
+                match wow_packet::packets::movement::MoveTimeSkipped::read(&mut pkt) {
+                    Ok(skipped) => self.handle_move_time_skipped(skipped).await,
+                    Err(e) => warn!("Failed to read MoveTimeSkipped: {e}"),
+                }
+            }
+            ClientOpcodes::MoveSplineDone => {
+                match wow_packet::packets::movement::MoveSplineDone::read(&mut pkt) {
+                    Ok(done) => self.handle_move_spline_done(done).await,
+                    Err(e) => warn!("Failed to read MoveSplineDone: {e}"),
+                }
+            }
+            ClientOpcodes::MoveTeleportAck => {
+                match wow_packet::packets::movement::MoveTeleportAck::read(&mut pkt) {
+                    Ok(ack) => self.handle_move_teleport_ack(ack).await,
+                    Err(e) => warn!("Failed to read MoveTeleportAck: {e}"),
                 }
             }
 
@@ -5294,6 +5377,10 @@ impl WorldSession {
         self.set_player_map_position_like_cpp(self.current_map_id, position);
     }
 
+    pub(crate) fn set_player_movement_time_like_cpp(&mut self, time: u32) {
+        self.player_movement_time_like_cpp = time;
+    }
+
     pub(crate) fn set_player_level_like_cpp(&mut self, level: u8) {
         self.player_level = level;
         if let Some(controller) = &mut self.player_controller {
@@ -5872,6 +5959,151 @@ impl WorldSession {
     #[cfg(test)]
     pub(crate) fn movement_visibility_refresh_requests_like_cpp(&self) -> u32 {
         self.movement_visibility_refresh_requests_like_cpp
+    }
+
+    pub(crate) fn validate_movement_ack_status_like_cpp(
+        &self,
+        status: &wow_packet::packets::movement::MovementInfo,
+    ) -> bool {
+        let Some(player_guid) = self.player_guid() else {
+            return false;
+        };
+
+        status.guid == player_guid && status.position.is_valid_map_coord_like_cpp()
+    }
+
+    pub(crate) fn record_movement_ack_event_like_cpp(&mut self, event: MovementAckEventLikeCpp) {
+        self.movement_ack_events_like_cpp.push(event);
+    }
+
+    pub(crate) fn apply_knock_back_ack_like_cpp(
+        &mut self,
+        opcode: ClientOpcodes,
+        ack: &wow_packet::packets::movement::MovementAck,
+    ) -> bool {
+        if !self.validate_movement_ack_status_like_cpp(&ack.status) {
+            self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+                opcode,
+                mover_guid: ack.status.guid,
+                ack_index: Some(ack.ack_index),
+                adjusted_time: None,
+                speed: None,
+                time_skipped: None,
+                spline_id: None,
+                accepted: false,
+            });
+            return false;
+        }
+
+        let mut status = ack.status.clone();
+        status.time = self.adjust_client_movement_time_like_cpp(status.time);
+        self.player_movement_time_like_cpp = status.time;
+        self.set_player_position_like_cpp(status.position);
+        self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+            opcode,
+            mover_guid: status.guid,
+            ack_index: Some(ack.ack_index),
+            adjusted_time: Some(status.time),
+            speed: None,
+            time_skipped: None,
+            spline_id: None,
+            accepted: true,
+        });
+        true
+    }
+
+    pub(crate) fn apply_move_time_skipped_like_cpp(
+        &mut self,
+        mover_guid: ObjectGuid,
+        time_skipped: u32,
+    ) -> bool {
+        let accepted = self.player_guid() == Some(mover_guid);
+        if accepted {
+            self.player_movement_time_like_cpp = self
+                .player_movement_time_like_cpp
+                .saturating_add(time_skipped);
+        }
+
+        self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+            opcode: ClientOpcodes::MoveTimeSkipped,
+            mover_guid,
+            ack_index: None,
+            adjusted_time: accepted.then_some(self.player_movement_time_like_cpp),
+            speed: None,
+            time_skipped: Some(time_skipped),
+            spline_id: None,
+            accepted,
+        });
+        accepted
+    }
+
+    pub(crate) fn record_validated_movement_ack_like_cpp(
+        &mut self,
+        opcode: ClientOpcodes,
+        ack: &wow_packet::packets::movement::MovementAck,
+        speed: Option<f32>,
+    ) -> bool {
+        let accepted = self.validate_movement_ack_status_like_cpp(&ack.status);
+        self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+            opcode,
+            mover_guid: ack.status.guid,
+            ack_index: Some(ack.ack_index),
+            adjusted_time: None,
+            speed,
+            time_skipped: None,
+            spline_id: None,
+            accepted,
+        });
+        accepted
+    }
+
+    pub(crate) fn record_move_spline_done_like_cpp(
+        &mut self,
+        status: &wow_packet::packets::movement::MovementInfo,
+        spline_id: i32,
+    ) -> bool {
+        let accepted = self.validate_movement_ack_status_like_cpp(status);
+        self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+            opcode: ClientOpcodes::MoveSplineDone,
+            mover_guid: status.guid,
+            ack_index: None,
+            adjusted_time: None,
+            speed: None,
+            time_skipped: None,
+            spline_id: Some(spline_id),
+            accepted,
+        });
+        accepted
+    }
+
+    pub(crate) fn record_move_teleport_ack_like_cpp(
+        &mut self,
+        mover_guid: ObjectGuid,
+        ack_index: i32,
+        move_time: i32,
+    ) -> bool {
+        let accepted = self.player_guid() == Some(mover_guid);
+        self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
+            opcode: ClientOpcodes::MoveTeleportAck,
+            mover_guid,
+            ack_index: Some(ack_index),
+            adjusted_time: (move_time >= 0).then_some(move_time as u32),
+            speed: None,
+            time_skipped: None,
+            spline_id: None,
+            accepted,
+        });
+        accepted
+    }
+
+    #[cfg(test)]
+    pub(crate) fn movement_ack_events_like_cpp(&self) -> &[MovementAckEventLikeCpp] {
+        &self.movement_ack_events_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn player_movement_time_like_cpp(&self) -> u32 {
+        self.player_movement_time_like_cpp
     }
 
     pub(crate) fn interrupt_non_melee_spell_cast_for_loot_like_cpp(&mut self) -> bool {

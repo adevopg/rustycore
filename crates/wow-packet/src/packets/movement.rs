@@ -370,6 +370,147 @@ impl ClientPlayerMovement {
     }
 }
 
+// ── Movement ACK client packets ──────────────────────────────────
+
+/// C++ `WorldPackets::Movement::MovementAck`.
+#[derive(Debug, Clone)]
+pub struct MovementAck {
+    pub status: MovementInfo,
+    pub ack_index: i32,
+}
+
+impl MovementAck {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            status: MovementInfo::read(pkt)?,
+            ack_index: pkt.read_int32()?,
+        })
+    }
+}
+
+/// Generic ACK packet used by root, hover, water-walk and similar movement toggles.
+#[derive(Debug, Clone)]
+pub struct MovementAckMessage {
+    pub ack: MovementAck,
+}
+
+impl MovementAckMessage {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            ack: MovementAck::read(pkt)?,
+        })
+    }
+}
+
+/// ACK packet carrying a movement speed or movement-force magnitude.
+#[derive(Debug, Clone)]
+pub struct MovementSpeedAck {
+    pub ack: MovementAck,
+    pub speed: f32,
+}
+
+impl MovementSpeedAck {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            ack: MovementAck::read(pkt)?,
+            speed: pkt.read_float()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MoveKnockBackSpeeds {
+    pub horz_speed: f32,
+    pub vert_speed: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveKnockBackAck {
+    pub ack: MovementAck,
+    pub speeds: Option<MoveKnockBackSpeeds>,
+}
+
+impl MoveKnockBackAck {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        let ack = MovementAck::read(pkt)?;
+        let speeds = if pkt.read_bit()? {
+            Some(MoveKnockBackSpeeds {
+                horz_speed: pkt.read_float()?,
+                vert_speed: pkt.read_float()?,
+            })
+        } else {
+            None
+        };
+        Ok(Self { ack, speeds })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveSetCollisionHeightAck {
+    pub data: MovementAck,
+    pub height: f32,
+    pub mount_display_id: u32,
+    pub reason: u8,
+}
+
+impl MoveSetCollisionHeightAck {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            data: MovementAck::read(pkt)?,
+            height: pkt.read_float()?,
+            mount_display_id: pkt.read_uint32()?,
+            reason: pkt.read_uint8()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveTimeSkipped {
+    pub mover_guid: ObjectGuid,
+    pub time_skipped: u32,
+}
+
+impl MoveTimeSkipped {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            mover_guid: pkt.read_packed_guid()?,
+            time_skipped: pkt.read_uint32()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveSplineDone {
+    pub status: MovementInfo,
+    pub spline_id: i32,
+}
+
+impl MoveSplineDone {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            status: MovementInfo::read(pkt)?,
+            spline_id: pkt.read_int32()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MoveTeleportAck {
+    pub mover_guid: ObjectGuid,
+    pub ack_index: i32,
+    pub move_time: i32,
+}
+
+impl MoveTeleportAck {
+    pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            mover_guid: pkt.read_packed_guid()?,
+            ack_index: pkt.read_int32()?,
+            move_time: pkt.read_int32()?,
+        })
+    }
+}
+
 // ── MoveUpdate (SMSG_MOVE_UPDATE) ────────────────────────────────
 
 /// Broadcast a player's movement to nearby players.
@@ -615,5 +756,92 @@ mod tests {
         assert_eq!(inertia.y, 2.0);
         assert_eq!(inertia.z, 3.0);
         assert_eq!(inertia.lifetime, 400);
+    }
+
+    #[test]
+    fn movement_ack_packets_read_cpp_field_order() {
+        let info = MovementInfo {
+            guid: ObjectGuid::create_player(1, 42),
+            time: 1234,
+            position: Position::new(1.0, 2.0, 3.0, 4.0),
+            ..MovementInfo::default()
+        };
+
+        let mut pkt = WorldPacket::new_empty();
+        info.write(&mut pkt);
+        pkt.write_int32(77);
+        pkt.write_float(7.5);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let speed_ack = MovementSpeedAck::read(&mut pkt).unwrap();
+        assert_eq!(speed_ack.ack.status.guid, info.guid);
+        assert_eq!(speed_ack.ack.ack_index, 77);
+        assert_eq!(speed_ack.speed, 7.5);
+
+        let mut pkt = WorldPacket::new_empty();
+        info.write(&mut pkt);
+        pkt.write_int32(78);
+        pkt.write_bit(true);
+        pkt.write_float(8.0);
+        pkt.write_float(9.0);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let knockback = MoveKnockBackAck::read(&mut pkt).unwrap();
+        assert_eq!(knockback.ack.ack_index, 78);
+        assert_eq!(
+            knockback.speeds,
+            Some(MoveKnockBackSpeeds {
+                horz_speed: 8.0,
+                vert_speed: 9.0
+            })
+        );
+
+        let mut pkt = WorldPacket::new_empty();
+        info.write(&mut pkt);
+        pkt.write_int32(79);
+        pkt.write_float(2.25);
+        pkt.write_uint32(123);
+        pkt.write_uint8(4);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let collision = MoveSetCollisionHeightAck::read(&mut pkt).unwrap();
+        assert_eq!(collision.data.ack_index, 79);
+        assert_eq!(collision.height, 2.25);
+        assert_eq!(collision.mount_display_id, 123);
+        assert_eq!(collision.reason, 4);
+    }
+
+    #[test]
+    fn movement_time_spline_and_teleport_ack_packets_read_cpp_field_order() {
+        let guid = ObjectGuid::create_player(1, 42);
+
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        pkt.write_uint32(250);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let skipped = MoveTimeSkipped::read(&mut pkt).unwrap();
+        assert_eq!(skipped.mover_guid, guid);
+        assert_eq!(skipped.time_skipped, 250);
+
+        let info = MovementInfo {
+            guid,
+            time: 1234,
+            position: Position::new(1.0, 2.0, 3.0, 4.0),
+            ..MovementInfo::default()
+        };
+        let mut pkt = WorldPacket::new_empty();
+        info.write(&mut pkt);
+        pkt.write_int32(9001);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let spline = MoveSplineDone::read(&mut pkt).unwrap();
+        assert_eq!(spline.status.guid, guid);
+        assert_eq!(spline.spline_id, 9001);
+
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        pkt.write_int32(11);
+        pkt.write_int32(12);
+        let mut pkt = WorldPacket::from_bytes(pkt.data());
+        let teleport = MoveTeleportAck::read(&mut pkt).unwrap();
+        assert_eq!(teleport.mover_guid, guid);
+        assert_eq!(teleport.ack_index, 11);
+        assert_eq!(teleport.move_time, 12);
     }
 }

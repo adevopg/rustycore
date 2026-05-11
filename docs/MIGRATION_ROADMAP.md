@@ -480,6 +480,13 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
     - [ ] **#A06.6.4** Conectar hooks registrados a Pet runtime y Proc/Aura runtime completos: `UnsummonPetTemporaryIfAny`, `Unit::ProcSkillsAndAuras(PROC_FLAG_JUMP)` y aura runtime real en vez de `visible_auras` representado.
   - [x] **#A06.7** Portar efectos de `MoveInitActiveMoverComplete`: lee `Ticks`, setea `PLAYER_LOCAL_FLAG_OVERRIDE_TRANSPORT_SERVER_TIME`, calcula `TransportServerTime = GameTimeMS - Ticks`, emite VALUES update mínimo de `ActivePlayerData::{LocalFlags,TransportServerTime}` y refresca visibility como C++.
   - [ ] **#A06.8** Inventariar y portar ACK movement opcodes (`KnockBack`, speed, force, collision height, spline done, time skipped).
+    - [x] **#A06.8a** Portar parsers/handlers base contrastados con C++ para ACKs genéricos (`HandleMovementAckMessage`), speed ACKs, `MoveKnockBackAck`, `MoveSetCollisionHeightAck`, `MoveTimeSkipped`, `MoveSplineDone` y `MoveTeleportAck`: Rust valida GUID/coord, ajusta time en knockback, suma `TimeSkipped` al tiempo de movimiento representado y registra eventos para los runtime gaps.
+    - [ ] **#A06.8b** Portar counters y anticheat de `HandleForceSpeedChangeAck` / `HandleMoveSetModMovementForceMagnitudeAck`: `m_forced_speed_changes`, `m_movementForceModMagnitudeChanges`, speed runtime, corrección y kick.
+    - [ ] **#A06.8c** Emitir broadcasts C++ pendientes: `SMSG_MOVE_UPDATE_KNOCK_BACK`, `SMSG_MOVE_SKIP_TIME`, `SMSG_MOVE_UPDATE_APPLY_MOVEMENT_FORCE`, `SMSG_MOVE_UPDATE_REMOVE_MOVEMENT_FORCE`, `SMSG_MOVE_UPDATE_MOD_MOVEMENT_FORCE_MAGNITUDE`.
+    - [ ] **#A06.8d** Portar `MovementForce` wire (`MoveApplyMovementForceAck`/`MoveRemoveMovementForceAck`) y su validación exacta.
+    - [ ] **#A06.8e** Integrar `MoveSplineDone` con Taxi/MotionMaster runtime: nodo teleport, cleanup post-flight, fall info reset y aura honorless target.
+    - [ ] **#A06.8f** Integrar `MoveTeleportAck` con near-teleport runtime: semaphore, destino, zone/area/PvP, resummon pet y delayed operations.
+    - [ ] **#A06.8g** Reemplazar la validación conservadora de ACKs por `Player::ValidateMovementInfo` completo sobre flags cuando Unit/Aura/Vehicle runtime esté disponible.
 - [ ] **#A07** Auditar **Combat** (`wow-combat` + handlers) vs `src/server/game/Combat/`. Damage roll, miss tables, hit info.
 - [ ] **#A08** Auditar **Spells** (`wow-spell`) vs `src/server/game/Spells/`. Spell flow, casting, effects subset.
 - [ ] **#A09** Auditar **Quests** (handlers/quest.rs, wow-data/quest) vs `src/server/game/Quests/`. Eligibility, kill credit, completion, reward.

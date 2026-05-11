@@ -5,7 +5,7 @@
 
 //! Handlers for miscellaneous client opcodes:
 //! SetSelection, AreaTrigger, RequestCemeteryList,
-//! TaxiNodeStatusQuery, ChatJoinChannel, MoveTimeSkipped.
+//! TaxiNodeStatusQuery, ChatJoinChannel.
 
 use tracing::{debug, info, warn};
 use wow_constants::{ClientOpcodes, ItemExtendedCostFlags};
@@ -79,15 +79,6 @@ inventory::submit! {
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::Inplace,
         handler_name: "handle_chat_join_channel",
-    }
-}
-
-inventory::submit! {
-    PacketHandlerEntry {
-        opcode: ClientOpcodes::MoveTimeSkipped,
-        status: SessionStatus::LoggedIn,
-        processing: PacketProcessing::Inplace,
-        handler_name: "handle_move_time_skipped",
     }
 }
 
@@ -668,13 +659,6 @@ impl crate::session::WorldSession {
         // TODO: parse channel packet and join via ChannelManager.
         // Packet structure (bit-packed): channel_id u32, has_voice bit,
         // name_len bits(7), pass_len bits(7), channel_name, password.
-    }
-
-    /// CMSG_MOVE_TIME_SKIPPED — client reports skipped movement time.
-    /// C# ref: MovementHandler.HandleMoveTimeSkipped
-    /// Stubbed until movement broadcast is implemented.
-    pub async fn handle_move_time_skipped(&mut self, _pkt: wow_packet::WorldPacket) {
-        // TODO: update mover.m_movementInfo.Time and broadcast MoveSkipTime.
     }
 
     // ── QueryTime ─────────────────────────────────────────────────────────────

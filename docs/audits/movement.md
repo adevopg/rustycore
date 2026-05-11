@@ -10,8 +10,14 @@ Fecha: 2026-05-11
   - `operator>>(ByteBuffer&, MovementInfo&)`, líneas 104-170: orden binario de lectura.
   - `operator<<(ByteBuffer&, MovementInfo const&)`, líneas 25-99: orden binario de escritura.
   - `operator>>(ByteBuffer&, MovementInfo::TransportInfo&)`, líneas 181-198: transporte con bits `hasPrevTime`/`hasVehicleId`.
+  - ACKs de movimiento, líneas 800-989: `MoveTeleportAck`, `MovementAck`, `MovementAckMessage`, `MovementSpeedAck`, `MoveKnockBackAck`, `MoveApply/RemoveMovementForceAck`, `MoveSetCollisionHeightAck`, `MoveTimeSkipped`, `MoveSplineDone`.
 - `/home/server/woltk-trinity-legacy/src/server/game/Handlers/MovementHandler.cpp`
   - `HandleMovementOpcode`, líneas 312-430: validación de mover, teleport, coordenadas, transport, fall, auras, update position y broadcast.
+  - `HandleMoveTeleportAck`, líneas 263-306: near teleport ack, posición destino, zone update, resummon pet y delayed ops.
+  - `HandleForceSpeedChangeAck`, líneas 470-539: valida movement info, decrementa counters de speed force, corrige/kickea si la velocidad no coincide.
+  - `HandleMoveKnockBackAck`, líneas 552-565: valida, ajusta time, guarda `m_movementInfo` y emite `SMSG_MOVE_UPDATE_KNOCK_BACK`.
+  - `HandleMovementAckMessage`, `HandleSetCollisionHeightAck`, `HandleMoveApply/RemoveMovementForceAck`, `HandleMoveSetModMovementForceMagnitudeAck`, líneas 567-666.
+  - `HandleMoveSplineDoneOpcode` y `HandleMoveTimeSkippedOpcode`, líneas 668-741.
   - `HandleSetActiveMoverOpcode`, líneas 543-548: solo log si el mover no coincide.
   - `HandleMoveInitActiveMoverComplete`, líneas 810-815: set local flag, transport server time y visibility update.
 
@@ -21,10 +27,12 @@ Fecha: 2026-05-11
   - `MovementInfo::read`, líneas 114-242.
   - `MovementInfo::write`, líneas 246-305.
   - `MoveUpdate`, `MonsterMove`, `SetActiveMover`, `MoveInitActiveMoverComplete`.
+  - `MovementAck`, `MovementAckMessage`, `MovementSpeedAck`, `MoveKnockBackAck`, `MoveSetCollisionHeightAck`, `MoveTimeSkipped`, `MoveSplineDone`, `MoveTeleportAck`.
 - `crates/wow-world/src/handlers/movement.rs`
   - `handle_movement`, líneas 79-153.
   - `handle_set_active_mover`, líneas 160-181.
   - `handle_move_init_active_mover_complete`, líneas 187-196.
+  - ACK handlers para generic ACKs, speed ACKs, knockback, collision height, time skipped, spline done y teleport ack.
 
 ## Divergencias
 
@@ -40,7 +48,14 @@ Fecha: 2026-05-11
 | Handler C++ side effects: fall damage, parachute/flight aura interrupts, pet unsummon, sit-to-stand, under-map damage, jump procs | Corregido parcialmente en `#A06.6.1-#A06.6.4a`: Rust ya remueve auras por flags `LandingOrFlight`/`Jump`, levanta al jugador sentado al moverse, registra hooks para unsummon temporal de pet / jump proc, aplica `HandleFall` con `m_lastFallTime/Z`, guards GM/hover/feather/fly/normal immunity, `SAFE_FALL`, `MODIFY_FALL_DAMAGE_PCT`, god/env immunity y Gust of Wind representados, y ejecuta under-map con `PLAYER_FLAGS_IS_OUT_OF_BOUNDS` representado + `DAMAGE_FALL_TO_VOID`. `MapManager::min_height_like_cpp` usa el fallback C++ `-500.0` hasta que terrain/grid exponga alturas reales. Quedan conexiones runtime Pet/Proc/Aura completas. | OK parcial | `#A06.6.4`: conectar los hooks a runtime real; terrain/grid real sigue en Map/Terrain. |
 | `SetActiveMover` C++ solo loguea mismatch si player está en world | Rust loguea warning para mismatch pero no cambia estado, comportamiento aceptable. | OK distinto | Bajar a `trace/debug` si el log molesta en pruebas. |
 | `MoveInitActiveMoverComplete` C++ setea local flag, transport server time y actualiza visibility | Corregido en `#A06.7`: Rust lee `Ticks`, setea `PLAYER_LOCAL_FLAG_OVERRIDE_TRANSPORT_SERVER_TIME`, calcula `TransportServerTime = GameTimeMS - Ticks`, emite VALUES update mínimo de `ActivePlayerData::{LocalFlags,TransportServerTime}` y dispara refresh de visibility. | OK | Mantener test de estado; el timing exacto depende del contador monotónico Rust equivalente a `GameTime::GetGameTimeMS`. |
-| ACK opcodes (`MoveKnockBackAck`, speed acks, movement force acks, collision height, spline done, time skipped) | Rust registra solo movement básicos, `SetActiveMover` y `MoveInitActiveMoverComplete`; no hay packet structs ni handlers para la mayoría de ACKs. | Missing | `#A06.8`: inventario de opcodes movement ACK y port incremental antes de anticheat/speed control. |
+| ACK opcodes genéricos (`CollisionDisable/Enable`, double jump, swim-to-fly, feather fall, root/unroot, gravity, hover, inertia, can fly, turn while falling, ignore movement forces, water walk) | Corregido en `#A06.8a`: Rust registra los opcodes que C++ manda a `HandleMovementAckMessage`, parsea `MovementAck` en orden C++ y valida GUID/coord de forma conservadora. | OK parcial | Queda portar la mutación completa de `Player::ValidateMovementInfo` sobre flags cuando exista Unit/Aura runtime real. |
+| ACKs de velocidad (`MoveForce*SpeedChangeAck`, turn/pitch rate y `MoveSetModMovementForceMagnitudeAck`) | Corregido en `#A06.8a` a nivel parser/handler: Rust lee `MovementSpeedAck`, valida GUID/coord y registra el ACK con speed. | OK parcial | `#A06.8b`: counters `m_forced_speed_changes`, speed runtime y anticheat/corrección/kick como C++. |
+| `MoveKnockBackAck` | Corregido en `#A06.8a`: Rust lee optional speeds bit como C++, valida mover, ajusta time con `AdjustClientMovementTime`, actualiza posición/tiempo representados y registra evento. | OK parcial | `#A06.8c`: emitir `SMSG_MOVE_UPDATE_KNOCK_BACK` a set cuando el broadcast/runtime esté completo. |
+| `MoveSetCollisionHeightAck` | Corregido en `#A06.8a`: Rust lee `MovementAck`, `Height`, `MountDisplayID`, `Reason u8` en orden C++ y valida status. | OK parcial | Conectar a collision-height runtime si se requiere más que la validación C++ actual. |
+| `MoveTimeSkipped` | Corregido en `#A06.8a`: Rust salió de `misc` stub, lee `MoverGUID` + `TimeSkipped`, valida mover y suma `time_skipped` al tiempo de movimiento representado. | OK parcial | `#A06.8d`: emitir `SMSG_MOVE_SKIP_TIME` a set, excluyendo al jugador como C++. |
+| `MoveSplineDone` | Corregido en `#A06.8a` a nivel parser/handler: Rust lee `MovementInfo` + `SplineID`, valida y registra. | OK parcial | `#A06.8e`: integrar taxi flight, teleport de nodos y cleanup post-taxi cuando MotionMaster/Taxi runtime esté completo. |
+| `MoveTeleportAck` | Corregido en `#A06.8a` a nivel parser/handler: Rust lee `MoverGUID`, `AckIndex`, `MoveTime`, valida GUID y registra. | OK parcial | `#A06.8f`: near-teleport semaphore, aplicar destino, zone/PvP/pet/delayed operations cuando Player teleport runtime exista. |
+| ACKs de movement force (`MoveApplyMovementForceAck`, `MoveRemoveMovementForceAck`) | C++ los parsea y rebroadcasts con `MoveUpdateApply/RemoveMovementForce`; Rust aún no tiene `MovementForce` parser ni server update equivalente en esta subfase. | Missing | `#A06.8d`: portar `MovementForce` wire y broadcasts. |
 | `SMSG_ON_MONSTER_MOVE` C++ usa `MovementMonsterSpline` completo con flags, filters, face modes, packed deltas, extras | Rust `MonsterMove` es una versión simplificada de un punto y no representa `MoveSpline`. | Missing | Cubrir en Fase 2.1 `MoveSpline real`; no usarlo como port completo. |
 
 ## TODOs añadidos al roadmap
@@ -52,8 +67,9 @@ Fecha: 2026-05-11
 - `#A06.5`: corregido; `AdjustClientMovementTime` y time-sync delta básico portados.
 - `#A06.6`: `#A06.6.1-#A06.6.2` corregidos; quedan `#A06.6.3-#A06.6.4` para under-map y conexión real Aura/Pet/Proc.
 - `#A06.7`: portar efectos de `MoveInitActiveMoverComplete`.
-- `#A06.8`: inventariar y portar ACK movement opcodes.
+- `#A06.8a`: corregido; parsers/handlers base para ACKs genéricos, speed ACKs, knockback, collision height, time skipped, spline done y teleport ack.
+- `#A06.8b-#A06.8g`: pendientes explícitos para speed anticheat/counters, broadcasts knockback/time-skipped/movement-force, taxi spline done y near teleport runtime.
 
 ## Conclusión
 
-`MovementInfo::read` está cerca del wire C++, pero no es auditoría completa porque se pierden campos opcionales y el writer tiene una divergencia en fall data. El handler Rust es funcional para la prueba básica de login/moverse, pero no es un port completo de `MovementHandler.cpp`. El módulo queda en estado ⚠️, no ✅.
+`MovementInfo` y varios ACKs principales ya están fijados contra el wire C++ con tests, y el handler Rust cubre movimiento básico, side effects representables, `MoveInitActiveMoverComplete` y ACK bookkeeping seguro. Aun así no es un port completo de `MovementHandler.cpp`: faltan runtime real de Aura/Pet/Proc, movement-force, speed anticheat/counters, broadcasts ACK, taxi/movespline y near-teleport. El módulo queda en estado ⚠️, no ✅.

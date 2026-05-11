@@ -21,7 +21,9 @@ use wow_constants::unit::UnitStandStateType;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ServerPacket;
 use wow_packet::packets::movement::{
-    ClientPlayerMovement, MoveInitActiveMoverComplete, MoveUpdate, MovementInfo, SetActiveMover,
+    ClientPlayerMovement, MoveInitActiveMoverComplete, MoveKnockBackAck, MoveSetCollisionHeightAck,
+    MoveSplineDone, MoveTeleportAck, MoveTimeSkipped, MoveUpdate, MovementAckMessage, MovementInfo,
+    MovementSpeedAck, SetActiveMover,
 };
 
 use crate::session::{
@@ -157,6 +159,7 @@ impl WorldSession {
 
         self.apply_movement_side_effects_like_cpp(opcode, &info.info);
         info.info.time = self.adjust_client_movement_time_like_cpp(info.info.time);
+        self.set_player_movement_time_like_cpp(info.info.time);
 
         // Update server-side player position.
         self.set_player_position_like_cpp(info.info.position);
@@ -294,6 +297,90 @@ impl WorldSession {
         );
         self.apply_move_init_active_mover_complete_like_cpp(pkt.ticks);
         self.update_visibility().await;
+    }
+
+    /// Handle C++ `HandleMovementAckMessage` opcodes.
+    pub async fn handle_movement_ack_message(
+        &mut self,
+        opcode: ClientOpcodes,
+        pkt: MovementAckMessage,
+    ) {
+        trace!(account = self.account_id, ?opcode, "MovementAckMessage");
+        self.record_validated_movement_ack_like_cpp(opcode, &pkt.ack, None);
+    }
+
+    /// Handle C++ `HandleForceSpeedChangeAck` and movement-force magnitude ACKs.
+    pub async fn handle_movement_speed_ack(
+        &mut self,
+        opcode: ClientOpcodes,
+        pkt: MovementSpeedAck,
+    ) {
+        trace!(
+            account = self.account_id,
+            ?opcode,
+            speed = pkt.speed,
+            "MovementSpeedAck"
+        );
+        self.record_validated_movement_ack_like_cpp(opcode, &pkt.ack, Some(pkt.speed));
+    }
+
+    /// Handle C++ `HandleMoveKnockBackAck`.
+    pub async fn handle_move_knock_back_ack(&mut self, pkt: MoveKnockBackAck) {
+        trace!(
+            account = self.account_id,
+            has_speeds = pkt.speeds.is_some(),
+            "MoveKnockBackAck"
+        );
+        self.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &pkt.ack);
+    }
+
+    /// Handle C++ `HandleSetCollisionHeightAck`.
+    pub async fn handle_move_set_collision_height_ack(&mut self, pkt: MoveSetCollisionHeightAck) {
+        trace!(
+            account = self.account_id,
+            height = pkt.height,
+            mount_display_id = pkt.mount_display_id,
+            reason = pkt.reason,
+            "MoveSetCollisionHeightAck"
+        );
+        self.record_validated_movement_ack_like_cpp(
+            ClientOpcodes::MoveSetCollisionHeightAck,
+            &pkt.data,
+            None,
+        );
+    }
+
+    /// Handle C++ `HandleMoveTimeSkippedOpcode`.
+    pub async fn handle_move_time_skipped(&mut self, pkt: MoveTimeSkipped) {
+        trace!(
+            account = self.account_id,
+            mover = ?pkt.mover_guid,
+            time_skipped = pkt.time_skipped,
+            "MoveTimeSkipped"
+        );
+        self.apply_move_time_skipped_like_cpp(pkt.mover_guid, pkt.time_skipped);
+    }
+
+    /// Handle C++ `HandleMoveSplineDoneOpcode` bookkeeping until taxi runtime is complete.
+    pub async fn handle_move_spline_done(&mut self, pkt: MoveSplineDone) {
+        trace!(
+            account = self.account_id,
+            spline_id = pkt.spline_id,
+            "MoveSplineDone"
+        );
+        self.record_move_spline_done_like_cpp(&pkt.status, pkt.spline_id);
+    }
+
+    /// Handle C++ `HandleMoveTeleportAck` bookkeeping until near-teleport runtime is complete.
+    pub async fn handle_move_teleport_ack(&mut self, pkt: MoveTeleportAck) {
+        trace!(
+            account = self.account_id,
+            mover = ?pkt.mover_guid,
+            ack_index = pkt.ack_index,
+            move_time = pkt.move_time,
+            "MoveTeleportAck"
+        );
+        self.record_move_teleport_ack_like_cpp(pkt.mover_guid, pkt.ack_index, pkt.move_time);
     }
 }
 
@@ -538,6 +625,52 @@ mod tests {
         );
         assert_eq!(session.movement_visibility_refresh_requests_like_cpp(), 1);
     }
+
+    #[test]
+    fn movement_ack_helpers_validate_and_apply_cpp_side_effects() {
+        let mut session = make_session();
+        let guid = ObjectGuid::create_player(1, 42);
+        session.set_player_guid(Some(guid));
+
+        let status = MovementInfo {
+            guid,
+            time: 1_000,
+            position: wow_core::Position::new(10.0, 20.0, 30.0, 1.5),
+            ..MovementInfo::default()
+        };
+        let ack = wow_packet::packets::movement::MovementAck {
+            status: status.clone(),
+            ack_index: 7,
+        };
+
+        assert!(session.apply_knock_back_ack_like_cpp(ClientOpcodes::MoveKnockBackAck, &ack));
+        assert_eq!(session.player_position_like_cpp(), Some(status.position));
+        assert_eq!(session.movement_ack_events_like_cpp().len(), 1);
+        assert!(session.movement_ack_events_like_cpp()[0].accepted);
+        assert_eq!(session.movement_ack_events_like_cpp()[0].ack_index, Some(7));
+        assert_eq!(
+            session.movement_ack_events_like_cpp()[0].adjusted_time,
+            Some(session.player_movement_time_like_cpp())
+        );
+
+        session.set_player_movement_time_like_cpp(100);
+        assert!(session.apply_move_time_skipped_like_cpp(guid, 25));
+        assert_eq!(session.player_movement_time_like_cpp(), 125);
+        assert_eq!(session.movement_ack_events_like_cpp().len(), 2);
+        assert_eq!(
+            session.movement_ack_events_like_cpp()[1].opcode,
+            ClientOpcodes::MoveTimeSkipped
+        );
+        assert_eq!(
+            session.movement_ack_events_like_cpp()[1].time_skipped,
+            Some(25)
+        );
+
+        let wrong_guid = ObjectGuid::create_player(1, 43);
+        assert!(!session.apply_move_time_skipped_like_cpp(wrong_guid, 25));
+        assert_eq!(session.player_movement_time_like_cpp(), 125);
+        assert!(!session.movement_ack_events_like_cpp()[2].accepted);
+    }
 }
 
 // ── Handler registration (SetActiveMover) ────────────────────────
@@ -559,5 +692,104 @@ inventory::submit! {
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::Inplace,
         handler_name: "handle_move_init_active_mover_complete",
+    }
+}
+
+macro_rules! register_movement_ack_message {
+    ($opcode:ident) => {
+        inventory::submit! {
+            PacketHandlerEntry {
+                opcode: ClientOpcodes::$opcode,
+                status: SessionStatus::LoggedIn,
+                processing: PacketProcessing::Inplace,
+                handler_name: "handle_movement_ack_message",
+            }
+        }
+    };
+}
+
+macro_rules! register_movement_speed_ack {
+    ($opcode:ident) => {
+        inventory::submit! {
+            PacketHandlerEntry {
+                opcode: ClientOpcodes::$opcode,
+                status: SessionStatus::LoggedIn,
+                processing: PacketProcessing::Inplace,
+                handler_name: "handle_movement_speed_ack",
+            }
+        }
+    };
+}
+
+register_movement_ack_message!(MoveCollisionDisableAck);
+register_movement_ack_message!(MoveCollisionEnableAck);
+register_movement_ack_message!(MoveEnableDoubleJumpAck);
+register_movement_ack_message!(MoveEnableSwimToFlyTransAck);
+register_movement_ack_message!(MoveFeatherFallAck);
+register_movement_ack_message!(MoveForceRootAck);
+register_movement_ack_message!(MoveForceUnrootAck);
+register_movement_ack_message!(MoveGravityDisableAck);
+register_movement_ack_message!(MoveGravityEnableAck);
+register_movement_ack_message!(MoveHoverAck);
+register_movement_ack_message!(MoveInertiaDisableAck);
+register_movement_ack_message!(MoveInertiaEnableAck);
+register_movement_ack_message!(MoveSetCanFlyAck);
+register_movement_ack_message!(MoveSetCanTurnWhileFallingAck);
+register_movement_ack_message!(MoveSetIgnoreMovementForcesAck);
+register_movement_ack_message!(MoveWaterWalkAck);
+
+register_movement_speed_ack!(MoveForceWalkSpeedChangeAck);
+register_movement_speed_ack!(MoveForceRunSpeedChangeAck);
+register_movement_speed_ack!(MoveForceRunBackSpeedChangeAck);
+register_movement_speed_ack!(MoveForceSwimSpeedChangeAck);
+register_movement_speed_ack!(MoveForceSwimBackSpeedChangeAck);
+register_movement_speed_ack!(MoveForceTurnRateChangeAck);
+register_movement_speed_ack!(MoveForceFlightSpeedChangeAck);
+register_movement_speed_ack!(MoveForceFlightBackSpeedChangeAck);
+register_movement_speed_ack!(MoveForcePitchRateChangeAck);
+register_movement_speed_ack!(MoveSetModMovementForceMagnitudeAck);
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::MoveKnockBackAck,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_move_knock_back_ack",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::MoveSetCollisionHeightAck,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_move_set_collision_height_ack",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::MoveTimeSkipped,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_move_time_skipped",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::MoveSplineDone,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_move_spline_done",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::MoveTeleportAck,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_move_teleport_ack",
     }
 }
