@@ -23,8 +23,8 @@ use wow_database::{
     WorldStatements,
 };
 use wow_entities::{
-    BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_COUNT, BUYBACK_SLOT_START,
-    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
+    BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_START, INVENTORY_DEFAULT_SIZE,
+    INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
     INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT, REAGENT_BAG_SLOT_END,
     REAGENT_BAG_SLOT_START, is_equipment_pos, is_inventory_pos,
 };
@@ -2089,13 +2089,7 @@ impl WorldSession {
         self.set_player_guid(None);
 
         // Clear inventory state
-        self.inventory_items.clear();
-        self.buyback_items.clear();
-        self.buyback_price = [0; BUYBACK_SLOT_COUNT];
-        self.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
-        self.current_buyback_slot = BUYBACK_SLOT_START;
-        self.inventory_item_objects.clear();
-        self.sync_player_inventory_like_cpp();
+        self.clear_all_inventory_runtime_like_cpp();
         self.player_currencies.clear();
         self.set_active_loot_guid(ObjectGuid::EMPTY);
 
@@ -2181,10 +2175,7 @@ impl WorldSession {
             None => return,
         };
         if self.buyback_items.is_empty() {
-            self.buyback_price = [0; BUYBACK_SLOT_COUNT];
-            self.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
-            self.current_buyback_slot = BUYBACK_SLOT_START;
-            self.sync_player_inventory_like_cpp();
+            self.clear_buyback_runtime_like_cpp();
             return;
         }
 
@@ -2217,11 +2208,7 @@ impl WorldSession {
         for item_guid in removed_guids {
             self.remove_inventory_item_object(item_guid);
         }
-        self.buyback_items.clear();
-        self.buyback_price = [0; BUYBACK_SLOT_COUNT];
-        self.buyback_timestamp = [0; BUYBACK_SLOT_COUNT];
-        self.current_buyback_slot = BUYBACK_SLOT_START;
-        self.sync_player_inventory_like_cpp();
+        self.clear_buyback_runtime_like_cpp();
         self.sync_object_accessor_player();
     }
 
@@ -2331,9 +2318,7 @@ impl WorldSession {
         let mut inv_slots = [ObjectGuid::EMPTY; 141];
         let mut item_creates: Vec<wow_packet::packets::update::ItemCreateData> = Vec::new();
         let realm_id = self.realm_id();
-        self.inventory_items.clear();
-        self.inventory_item_objects.clear();
-        self.sync_player_inventory_like_cpp();
+        self.clear_inventory_items_and_objects_like_cpp();
         self.player_currencies.clear();
         {
             let mut eq_stmt = char_db.prepare(CharStatements::SEL_CHAR_EQUIPMENT);
@@ -2405,9 +2390,9 @@ impl WorldSession {
                                 inventory_type,
                             };
                             if WorldSession::is_buyback_slot(slot) {
-                                self.buyback_items.insert(slot, inventory_item);
+                                self.insert_buyback_item_like_cpp(slot, inventory_item);
                             } else {
-                                self.inventory_items.insert(slot, inventory_item);
+                                self.insert_inventory_item_like_cpp(slot, inventory_item);
                             }
                             let mut item_object = self.make_inventory_item_object(
                                 item_guid,
@@ -4801,9 +4786,9 @@ impl WorldSession {
                     new_count,
                     ..
                 } => {
-                    if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+                    self.update_inventory_item_object_like_cpp(item_guid, |item| {
                         item.set_count(new_count);
-                    }
+                    });
                     self.send_packet(&UpdateObject::item_stack_count_update(
                         item_guid, map_id, new_count,
                     ));
@@ -4811,7 +4796,7 @@ impl WorldSession {
                 ExtendedCostItemTurninChange::Delete {
                     slot, item_guid, ..
                 } => {
-                    self.inventory_items.remove(&slot);
+                    self.remove_inventory_item_like_cpp(slot);
                     self.remove_inventory_item_object(item_guid);
                     cleared_slots.push((slot, ObjectGuid::EMPTY));
                     if (slot as usize) < 19 {
@@ -5378,14 +5363,14 @@ impl WorldSession {
         }
 
         for &(_, item_guid, new_count) in &existing_updates {
-            if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+            self.update_inventory_item_object_like_cpp(item_guid, |item| {
                 item.set_count(new_count);
-            }
+            });
         }
 
         let inv_type = self.item_template_inventory_type(buy.item_id as u32);
         for &(slot, db_guid, item_guid, stack_count) in &new_stacks {
-            self.inventory_items.insert(
+            self.insert_inventory_item_like_cpp(
                 slot,
                 crate::session::InventoryItem {
                     guid: item_guid,
@@ -5528,7 +5513,7 @@ impl WorldSession {
         };
 
         let buyback_index = (buyback_slot - BUYBACK_SLOT_START) as usize;
-        let price = u64::from(self.buyback_price[buyback_index]);
+        let price = u64::from(self.buyback_price_like_cpp()[buyback_index]);
         if self.player_gold < price {
             self.send_buy_error(
                 BuyResult::NotEnoughtMoney,
@@ -5639,22 +5624,24 @@ impl WorldSession {
         }
 
         self.player_gold = new_gold;
-        self.buyback_items.remove(&buyback_slot);
-        self.buyback_price[buyback_index] = 0;
-        self.buyback_timestamp[buyback_index] = 0;
-        if self.buyback_items.contains_key(&self.current_buyback_slot) {
-            self.current_buyback_slot = buyback_slot;
+        self.remove_buyback_item_like_cpp(buyback_slot);
+        self.clear_buyback_slot_metadata_like_cpp(buyback_slot);
+        if self
+            .buyback_items_like_cpp()
+            .contains_key(&self.current_buyback_slot_like_cpp())
+        {
+            self.set_current_buyback_slot_like_cpp(buyback_slot);
         }
 
         for &(_, item_guid, new_count) in &existing_updates {
-            if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+            self.update_inventory_item_object_like_cpp(item_guid, |item| {
                 item.set_count(new_count);
-            }
+            });
         }
 
         let mut inv_slot_changes = vec![(buyback_slot, ObjectGuid::EMPTY)];
         if let Some(slot) = moved_slot {
-            self.inventory_items.insert(
+            self.insert_inventory_item_like_cpp(
                 slot,
                 InventoryItem {
                     guid: buyback_item.guid,
@@ -5664,9 +5651,9 @@ impl WorldSession {
                 },
             );
             self.set_inventory_item_object_slot(buyback_item.guid, slot);
-            if let Some(item_object) = self.inventory_item_objects.get_mut(&buyback_item.guid) {
+            self.update_inventory_item_object_like_cpp(buyback_item.guid, |item_object| {
                 item_object.set_count(moved_count);
-            }
+            });
             inv_slot_changes.push((slot, buyback_item.guid));
         } else {
             self.remove_inventory_item_object(buyback_item.guid);
@@ -5820,7 +5807,6 @@ impl WorldSession {
         let money = sell_price.saturating_mul(u64::from(sold_count));
         let new_gold = self.player_gold.saturating_add(money);
         let buyback_slot = self.select_buyback_slot_cpp();
-        let buyback_index = (buyback_slot - BUYBACK_SLOT_START) as usize;
         let old_buyback = self.buyback_items.get(&buyback_slot).cloned();
         let buyback_price = sell_price
             .saturating_mul(u64::from(sold_count))
@@ -5916,11 +5902,10 @@ impl WorldSession {
 
         self.player_gold = new_gold;
         if let Some(old_buyback) = old_buyback {
-            self.buyback_items.remove(&buyback_slot);
+            self.remove_buyback_item_like_cpp(buyback_slot);
             self.remove_inventory_item_object(old_buyback.guid);
         }
-        self.buyback_price[buyback_index] = buyback_price;
-        self.buyback_timestamp[buyback_index] = buyback_timestamp;
+        self.set_buyback_slot_metadata_like_cpp(buyback_slot, buyback_price, buyback_timestamp);
         self.advance_buyback_slot_cpp();
 
         let mut created_buyback_item = None;
@@ -5930,11 +5915,11 @@ impl WorldSession {
             let stack_count = cloned_item.count();
             let durability = cloned_item.data().durability;
             let max_durability = cloned_item.data().max_durability;
-            if let Some(item_object) = self.inventory_item_objects.get_mut(&item.guid) {
+            self.update_inventory_item_object_like_cpp(item.guid, |item_object| {
                 item_object.set_count(remaining);
-            }
+            });
             stack_update = Some((item.guid, remaining));
-            self.buyback_items.insert(
+            self.insert_buyback_item_like_cpp(
                 buyback_slot,
                 InventoryItem {
                     guid: new_item_guid,
@@ -5947,8 +5932,8 @@ impl WorldSession {
             self.set_inventory_item_object_slot(new_item_guid, buyback_slot);
             created_buyback_item = Some((new_item_guid, stack_count, durability, max_durability));
         } else {
-            self.inventory_items.remove(&slot);
-            self.buyback_items.insert(
+            self.remove_inventory_item_like_cpp(slot);
+            self.insert_buyback_item_like_cpp(
                 buyback_slot,
                 InventoryItem {
                     guid: item.guid,
@@ -6085,9 +6070,9 @@ impl WorldSession {
                 return;
             }
 
-            if let Some(item) = self.inventory_item_objects.get_mut(&refund.item_guid) {
+            self.update_inventory_item_object_like_cpp(refund.item_guid, |item| {
                 item.set_not_refundable();
-            }
+            });
             self.sync_object_accessor_player();
             self.send_packet(&ItemExpirePurchaseRefund {
                 item_guid: refund.item_guid,
@@ -6381,17 +6366,17 @@ impl WorldSession {
         }
 
         self.player_gold = new_gold;
-        self.inventory_items.remove(&refund_slot);
+        self.remove_inventory_item_like_cpp(refund_slot);
         self.remove_inventory_item_object(refund.item_guid);
 
         for &(item_guid, _, new_count) in planned_existing_counts.values() {
-            if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+            self.update_inventory_item_object_like_cpp(item_guid, |item| {
                 item.set_count(new_count);
-            }
+            });
         }
 
         for (stack, db_guid, item_guid) in &created_new_stacks {
-            self.inventory_items.insert(
+            self.insert_inventory_item_like_cpp(
                 stack.slot,
                 InventoryItem {
                     guid: *item_guid,
@@ -6573,16 +6558,16 @@ impl WorldSession {
 
         // Perform the swap in memory
         if let Some(ref item) = src_item {
-            self.inventory_items.insert(dst, item.clone());
+            self.insert_inventory_item_like_cpp(dst, item.clone());
             self.set_inventory_item_object_slot(item.guid, dst);
         } else {
-            self.inventory_items.remove(&dst);
+            self.remove_inventory_item_like_cpp(dst);
         }
         if let Some(ref item) = dst_item {
-            self.inventory_items.insert(src, item.clone());
+            self.insert_inventory_item_like_cpp(src, item.clone());
             self.set_inventory_item_object_slot(item.guid, src);
         } else {
-            self.inventory_items.remove(&src);
+            self.remove_inventory_item_like_cpp(src);
         }
         self.sync_object_accessor_player();
 
@@ -6925,9 +6910,9 @@ impl WorldSession {
                 return;
             }
 
-            if let Some(item_object) = self.inventory_item_objects.get_mut(&item.guid) {
+            self.update_inventory_item_object_like_cpp(item.guid, |item_object| {
                 item_object.set_count(new_count);
-            }
+            });
             self.sync_object_accessor_player();
             self.send_packet(&UpdateObject::item_stack_count_update(
                 item.guid,
@@ -6968,7 +6953,7 @@ impl WorldSession {
             return;
         }
 
-        self.inventory_items.remove(&slot);
+        self.remove_inventory_item_like_cpp(slot);
         self.remove_inventory_item_object(item.guid);
         self.sync_object_accessor_player();
 

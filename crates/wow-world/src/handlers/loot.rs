@@ -4758,13 +4758,13 @@ impl WorldSession {
         }
 
         for &(_, item_guid, _, new_count, _) in &planned_existing_counts {
-            if let Some(item) = self.inventory_item_objects.get_mut(&item_guid) {
+            self.update_inventory_item_object_like_cpp(item_guid, |item| {
                 item.set_count(new_count);
-            }
+            });
         }
 
         for (stack, db_guid, item_guid) in &created_new_stacks {
-            self.inventory_items.insert(
+            self.insert_inventory_item_like_cpp(
                 stack.slot,
                 InventoryItem {
                     guid: *item_guid,
