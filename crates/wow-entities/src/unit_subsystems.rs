@@ -1524,6 +1524,13 @@ pub enum MovementGeneratorPriority {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+pub enum RotateDirection {
+    Left = 0,
+    Right = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum MovementSlot {
     Default = 0,
     Active = 1,
@@ -1562,9 +1569,11 @@ pub struct MovementGeneratorRef {
     pub target_guid: Option<ObjectGuid>,
     pub movement_id: u32,
     pub duration_ms: Option<u32>,
+    pub max_duration_ms: Option<u32>,
     pub elapsed_ms: u32,
     pub arrival_spell_id: u32,
     pub arrival_spell_target_guid: ObjectGuid,
+    pub rotate_direction: Option<RotateDirection>,
 }
 
 impl MovementGeneratorRef {
@@ -1579,9 +1588,11 @@ impl MovementGeneratorRef {
             target_guid: None,
             movement_id: 0,
             duration_ms: None,
+            max_duration_ms: None,
             elapsed_ms: 0,
             arrival_spell_id: 0,
             arrival_spell_target_guid: ObjectGuid::EMPTY,
+            rotate_direction: None,
         }
     }
 
@@ -1617,6 +1628,16 @@ impl MovementGeneratorRef {
 
     pub const fn with_duration_ms(mut self, duration_ms: u32) -> Self {
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    pub const fn with_max_duration_ms(mut self, max_duration_ms: u32) -> Self {
+        self.max_duration_ms = Some(max_duration_ms);
+        self
+    }
+
+    pub const fn with_rotate_direction(mut self, direction: RotateDirection) -> Self {
+        self.rotate_direction = Some(direction);
         self
     }
 
@@ -1806,6 +1827,141 @@ impl MovementGeneratorRef {
                 && owner_is_creature,
         }
     }
+
+    pub fn initialize_idle_like_cpp(&self) -> IdleMovementAction {
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn reset_idle_like_cpp(&self) -> IdleMovementAction {
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn update_idle_like_cpp(&self) -> bool {
+        true
+    }
+
+    pub fn finalize_idle_like_cpp(&mut self) {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+    }
+
+    pub fn initialize_rotate_like_cpp(&mut self) -> IdleMovementAction {
+        self.flags &=
+            !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn reset_rotate_like_cpp(&mut self) -> IdleMovementAction {
+        self.flags &= !MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        self.initialize_rotate_like_cpp()
+    }
+
+    pub fn update_rotate_like_cpp(
+        &mut self,
+        owner_exists: bool,
+        diff_ms: u32,
+        current_orientation: f32,
+    ) -> RotateMovementUpdate {
+        if !owner_exists {
+            return RotateMovementUpdate {
+                keep_running: false,
+                facing_angle: None,
+            };
+        }
+
+        let max_duration_ms = self.max_duration_ms.unwrap_or(0);
+        let direction = self.rotate_direction.unwrap_or(RotateDirection::Left);
+        let facing_angle = if max_duration_ms == 0 {
+            current_orientation
+        } else {
+            let sign = match direction {
+                RotateDirection::Left => 1.0,
+                RotateDirection::Right => -1.0,
+            };
+            (current_orientation
+                + (diff_ms as f32 * std::f32::consts::TAU / max_duration_ms as f32) * sign)
+                .clamp(0.0, std::f32::consts::TAU)
+        };
+
+        let remaining = self.duration_ms.unwrap_or(0);
+        if remaining > diff_ms {
+            self.duration_ms = Some(remaining - diff_ms);
+            RotateMovementUpdate {
+                keep_running: true,
+                facing_angle: Some(facing_angle),
+            }
+        } else {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            RotateMovementUpdate {
+                keep_running: false,
+                facing_angle: Some(facing_angle),
+            }
+        }
+    }
+
+    pub fn deactivate_timed_idle_like_cpp(&mut self) {
+        self.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+    }
+
+    pub fn finalize_rotate_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> RotateMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        RotateMovementFinalize {
+            inform: (movement_inform && owner_is_creature).then_some(PointMovementInform {
+                kind: MovementGeneratorKind::Rotate,
+                movement_id: self.movement_id,
+            }),
+        }
+    }
+
+    pub fn initialize_distract_like_cpp(
+        &mut self,
+        owner_is_standing: bool,
+    ) -> DistractMovementAction {
+        self.flags &=
+            !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+        DistractMovementAction {
+            stand_up: !owner_is_standing,
+            launch_facing_spline: true,
+        }
+    }
+
+    pub fn reset_distract_like_cpp(&mut self, owner_is_standing: bool) -> DistractMovementAction {
+        self.flags &= !MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        self.initialize_distract_like_cpp(owner_is_standing)
+    }
+
+    pub fn update_distract_like_cpp(&mut self, owner_exists: bool, diff_ms: u32) -> bool {
+        if !owner_exists {
+            return false;
+        }
+
+        let remaining = self.duration_ms.unwrap_or(0);
+        if diff_ms > remaining {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            return false;
+        }
+
+        self.duration_ms = Some(remaining - diff_ms);
+        true
+    }
+
+    pub fn finalize_distract_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> DistractMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        DistractMovementFinalize {
+            set_home_orientation: movement_inform
+                && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+                && owner_is_creature,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1863,6 +2019,33 @@ pub struct SeekAssistancePlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleMovementAction {
+    StopMoving,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RotateMovementUpdate {
+    pub keep_running: bool,
+    pub facing_angle: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotateMovementFinalize {
+    pub inform: Option<PointMovementInform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistractMovementAction {
+    pub stand_up: bool,
+    pub launch_facing_spline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistractMovementFinalize {
+    pub set_home_orientation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveFallPlan {
     Noop,
     PlayerFallInfo,
@@ -1916,7 +2099,9 @@ pub struct MotionSubsystem {
 impl Default for MotionSubsystem {
     fn default() -> Self {
         let default_generator =
-            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZED);
         Self {
             default_generator,
             active_generators: Vec::new(),
@@ -2060,7 +2245,9 @@ impl MotionSubsystem {
 
     pub fn move_idle(&mut self) {
         self.default_generator =
-            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZED);
         self.flags |= MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
         if self.active_generators.is_empty() {
             self.current_generator = MovementGeneratorKind::Idle;
@@ -2105,6 +2292,39 @@ impl MotionSubsystem {
             .with_base_unit_state(UnitState::DISTRACTED.bits())
             .with_duration_ms(timer_ms),
         );
+    }
+
+    pub fn move_distract_like_cpp(&mut self, timer_ms: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Distract, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::DISTRACTED.bits())
+                .with_duration_ms(timer_ms),
+        );
+    }
+
+    pub fn move_rotate_like_cpp(
+        &mut self,
+        movement_id: u32,
+        time_ms: u32,
+        direction: RotateDirection,
+    ) -> bool {
+        if time_ms == 0 {
+            return false;
+        }
+
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Rotate, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::ROTATING.bits())
+                .with_movement_id(movement_id)
+                .with_duration_ms(time_ms)
+                .with_max_duration_ms(time_ms)
+                .with_rotate_direction(direction),
+        );
+        true
     }
 
     pub fn move_charge(&mut self, movement_id: u32) {
@@ -3284,6 +3504,15 @@ mod unit_subsystems_tests {
             motion.current_movement_generator().kind,
             MovementGeneratorKind::Idle
         );
+        assert_eq!(
+            motion.current_movement_generator().priority,
+            MovementGeneratorPriority::Normal
+        );
+        assert!(
+            motion
+                .current_movement_generator()
+                .has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED)
+        );
 
         motion.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
@@ -3324,6 +3553,102 @@ mod unit_subsystems_tests {
             motion.current_movement_generator().kind,
             MovementGeneratorKind::Follow
         );
+    }
+
+    #[test]
+    fn idle_rotate_and_distract_generators_match_cpp_lifecycle_shape() {
+        let mut idle = MotionSubsystem::default().default_generator;
+        assert_eq!(
+            idle.initialize_idle_like_cpp(),
+            IdleMovementAction::StopMoving
+        );
+        assert_eq!(idle.reset_idle_like_cpp(), IdleMovementAction::StopMoving);
+        assert!(idle.update_idle_like_cpp());
+        idle.finalize_idle_like_cpp();
+        assert!(idle.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut motion = MotionSubsystem::default();
+        assert!(!motion.move_rotate_like_cpp(7, 0, RotateDirection::Left));
+        assert!(motion.move_rotate_like_cpp(7, 1_000, RotateDirection::Left));
+        let mut rotate = motion.current_movement_generator();
+        assert_eq!(rotate.kind, MovementGeneratorKind::Rotate);
+        assert_eq!(rotate.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(rotate.base_unit_state, UnitState::ROTATING.bits());
+        assert_eq!(rotate.movement_id, 7);
+        assert_eq!(rotate.duration_ms, Some(1_000));
+        assert_eq!(rotate.max_duration_ms, Some(1_000));
+        assert_eq!(rotate.rotate_direction, Some(RotateDirection::Left));
+
+        assert_eq!(
+            rotate.initialize_rotate_like_cpp(),
+            IdleMovementAction::StopMoving
+        );
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        let update = rotate.update_rotate_like_cpp(true, 250, 0.0);
+        assert!(update.keep_running);
+        assert_eq!(rotate.duration_ms, Some(750));
+        assert!(
+            update
+                .facing_angle
+                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+        );
+
+        let finished = rotate.update_rotate_like_cpp(true, 750, std::f32::consts::FRAC_PI_2);
+        assert!(!finished.keep_running);
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert_eq!(
+            rotate.finalize_rotate_like_cpp(true, true),
+            RotateMovementFinalize {
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Rotate,
+                    movement_id: 7,
+                }),
+            }
+        );
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut right =
+            MovementGeneratorRef::new(MovementGeneratorKind::Rotate, MovementSlot::Active)
+                .with_duration_ms(1_000)
+                .with_max_duration_ms(1_000)
+                .with_rotate_direction(RotateDirection::Right);
+        let right_update = right.update_rotate_like_cpp(true, 250, std::f32::consts::PI);
+        assert!(
+            right_update
+                .facing_angle
+                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+        );
+
+        let mut distract_motion = MotionSubsystem::default();
+        distract_motion.move_distract_like_cpp(500);
+        let mut distract = distract_motion.current_movement_generator();
+        assert_eq!(distract.kind, MovementGeneratorKind::Distract);
+        assert_eq!(distract.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(distract.base_unit_state, UnitState::DISTRACTED.bits());
+        assert_eq!(distract.duration_ms, Some(500));
+        assert_eq!(
+            distract.initialize_distract_like_cpp(false),
+            DistractMovementAction {
+                stand_up: true,
+                launch_facing_spline: true,
+            }
+        );
+        assert!(distract.update_distract_like_cpp(true, 500));
+        assert_eq!(distract.duration_ms, Some(0));
+        assert!(!distract.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert!(!distract.update_distract_like_cpp(true, 1));
+        assert!(distract.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert_eq!(
+            distract.finalize_distract_like_cpp(true, true),
+            DistractMovementFinalize {
+                set_home_orientation: true,
+            }
+        );
+
+        let mut deactivated =
+            MovementGeneratorRef::new(MovementGeneratorKind::Distract, MovementSlot::Active);
+        deactivated.deactivate_timed_idle_like_cpp();
+        assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
     }
 
     #[test]
