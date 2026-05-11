@@ -706,6 +706,10 @@ pub struct WorldSession {
     last_fall_z_like_cpp: f32,
     /// Recorded fall damage events until combat log/update packet runtime is complete.
     fall_damage_events_like_cpp: Vec<MovementFallDamageEvent>,
+    /// C++ `PLAYER_FLAGS_IS_OUT_OF_BOUNDS` represented state.
+    player_out_of_bounds_like_cpp: bool,
+    /// Recorded `DAMAGE_FALL_TO_VOID` events until environmental damage packets are complete.
+    under_map_damage_events_like_cpp: Vec<MovementUnderMapDamageEvent>,
     /// Represented stand state used by movement side effects until UnitData owns it.
     player_stand_state_like_cpp: UnitStandStateType,
     /// Count of C++ temporary pet unsummon side effects requested by movement.
@@ -923,6 +927,13 @@ pub(crate) struct MovementFallDamageEvent {
     pub final_damage: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MovementUnderMapDamageEvent {
+    pub z: f32,
+    pub min_height: f32,
+    pub damage: u32,
+}
+
 /// Parameters for spawning nearby creatures after login.
 pub struct PendingCreatureSpawn {
     pub map_id: u16,
@@ -1093,6 +1104,8 @@ impl WorldSession {
             last_fall_time_like_cpp: 0,
             last_fall_z_like_cpp: 0.0,
             fall_damage_events_like_cpp: Vec::new(),
+            player_out_of_bounds_like_cpp: false,
+            under_map_damage_events_like_cpp: Vec::new(),
             player_stand_state_like_cpp: UnitStandStateType::Stand,
             temporary_pet_unsummon_requests_like_cpp: 0,
             movement_jump_proc_requests_like_cpp: 0,
@@ -5595,6 +5608,64 @@ impl WorldSession {
     #[cfg(test)]
     pub(crate) fn fall_damage_events_like_cpp(&self) -> &[MovementFallDamageEvent] {
         &self.fall_damage_events_like_cpp
+    }
+
+    pub(crate) fn player_min_height_like_cpp(&self, position: wow_core::Position) -> f32 {
+        let map_id = self.player_map_id_like_cpp();
+        self.map_manager
+            .as_ref()
+            .and_then(|manager| {
+                manager
+                    .read()
+                    .ok()
+                    .map(|manager| manager.min_height_like_cpp(map_id, 0, position.x, position.y))
+            })
+            .unwrap_or(crate::map_manager::DEFAULT_MIN_HEIGHT_LIKE_CPP)
+    }
+
+    pub(crate) fn handle_under_map_like_cpp(
+        &mut self,
+        movement_info: &wow_packet::packets::movement::MovementInfo,
+    ) -> Option<MovementUnderMapDamageEvent> {
+        let min_height = self.player_min_height_like_cpp(movement_info.position);
+        if movement_info.position.z >= min_height {
+            self.player_out_of_bounds_like_cpp = false;
+            return None;
+        }
+
+        if !self.player_alive_like_cpp {
+            return None;
+        }
+
+        self.player_out_of_bounds_like_cpp = true;
+        let damage = self.player_max_health_like_cpp;
+        self.player_health_like_cpp = self.player_health_like_cpp.saturating_sub(damage);
+        if self.player_health_like_cpp == 0 {
+            self.player_alive_like_cpp = false;
+        }
+
+        // C++ calls KillPlayer if EnvironmentalDamage did not kill due to GM/immunity.
+        if self.player_alive_like_cpp {
+            self.set_player_alive_like_cpp(false);
+        }
+
+        let event = MovementUnderMapDamageEvent {
+            z: movement_info.position.z,
+            min_height,
+            damage,
+        };
+        self.under_map_damage_events_like_cpp.push(event);
+        Some(event)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn under_map_damage_events_like_cpp(&self) -> &[MovementUnderMapDamageEvent] {
+        &self.under_map_damage_events_like_cpp
+    }
+
+    #[cfg(test)]
+    pub(crate) fn player_out_of_bounds_like_cpp(&self) -> bool {
+        self.player_out_of_bounds_like_cpp
     }
 
     pub(crate) fn set_player_stand_state_like_cpp(&mut self, state: UnitStandStateType) {

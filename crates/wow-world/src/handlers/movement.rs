@@ -250,6 +250,7 @@ impl WorldSession {
             info,
             matches!(opcode, Some(ClientOpcodes::MoveFallLand)),
         );
+        self.handle_under_map_like_cpp(info);
     }
 
     /// Handle CMSG_SET_ACTIVE_MOVER — client sets which unit is currently being moved.
@@ -402,6 +403,29 @@ mod tests {
         harmless.jump.fall_time = 1_600;
         session.apply_movement_side_effects_like_cpp(Some(ClientOpcodes::MoveFallLand), &harmless);
         assert_eq!(session.fall_damage_events_like_cpp().len(), 1);
+    }
+
+    #[test]
+    fn movement_under_map_applies_cpp_void_damage_and_flag() {
+        let mut session = make_session();
+        session.set_player_health_like_cpp(1_000, 1_000);
+        let mut info = MovementInfo::default();
+        info.position.z = -501.0;
+
+        session.apply_movement_side_effects_like_cpp(Some(ClientOpcodes::MoveHeartbeat), &info);
+
+        assert_eq!(session.under_map_damage_events_like_cpp().len(), 1);
+        assert_eq!(
+            session.under_map_damage_events_like_cpp()[0].min_height,
+            crate::map_manager::DEFAULT_MIN_HEIGHT_LIKE_CPP
+        );
+        assert_eq!(session.player_health_like_cpp(), 0);
+        assert!(!session.player_is_alive_like_cpp());
+        assert!(session.player_out_of_bounds_like_cpp());
+
+        info.position.z = -499.0;
+        session.apply_movement_side_effects_like_cpp(Some(ClientOpcodes::MoveHeartbeat), &info);
+        assert!(!session.player_out_of_bounds_like_cpp());
     }
 }
 

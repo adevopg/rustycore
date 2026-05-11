@@ -475,7 +475,7 @@ Cada fase es un commit (o pequeño grupo de commits) mergeable a `main` con `car
   - [ ] **#A06.6** Separar side effects C++ de movement: fall damage, aura interrupts, pet unsummon, sit-to-stand, under-map damage y jump procs.
     - [x] **#A06.6.1** Portar side effects representables hoy: remover auras `LandingOrFlight`/`Jump`, sentar-a-stand en movimiento y registrar hooks de unsummon temporal de pet / jump proc.
     - [x] **#A06.6.2** Portar base de `Player::HandleFall` / `UpdateFallInformationIfNeed`: `m_lastFallTime/Z`, umbral 14.57, fórmula C++ de daño, clamp a max health y aplicación al estado representado de salud/vida; modificadores de aura quedan en `#A06.6.4`.
-    - [ ] **#A06.6.3** Portar under-map damage cuando exista `Map::GetMinHeight`/Battleground hook real.
+    - [x] **#A06.6.3** Portar under-map damage: `MapManager::min_height_like_cpp` expone el fallback C++ `TerrainInfo::GetMinHeight == -500.0` cuando no hay grid, `handle_movement` marca `PLAYER_FLAGS_IS_OUT_OF_BOUNDS` representado, aplica `DAMAGE_FALL_TO_VOID` por vida máxima y mata si el daño ambiental no lo hizo. La altura real de terrain/grid y el hook Battleground siguen en las tareas Map/Terrain/Battleground, no se finge aquí.
     - [ ] **#A06.6.4** Conectar hooks registrados a Pet runtime y Proc/Aura runtime completos.
   - [ ] **#A06.7** Portar efectos de `MoveInitActiveMoverComplete`: local flag, transport server time y visibility update.
   - [ ] **#A06.8** Inventariar y portar ACK movement opcodes (`KnockBack`, speed, force, collision height, spline done, time skipped).

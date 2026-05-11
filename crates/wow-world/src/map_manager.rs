@@ -17,6 +17,13 @@ pub const VISIBILITY_RADIUS: f32 = 100.0;
 /// Default time before a grid unloads if no players are nearby (5 minutes).
 pub const DEFAULT_GRID_UNLOAD_TIME: Duration = Duration::from_secs(300);
 
+/// TrinityCore `TerrainInfo::GetMinHeight` fallback when no terrain grid is loaded.
+///
+/// Real grid-backed min-height data belongs to the terrain/map-data port; exposing
+/// the fallback here lets movement preserve the C++ under-map branch without
+/// inventing terrain values.
+pub const DEFAULT_MIN_HEIGHT_LIKE_CPP: f32 = -500.0;
+
 /// Coordinate of a grid cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GridCoord {
@@ -571,6 +578,10 @@ impl MapInstance {
     pub fn is_grid_loaded(&self, x: i16, y: i16) -> bool {
         self.get_grid(x, y).is_some()
     }
+
+    pub fn min_height_like_cpp(&self, _x: f32, _y: f32) -> f32 {
+        DEFAULT_MIN_HEIGHT_LIKE_CPP
+    }
 }
 
 /// Global map manager containing all map instances.
@@ -941,6 +952,12 @@ impl MapManager {
         self.get_map(map_id, instance_id)
             .map(|m| m.is_grid_loaded(x, y))
             .unwrap_or(false)
+    }
+
+    pub fn min_height_like_cpp(&self, map_id: u16, instance_id: u32, x: f32, y: f32) -> f32 {
+        self.get_map(map_id, instance_id)
+            .map(|m| m.min_height_like_cpp(x, y))
+            .unwrap_or(DEFAULT_MIN_HEIGHT_LIKE_CPP)
     }
 
     pub fn create_grid(&mut self, map_id: u16, instance_id: u32, x: i16, y: i16) -> &mut Grid {
