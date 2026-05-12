@@ -197,6 +197,13 @@ pub struct DetourPolyPath {
     pub end_far_from_poly: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviousPolyPathLikeCpp {
+    Recalculate,
+    PolyRefs(Vec<DetourPolyRef>),
+    ShortcutNoPath,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetourSteerTarget {
     pub position: [f32; 3],
@@ -1090,6 +1097,84 @@ pub fn build_point_path_like_cpp(
         actual_end,
         path_type,
     })
+}
+
+pub fn reuse_previous_poly_path_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    filter: &DetourQueryFilter,
+    previous_poly_refs: &[DetourPolyRef],
+    start_poly: DetourPolyRef,
+    end_poly: DetourPolyRef,
+    end_point: [f32; 3],
+    use_raycast: bool,
+) -> Result<PreviousPolyPathLikeCpp, DetourNavMeshQueryError> {
+    if previous_poly_refs.is_empty() {
+        return Ok(PreviousPolyPathLikeCpp::Recalculate);
+    }
+
+    let Some(path_start_index) = previous_poly_refs
+        .iter()
+        .position(|poly| *poly == start_poly)
+    else {
+        return Ok(PreviousPolyPathLikeCpp::Recalculate);
+    };
+
+    let path_end_index = previous_poly_refs
+        .iter()
+        .enumerate()
+        .skip(path_start_index + 1)
+        .rev()
+        .find_map(|(index, poly)| (*poly == end_poly).then_some(index));
+
+    if let Some(path_end_index) = path_end_index {
+        return Ok(PreviousPolyPathLikeCpp::PolyRefs(
+            previous_poly_refs[path_start_index..=path_end_index].to_vec(),
+        ));
+    }
+
+    let remaining = &previous_poly_refs[path_start_index..];
+    let mut prefix_poly_length = ((remaining.len() as f32) * 0.8 + 0.5) as usize;
+    prefix_poly_length = prefix_poly_length.clamp(1, remaining.len());
+    let mut prefix = remaining[..prefix_poly_length].to_vec();
+
+    let mut suffix_start_poly = *prefix.last().unwrap();
+    let suffix_end_point = match query.closest_point_on_poly(suffix_start_poly, end_point) {
+        Ok((closest, _)) => closest,
+        Err(_) if prefix.len() > 1 => {
+            prefix.pop();
+            suffix_start_poly = *prefix.last().unwrap();
+            match query.closest_point_on_poly(suffix_start_poly, end_point) {
+                Ok((closest, _)) => closest,
+                Err(_) => return Ok(PreviousPolyPathLikeCpp::ShortcutNoPath),
+            }
+        }
+        Err(_) => return Ok(PreviousPolyPathLikeCpp::ShortcutNoPath),
+    };
+
+    if use_raycast {
+        return Ok(PreviousPolyPathLikeCpp::ShortcutNoPath);
+    }
+
+    let max_suffix_path = MAX_PATH_LENGTH_LIKE_CPP.saturating_sub(prefix.len());
+    let suffix = query
+        .find_path(
+            suffix_start_poly,
+            end_poly,
+            suffix_end_point,
+            end_point,
+            filter,
+            max_suffix_path,
+        )
+        .unwrap_or_default();
+
+    if suffix.is_empty() {
+        prefix.pop();
+        return Ok(PreviousPolyPathLikeCpp::PolyRefs(prefix));
+    }
+
+    prefix.pop();
+    prefix.extend(suffix);
+    Ok(PreviousPolyPathLikeCpp::PolyRefs(prefix))
 }
 
 pub fn build_straight_poly_path_like_cpp(
@@ -2865,6 +2950,57 @@ mod tests {
         .unwrap();
         assert_eq!(raycast.points, vec![[0.25, 0.0, 0.25], [0.75, 0.0, 0.75]]);
         assert_eq!(raycast.path_type, DetourPathType::NOPATH);
+    }
+
+    #[test]
+    fn reuse_previous_poly_path_cuts_subpath_and_rejects_raycast_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        mesh.add_tile(&generated_square_tile_blob(0, 0)).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+
+        let reused = reuse_previous_poly_path_like_cpp(
+            &query,
+            &filter,
+            &[11, 22, 33, 44],
+            22,
+            44,
+            [0.75, 0.0, 0.75],
+            false,
+        )
+        .unwrap();
+        assert_eq!(reused, PreviousPolyPathLikeCpp::PolyRefs(vec![22, 33, 44]));
+
+        let recalculated = reuse_previous_poly_path_like_cpp(
+            &query,
+            &filter,
+            &[11, 22, 33, 44],
+            55,
+            44,
+            [0.75, 0.0, 0.75],
+            false,
+        )
+        .unwrap();
+        assert_eq!(recalculated, PreviousPolyPathLikeCpp::Recalculate);
+
+        let raycast = reuse_previous_poly_path_like_cpp(
+            &query,
+            &filter,
+            &[11, 22, 33, 44],
+            22,
+            55,
+            [0.75, 0.0, 0.75],
+            true,
+        )
+        .unwrap();
+        assert_eq!(raycast, PreviousPolyPathLikeCpp::ShortcutNoPath);
     }
 
     #[test]
