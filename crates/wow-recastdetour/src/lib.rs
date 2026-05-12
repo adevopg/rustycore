@@ -30,8 +30,14 @@ pub const DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP: usize = 28;
 pub const DT_FAILURE_LIKE_CPP: DetourStatus = 1_u32 << 31;
 pub const DT_SUCCESS_LIKE_CPP: DetourStatus = 1_u32 << 30;
 pub const DT_IN_PROGRESS_LIKE_CPP: DetourStatus = 1_u32 << 29;
+pub const DT_BUFFER_TOO_SMALL_LIKE_CPP: DetourStatus = 1_u32 << 0;
 pub const DT_OUT_OF_MEMORY_LIKE_CPP: DetourStatus = 1_u32 << 2;
 pub const DT_INVALID_PARAM_LIKE_CPP: DetourStatus = 1_u32 << 3;
+pub const DT_STRAIGHTPATH_START_LIKE_CPP: u8 = 0x01;
+pub const DT_STRAIGHTPATH_END_LIKE_CPP: u8 = 0x02;
+pub const DT_STRAIGHTPATH_OFFMESH_CONNECTION_LIKE_CPP: u8 = 0x04;
+pub const DT_STRAIGHTPATH_AREA_CROSSINGS_LIKE_CPP: i32 = 0x01;
+pub const DT_STRAIGHTPATH_ALL_CROSSINGS_LIKE_CPP: i32 = 0x02;
 
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
@@ -136,6 +142,13 @@ pub struct DetourNearestPoly {
     pub nearest_point: [f32; 3],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetourStraightPathPoint {
+    pub position: [f32; 3],
+    pub flags: u8,
+    pub poly_ref: DetourPolyRef,
+}
+
 unsafe extern "C" {
     fn rustycore_dt_alloc_nav_mesh() -> *mut RawDetourNavMesh;
     fn rustycore_dt_free_nav_mesh(mesh: *mut RawDetourNavMesh);
@@ -195,6 +208,19 @@ unsafe extern "C" {
         path: *mut DetourPolyRef,
         path_count: *mut i32,
         max_path: i32,
+    ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_query_find_straight_path(
+        query: *const RawDetourNavMeshQuery,
+        start_pos: *const f32,
+        end_pos: *const f32,
+        path: *const DetourPolyRef,
+        path_size: i32,
+        straight_path: *mut f32,
+        straight_path_flags: *mut u8,
+        straight_path_refs: *mut DetourPolyRef,
+        straight_path_count: *mut i32,
+        max_straight_path: i32,
+        options: i32,
     ) -> DetourStatus;
     fn rustycore_dt_free(ptr: *mut std::ffi::c_void);
     fn rustycore_dt_create_square_tile_data(
@@ -369,6 +395,56 @@ impl<'mesh> DetourNavMeshQuery<'mesh> {
         path.truncate(path_count.max(0) as usize);
         Ok(path)
     }
+
+    pub fn find_straight_path(
+        &self,
+        start_pos: [f32; 3],
+        end_pos: [f32; 3],
+        path: &[DetourPolyRef],
+        max_straight_path: usize,
+        options: i32,
+    ) -> Result<Vec<DetourStraightPathPoint>, DetourNavMeshQueryError> {
+        if path.len() > i32::MAX as usize {
+            return Err(DetourNavMeshQueryError::PathBufferTooLarge {
+                max_path: path.len(),
+            });
+        }
+        if max_straight_path > i32::MAX as usize {
+            return Err(DetourNavMeshQueryError::StraightPathBufferTooLarge { max_straight_path });
+        }
+
+        let mut positions = vec![0.0; max_straight_path.saturating_mul(3)];
+        let mut flags = vec![0; max_straight_path];
+        let mut refs = vec![0; max_straight_path];
+        let mut count = 0;
+        let status = unsafe {
+            rustycore_dt_nav_mesh_query_find_straight_path(
+                self.raw.as_ptr(),
+                start_pos.as_ptr(),
+                end_pos.as_ptr(),
+                path.as_ptr(),
+                path.len() as i32,
+                positions.as_mut_ptr(),
+                flags.as_mut_ptr(),
+                refs.as_mut_ptr(),
+                &mut count,
+                max_straight_path as i32,
+                options,
+            )
+        };
+        if detour_status_failed(status) {
+            return Err(DetourNavMeshQueryError::FindStraightPathFailed { status });
+        }
+
+        let count = count.max(0) as usize;
+        Ok((0..count)
+            .map(|i| DetourStraightPathPoint {
+                position: [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]],
+                flags: flags[i],
+                poly_ref: refs[i],
+            })
+            .collect())
+    }
 }
 
 impl Drop for DetourNavMeshQuery<'_> {
@@ -465,6 +541,12 @@ pub enum DetourNavMeshQueryError {
     FindPathFailed { status: DetourStatus },
     #[error("Detour findPath output buffer is too large for C++ int size: {max_path}")]
     PathBufferTooLarge { max_path: usize },
+    #[error("Detour findStraightPath failed with status 0x{status:08x}")]
+    FindStraightPathFailed { status: DetourStatus },
+    #[error(
+        "Detour findStraightPath output buffer is too large for C++ int size: {max_straight_path}"
+    )]
+    StraightPathBufferTooLarge { max_straight_path: usize },
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1098,6 +1180,55 @@ mod tests {
                 0,
             ),
             Err(DetourNavMeshQueryError::FindPathFailed {
+                status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
+            })
+        );
+    }
+
+    #[test]
+    fn detour_query_find_straight_path_matches_cpp_single_poly_shape() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        let tile = generated_square_tile_blob(0, 0);
+        mesh.add_tile(&tile).unwrap();
+
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+        let nearest = query
+            .find_nearest_poly([0.5, 0.0, 0.5], [3.0, 5.0, 3.0], &filter)
+            .unwrap();
+        let path = query
+            .find_path(
+                nearest.poly_ref,
+                nearest.poly_ref,
+                [0.25, 0.0, 0.25],
+                [0.75, 0.0, 0.75],
+                &filter,
+                4,
+            )
+            .unwrap();
+
+        let straight = query
+            .find_straight_path([0.25, 0.0, 0.25], [0.75, 0.0, 0.75], &path, 4, 0)
+            .unwrap();
+
+        assert_eq!(straight.len(), 2);
+        assert_eq!(straight[0].flags, DT_STRAIGHTPATH_START_LIKE_CPP);
+        assert_eq!(straight[0].poly_ref, nearest.poly_ref);
+        assert_eq!(straight[0].position, [0.25, 0.0, 0.25]);
+        assert_eq!(straight[1].flags, DT_STRAIGHTPATH_END_LIKE_CPP);
+        assert_eq!(straight[1].poly_ref, 0);
+        assert_eq!(straight[1].position, [0.75, 0.0, 0.75]);
+
+        assert_eq!(
+            query.find_straight_path([0.25, 0.0, 0.25], [0.75, 0.0, 0.75], &path, 0, 0),
+            Err(DetourNavMeshQueryError::FindStraightPathFailed {
                 status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
             })
         );

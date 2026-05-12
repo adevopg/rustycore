@@ -153,6 +153,32 @@ extern "C"
             max_path);
     }
 
+    dtStatus rustycore_dt_nav_mesh_query_find_straight_path(
+        dtNavMeshQuery const* query,
+        float const* start_pos,
+        float const* end_pos,
+        uint64_t const* path,
+        int path_size,
+        float* straight_path,
+        unsigned char* straight_path_flags,
+        uint64_t* straight_path_refs,
+        int* straight_path_count,
+        int max_straight_path,
+        int options)
+    {
+        return query->findStraightPath(
+            start_pos,
+            end_pos,
+            (dtPolyRef const*)path,
+            path_size,
+            straight_path,
+            straight_path_flags,
+            (dtPolyRef*)straight_path_refs,
+            straight_path_count,
+            max_straight_path,
+            options);
+    }
+
     void rustycore_dt_free(void* ptr)
     {
         dtFree(ptr);
