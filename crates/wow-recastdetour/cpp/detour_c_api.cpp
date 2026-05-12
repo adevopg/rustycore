@@ -1,6 +1,7 @@
 #include "DetourNavMesh.h"
 #include "DetourAlloc.h"
 #include "DetourStatus.h"
+#include "DetourNavMeshBuilder.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -56,5 +57,53 @@ extern "C"
     dtStatus rustycore_dt_nav_mesh_remove_tile(dtNavMesh* mesh, uint64_t tile_ref)
     {
         return mesh->removeTile((dtTileRef)tile_ref, 0, 0);
+    }
+
+    void rustycore_dt_free(void* ptr)
+    {
+        dtFree(ptr);
+    }
+
+    bool rustycore_dt_create_square_tile_data(int tile_x, int tile_y, unsigned char** out_data, int* out_data_size)
+    {
+        unsigned short verts[] = {
+            0, 0, 0,
+            1, 0, 0,
+            1, 0, 1,
+            0, 0, 1,
+        };
+        unsigned short polys[] = {
+            0, 1, 2, 3,
+            0, 0, 0, 0,
+        };
+        unsigned short poly_flags[] = { 1 };
+        unsigned char poly_areas[] = { 0 };
+
+        dtNavMeshCreateParams params;
+        memset(&params, 0, sizeof(params));
+        params.verts = verts;
+        params.vertCount = 4;
+        params.polys = polys;
+        params.polyFlags = poly_flags;
+        params.polyAreas = poly_areas;
+        params.polyCount = 1;
+        params.nvp = 4;
+        params.tileX = tile_x;
+        params.tileY = tile_y;
+        params.tileLayer = 0;
+        params.bmin[0] = 0.0f;
+        params.bmin[1] = 0.0f;
+        params.bmin[2] = 0.0f;
+        params.bmax[0] = 1.0f;
+        params.bmax[1] = 1.0f;
+        params.bmax[2] = 1.0f;
+        params.walkableHeight = 2.0f;
+        params.walkableRadius = 0.0f;
+        params.walkableClimb = 0.9f;
+        params.cs = 1.0f;
+        params.ch = 1.0f;
+        params.buildBvTree = true;
+
+        return dtCreateNavMeshData(&params, out_data, out_data_size);
     }
 }

@@ -138,6 +138,13 @@ unsafe extern "C" {
         mesh: *mut RawDetourNavMesh,
         tile_ref: DetourTileRef,
     ) -> DetourStatus;
+    fn rustycore_dt_free(ptr: *mut std::ffi::c_void);
+    fn rustycore_dt_create_square_tile_data(
+        tile_x: i32,
+        tile_y: i32,
+        out_data: *mut *mut u8,
+        out_data_size: *mut i32,
+    ) -> bool;
 }
 
 #[derive(Debug)]
@@ -708,6 +715,23 @@ mod tests {
     }
 
     #[test]
+    fn detour_nav_mesh_adds_and_removes_generated_tile_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        let tile = generated_square_tile_blob(0, 0);
+
+        let tile_ref = mesh.add_tile(&tile).unwrap();
+        assert_ne!(tile_ref, 0);
+        mesh.remove_tile(tile_ref).unwrap();
+    }
+
+    #[test]
     fn mmap_tile_header_round_trips_cpp_layout() {
         let header = MmapTileHeader {
             mmap_magic: MMAP_MAGIC_LIKE_CPP,
@@ -940,5 +964,30 @@ mod tests {
             std::process::id(),
             std::thread::current().id()
         ))
+    }
+
+    fn generated_square_tile_blob(tile_x: i32, tile_y: i32) -> MmapTileBlob {
+        let mut data = std::ptr::null_mut();
+        let mut data_size = 0;
+        assert!(unsafe {
+            rustycore_dt_create_square_tile_data(tile_x, tile_y, &mut data, &mut data_size)
+        });
+        assert!(!data.is_null());
+        assert!(data_size > 0);
+
+        let bytes = unsafe { std::slice::from_raw_parts(data, data_size as usize) }.to_vec();
+        unsafe { rustycore_dt_free(data.cast()) };
+
+        MmapTileBlob {
+            header: MmapTileHeader {
+                mmap_magic: MMAP_MAGIC_LIKE_CPP,
+                dt_version: DT_NAVMESH_VERSION_LIKE_CPP,
+                mmap_version: MMAP_VERSION_LIKE_CPP,
+                size: data_size as u32,
+                uses_liquids: true,
+                padding: [0, 0, 0],
+            },
+            data: bytes,
+        }
     }
 }
