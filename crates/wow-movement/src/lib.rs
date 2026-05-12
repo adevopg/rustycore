@@ -6,13 +6,16 @@ pub mod spline;
 
 pub use defines::{
     CONTACT_DISTANCE_LIKE_CPP, ChaseAngle, ChaseRange, JumpArrivalCastArgs, JumpChargeParams,
-    JumpChargeSpec, normalize_orientation_like_cpp,
+    JumpChargeSpec, RotateDirection, normalize_orientation_like_cpp,
 };
 pub use generator::{
     MovementGenerator, MovementGeneratorFlags, MovementGeneratorMode, MovementGeneratorPriority,
     MovementGeneratorState, MovementGeneratorType, MovementSlot,
 };
-pub use generators::IdleMovementGenerator;
+pub use generators::{
+    IdleMovementGenerator, RotateFacingSpline, RotateMovementGenerator, RotateMovementInform,
+    RotateMovementUpdate, UNIT_STATE_ROTATING_LIKE_CPP,
+};
 pub use motion_master::{
     DelayedAction, DelayedActionQueue, MotionMasterDelayedActionType, MotionMasterFlags,
     ResolvedDelayedAction,

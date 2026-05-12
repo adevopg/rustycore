@@ -4,6 +4,29 @@ use wow_core::ObjectGuid;
 
 pub const CONTACT_DISTANCE_LIKE_CPP: f32 = 0.5;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum RotateDirection {
+    Left = 0,
+    Right = 1,
+}
+
+impl RotateDirection {
+    #[must_use]
+    pub const fn from_trinity_id(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Left),
+            1 => Some(Self::Right),
+            2..=u8::MAX => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn trinity_id(self) -> u8 {
+        self as u8
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChaseRange {
     pub min_range: f32,
@@ -194,6 +217,21 @@ mod tests {
 
     fn assert_close(left: f32, right: f32) {
         assert!((left - right).abs() < EPSILON, "left={left}, right={right}");
+    }
+
+    #[test]
+    fn rotate_direction_values_match_cpp() {
+        assert_eq!(RotateDirection::Left.trinity_id(), 0);
+        assert_eq!(RotateDirection::Right.trinity_id(), 1);
+        assert_eq!(
+            RotateDirection::from_trinity_id(0),
+            Some(RotateDirection::Left)
+        );
+        assert_eq!(
+            RotateDirection::from_trinity_id(1),
+            Some(RotateDirection::Right)
+        );
+        assert_eq!(RotateDirection::from_trinity_id(2), None);
     }
 
     #[test]
