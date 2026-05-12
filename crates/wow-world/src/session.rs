@@ -7414,7 +7414,6 @@ impl WorldSession {
 
         let mmap_runtime_config = self.mmap_runtime_config_like_cpp.clone();
         let mmap_pathfinder = self.mmap_pathfinder_like_cpp.clone();
-        let map_id_for_pathfinding = u32::from(self.player_map_id_like_cpp());
         for guid in guids {
             let _ = self.mutate_world_creature(guid, |creature| {
                 if !creature.is_alive() {
@@ -7436,9 +7435,11 @@ impl WorldSession {
                                     .creature
                                     .unit()
                                     .has_unit_state(UnitState::IGNORE_PATHFINDING.bits());
+                                let source_map_id = creature.map_id();
+                                let source_instance_id = creature.instance_id();
                                 let movement = if mmap_runtime_config
                                     .should_try_pathfinding_like_cpp(
-                                        map_id_for_pathfinding,
+                                        source_map_id,
                                         owner_ignores_pathfinding,
                                     ) {
                                     let detour_path = mmap_pathfinder.as_ref().and_then(|worker| {
@@ -7446,9 +7447,9 @@ impl WorldSession {
                                             WorldMMapPathRequestLikeCpp {
                                                 start: creature.position(),
                                                 destination: dst,
-                                                mesh_map_id: map_id_for_pathfinding,
-                                                instance_map_id: map_id_for_pathfinding,
-                                                instance_id: 0,
+                                                mesh_map_id: source_map_id,
+                                                instance_map_id: source_map_id,
+                                                instance_id: source_instance_id,
                                                 filter_context: PathQueryFilterContext::creature(
                                                     true, false, false, false,
                                                 ),

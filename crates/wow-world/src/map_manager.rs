@@ -441,6 +441,14 @@ impl WorldCreature {
         self.creature.ai_position()
     }
 
+    pub fn map_id(&self) -> u32 {
+        self.creature.unit().world().map_id()
+    }
+
+    pub fn instance_id(&self) -> u32 {
+        self.creature.unit().world().instance_id()
+    }
+
     pub fn home_position(&self) -> Position {
         self.creature.ai_home_position()
     }
