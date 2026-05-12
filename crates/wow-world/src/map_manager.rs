@@ -7,8 +7,8 @@ use wow_constants::movement::MovementFlag;
 use wow_constants::{UnitStandStateType, UnitState, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
-    Creature, CreatureAiState, DistractMovementAction, EVENT_CHARGE_PREPATH, MovementGeneratorKind,
-    PointMovementAction, PointMovementInform, RotateMovementUpdate,
+    Creature, CreatureAiState, DistractMovementAction, EVENT_CHARGE_PREPATH, GenericMovementInform,
+    MovementGeneratorKind, PointMovementAction, PointMovementInform, RotateMovementUpdate,
 };
 use wow_movement::{
     MoveSpline, MoveSplineInit, MoveSplineLaunchInput, MoveSplineStopInput, MoveSplineStopResult,
@@ -651,6 +651,27 @@ impl WorldCreature {
             generator
                 .finalize_rotate_like_cpp(movement_inform, true)
                 .inform
+        };
+        if let Some(inform) = inform {
+            self.creature
+                .record_ai_movement_inform(inform.kind.trinity_id(), inform.movement_id);
+        }
+        inform
+    }
+
+    pub fn finalize_generic_movement_like_cpp(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        movement_inform: bool,
+    ) -> Option<GenericMovementInform> {
+        let inform = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == kind && generator.movement_id == movement_id)?;
+            generator.finalize_generic_like_cpp(movement_inform)
         };
         if let Some(inform) = inform {
             self.creature
@@ -1828,6 +1849,59 @@ mod tests {
         assert_eq!(generator.kind, MovementGeneratorKind::Point);
         assert_eq!(generator.movement_id, EVENT_CHARGE_PREPATH);
         assert_eq!(generator.base_unit_state, UnitState::CHARGING.bits());
+    }
+
+    #[test]
+    fn world_creature_finalize_generic_movement_records_ai_inform_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54326);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let target = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54327);
+        {
+            let motion = &mut creature.creature.unit_mut().subsystems_mut().motion;
+            motion.launch_generic_movement(
+                MovementGeneratorKind::Effect,
+                77,
+                1_000,
+                Some((1234, target)),
+            );
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Effect)
+                .expect("generic effect generator");
+            generator.initialize_generic_like_cpp();
+            assert!(!generator.update_generic_like_cpp(1_000, false, false));
+        }
+
+        assert_eq!(
+            creature.finalize_generic_movement_like_cpp(MovementGeneratorKind::Effect, 77, true),
+            Some(GenericMovementInform {
+                kind: MovementGeneratorKind::Effect,
+                movement_id: 77,
+                arrival_spell_id: Some(1234),
+                arrival_spell_target_guid: Some(target),
+            })
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().last_movement_inform,
+            Some(wow_entities::CreatureMovementInform {
+                movement_type: MovementGeneratorKind::Effect.trinity_id(),
+                movement_id: 77,
+            })
+        );
     }
 
     #[test]
