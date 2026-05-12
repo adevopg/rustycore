@@ -7,6 +7,7 @@ pub mod generic;
 pub mod home;
 pub mod idle;
 pub mod point;
+pub mod random;
 pub mod rotate;
 
 pub use chase::{
@@ -62,6 +63,15 @@ pub use point::{
     EVENT_CHARGE_PREPATH_LIKE_CPP, PointMovementAction, PointMovementFinalize,
     PointMovementGenerator, PointMovementInform, PointMovementLaunch,
     UNIT_STATE_ROAMING_MOVE_LIKE_CPP,
+};
+pub use random::{
+    CreatureRandomMovementType, RANDOM_LOS_RETRY_MS_LIKE_CPP, RANDOM_PATH_LENGTH_LIMIT_LIKE_CPP,
+    RANDOM_PATH_RETRY_MS_LIKE_CPP, RANDOM_PAUSE_MAX_MS_LIKE_CPP, RANDOM_PAUSE_MIN_MS_LIKE_CPP,
+    RANDOM_WANDER_STEPS_MAX_LIKE_CPP, RANDOM_WANDER_STEPS_MIN_LIKE_CPP, RandomDestinationPlan,
+    RandomFinalizeAction, RandomLaunchPlan, RandomMovementAction, RandomMovementGenerator,
+    RandomMovementInform, RandomPathResult, RandomUnitSnapshot,
+    UNIT_STATE_RANDOM_LOST_CONTROL_LIKE_CPP, UNIT_STATE_RANDOM_NOT_MOVE_LIKE_CPP,
+    compute_random_destination_like_cpp, random_walk_like_cpp,
 };
 pub use rotate::{
     RotateFacingSpline, RotateMovementGenerator, RotateMovementInform, RotateMovementUpdate,
