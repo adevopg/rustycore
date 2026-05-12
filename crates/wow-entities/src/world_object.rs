@@ -700,6 +700,10 @@ impl WorldObject {
         &self.suppressed_phase_shift
     }
 
+    pub fn suppressed_phase_shift_mut(&mut self) -> &mut PhaseShift {
+        &mut self.suppressed_phase_shift
+    }
+
     pub const fn db_phase(&self) -> i32 {
         self.db_phase
     }

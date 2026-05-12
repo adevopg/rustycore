@@ -183,6 +183,7 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 - A single SMSG_PHASE_SHIFT_CHANGE serializer with constant payload.
 - `wow-constants::PhaseShiftFlags` / `PhaseFlags` mirror the C++ enum bit values.
 - `wow-entities::PhaseShift` now carries C++-like phase refs, `PersonalGuid`, visible map id refs and UI map phase id refs with refcount semantics.
+- `wow-entities::WorldObject` owns C++ `_phaseShift` / `_suppressedPhaseShift` equivalents and exposes mutable accessors for both.
 - `PhaseShift::can_see` now mirrors the C++ pure predicate for `Unphased`, `AlwaysVisible`, `Inverse`, `InverseUnphased`, `NoCosmetic`, and personal phases.
 - Terrain swap metadata loading exists for `terrain_worldmap` / `terrain_swap_defaults`, including C++ DB2+hotfix `UiMapXMapArt.PhaseID` validation for `IsUiMapPhase`.
 - `Phase.db2` and `PhaseXPhaseGroup.db2` are loaded with hotfix overlays, exposing C++-like personal/cosmetic phase checks and `GetPhasesForGroup`.
@@ -266,7 +267,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [x] **#PHASE.2** Define `PhaseShift` struct with C++-like phase refs, visible-map refs and UI-map-phase refs (implemented in `wow-entities::PhaseShift`; personal GUID depth still belongs to later façade work) (M)
 - [x] **#PHASE.3** Implement `PhaseShift::add_phase` / `remove_phase` / `add_visible_map_id` / `remove_visible_map_id` / `add_ui_map_phase_id` / `remove_ui_map_phase_id` with C++ refcount semantics for represented fields (M)
 - [x] **#PHASE.4** Implement `PhaseShift::can_see` honouring `AlwaysVisible`, `Inverse`, `InverseUnphased`, `Unphased`, `NoCosmetic`; cover the `Personal` interaction (must also match `PersonalGuid`) (H)
-- [ ] **#PHASE.5** Add `phase_shift` and `suppressed_phase_shift` fields to the WorldObject base in `crates/wow-world/src/entities/world_object.rs` (and propagate to Player / Creature / GameObject / DynamicObject / AreaTrigger) (M)
+- [x] **#PHASE.5** Add `phase_shift` and `suppressed_phase_shift` fields to the WorldObject base (actual Rust owner: `crates/wow-entities/src/world_object.rs`) and propagate through Player / Creature / GameObject / DynamicObject / AreaTrigger via their embedded `WorldObject`/`Unit` base (M)
 - [ ] **#PHASE.6** Define `PhaseInfoStruct`, `PhaseAreaInfo` (with `SubAreaExclusions: HashSet<u32>`, `Conditions: ConditionContainer`), `TerrainSwapInfo` (with `UiMapPhaseIDs: Vec<u32>`) data structs in `crates/wow-data/src/phasing.rs` (M)
 - [ ] **#PHASE.7** Implement loader for `phase_definitions` (id → `PhaseInfoStruct`) (L)
 - [ ] **#PHASE.8** Implement loader for `phase_area` (areaId → `Vec<PhaseAreaInfo>`) joined with `conditions WHERE SourceTypeOrReferenceId = 26` (M)
