@@ -3303,6 +3303,7 @@ dependencies = [
  "wow-movement",
  "wow-network",
  "wow-packet",
+ "wow-recastdetour",
 ]
 
 [[package]]

@@ -12,8 +12,10 @@ use wow_entities::{
 };
 use wow_movement::{
     MoveSpline, MoveSplineInit, MoveSplineLaunchInput, MoveSplineStopInput, MoveSplineStopResult,
+    PathGenerator, PathType,
 };
 use wow_packet::packets::update::CreatureCreateData;
+use wow_recastdetour::{DetourPathType, DetourPolyPath};
 
 /// Size of a grid cell in yards (64x64 yards like TrinityCore).
 pub const GRID_SIZE: f32 = 64.0;
@@ -33,6 +35,38 @@ pub const DEFAULT_MIN_HEIGHT_LIKE_CPP: f32 = -500.0;
 
 fn position_to_i32_tuple(position: Position) -> (i32, i32, i32) {
     (position.x as i32, position.y as i32, position.z as i32)
+}
+
+fn position_from_detour_point_like_cpp(point: [f32; 3]) -> Position {
+    Position::new(point[0], point[1], point[2], 0.0)
+}
+
+pub fn path_type_from_detour_like_cpp(path_type: DetourPathType) -> PathType {
+    PathType::from_bits_retain(path_type.bits())
+}
+
+pub fn path_generator_from_detour_like_cpp(
+    start: Position,
+    destination: Position,
+    detour_path: &DetourPolyPath,
+    force_destination: bool,
+) -> PathGenerator {
+    let mut path = PathGenerator::new();
+    path.apply_detour_path_like_cpp(
+        start,
+        destination,
+        position_from_detour_point_like_cpp(detour_path.point_path.actual_end),
+        detour_path
+            .point_path
+            .points
+            .iter()
+            .copied()
+            .map(position_from_detour_point_like_cpp),
+        &detour_path.poly_refs,
+        path_type_from_detour_like_cpp(detour_path.point_path.path_type),
+        force_destination,
+    );
+    path
 }
 
 /// Coordinate of a grid cell.
@@ -458,6 +492,35 @@ impl WorldCreature {
         init.move_by_path(points, 0);
 
         self.launch_move_spline_init_like_cpp(&mut init, dst)
+    }
+
+    pub fn begin_move_spline_with_detour_path_like_cpp(
+        &mut self,
+        dst: Position,
+        detour_path: Option<&DetourPolyPath>,
+        force_destination: bool,
+    ) -> Option<(Position, MoveSpline, Option<PathGenerator>)> {
+        let Some(detour_path) = detour_path else {
+            return self
+                .begin_move_spline_like_cpp(dst)
+                .map(|(from, spline)| (from, spline, None));
+        };
+
+        let path = path_generator_from_detour_like_cpp(
+            self.position(),
+            dst,
+            detour_path,
+            force_destination,
+        );
+        if path.path_type().contains(PathType::NOPATH) {
+            return self
+                .begin_move_spline_like_cpp(dst)
+                .map(|(from, spline)| (from, spline, Some(path)));
+        }
+
+        let points = path.path_points().to_vec();
+        self.begin_move_spline_by_path_like_cpp(points)
+            .map(|(from, spline)| (from, spline, Some(path)))
     }
 
     pub fn begin_point_movement_like_cpp(
@@ -1788,6 +1851,80 @@ mod tests {
         assert!(motion_spline.enabled);
         assert_eq!(motion_spline.spline_id, spline.id());
         assert_eq!(motion_spline.final_destination, Some((15, 12, 0)));
+    }
+
+    #[test]
+    fn world_creature_detour_path_bridge_uses_moveby_path_or_direct_fallback_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54324);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let normal_path = DetourPolyPath {
+            poly_refs: vec![11, 22],
+            point_path: wow_recastdetour::DetourPointPath {
+                points: vec![[10.0, 10.0, 0.0], [12.0, 11.0, 0.0], [15.0, 12.0, 0.0]],
+                actual_end: [15.0, 12.0, 0.0],
+                path_type: DetourPathType::NORMAL,
+            },
+            start_far_from_poly: false,
+            end_far_from_poly: false,
+        };
+        let dst = Position::new(15.0, 12.0, 0.0, 0.0);
+
+        let (from, spline, path) = creature
+            .begin_move_spline_with_detour_path_like_cpp(dst, Some(&normal_path), false)
+            .expect("detour path launches");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert_eq!(spline.final_destination(), Some(dst));
+        assert_eq!(spline.monster_move_path_data().points, vec![dst]);
+        let path = path.expect("path generator");
+        assert_eq!(path.path_type(), PathType::NORMAL);
+        assert_eq!(path.poly_length(), 2);
+        assert_eq!(
+            path.path_points(),
+            &[
+                Position::new(10.0, 10.0, 0.0, 0.0),
+                Position::new(12.0, 11.0, 0.0, 0.0),
+                dst
+            ]
+        );
+
+        let nopath = DetourPolyPath {
+            poly_refs: Vec::new(),
+            point_path: wow_recastdetour::DetourPointPath {
+                points: vec![[15.0, 12.0, 0.0], [20.0, 10.0, 0.0]],
+                actual_end: [20.0, 10.0, 0.0],
+                path_type: DetourPathType::NOPATH,
+            },
+            start_far_from_poly: false,
+            end_far_from_poly: false,
+        };
+        let fallback_dst = Position::new(20.0, 10.0, 0.0, 0.0);
+
+        let (_from, fallback_spline, fallback_path) = creature
+            .begin_move_spline_with_detour_path_like_cpp(fallback_dst, Some(&nopath), false)
+            .expect("direct fallback launches");
+
+        assert_eq!(fallback_spline.final_destination(), Some(fallback_dst));
+        assert!(
+            fallback_path
+                .expect("fallback path metadata")
+                .path_type()
+                .contains(PathType::NOPATH)
+        );
     }
 
     #[test]
