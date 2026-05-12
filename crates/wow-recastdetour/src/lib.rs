@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     fs, io,
+    marker::PhantomData,
     path::{Path, PathBuf},
+    ptr::NonNull,
+    rc::Rc,
 };
 
 use thiserror::Error;
@@ -24,6 +27,9 @@ pub const DT_OFFMESH_CON_BIDIR_LIKE_CPP: u32 = 1;
 pub const DT_MAX_AREAS_LIKE_CPP: usize = 64;
 pub const DT_TILE_FREE_DATA_LIKE_CPP: i32 = 0x01;
 pub const DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP: usize = 28;
+pub const DT_FAILURE_LIKE_CPP: DetourStatus = 1_u32 << 31;
+pub const DT_SUCCESS_LIKE_CPP: DetourStatus = 1_u32 << 30;
+pub const DT_IN_PROGRESS_LIKE_CPP: DetourStatus = 1_u32 << 29;
 
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
@@ -93,6 +99,7 @@ pub enum MmapTileBlobError {
     CorruptedDataSize { declared: usize, available: usize },
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetourNavMeshParams {
     pub origin: [f32; 3],
@@ -100,6 +107,75 @@ pub struct DetourNavMeshParams {
     pub tile_height: f32,
     pub max_tiles: i32,
     pub max_polys: i32,
+}
+
+#[repr(C)]
+pub struct RawDetourNavMesh {
+    _private: [u8; 0],
+}
+
+pub type DetourStatus = u32;
+
+unsafe extern "C" {
+    fn rustycore_dt_alloc_nav_mesh() -> *mut RawDetourNavMesh;
+    fn rustycore_dt_free_nav_mesh(mesh: *mut RawDetourNavMesh);
+    fn rustycore_dt_nav_mesh_init(
+        mesh: *mut RawDetourNavMesh,
+        params: *const DetourNavMeshParams,
+    ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_get_max_tiles(mesh: *const RawDetourNavMesh) -> u32;
+}
+
+#[derive(Debug)]
+pub struct DetourNavMesh {
+    raw: NonNull<RawDetourNavMesh>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl DetourNavMesh {
+    pub fn new(params: &DetourNavMeshParams) -> Result<Self, DetourNavMeshError> {
+        let raw = NonNull::new(unsafe { rustycore_dt_alloc_nav_mesh() })
+            .ok_or(DetourNavMeshError::AllocationFailed)?;
+        let status = unsafe { rustycore_dt_nav_mesh_init(raw.as_ptr(), params) };
+        if detour_status_failed(status) {
+            unsafe { rustycore_dt_free_nav_mesh(raw.as_ptr()) };
+            return Err(DetourNavMeshError::InitFailed { status });
+        }
+
+        Ok(Self {
+            raw,
+            _not_send_or_sync: PhantomData,
+        })
+    }
+
+    #[must_use]
+    pub fn max_tiles(&self) -> u32 {
+        unsafe { rustycore_dt_nav_mesh_get_max_tiles(self.raw.as_ptr()) }
+    }
+
+    #[must_use]
+    pub const fn as_raw(&self) -> *mut RawDetourNavMesh {
+        self.raw.as_ptr()
+    }
+}
+
+impl Drop for DetourNavMesh {
+    fn drop(&mut self) {
+        unsafe { rustycore_dt_free_nav_mesh(self.raw.as_ptr()) };
+    }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum DetourNavMeshError {
+    #[error("Detour navmesh allocation failed")]
+    AllocationFailed,
+    #[error("Detour navmesh initialization failed with status 0x{status:08x}")]
+    InitFailed { status: DetourStatus },
+}
+
+#[must_use]
+pub const fn detour_status_failed(status: DetourStatus) -> bool {
+    status & DT_FAILURE_LIKE_CPP != 0
 }
 
 impl DetourNavMeshParams {
@@ -481,6 +557,11 @@ mod tests {
         assert_eq!(DT_MAX_AREAS_LIKE_CPP, 64);
         assert_eq!(DT_TILE_FREE_DATA_LIKE_CPP, 1);
         assert_eq!(DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP, 28);
+        assert_eq!(DT_FAILURE_LIKE_CPP, 1_u32 << 31);
+        assert_eq!(DT_SUCCESS_LIKE_CPP, 1_u32 << 30);
+        assert_eq!(DT_IN_PROGRESS_LIKE_CPP, 1_u32 << 29);
+        assert!(detour_status_failed(DT_FAILURE_LIKE_CPP));
+        assert!(!detour_status_failed(DT_SUCCESS_LIKE_CPP));
 
         assert_eq!(NAV_AREA_EMPTY_LIKE_CPP, 0);
         assert_eq!(NAV_AREA_GROUND_LIKE_CPP, 11);
@@ -516,6 +597,21 @@ mod tests {
                 expected: 28,
             })
         );
+    }
+
+    #[test]
+    fn detour_nav_mesh_wrapper_initializes_vendored_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+
+        let mesh = DetourNavMesh::new(&params).unwrap();
+        assert_eq!(mesh.max_tiles(), 16);
+        assert!(!mesh.as_raw().is_null());
     }
 
     #[test]

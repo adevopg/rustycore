@@ -7,6 +7,7 @@ fn main() {
     let detour_dir = manifest_dir.join("vendor/Detour");
     let include_dir = detour_dir.join("Include");
     let source_dir = detour_dir.join("Source");
+    let cpp_dir = manifest_dir.join("cpp");
 
     for path in [
         "DetourAlloc.cpp",
@@ -19,6 +20,10 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={}", source_dir.join(path).display());
     }
+    println!(
+        "cargo:rerun-if-changed={}",
+        cpp_dir.join("detour_c_api.cpp").display()
+    );
 
     for path in [
         "DetourAlloc.h",
@@ -50,6 +55,7 @@ fn main() {
             source_dir.join("DetourNavMeshBuilder.cpp"),
             source_dir.join("DetourNavMeshQuery.cpp"),
             source_dir.join("DetourNode.cpp"),
+            cpp_dir.join("detour_c_api.cpp"),
         ])
         .compile("wow_detour");
 }
