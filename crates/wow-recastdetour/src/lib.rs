@@ -1053,6 +1053,131 @@ pub fn build_straight_poly_path_like_cpp(
     })
 }
 
+pub fn build_raycast_poly_path_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    filter: &DetourQueryFilter,
+    start_point: [f32; 3],
+    mut end_point: [f32; 3],
+) -> Result<DetourPolyPath, DetourNavMeshQueryError> {
+    let (start_poly, dist_to_start_poly) =
+        get_poly_by_location_like_cpp(query, filter, start_point)?;
+    let (end_poly, dist_to_end_poly) = get_poly_by_location_like_cpp(query, filter, end_point)?;
+    let start_far_from_poly = dist_to_start_poly > 7.0;
+    let end_far_from_poly = dist_to_end_poly > 7.0;
+
+    if start_far_from_poly || end_far_from_poly {
+        if let Ok((closest, _)) = query.closest_point_on_poly(end_poly, end_point) {
+            end_point = closest;
+        }
+    }
+
+    let raycast = match query.raycast(
+        start_poly,
+        start_point,
+        end_point,
+        filter,
+        MAX_PATH_LENGTH_LIKE_CPP,
+    ) {
+        Ok(raycast) if !raycast.path.is_empty() => raycast,
+        Ok(raycast) => {
+            let mut path_type = DetourPathType::NOPATH | DetourPathType::SHORTCUT;
+            add_far_from_poly_flags_like_cpp(
+                &mut path_type,
+                start_far_from_poly,
+                end_far_from_poly,
+            );
+            return Ok(DetourPolyPath {
+                poly_refs: raycast.path,
+                point_path: DetourPointPath {
+                    points: vec![start_point, end_point],
+                    actual_end: end_point,
+                    path_type,
+                },
+                start_far_from_poly,
+                end_far_from_poly,
+            });
+        }
+        Err(error) => {
+            let mut path_type = DetourPathType::NOPATH | DetourPathType::SHORTCUT;
+            add_far_from_poly_flags_like_cpp(
+                &mut path_type,
+                start_far_from_poly,
+                end_far_from_poly,
+            );
+            if start_poly == 0 {
+                return Ok(DetourPolyPath {
+                    poly_refs: Vec::new(),
+                    point_path: DetourPointPath {
+                        points: vec![start_point, end_point],
+                        actual_end: end_point,
+                        path_type,
+                    },
+                    start_far_from_poly,
+                    end_far_from_poly,
+                });
+            }
+            return Err(error);
+        }
+    };
+
+    let last_poly = raycast.path.last().copied().unwrap_or(start_poly);
+    if raycast.hit_t != f32::MAX {
+        let mut hit_t = raycast.hit_t * 0.99;
+        if !hit_t.is_finite() {
+            hit_t = 0.0;
+        }
+        let mut hit_pos = detour_lerp(start_point, end_point, hit_t);
+        match query.get_poly_height(last_poly, hit_pos) {
+            Ok(height) => hit_pos[1] = height,
+            Err(_) => {
+                if let Ok(boundary) = query.closest_point_on_poly_boundary(last_poly, hit_pos) {
+                    hit_pos = boundary;
+                }
+            }
+        }
+
+        let mut path_type = DetourPathType::INCOMPLETE;
+        add_far_from_poly_flags_like_cpp(&mut path_type, start_far_from_poly, false);
+        return Ok(DetourPolyPath {
+            poly_refs: raycast.path,
+            point_path: DetourPointPath {
+                points: vec![start_point, hit_pos],
+                actual_end: hit_pos,
+                path_type,
+            },
+            start_far_from_poly,
+            end_far_from_poly,
+        });
+    }
+
+    match query.get_poly_height(last_poly, end_point) {
+        Ok(height) => end_point[1] = height,
+        Err(_) => {
+            if let Ok(boundary) = query.closest_point_on_poly_boundary(last_poly, end_point) {
+                end_point = boundary;
+            }
+        }
+    }
+
+    let mut path_type = if start_far_from_poly || end_far_from_poly {
+        DetourPathType::INCOMPLETE
+    } else {
+        DetourPathType::NORMAL
+    };
+    add_far_from_poly_flags_like_cpp(&mut path_type, start_far_from_poly, end_far_from_poly);
+
+    Ok(DetourPolyPath {
+        poly_refs: raycast.path,
+        point_path: DetourPointPath {
+            points: vec![start_point, end_point],
+            actual_end: end_point,
+            path_type,
+        },
+        start_far_from_poly,
+        end_far_from_poly,
+    })
+}
+
 fn add_far_from_poly_flags_like_cpp(
     path_type: &mut DetourPathType,
     start_far_from_poly: bool,
@@ -1082,6 +1207,14 @@ fn detour_in_range(first: [f32; 3], second: [f32; 3], range: f32, height: f32) -
     let dy = second[1] - first[1];
     let dz = second[2] - first[2];
     (dx * dx + dz * dz) < range * range && dy.abs() < height
+}
+
+fn detour_lerp(start: [f32; 3], end: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        start[0] + (end[0] - start[0]) * t,
+        start[1] + (end[1] - start[1]) * t,
+        start[2] + (end[2] - start[2]) * t,
+    ]
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -2185,6 +2318,67 @@ mod tests {
         assert_eq!(
             path.point_path.path_type,
             DetourPathType::SHORTCUT | DetourPathType::NOPATH
+        );
+    }
+
+    #[test]
+    fn detour_build_raycast_poly_path_handles_empty_raycast_path_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        mesh.add_tile(&generated_square_tile_blob(0, 0)).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+
+        let path =
+            build_raycast_poly_path_like_cpp(&query, &filter, [0.25, 0.0, 0.25], [0.75, 0.0, 0.75])
+                .unwrap();
+
+        assert!(path.poly_refs.is_empty());
+        assert_eq!(
+            path.point_path.path_type,
+            DetourPathType::SHORTCUT | DetourPathType::NOPATH
+        );
+        assert_eq!(
+            path.point_path.points,
+            vec![[0.25, 0.0, 0.25], [0.75, 0.0, 0.75]]
+        );
+    }
+
+    #[test]
+    fn detour_build_raycast_poly_path_marks_far_flags_on_missing_poly_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mesh = DetourNavMesh::new(&params).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+
+        let path =
+            build_raycast_poly_path_like_cpp(&query, &filter, [0.25, 0.0, 0.25], [0.75, 0.0, 0.75])
+                .unwrap();
+
+        assert!(path.start_far_from_poly);
+        assert!(path.end_far_from_poly);
+        assert!(path.point_path.path_type.contains(DetourPathType::NOPATH));
+        assert!(
+            path.point_path
+                .path_type
+                .contains(DetourPathType::FARFROMPOLY_START)
+        );
+        assert!(
+            path.point_path
+                .path_type
+                .contains(DetourPathType::FARFROMPOLY_END)
         );
     }
 
