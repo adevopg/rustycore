@@ -207,6 +207,28 @@ extern "C"
         return query->getPolyHeight((dtPolyRef)poly_ref, position, height);
     }
 
+    dtStatus rustycore_dt_nav_mesh_query_move_along_surface(
+        dtNavMeshQuery const* query,
+        uint64_t start_ref,
+        float const* start_pos,
+        float const* end_pos,
+        dtQueryFilter const* filter,
+        float* result_pos,
+        uint64_t* visited,
+        int* visited_count,
+        int max_visited_size)
+    {
+        return query->moveAlongSurface(
+            (dtPolyRef)start_ref,
+            start_pos,
+            end_pos,
+            filter,
+            result_pos,
+            (dtPolyRef*)visited,
+            visited_count,
+            max_visited_size);
+    }
+
     void rustycore_dt_free(void* ptr)
     {
         dtFree(ptr);
