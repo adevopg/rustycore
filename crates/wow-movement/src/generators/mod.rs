@@ -1,3 +1,4 @@
+pub mod chase;
 pub mod distract;
 pub mod follow;
 pub mod generic;
@@ -5,6 +6,12 @@ pub mod idle;
 pub mod point;
 pub mod rotate;
 
+pub use chase::{
+    CHASE_RANGE_CHECK_INTERVAL_MS_LIKE_CPP, ChaseFinalizeAction, ChaseLaunchPlan,
+    ChaseMovementAction, ChaseMovementGenerator, ChaseMovementInform, ChaseRangeBounds,
+    ChaseUnitSnapshot, ChaseWalkMode, UNIT_STATE_CHASE_LIKE_CPP, UNIT_STATE_CHASE_MOVE_LIKE_CPP,
+    position_okay_like_cpp as chase_position_okay_like_cpp,
+};
 pub use distract::{
     AssistanceDistractFinalizeAction, AssistanceDistractMovementGenerator, DistractFacingSpline,
     DistractFinalizeAction, DistractInitializeAction, DistractMovementGenerator,
