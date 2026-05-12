@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs, io,
     marker::PhantomData,
+    mem::ManuallyDrop,
     path::{Path, PathBuf},
     ptr::NonNull,
     rc::Rc,
@@ -1511,6 +1512,25 @@ pub fn calculate_detour_path_like_cpp(
     Ok(poly_path)
 }
 
+fn calculate_detour_path_with_raw_query_like_cpp(
+    nav_mesh: &DetourNavMesh,
+    raw_query: *mut RawDetourNavMeshQuery,
+    filter: &DetourQueryFilter,
+    start_wow: [f32; 3],
+    end_wow: [f32; 3],
+    options: DetourPathOptions,
+) -> Result<DetourPolyPath, DetourNavMeshQueryError> {
+    let Some(raw) = NonNull::new(raw_query) else {
+        return Err(DetourNavMeshQueryError::AllocationFailed);
+    };
+    let query = ManuallyDrop::new(DetourNavMeshQuery {
+        raw,
+        _mesh_lifetime_and_thread_model: PhantomData,
+    });
+
+    calculate_detour_path_like_cpp(nav_mesh, &query, filter, start_wow, end_wow, options)
+}
+
 #[must_use]
 pub fn fixup_corridor_like_cpp(
     path: &[DetourPolyRef],
@@ -1955,6 +1975,36 @@ impl MMapData {
         self.nav_mesh.remove_tile(tile_ref)?;
         self.loaded_tile_refs.remove(&packed_grid_pos);
         Ok(true)
+    }
+
+    pub fn calculate_path_for_instance_like_cpp(
+        &self,
+        instance_map_id: u32,
+        instance_id: u32,
+        filter: &DetourQueryFilter,
+        start_wow: [f32; 3],
+        end_wow: [f32; 3],
+        options: DetourPathOptions,
+    ) -> Result<Option<DetourPolyPath>, DetourNavMeshQueryError> {
+        let Some(query) = self.get_nav_mesh_query(instance_map_id, instance_id) else {
+            return Ok(None);
+        };
+
+        if !self.nav_mesh.have_tile_for_wow_position_like_cpp(start_wow)
+            || !self.nav_mesh.have_tile_for_wow_position_like_cpp(end_wow)
+        {
+            return Ok(None);
+        }
+
+        calculate_detour_path_with_raw_query_like_cpp(
+            &self.nav_mesh,
+            query.as_raw(),
+            filter,
+            start_wow,
+            end_wow,
+            options,
+        )
+        .map(Some)
     }
 }
 
@@ -3583,6 +3633,58 @@ mod tests {
                 .unwrap()
                 .loaded_tile_refs
                 .contains_key(&pack_tile_id_like_cpp(0, 0))
+        );
+        assert!(matches!(
+            manager.load_map_instance(&root, 1, 1, 42),
+            Ok(true)
+        ));
+        let filter = DetourQueryFilter::new().unwrap();
+        let calculated = manager
+            .get_mmap_data(1)
+            .unwrap()
+            .calculate_path_for_instance_like_cpp(
+                1,
+                42,
+                &filter,
+                [0.25, 0.25, 0.0],
+                [0.75, 0.75, 0.0],
+                DetourPathOptions::default(),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            calculated.point_path.points,
+            vec![[0.25, 0.25, 0.0], [0.75, 0.75, 0.0]]
+        );
+        assert!(
+            manager
+                .get_mmap_data(1)
+                .unwrap()
+                .calculate_path_for_instance_like_cpp(
+                    1,
+                    999,
+                    &filter,
+                    [0.25, 0.25, 0.0],
+                    [0.75, 0.75, 0.0],
+                    DetourPathOptions::default(),
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            manager
+                .get_mmap_data(1)
+                .unwrap()
+                .calculate_path_for_instance_like_cpp(
+                    1,
+                    42,
+                    &filter,
+                    [0.25, 0.25, 0.0],
+                    [2.0, 2.0, 0.0],
+                    DetourPathOptions::default(),
+                )
+                .unwrap()
+                .is_none()
         );
 
         assert!(matches!(manager.unload_map_tile(1, 0, 0), Ok(true)));
