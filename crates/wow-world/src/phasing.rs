@@ -8,8 +8,11 @@
 use std::{error::Error, fmt};
 
 use wow_core::ObjectGuid;
+use wow_data::{PhaseGroupStore, PhaseStore};
 use wow_entities::{PhaseShift, WorldObject};
 use wow_packet::packets::misc::{PhaseShiftChange, PhaseShiftDataPhase};
+
+use wow_constants::PhaseFlags;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhaseVisibilityUpdate {
@@ -57,6 +60,19 @@ impl fmt::Display for PhaseShiftPacketBuildError {
 
 impl Error for PhaseShiftPacketBuildError {}
 
+/// C++ local `PhasingHandler.cpp::GetPhaseFlags`.
+pub fn phase_flags_for_id_like_cpp(phase_store: &PhaseStore, phase_id: u32) -> PhaseFlags {
+    if phase_store.is_cosmetic_phase(phase_id) {
+        return PhaseFlags::COSMETIC;
+    }
+
+    if phase_store.is_personal_phase(phase_id) {
+        return PhaseFlags::PERSONAL;
+    }
+
+    PhaseFlags::NONE
+}
+
 /// C++ `PhasingHandler::ResetPhaseShift`.
 pub fn reset_phase_shift_like_cpp(object: &mut WorldObject) {
     object.phase_shift_mut().clear();
@@ -87,6 +103,116 @@ pub fn set_inversed_like_cpp(
 ) -> PhaseVisibilityUpdate {
     object.phase_shift_mut().set_inversed_like_cpp(apply);
     PhaseVisibilityUpdate::new(update_visibility, true)
+}
+
+/// C++ `PhasingHandler::AddPhase` core mutation, excluding runtime controlled-unit traversal.
+pub fn add_phase_like_cpp(
+    object: &mut WorldObject,
+    phase_store: &PhaseStore,
+    phase_id: u32,
+    personal_guid: ObjectGuid,
+    update_visibility: bool,
+) -> PhaseVisibilityUpdate {
+    let flags = phase_flags_for_id_like_cpp(phase_store, phase_id);
+    let changed = object
+        .phase_shift_mut()
+        .add_phase_like_cpp(phase_id, flags, 1);
+
+    if object.phase_shift().has_personal_phase_like_cpp() {
+        object
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(personal_guid);
+    }
+
+    PhaseVisibilityUpdate::new(update_visibility, changed)
+}
+
+/// Public C++ `PhasingHandler::AddPhase` entry shape for a single object.
+pub fn add_object_phase_like_cpp(
+    object: &mut WorldObject,
+    phase_store: &PhaseStore,
+    phase_id: u32,
+    update_visibility: bool,
+) -> PhaseVisibilityUpdate {
+    add_phase_like_cpp(
+        object,
+        phase_store,
+        phase_id,
+        object.guid(),
+        update_visibility,
+    )
+}
+
+/// C++ `PhasingHandler::RemovePhase` core mutation, excluding runtime controlled-unit traversal.
+pub fn remove_phase_like_cpp(
+    object: &mut WorldObject,
+    phase_id: u32,
+    update_visibility: bool,
+) -> PhaseVisibilityUpdate {
+    let changed = object.phase_shift_mut().remove_phase_like_cpp(phase_id);
+    PhaseVisibilityUpdate::new(update_visibility, changed)
+}
+
+/// C++ `PhasingHandler::AddPhaseGroup` core mutation, excluding runtime controlled-unit traversal.
+pub fn add_phase_group_like_cpp(
+    object: &mut WorldObject,
+    phase_store: &PhaseStore,
+    phase_group_store: &PhaseGroupStore,
+    phase_group_id: u32,
+    personal_guid: ObjectGuid,
+    update_visibility: bool,
+) -> Option<PhaseVisibilityUpdate> {
+    let phases = phase_group_store.phases_for_group(phase_group_id)?;
+    let mut changed = false;
+    for phase_id in phases {
+        let flags = phase_flags_for_id_like_cpp(phase_store, *phase_id);
+        changed = object
+            .phase_shift_mut()
+            .add_phase_like_cpp(*phase_id, flags, 1)
+            || changed;
+    }
+
+    if object.phase_shift().has_personal_phase_like_cpp() {
+        object
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(personal_guid);
+    }
+
+    Some(PhaseVisibilityUpdate::new(update_visibility, changed))
+}
+
+/// Public C++ `PhasingHandler::AddPhaseGroup` entry shape for a single object.
+pub fn add_object_phase_group_like_cpp(
+    object: &mut WorldObject,
+    phase_store: &PhaseStore,
+    phase_group_store: &PhaseGroupStore,
+    phase_group_id: u32,
+    update_visibility: bool,
+) -> Option<PhaseVisibilityUpdate> {
+    add_phase_group_like_cpp(
+        object,
+        phase_store,
+        phase_group_store,
+        phase_group_id,
+        object.guid(),
+        update_visibility,
+    )
+}
+
+/// C++ `PhasingHandler::RemovePhaseGroup` core mutation, excluding runtime controlled-unit traversal.
+pub fn remove_phase_group_like_cpp(
+    object: &mut WorldObject,
+    phase_group_store: &PhaseGroupStore,
+    phase_group_id: u32,
+    update_visibility: bool,
+) -> Option<PhaseVisibilityUpdate> {
+    let phases = phase_group_store.phases_for_group(phase_group_id)?;
+    let mut changed = false;
+    for phase_id in phases {
+        changed = object.phase_shift_mut().remove_phase_like_cpp(*phase_id) || changed;
+    }
+
+    Some(PhaseVisibilityUpdate::new(update_visibility, changed))
 }
 
 /// C++ `PhasingHandler::SendToPlayer(Player const*, PhaseShift const&)` packet build step.
@@ -137,6 +263,10 @@ mod tests {
     use super::*;
     use wow_constants::{PhaseFlags, PhaseShiftFlags, TypeId, TypeMask};
     use wow_core::{ObjectGuid, guid::HighGuid};
+    use wow_data::{
+        PhaseEntry, PhaseXPhaseGroupEntry,
+        phase::{PHASE_ENTRY_FLAG_COSMETIC, PHASE_ENTRY_FLAG_PERSONAL},
+    };
 
     fn world_object() -> WorldObject {
         let mut object = WorldObject::new(false, TypeId::Unit, TypeMask::UNIT);
@@ -150,6 +280,43 @@ mod tests {
             1,
         ));
         object
+    }
+
+    fn phase_store() -> PhaseStore {
+        PhaseStore::from_entries([
+            PhaseEntry { id: 10, flags: 0 },
+            PhaseEntry {
+                id: 20,
+                flags: PHASE_ENTRY_FLAG_PERSONAL,
+            },
+            PhaseEntry {
+                id: 30,
+                flags: PHASE_ENTRY_FLAG_COSMETIC,
+            },
+        ])
+    }
+
+    fn phase_group_store(phase_store: &PhaseStore) -> PhaseGroupStore {
+        PhaseGroupStore::from_entries(
+            phase_store,
+            [
+                PhaseXPhaseGroupEntry {
+                    id: 1,
+                    phase_id: 10,
+                    phase_group_id: 7,
+                },
+                PhaseXPhaseGroupEntry {
+                    id: 2,
+                    phase_id: 20,
+                    phase_group_id: 7,
+                },
+                PhaseXPhaseGroupEntry {
+                    id: 3,
+                    phase_id: 99,
+                    phase_group_id: 7,
+                },
+            ],
+        )
     }
 
     #[test]
@@ -178,6 +345,66 @@ mod tests {
         );
         assert!(!object.phase_shift().has_phase_like_cpp(10));
         assert!(!object.suppressed_phase_shift().has_phase_like_cpp(20));
+    }
+
+    #[test]
+    fn add_and_remove_phase_core_match_cpp_mutation() {
+        let phase_store = phase_store();
+        let mut object = world_object();
+        let personal_guid = object.guid();
+
+        let update = add_object_phase_like_cpp(&mut object, &phase_store, 20, true);
+
+        assert_eq!(update, PhaseVisibilityUpdate::new(true, true));
+        assert!(object.phase_shift().has_phase_like_cpp(20));
+        assert_eq!(
+            object
+                .phase_shift()
+                .phase_ref_like_cpp(20)
+                .map(|phase| phase.flags()),
+            Some(PhaseFlags::PERSONAL)
+        );
+        assert_eq!(object.phase_shift().personal_guid_like_cpp(), personal_guid);
+
+        let update = add_object_phase_like_cpp(&mut object, &phase_store, 20, true);
+        assert_eq!(update, PhaseVisibilityUpdate::new(true, false));
+
+        let update = remove_phase_like_cpp(&mut object, 20, false);
+        assert_eq!(update, PhaseVisibilityUpdate::new(false, false));
+        assert!(object.phase_shift().has_phase_like_cpp(20));
+
+        let update = remove_phase_like_cpp(&mut object, 20, false);
+        assert_eq!(update, PhaseVisibilityUpdate::new(false, true));
+        assert!(!object.phase_shift().has_phase_like_cpp(20));
+    }
+
+    #[test]
+    fn phase_group_core_uses_cpp_group_lookup_and_phase_flags() {
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let mut object = world_object();
+
+        let update =
+            add_object_phase_group_like_cpp(&mut object, &phase_store, &phase_group_store, 7, true);
+
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(true, true)));
+        assert!(object.phase_shift().has_phase_like_cpp(10));
+        assert!(object.phase_shift().has_phase_like_cpp(20));
+        assert!(!object.phase_shift().has_phase_like_cpp(99));
+
+        let missing_group = add_object_phase_group_like_cpp(
+            &mut object,
+            &phase_store,
+            &phase_group_store,
+            99,
+            true,
+        );
+        assert_eq!(missing_group, None);
+
+        let update = remove_phase_group_like_cpp(&mut object, &phase_group_store, 7, false);
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, true)));
+        assert!(!object.phase_shift().has_phase_like_cpp(10));
+        assert!(!object.phase_shift().has_phase_like_cpp(20));
     }
 
     #[test]
