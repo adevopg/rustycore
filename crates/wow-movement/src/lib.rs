@@ -2,6 +2,7 @@ pub mod defines;
 pub mod generator;
 pub mod generators;
 pub mod motion_master;
+pub mod path_generator;
 pub mod spline;
 
 pub use defines::{
@@ -84,7 +85,12 @@ pub use generators::{
 };
 pub use motion_master::{
     DelayedAction, DelayedActionQueue, MotionMaster, MotionMasterDelayedActionType,
-    MotionMasterFlags, ResolvedDelayedAction,
+    MotionMasterFlags, ResolvedDelayedAction, StopOnDeathAction,
+};
+pub use path_generator::{
+    INVALID_POLYREF_LIKE_CPP, MAX_PATH_LENGTH_LIKE_CPP, MAX_POINT_PATH_LENGTH_LIKE_CPP,
+    PathGenerator, PathType, SMOOTH_PATH_SLOP_LIKE_CPP, SMOOTH_PATH_STEP_SIZE_LIKE_CPP,
+    VERTEX_SIZE_LIKE_CPP, distance_3d, distance_3d_sq, in_range_like_cpp, in_range_yzx_like_cpp,
 };
 pub use spline::{
     AnimTierTransition, FacingInfo, JumpSpeeds, MonsterMovePathData, MonsterMoveType, MoveSpline,

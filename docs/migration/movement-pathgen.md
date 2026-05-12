@@ -3,9 +3,9 @@
 > **C++ canonical path:** `src/server/game/Movement/PathGenerator.{h,cpp}` + Detour bridge from `src/server/collision/Management/MMapManager.{h,cpp}` + `src/server/collision/Management/MMapDefines.h` + 3rdparty `dep/recastnavigation/Detour/`
 > **Rust target crate(s):** `crates/wow-recastdetour/` (currently 0-line placeholder; FFI bindings to Recast/Detour) + future `crates/wow-movement/src/path_generator.rs`
 > **Layer:** L5 sub-module (depends on `wow-collision` / VMaps L3 for height fallback, mmap tile loading from disk)
-> **Status:** ❌ not started — `wow-recastdetour` is a 0-line placeholder; no `PathGenerator`; no mmap tile loader
+> **Status:** ⚠️ first portable slice started — `wow-movement::PathGenerator` now has C++ constants/flags, no-navmesh shortcut fallback, geometry helpers, path length and `ShortenPathUntilDist`; `wow-recastdetour` remains a 0-line placeholder, with no Detour FFI or mmap tile loader
 > **Audited vs C++:** ✅ complete 2026-05-01
-> **Last updated:** 2026-05-01
+> **Last updated:** 2026-05-12
 
 > Sub-doc of [`movement.md`](movement.md). Cross-links: [`movement-generators.md`](movement-generators.md) (`Chase`/`Follow`/`Point`/`Waypoint`/`Confused`/`Fleeing` are the consumers), [`movement-spline.md`](movement-spline.md) (`MoveSplineInit::MoveTo` invokes `PathGenerator::CalculatePath`), [`common-collision.md`](common-collision.md) (height/LOS via VMaps; mmap tile coordinates align with VMap grid), [`ai-base.md`](ai-base.md) (AI scripts indirectly trigger pathfind via generators).
 
@@ -175,7 +175,7 @@ Tile generation is offline (`mmaps_generator` tool from Trinity); the runtime on
 | Rust target | Kind | Rust files | Lines | Status | Notes |
 |---|---|---:|---:|---|---|
 | `crates/wow-recastdetour` | `crate_dir` | 1 | 0 | `exists_empty` | crate exists; no active Rust source lines |
-| `crates/wow-movement/src/path_generator.rs` | `path` | 0 | 0 | `missing_declared_path` | declared/proposed target does not exist |
+| `crates/wow-movement/src/path_generator.rs` | `path` | 1 | partial | `portable_slice` | C++ constants/flags, no-navmesh shortcut fallback, path length, geometry helpers and `ShortenPathUntilDist`; no Detour-backed pathfinding |
 | `crates/wow-recastdetour/Cargo.toml` | `file` | 1 | 9 | `exists_manifest` | manifest exists; not counted as active Rust source |
 | `crates/wow-recastdetour/src/lib.rs` | `file` | 1 | 0 | `exists_empty` | file exists but has 0 lines |
 
@@ -184,16 +184,17 @@ Tile generation is offline (`mmaps_generator` tool from Trinity); the runtime on
 **Files in `/home/server/rustycore`:**
 - `crates/wow-recastdetour/Cargo.toml` — declared dependency stub.
 - `crates/wow-recastdetour/src/lib.rs` — **0 lines of actual FFI code** (placeholder).
-- *No* `crates/wow-movement/src/path_generator.rs`.
+- `crates/wow-movement/src/path_generator.rs` — first portable slice: `PathType`, constants, degraded no-navmesh shortcut fallback, `SetPathLengthLimit`, distance/range helpers, far-from-poly flags and `ShortenPathUntilDist` shape.
 - *No* `mmap` tile loader anywhere.
 - *No* Detour FFI bindings (no `cxx`, `bindgen`, or `recastnavigation-sys` integration).
 
 **What's implemented:**
-- *Nothing functional.* `wow-recastdetour` is an empty crate listed in the workspace `Cargo.toml` so future code has a place to land. There is no static or dynamic link to Recast/Detour, no header generation, and no test harness.
+- Portable, owner-independent pathgen slice in `wow-movement`: exact `PathType` bits and constants from `PathGenerator.h`, C++-style no-navmesh fallback (`BuildShortcut` followed by `PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH`), path length, `SetUseStraightPath`, `SetUseRaycast`, `SetPathLengthLimit`, `Dist3DSqr`, `InRange`, `InRangeYZX`, `AddFarFromPolyFlags`, and `ShortenPathUntilDist` with line-of-sight abstracted as a callback.
+- `wow-recastdetour` remains an empty crate listed in the workspace `Cargo.toml` so future FFI code has a place to land. There is no static or dynamic link to Recast/Detour and no header generation.
 
 **What's missing vs C++:**
-- **`PathGenerator` class** — 1045 lines of C++ code defining `CalculatePath`, `BuildPolyPath`, `BuildPointPath`, `BuildShortcut`, `FindSmoothPath`, `FixupCorridor`, `GetSteerTarget`, `NormalizePath`, `AddFarFromPolyFlags`, `ShortenPathUntilDist` — none ported.
-- **`PathType` enum / bitfield** — does not exist.
+- **Detour-backed `PathGenerator` behavior** — the real `CalculatePath`, `BuildPolyPath`, `BuildPointPath`, `FindSmoothPath`, `FixupCorridor`, `GetSteerTarget`, `NormalizePath`, filter setup and mmap-backed branches remain unported.
+- **Owner-backed context** — the portable `PathGenerator` does not own a `WorldObject`, `Map`, `MMapManager`, collision height or phase shift yet; LOS/Z normalization are represented through explicit callbacks or left for owner integration.
 - **`dtNavMesh` / `dtNavMeshQuery` / `dtQueryFilter` FFI** — no Rust wrapper, no safety abstractions, no lifetime model. The Detour C++ runtime is not linked.
 - **`MMapManager`** — no tile cache, no `loadMap(mapId)`, no `.mmap`/`.mmtile` reader, no per-instance query allocation.
 - **`NavTerrain` flags** — enum does not exist.
@@ -215,7 +216,7 @@ Tile generation is offline (`mmaps_generator` tool from Trinity); the runtime on
 - Per-instance query (one `dtNavMeshQuery` per `(mapId, instanceId)`) means dungeon raids cannot share a single query object — the Rust `MapManager` design currently has no plumbing for this.
 
 **Tests existing:**
-- 0 tests for `PathGenerator` (does not exist).
+- Unit tests cover the portable `PathGenerator` slice in `wow-movement`: constants/flags, no-navmesh shortcut fallback, invalid coordinate rejection, path length, geometry helpers, far-from-poly flags, path-length limit and `ShortenPathUntilDist`.
 - 0 tests for mmap tile load (no loader).
 - 0 tests for Detour FFI wrapper (no FFI).
 - The `wow-recastdetour` crate has no `#[cfg(test)]`.
@@ -257,18 +258,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-PATH.8** Per-instance `dtNavMeshQuery` allocator: `MMapData { mesh: DetourNavMesh, queries: HashMap<InstanceId, DetourNavMeshQuery> }`. (M)
 - [ ] **#MOVE-PATH.9** On-demand tile load: `load_map_data(map_id, tx, ty)` reads file lazily; track loaded set per map. (H)
 - [ ] **#MOVE-PATH.10** `NavTerrain` flags enum (`GROUND=1`, `MAGMA=2`, `SLIME=4`, `WATER=8`, `EMPTY=16`); poly-area → flag mapping. (L)
-- [ ] **#MOVE-PATH.11** Port `PathType` bitflags + constants (`MAX_PATH_LENGTH=74`, `SMOOTH_PATH_STEP_SIZE=4.0`, `SMOOTH_PATH_SLOP=0.3`, `INVALID_POLYREF=0`). (L)
-- [ ] **#MOVE-PATH.12** `PathGenerator` skeleton: holds `&MMapManager`, `owner` reference, `polyrefs: [u64; 74]`, `path_points: Vec<Vec3>`, `_type: PathType`, filter. (M)
+- [x] **#MOVE-PATH.11** Port `PathType` bitflags + constants (`MAX_PATH_LENGTH=74`, `SMOOTH_PATH_STEP_SIZE=4.0`, `SMOOTH_PATH_SLOP=0.3`, `INVALID_POLYREF=0`). (L)
+- [ ] **#MOVE-PATH.12** `PathGenerator` skeleton: portable state now exists in `wow-movement` (`polyrefs: [u64; 74]`, `path_points`, `_type`, options and start/end/actual-end positions). Remaining work: owner `WorldObject`, `MMapManager`, Detour query/filter ownership and map height/LOS context. (M)
 - [ ] **#MOVE-PATH.13** `PathGenerator::create_filter()` with creature-type → include-flags mapping (ground vs water vs flying vs lava-immune). (M)
-- [ ] **#MOVE-PATH.14** Port `BuildShortcut` (no-mmap fallback: 2-point straight line). (L)
+- [x] **#MOVE-PATH.14** Port `BuildShortcut`/no-mmap fallback: portable `calculate_without_navmesh_like_cpp` builds `[start,end]` and marks `PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH` like C++ `CalculatePath` when mmaps are unavailable. (L)
 - [ ] **#MOVE-PATH.15** Port `BuildPolyPath`: `find_nearest_poly(start)` + `find_nearest_poly(end)` + `find_path(start_poly, end_poly, &filter)`. (H)
 - [ ] **#MOVE-PATH.16** Port `BuildPointPath`: dispatch between `findStraightPath` (`_useStraightPath=true`) and `FindSmoothPath`. (H)
 - [ ] **#MOVE-PATH.17** Port `FindSmoothPath` + `GetSteerTarget` + `FixupCorridor` (the Detour smooth-path tutorial code, identical math). (XL)
 - [ ] **#MOVE-PATH.18** Port `NormalizePath` (Z-clamp via `Map::GetHeight`). (M)
-- [ ] **#MOVE-PATH.19** Port `IsInvalidDestinationZ` + `AddFarFromPolyFlags` + `ShortenPathUntilDist`. (M)
-- [ ] **#MOVE-PATH.20** Port `Dist3DSqr` / `InRange` / `InRangeYZX` helpers. (L)
+- [ ] **#MOVE-PATH.19** Port `IsInvalidDestinationZ` + `AddFarFromPolyFlags` + `ShortenPathUntilDist`. `AddFarFromPolyFlags` and `ShortenPathUntilDist` shape are represented; `IsInvalidDestinationZ`, collision-height hit sphere and real `Map::isInLineOfSight` remain owner-backed gaps. (M)
+- [x] **#MOVE-PATH.20** Port `Dist3DSqr` / `InRange` / `InRangeYZX` helpers. (L)
 - [ ] **#MOVE-PATH.21** Port `CalculatePath(destX, destY, destZ, force_dest)` top-level entry orchestrating all the above. (H)
-- [ ] **#MOVE-PATH.22** Port `SetUseStraightPath` / `SetPathLengthLimit` / `SetUseRaycast` setters. (L)
+- [x] **#MOVE-PATH.22** Port `SetUseStraightPath` / `SetPathLengthLimit` / `SetUseRaycast` setters. (L)
 - [ ] **#MOVE-PATH.23** Wire `PathGenerator` into `MoveSplineInit::MoveTo(generatePath=true, ...)` — see [`movement-spline.md`](movement-spline.md) #MOVE-SPL.14. (M)
 - [ ] **#MOVE-PATH.24** Snapshot tests: known map + known start/end → expected path waypoints (record from C++ trinity, replay in Rust). (H)
 - [ ] **#MOVE-PATH.25** Stress test: 1000 chase paths/sec on Stormwind tile; verify no leaks of `dtNavMeshQuery`. (M)
@@ -297,18 +298,18 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] Test: `MMapManager::load_map(0)` (Eastern Kingdoms) succeeds and exposes a non-null `dtNavMesh`.
 - [ ] Test: `MMapManager` loads tile `(map=0, tx=32, ty=32)` (centre of EK) on demand without preloading.
 - [ ] Test: `MMapManager::load_map_instance(map_id=0, instance=0)` allocates a fresh `dtNavMeshQuery`; second call reuses it.
-- [ ] Test: `PathGenerator::CalculatePath` with mmap disabled / map not in allowlist → `PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH` + path = `[start, end]`.
+- [x] Test: `PathGenerator::CalculatePath` with mmap disabled / map not in allowlist → represented no-navmesh fallback `PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH` + path = `[start, end]` as C++ `CalculatePath` sets after `BuildShortcut`.
 - [ ] Test: `PathGenerator::CalculatePath` with mmaps loaded → `PATHFIND_NORMAL` + path length ≥ Euclidean distance.
 - [ ] Test: `PathGenerator::CalculatePath` across two adjacent tiles → smooth path crosses tile boundary without duplicate points.
 - [ ] Test: `PathGenerator::CalculatePath` with start far from any poly → `PATHFIND_FARFROMPOLY_START`.
 - [ ] Test: `PathGenerator::CalculatePath` with end on inaccessible cliff → `PATHFIND_INCOMPLETE` (path leads to closest reachable point).
-- [ ] Test: `PathGenerator::ShortenPathUntilDist(target=last_point, dist=3.0)` removes segments until `|last - target| ≈ 3.0`.
+- [x] Test: `PathGenerator::ShortenPathUntilDist(target=last_point, dist=3.0)` removes segments until `|last - target| ≈ 3.0`, with LOS represented by callback.
 - [ ] Test: `PathGenerator::IsInvalidDestinationZ` rejects Z values 100+ yards above the polygon's vertical bound.
 - [ ] Test: `NormalizePath` clamps each Z within 5 yards of `Map::GetHeight(x, y)`.
 - [ ] Test: `CreateFilter` for a swimming creature includes `WATER` and excludes `MAGMA|SLIME`.
 - [ ] Test: `CreateFilter` for a flying creature includes `EMPTY` and skips ground checks.
 - [ ] Test: `dtQueryFilter` area cost for `MAGMA` ≥ 50.0 (creatures avoid lava).
-- [ ] Test: Path length limit `SetPathLengthLimit(50.0)` produces ≤ 13 points (50 / 4.0 = 12.5).
+- [x] Test: Path length limit `SetPathLengthLimit(50.0)` produces 12 points after C++ integer truncation (`uint32(50 / 4.0)`).
 - [ ] Test: Far-tile path (`tile A` → `tile B` neither loaded) triggers on-demand load of both tiles.
 - [ ] Test: Concurrent calls from two map instances each use their own `dtNavMeshQuery` (`!Send + !Sync` boundaries hold).
 - [ ] Test: Drop semantics: dropping `DetourNavMesh` calls `dtFreeNavMesh`; dropping `DetourNavMeshQuery` calls `dtFreeNavMeshQuery` (LeakSanitizer clean).
