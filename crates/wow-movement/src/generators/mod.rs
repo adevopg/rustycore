@@ -2,6 +2,7 @@ pub mod chase;
 pub mod confused;
 pub mod distract;
 pub mod fleeing;
+pub mod flight;
 pub mod follow;
 pub mod formation;
 pub mod generic;
@@ -41,6 +42,17 @@ pub use fleeing::{
     MIN_QUIET_DISTANCE_LIKE_CPP, TimedFleeingFinalizeAction, TimedFleeingInform,
     TimedFleeingMovementGenerator, UNIT_FLAG_FLEEING_LIKE_CPP, UNIT_STATE_FLEEING_LIKE_CPP,
     UNIT_STATE_FLEEING_MOVE_LIKE_CPP, compute_flee_destination_like_cpp,
+};
+pub use flight::{
+    FLIGHT_SKIP_SPLINE_POINT_DISTANCE_SQ_LIKE_CPP, FLIGHT_TIMEDIFF_NEXT_WP_MS_LIKE_CPP,
+    FLIGHT_TRAVEL_UPDATE_MS_LIKE_CPP, FlightEndGridInfo, FlightFinalizeAction,
+    FlightFinalizeContext, FlightLaunchPlan, FlightMovementAction, FlightPathEvent,
+    FlightPathMovementGenerator, FlightPathSwitchAction, FlightUpdateAction,
+    PLAYER_FLAGS_TAXI_BENCHMARK_LIKE_CPP, PLAYER_FLIGHT_SPEED_LIKE_CPP,
+    TAXI_PATH_NODE_FLAG_STOP_LIKE_CPP, TAXI_PATH_NODE_FLAG_TELEPORT_LIKE_CPP, TaxiNodeChangeInfo,
+    TaxiPathNode, TaxiPathSegment, UNIT_FLAG_ON_TAXI_LIKE_CPP,
+    UNIT_FLAG_REMOVE_CLIENT_CONTROL_LIKE_CPP, UNIT_STATE_IN_FLIGHT_LIKE_CPP,
+    is_node_included_in_shortened_path_like_cpp,
 };
 pub use follow::{
     AbstractFollower, AbstractFollowerEvent, FOLLOW_CHECK_INTERVAL_MS_LIKE_CPP,
