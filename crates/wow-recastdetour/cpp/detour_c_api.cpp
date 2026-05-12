@@ -179,6 +179,25 @@ extern "C"
             options);
     }
 
+    dtStatus rustycore_dt_nav_mesh_query_closest_point_on_poly(
+        dtNavMeshQuery const* query,
+        uint64_t poly_ref,
+        float const* position,
+        float* closest,
+        bool* position_over_poly)
+    {
+        return query->closestPointOnPoly((dtPolyRef)poly_ref, position, closest, position_over_poly);
+    }
+
+    dtStatus rustycore_dt_nav_mesh_query_closest_point_on_poly_boundary(
+        dtNavMeshQuery const* query,
+        uint64_t poly_ref,
+        float const* position,
+        float* closest)
+    {
+        return query->closestPointOnPolyBoundary((dtPolyRef)poly_ref, position, closest);
+    }
+
     void rustycore_dt_free(void* ptr)
     {
         dtFree(ptr);

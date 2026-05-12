@@ -222,6 +222,19 @@ unsafe extern "C" {
         max_straight_path: i32,
         options: i32,
     ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_query_closest_point_on_poly(
+        query: *const RawDetourNavMeshQuery,
+        poly_ref: DetourPolyRef,
+        position: *const f32,
+        closest: *mut f32,
+        position_over_poly: *mut bool,
+    ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_query_closest_point_on_poly_boundary(
+        query: *const RawDetourNavMeshQuery,
+        poly_ref: DetourPolyRef,
+        position: *const f32,
+        closest: *mut f32,
+    ) -> DetourStatus;
     fn rustycore_dt_free(ptr: *mut std::ffi::c_void);
     fn rustycore_dt_create_square_tile_data(
         tile_x: i32,
@@ -445,6 +458,50 @@ impl<'mesh> DetourNavMeshQuery<'mesh> {
             })
             .collect())
     }
+
+    pub fn closest_point_on_poly(
+        &self,
+        poly_ref: DetourPolyRef,
+        position: [f32; 3],
+    ) -> Result<([f32; 3], bool), DetourNavMeshQueryError> {
+        let mut closest = [0.0; 3];
+        let mut position_over_poly = false;
+        let status = unsafe {
+            rustycore_dt_nav_mesh_query_closest_point_on_poly(
+                self.raw.as_ptr(),
+                poly_ref,
+                position.as_ptr(),
+                closest.as_mut_ptr(),
+                &mut position_over_poly,
+            )
+        };
+        if detour_status_failed(status) {
+            return Err(DetourNavMeshQueryError::ClosestPointOnPolyFailed { status });
+        }
+
+        Ok((closest, position_over_poly))
+    }
+
+    pub fn closest_point_on_poly_boundary(
+        &self,
+        poly_ref: DetourPolyRef,
+        position: [f32; 3],
+    ) -> Result<[f32; 3], DetourNavMeshQueryError> {
+        let mut closest = [0.0; 3];
+        let status = unsafe {
+            rustycore_dt_nav_mesh_query_closest_point_on_poly_boundary(
+                self.raw.as_ptr(),
+                poly_ref,
+                position.as_ptr(),
+                closest.as_mut_ptr(),
+            )
+        };
+        if detour_status_failed(status) {
+            return Err(DetourNavMeshQueryError::ClosestPointOnPolyBoundaryFailed { status });
+        }
+
+        Ok(closest)
+    }
 }
 
 impl Drop for DetourNavMeshQuery<'_> {
@@ -547,6 +604,10 @@ pub enum DetourNavMeshQueryError {
         "Detour findStraightPath output buffer is too large for C++ int size: {max_straight_path}"
     )]
     StraightPathBufferTooLarge { max_straight_path: usize },
+    #[error("Detour closestPointOnPoly failed with status 0x{status:08x}")]
+    ClosestPointOnPolyFailed { status: DetourStatus },
+    #[error("Detour closestPointOnPolyBoundary failed with status 0x{status:08x}")]
+    ClosestPointOnPolyBoundaryFailed { status: DetourStatus },
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1231,6 +1292,50 @@ mod tests {
             Err(DetourNavMeshQueryError::FindStraightPathFailed {
                 status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
             })
+        );
+    }
+
+    #[test]
+    fn detour_query_closest_point_helpers_match_cpp_shape() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        let tile = generated_square_tile_blob(0, 0);
+        mesh.add_tile(&tile).unwrap();
+
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+        let nearest = query
+            .find_nearest_poly([0.5, 0.0, 0.5], [3.0, 5.0, 3.0], &filter)
+            .unwrap();
+
+        let (closest, over_poly) = query
+            .closest_point_on_poly(nearest.poly_ref, [0.5, 2.0, 0.5])
+            .unwrap();
+        assert_eq!(closest, [0.5, 0.0, 0.5]);
+        assert!(over_poly);
+
+        let boundary = query
+            .closest_point_on_poly_boundary(nearest.poly_ref, [2.0, 2.0, 0.5])
+            .unwrap();
+        assert_eq!(boundary, [1.0, 0.0, 0.5]);
+
+        assert_eq!(
+            query.closest_point_on_poly(0, [0.5, 0.0, 0.5]),
+            Err(DetourNavMeshQueryError::ClosestPointOnPolyFailed {
+                status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
+            })
+        );
+        assert_eq!(
+            query.closest_point_on_poly_boundary(0, [0.5, 0.0, 0.5]),
+            Err(DetourNavMeshQueryError::ClosestPointOnPolyBoundaryFailed {
+                status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
+            },)
         );
     }
 
