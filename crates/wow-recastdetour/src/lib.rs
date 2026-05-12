@@ -185,6 +185,17 @@ unsafe extern "C" {
         nearest_ref: *mut DetourPolyRef,
         nearest_point: *mut f32,
     ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_query_find_path(
+        query: *const RawDetourNavMeshQuery,
+        start_ref: DetourPolyRef,
+        end_ref: DetourPolyRef,
+        start_pos: *const f32,
+        end_pos: *const f32,
+        filter: *const RawDetourQueryFilter,
+        path: *mut DetourPolyRef,
+        path_count: *mut i32,
+        max_path: i32,
+    ) -> DetourStatus;
     fn rustycore_dt_free(ptr: *mut std::ffi::c_void);
     fn rustycore_dt_create_square_tile_data(
         tile_x: i32,
@@ -322,6 +333,42 @@ impl<'mesh> DetourNavMeshQuery<'mesh> {
             nearest_point,
         })
     }
+
+    pub fn find_path(
+        &self,
+        start_ref: DetourPolyRef,
+        end_ref: DetourPolyRef,
+        start_pos: [f32; 3],
+        end_pos: [f32; 3],
+        filter: &DetourQueryFilter,
+        max_path: usize,
+    ) -> Result<Vec<DetourPolyRef>, DetourNavMeshQueryError> {
+        if max_path > i32::MAX as usize {
+            return Err(DetourNavMeshQueryError::PathBufferTooLarge { max_path });
+        }
+
+        let mut path = vec![0; max_path];
+        let mut path_count = 0;
+        let status = unsafe {
+            rustycore_dt_nav_mesh_query_find_path(
+                self.raw.as_ptr(),
+                start_ref,
+                end_ref,
+                start_pos.as_ptr(),
+                end_pos.as_ptr(),
+                filter.as_raw(),
+                path.as_mut_ptr(),
+                &mut path_count,
+                max_path as i32,
+            )
+        };
+        if detour_status_failed(status) {
+            return Err(DetourNavMeshQueryError::FindPathFailed { status });
+        }
+
+        path.truncate(path_count.max(0) as usize);
+        Ok(path)
+    }
 }
 
 impl Drop for DetourNavMeshQuery<'_> {
@@ -414,6 +461,10 @@ pub enum DetourNavMeshQueryError {
     InitFailed { status: DetourStatus },
     #[error("Detour findNearestPoly failed with status 0x{status:08x}")]
     FindNearestPolyFailed { status: DetourStatus },
+    #[error("Detour findPath failed with status 0x{status:08x}")]
+    FindPathFailed { status: DetourStatus },
+    #[error("Detour findPath output buffer is too large for C++ int size: {max_path}")]
+    PathBufferTooLarge { max_path: usize },
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1005,6 +1056,51 @@ mod tests {
         assert!((nearest.nearest_point[0] - 0.5).abs() < f32::EPSILON);
         assert!((nearest.nearest_point[1] - 0.0).abs() < f32::EPSILON);
         assert!((nearest.nearest_point[2] - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn detour_query_find_path_returns_single_poly_for_same_start_end_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        let tile = generated_square_tile_blob(0, 0);
+        mesh.add_tile(&tile).unwrap();
+
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+        let nearest = query
+            .find_nearest_poly([0.5, 0.0, 0.5], [3.0, 5.0, 3.0], &filter)
+            .unwrap();
+        let path = query
+            .find_path(
+                nearest.poly_ref,
+                nearest.poly_ref,
+                [0.25, 0.0, 0.25],
+                [0.75, 0.0, 0.75],
+                &filter,
+                4,
+            )
+            .unwrap();
+
+        assert_eq!(path, vec![nearest.poly_ref]);
+        assert_eq!(
+            query.find_path(
+                nearest.poly_ref,
+                nearest.poly_ref,
+                [0.25, 0.0, 0.25],
+                [0.75, 0.0, 0.75],
+                &filter,
+                0,
+            ),
+            Err(DetourNavMeshQueryError::FindPathFailed {
+                status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
+            })
+        );
     }
 
     #[test]

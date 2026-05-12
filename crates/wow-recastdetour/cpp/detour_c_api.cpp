@@ -131,6 +131,28 @@ extern "C"
         return status;
     }
 
+    dtStatus rustycore_dt_nav_mesh_query_find_path(
+        dtNavMeshQuery const* query,
+        uint64_t start_ref,
+        uint64_t end_ref,
+        float const* start_pos,
+        float const* end_pos,
+        dtQueryFilter const* filter,
+        uint64_t* path,
+        int* path_count,
+        int max_path)
+    {
+        return query->findPath(
+            (dtPolyRef)start_ref,
+            (dtPolyRef)end_ref,
+            start_pos,
+            end_pos,
+            filter,
+            (dtPolyRef*)path,
+            path_count,
+            max_path);
+    }
+
     void rustycore_dt_free(void* ptr)
     {
         dtFree(ptr);
