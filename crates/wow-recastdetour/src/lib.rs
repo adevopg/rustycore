@@ -655,6 +655,41 @@ impl Drop for DetourNavMeshQuery<'_> {
 }
 
 #[derive(Debug)]
+pub struct MMapNavMeshQuery {
+    raw: NonNull<RawDetourNavMeshQuery>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl MMapNavMeshQuery {
+    pub fn new(mesh: &DetourNavMesh, max_nodes: i32) -> Result<Self, DetourNavMeshQueryError> {
+        let raw = NonNull::new(unsafe { rustycore_dt_alloc_nav_mesh_query() })
+            .ok_or(DetourNavMeshQueryError::AllocationFailed)?;
+        let status =
+            unsafe { rustycore_dt_nav_mesh_query_init(raw.as_ptr(), mesh.as_raw(), max_nodes) };
+        if detour_status_failed(status) {
+            unsafe { rustycore_dt_free_nav_mesh_query(raw.as_ptr()) };
+            return Err(DetourNavMeshQueryError::InitFailed { status });
+        }
+
+        Ok(Self {
+            raw,
+            _not_send_or_sync: PhantomData,
+        })
+    }
+
+    #[must_use]
+    pub const fn as_raw(&self) -> *mut RawDetourNavMeshQuery {
+        self.raw.as_ptr()
+    }
+}
+
+impl Drop for MMapNavMeshQuery {
+    fn drop(&mut self) {
+        unsafe { rustycore_dt_free_nav_mesh_query(self.raw.as_ptr()) };
+    }
+}
+
+#[derive(Debug)]
 pub struct DetourQueryFilter {
     raw: NonNull<RawDetourQueryFilter>,
     _not_send_or_sync: PhantomData<Rc<()>>,
@@ -826,19 +861,70 @@ pub enum DetourNavMeshParamsError {
     TooShort { actual: usize, expected: usize },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct MMapData {
+    nav_mesh_queries: HashMap<(u32, u32), MMapNavMeshQuery>,
+    nav_mesh: DetourNavMesh,
     pub nav_mesh_params: DetourNavMeshParams,
     pub loaded_tile_refs: HashMap<u32, u64>,
 }
 
 impl MMapData {
-    #[must_use]
-    pub fn new(nav_mesh_params: DetourNavMeshParams) -> Self {
-        Self {
+    pub fn new(nav_mesh_params: DetourNavMeshParams) -> Result<Self, DetourNavMeshError> {
+        let nav_mesh = DetourNavMesh::new(&nav_mesh_params)?;
+
+        Ok(Self {
+            nav_mesh_queries: HashMap::new(),
+            nav_mesh,
             nav_mesh_params,
             loaded_tile_refs: HashMap::new(),
+        })
+    }
+
+    #[must_use]
+    pub const fn nav_mesh(&self) -> &DetourNavMesh {
+        &self.nav_mesh
+    }
+
+    #[must_use]
+    pub fn nav_mesh_query_count(&self) -> usize {
+        self.nav_mesh_queries.len()
+    }
+
+    #[must_use]
+    pub fn has_nav_mesh_query(&self, instance_map_id: u32, instance_id: u32) -> bool {
+        self.nav_mesh_queries
+            .contains_key(&(instance_map_id, instance_id))
+    }
+
+    #[must_use]
+    pub fn get_nav_mesh_query(
+        &self,
+        instance_map_id: u32,
+        instance_id: u32,
+    ) -> Option<&MMapNavMeshQuery> {
+        self.nav_mesh_queries.get(&(instance_map_id, instance_id))
+    }
+
+    pub fn load_nav_mesh_query(
+        &mut self,
+        instance_map_id: u32,
+        instance_id: u32,
+    ) -> Result<bool, DetourNavMeshQueryError> {
+        let key = (instance_map_id, instance_id);
+        if self.nav_mesh_queries.contains_key(&key) {
+            return Ok(true);
         }
+
+        let query = MMapNavMeshQuery::new(&self.nav_mesh, 1024)?;
+        self.nav_mesh_queries.insert(key, query);
+        Ok(true)
+    }
+
+    pub fn unload_nav_mesh_query(&mut self, instance_map_id: u32, instance_id: u32) -> bool {
+        self.nav_mesh_queries
+            .remove(&(instance_map_id, instance_id))
+            .is_some()
     }
 }
 
@@ -848,7 +934,7 @@ pub struct ThreadUnsafeMapData {
     pub child_map_ids: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct MMapManager {
     loaded_mmaps: HashMap<u32, Option<MMapData>>,
     parent_map_data: HashMap<u32, u32>,
@@ -915,8 +1001,10 @@ impl MMapManager {
         let nav_mesh_params =
             DetourNavMeshParams::parse(&bytes).map_err(MMapManagerError::BadMapParams)?;
 
-        self.loaded_mmaps
-            .insert(map_id, Some(MMapData::new(nav_mesh_params)));
+        self.loaded_mmaps.insert(
+            map_id,
+            Some(MMapData::new(nav_mesh_params).map_err(MMapManagerError::NavMesh)?),
+        );
 
         Ok(true)
     }
@@ -939,6 +1027,65 @@ impl MMapManager {
             .loaded_tiles
             .saturating_sub(loaded.loaded_tile_refs.len() as u32);
         true
+    }
+
+    pub fn load_map_instance(
+        &mut self,
+        base_path: impl AsRef<Path>,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+    ) -> Result<bool, MMapManagerError> {
+        self.load_map_data(base_path, mesh_map_id)?;
+
+        let Some(data) = self
+            .loaded_mmaps
+            .get_mut(&mesh_map_id)
+            .and_then(Option::as_mut)
+        else {
+            return Ok(false);
+        };
+
+        data.load_nav_mesh_query(instance_map_id, instance_id)
+            .map_err(MMapManagerError::NavMeshQuery)
+    }
+
+    pub fn unload_map_instance(
+        &mut self,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+    ) -> bool {
+        let Some(data) = self
+            .loaded_mmaps
+            .get_mut(&mesh_map_id)
+            .and_then(Option::as_mut)
+        else {
+            return false;
+        };
+
+        data.unload_nav_mesh_query(instance_map_id, instance_id)
+    }
+
+    #[must_use]
+    pub fn get_nav_mesh(&self, map_id: u32) -> Option<&DetourNavMesh> {
+        self.loaded_mmaps
+            .get(&map_id)
+            .and_then(Option::as_ref)
+            .map(MMapData::nav_mesh)
+    }
+
+    #[must_use]
+    pub fn get_nav_mesh_query(
+        &self,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+    ) -> Option<&MMapNavMeshQuery> {
+        self.loaded_mmaps
+            .get(&mesh_map_id)
+            .and_then(Option::as_ref)
+            .and_then(|data| data.get_nav_mesh_query(instance_map_id, instance_id))
     }
 
     #[must_use]
@@ -978,6 +1125,10 @@ pub enum MMapManagerError {
     ReadMapFile { path: PathBuf, source: io::Error },
     #[error("bad mmap params: {0}")]
     BadMapParams(DetourNavMeshParamsError),
+    #[error("failed to initialize Detour navmesh: {0}")]
+    NavMesh(DetourNavMeshError),
+    #[error("failed to initialize Detour navmesh query: {0}")]
+    NavMeshQuery(DetourNavMeshQueryError),
 }
 
 impl MmapTileHeader {
@@ -1779,11 +1930,61 @@ mod tests {
         assert_eq!(manager.get_loaded_maps_count(), 1);
         assert_eq!(manager.get_loaded_tiles_count(), 0);
         assert_eq!(manager.get_nav_mesh_params(1), Some(params));
-        assert_eq!(manager.get_mmap_data(1).unwrap().loaded_tile_refs.len(), 0);
+        let data = manager.get_mmap_data(1).unwrap();
+        assert_eq!(data.loaded_tile_refs.len(), 0);
+        assert_eq!(data.nav_mesh().max_tiles(), params.max_tiles as u32);
+        assert!(manager.get_nav_mesh(1).is_some());
         assert!(manager.unload_map(1));
         assert!(!manager.unload_map(1));
         assert_eq!(manager.get_loaded_maps_count(), 1);
         assert_eq!(manager.get_nav_mesh_params(1), None);
+        assert!(manager.get_nav_mesh(1).is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mmap_manager_loads_and_reuses_instance_queries_like_cpp() {
+        let root = unique_test_dir("mmap-manager-instance-query");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 128,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let mut manager = MMapManager::new();
+        assert!(matches!(
+            manager.load_map_instance(&root, 1, 1, 42),
+            Ok(true)
+        ));
+        let data = manager.get_mmap_data(1).unwrap();
+        assert_eq!(data.nav_mesh_query_count(), 1);
+        assert!(data.has_nav_mesh_query(1, 42));
+        assert!(manager.get_nav_mesh_query(1, 1, 42).is_some());
+
+        assert!(matches!(
+            manager.load_map_instance(&root, 1, 1, 42),
+            Ok(true)
+        ));
+        assert_eq!(manager.get_mmap_data(1).unwrap().nav_mesh_query_count(), 1);
+
+        assert!(matches!(
+            manager.load_map_instance(&root, 1, 1, 43),
+            Ok(true)
+        ));
+        assert_eq!(manager.get_mmap_data(1).unwrap().nav_mesh_query_count(), 2);
+        assert!(manager.unload_map_instance(1, 1, 42));
+        assert!(!manager.unload_map_instance(1, 1, 42));
+        assert!(!manager.unload_map_instance(999, 1, 43));
+        assert_eq!(manager.get_mmap_data(1).unwrap().nav_mesh_query_count(), 1);
+
+        assert!(manager.unload_map(1));
+        assert!(manager.get_nav_mesh_query(1, 1, 43).is_none());
 
         std::fs::remove_dir_all(root).unwrap();
     }
