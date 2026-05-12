@@ -36,6 +36,7 @@ Current Rust status:
 - `#A06.8h.3e.18` ports runtime `RotateMovementGenerator` into `wow-movement`: exact `RotateDirection` ids, constructor/lifecycle flags, `UNIT_STATE_ROTATING`, C++ facing-angle math, duration/inform flag behavior, transport-path-transform output, and represented rotate `MovementInform`.
 - `#A06.8h.3e.19` ports runtime `DistractMovementGenerator` and `AssistanceDistractMovementGenerator` into `wow-movement`: exact priorities, `UNIT_STATE_DISTRACTED`, stand-up/facing-spline initialization, strict `diff > timer` completion, home-orientation return, and assistance return-to-aggressive action.
 - `#A06.8h.3e.20` adds the first runtime `MotionMaster` in `wow-movement`: default generator + active generators ordered by priority, delayed add/remove/clear/filter actions, top initialize/reset/update/pop flow, and represented `BaseUnitState` ref counting.
+- `#A06.8h.3e.21` ports runtime `GenericMovementGenerator` into `wow-movement`: executable `FnOnce(&mut MoveSplineInit)` launch against `MoveSpline`, C++ duration/cyclic/finalized update rules, no-resume deactivation behavior, and represented arrival spell + movement inform output.
 - Still missing: generalized executable generator behavior against a real `Unit`, pathgen-backed destinations, real SmartAI/script dispatch for `MovementInform`, real `CallAssistance` map/AI effects, follow/chase/flee/random/waypoint/taxi/spline-chain runtime logic, and full runtime `MotionMaster` ownership outside the represented subsystem.
 
 ---
@@ -306,12 +307,12 @@ Generators do not own packet writers directly; every motion is serialized throug
 <!-- REFINE.021:END rust-target-coverage -->
 
 **Files in `/home/server/rustycore`:**
-- `crates/wow-movement/` exists with `defines.rs`, `generator.rs`, `motion_master.rs`, `spline.rs`, and `generators/{idle,rotate,distract}.rs`.
+- `crates/wow-movement/` exists with `defines.rs`, `generator.rs`, `motion_master.rs`, `spline.rs`, and `generators/{idle,rotate,distract,generic}.rs`.
 - `wow-entities::MotionSubsystem` carries a represented `MotionMaster` state/update bridge for currently ported slices.
 - There is still no owner-backed runtime `MotionMaster` slot stack with real `Unit` context and full per-tick generator update for every concrete generator.
 
 **What's implemented:**
-- Runtime `MovementGeneratorType`, slot/mode/priority/flags, `MovementGenerator` trait, `MotionMasterFlags`, delayed action ids/queue, initial `MotionMaster` stack/update/filter core, `ChaseRange`, `ChaseAngle`, `RotateDirection`, jump/charge parameter shapes, `IdleMovementGenerator`, `RotateMovementGenerator`, `DistractMovementGenerator`, and `AssistanceDistractMovementGenerator`.
+- Runtime `MovementGeneratorType`, slot/mode/priority/flags, `MovementGenerator` trait, `MotionMasterFlags`, delayed action ids/queue, initial `MotionMaster` stack/update/filter core, `ChaseRange`, `ChaseAngle`, `RotateDirection`, jump/charge parameter shapes, `IdleMovementGenerator`, `RotateMovementGenerator`, `DistractMovementGenerator`, `AssistanceDistractMovementGenerator`, and `GenericMovementGenerator`.
 - Represented bridges in `wow-entities`/`wow-world` for Point/Generic/Idle/Rotate/Distract slices, direct creature point movement, facing-only rotate/distract splines, and canonical represented AI movement inform recording.
 - A legacy `wow_ai::wander::pick_wander_destination` linear-tween remains; it is **not** a generator and must be replaced by real generator pushes.
 - `crates/wow-world/src/handlers/movement.rs` parses client `CMSG_MOVE_*` opcodes and broadcasts movement updates, but it still does not drive the full owner-backed creature `MotionMaster`.
@@ -552,7 +553,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-GEN.19** `FormationMovementGenerator` + `creature_formations` loader. (H)
 - [ ] **#MOVE-GEN.20** `FlightPathMovementGenerator` + `TaxiPath.dbc`/`TaxiPathNode.dbc` integration + `SMSG_FLIGHT_SPLINE_SYNC`. (XL)
 - [ ] **#MOVE-GEN.21** `SplineChainMovementGenerator` + `script_spline_chain_*` loader + `SplineChainResumeInfo`. (H)
-- [ ] **#MOVE-GEN.22** `GenericMovementGenerator` (lambda capture for one-shot custom splines). Represented state/lifecycle is ported: constructor flags/base state, duration/cyclic update, deactivation/finalization and inform payload. Remaining work: executable `FnOnce(MoveSplineInit)` launch against a real `Unit`, arrival `CastSpell`, and `CreatureAI::MovementInform`. (M)
+- [x] **#MOVE-GEN.22** `GenericMovementGenerator` (lambda capture for one-shot custom splines). Runtime struct exists in `wow-movement`: captures `FnOnce(&mut MoveSplineInit)`, launches against `MoveSpline`, stores duration, preserves cyclic/finalized update rules, no-resume deactivation behavior and represented arrival spell/inform output. Real `Unit` owner lookup for `CastSpell` and real `CreatureAI::MovementInform` dispatch remain tracked by Spell/AI/Unit integration tasks, not by the generator shape. (M)
 - [ ] **#MOVE-GEN.23** `MotionMaster::MoveJump` / `MoveCharge` / `MoveKnockbackFrom` / `MoveFall` (parabolic helpers — depend on movement-spline). Pure helper slice is done: Rust has C++-matched jump max-height and `CalculateJumpSpeeds` math. Represented wrapper slice is also done: `LaunchMoveSpline`, `MoveJump`, `MoveJumpWithGravity`, `MoveKnockbackFrom` and `MoveFall` create/guard generator state like C++, and `PointMovementGenerator` now covers charge/prepath lifecycle/inform mapping. Remaining work is executable `MoveSplineInit`, real Unit speed selection, `MoveJumpTo`, spell effect extra data, pathgen charge/knockback raycast and fall height/hover lookup. (H)
 - [ ] **#MOVE-GEN.24** Wire `Unit::MovementInform(type, id)` AI callback (cross-link with [`ai-base.md`](ai-base.md)). (M)
 - [ ] **#MOVE-GEN.25** Wire per-Unit `MotionMaster::update(diff)` into `MapManager` creature tick. (H)
@@ -706,7 +707,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - FollowMovementGenerator: **absent** (215 lines C++); `AbstractFollower` helper missing.
 - FormationMovementGenerator: **absent** (222 lines C++); `creature_formations` table not loaded.
 - SplineChainMovementGenerator: **absent** (238 lines C++); `script_spline_chain_*` tables not loaded.
-- GenericMovementGenerator: represented constructor/lifecycle/inform exists; executable `FnOnce(MoveSplineInit)` launch and arrival `CastSpell` are pending.
+- GenericMovementGenerator: runtime struct exists with executable `FnOnce(&mut MoveSplineInit)` launch against `MoveSpline`, duration/cyclic/finalized update rules and represented arrival spell/inform output. Real `CastSpell` and `CreatureAI::MovementInform` dispatch are pending in Spell/AI/Unit integration.
 
 **Trait + enum surface.** The first boxed runtime `MovementGenerator` trait and runtime enum/flag surfaces now exist in `wow-movement`. Represented enum/flag surfaces still exist in `wow-entities`; pure `RotateDirection`, `ChaseRange`, `ChaseAngle`, `JumpArrivalCastArgs` and `JumpChargeParams` exist in `wow-movement`. Remaining structural gap: add the rest of the concrete runtime generator modules and move represented behavior behind a real runtime `MotionMaster` API without duplicating or regressing the tested bridge behavior.
 

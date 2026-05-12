@@ -15,8 +15,10 @@ pub use generator::{
 pub use generators::{
     AssistanceDistractFinalizeAction, AssistanceDistractMovementGenerator, DistractFacingSpline,
     DistractFinalizeAction, DistractInitializeAction, DistractMovementGenerator,
-    IdleMovementGenerator, RotateFacingSpline, RotateMovementGenerator, RotateMovementInform,
-    RotateMovementUpdate, UNIT_STATE_DISTRACTED_LIKE_CPP, UNIT_STATE_ROTATING_LIKE_CPP,
+    GenericArrivalSpell, GenericMovementFinalize, GenericMovementGenerator, GenericMovementInform,
+    GenericSplineInitializer, IdleMovementGenerator, RotateFacingSpline, RotateMovementGenerator,
+    RotateMovementInform, RotateMovementUpdate, UNIT_STATE_DISTRACTED_LIKE_CPP,
+    UNIT_STATE_ROAMING_LIKE_CPP, UNIT_STATE_ROTATING_LIKE_CPP,
 };
 pub use motion_master::{
     DelayedAction, DelayedActionQueue, MotionMaster, MotionMasterDelayedActionType,
