@@ -926,6 +926,30 @@ impl MMapData {
             .remove(&(instance_map_id, instance_id))
             .is_some()
     }
+
+    pub fn load_tile(
+        &mut self,
+        packed_grid_pos: u32,
+        tile: &MmapTileBlob,
+    ) -> Result<bool, DetourTileError> {
+        if self.loaded_tile_refs.contains_key(&packed_grid_pos) {
+            return Ok(false);
+        }
+
+        let tile_ref = self.nav_mesh.add_tile(tile)?;
+        self.loaded_tile_refs.insert(packed_grid_pos, tile_ref);
+        Ok(true)
+    }
+
+    pub fn unload_tile(&mut self, packed_grid_pos: u32) -> Result<bool, DetourTileError> {
+        let Some(tile_ref) = self.loaded_tile_refs.get(&packed_grid_pos).copied() else {
+            return Ok(false);
+        };
+
+        self.nav_mesh.remove_tile(tile_ref)?;
+        self.loaded_tile_refs.remove(&packed_grid_pos);
+        Ok(true)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1029,6 +1053,90 @@ impl MMapManager {
         true
     }
 
+    pub fn load_map(
+        &mut self,
+        base_path: impl AsRef<Path>,
+        map_id: u32,
+        x: i32,
+        y: i32,
+    ) -> Result<bool, MMapManagerError> {
+        let base_path = base_path.as_ref();
+        self.load_map_data(base_path, map_id)?;
+
+        let packed_grid_pos = pack_tile_id_like_cpp(x, y);
+        if self
+            .loaded_mmaps
+            .get(&map_id)
+            .and_then(Option::as_ref)
+            .is_some_and(|data| data.loaded_tile_refs.contains_key(&packed_grid_pos))
+        {
+            return Ok(false);
+        }
+
+        let tile = self.read_tile_blob_with_parent_fallback(base_path, map_id, x, y)?;
+        let Some(data) = self.loaded_mmaps.get_mut(&map_id).and_then(Option::as_mut) else {
+            return Ok(false);
+        };
+
+        if data
+            .load_tile(packed_grid_pos, &tile)
+            .map_err(MMapManagerError::Tile)?
+        {
+            self.loaded_tiles = self.loaded_tiles.saturating_add(1);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub fn unload_map_tile(
+        &mut self,
+        map_id: u32,
+        x: i32,
+        y: i32,
+    ) -> Result<bool, MMapManagerError> {
+        let Some(data) = self.loaded_mmaps.get_mut(&map_id).and_then(Option::as_mut) else {
+            return Ok(false);
+        };
+
+        if data
+            .unload_tile(pack_tile_id_like_cpp(x, y))
+            .map_err(MMapManagerError::Tile)?
+        {
+            self.loaded_tiles = self.loaded_tiles.saturating_sub(1);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn read_tile_blob_with_parent_fallback(
+        &self,
+        base_path: &Path,
+        map_id: u32,
+        x: i32,
+        y: i32,
+    ) -> Result<MmapTileBlob, MMapManagerError> {
+        let path = tile_file_path_like_cpp(base_path, map_id, x, y);
+        match read_mmap_tile_blob_file(&path, DT_NAVMESH_VERSION_LIKE_CPP) {
+            Ok(tile) => Ok(tile),
+            Err(MmapTileFileError::ReadTileFile { .. }) => {
+                let Some(parent_map_id) = self.parent_map_data.get(&map_id).copied() else {
+                    return Err(MMapManagerError::ReadTileFile { path });
+                };
+
+                let parent_path = tile_file_path_like_cpp(base_path, parent_map_id, x, y);
+                read_mmap_tile_blob_file(&parent_path, DT_NAVMESH_VERSION_LIKE_CPP).map_err(
+                    |source| MMapManagerError::TileFile {
+                        path: parent_path,
+                        source,
+                    },
+                )
+            }
+            Err(source) => Err(MMapManagerError::TileFile { path, source }),
+        }
+    }
+
     pub fn load_map_instance(
         &mut self,
         base_path: impl AsRef<Path>,
@@ -1129,6 +1237,15 @@ pub enum MMapManagerError {
     NavMesh(DetourNavMeshError),
     #[error("failed to initialize Detour navmesh query: {0}")]
     NavMeshQuery(DetourNavMeshQueryError),
+    #[error("failed to read mmap tile file {path:?}")]
+    ReadTileFile { path: PathBuf },
+    #[error("bad mmap tile file {path:?}: {source}")]
+    TileFile {
+        path: PathBuf,
+        source: MmapTileFileError,
+    },
+    #[error("failed to load Detour tile: {0}")]
+    Tile(DetourTileError),
 }
 
 impl MmapTileHeader {
@@ -1990,6 +2107,102 @@ mod tests {
     }
 
     #[test]
+    fn mmap_manager_loads_and_unloads_tiles_like_cpp() {
+        let root = unique_test_dir("mmap-manager-loads-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 128,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+        let tile = generated_square_tile_blob(0, 0);
+        write_mmap_tile_blob(&tile_file_path_like_cpp(&root, 1, 0, 0), &tile);
+
+        let mut manager = MMapManager::new();
+        assert!(matches!(manager.load_map(&root, 1, 0, 0), Ok(true)));
+        assert!(matches!(manager.load_map(&root, 1, 0, 0), Ok(false)));
+        assert_eq!(manager.get_loaded_tiles_count(), 1);
+        assert!(
+            manager
+                .get_mmap_data(1)
+                .unwrap()
+                .loaded_tile_refs
+                .contains_key(&pack_tile_id_like_cpp(0, 0))
+        );
+
+        assert!(matches!(manager.unload_map_tile(1, 0, 0), Ok(true)));
+        assert!(matches!(manager.unload_map_tile(1, 0, 0), Ok(false)));
+        assert_eq!(manager.get_loaded_tiles_count(), 0);
+        assert!(
+            manager
+                .get_mmap_data(1)
+                .unwrap()
+                .loaded_tile_refs
+                .is_empty()
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mmap_manager_reports_missing_or_bad_tiles_like_cpp() {
+        let root = unique_test_dir("mmap-manager-bad-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 128,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let mut manager = MMapManager::new();
+        assert!(matches!(
+            manager.load_map(&root, 1, 0, 0),
+            Err(MMapManagerError::ReadTileFile { .. })
+        ));
+
+        let mut bad_header = MmapTileHeader::new(DT_NAVMESH_VERSION_LIKE_CPP).to_bytes();
+        bad_header[0] = 0;
+        std::fs::write(tile_file_path_like_cpp(&root, 1, 0, 0), bad_header).unwrap();
+        assert!(matches!(
+            manager.load_map(&root, 1, 0, 0),
+            Err(MMapManagerError::TileFile { .. })
+        ));
+        assert_eq!(manager.get_loaded_tiles_count(), 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mmap_manager_tile_reader_uses_parent_fallback_like_cpp() {
+        let root = unique_test_dir("mmap-manager-parent-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+
+        let tile = generated_square_tile_blob(0, 0);
+        write_mmap_tile_blob(&tile_file_path_like_cpp(&root, 571, 0, 0), &tile);
+
+        let mut manager = MMapManager::new();
+        manager.initialize_thread_unsafe([ThreadUnsafeMapData {
+            map_id: 571,
+            child_map_ids: vec![609],
+        }]);
+
+        let fallback = manager
+            .read_tile_blob_with_parent_fallback(&root, 609, 0, 0)
+            .unwrap();
+        assert_eq!(fallback, tile);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn mmap_manager_thread_unsafe_preloads_allowed_map_ids_like_cpp() {
         let root = unique_test_dir("mmap-manager-thread-unsafe");
         std::fs::create_dir_all(root.join("mmaps")).unwrap();
@@ -2067,5 +2280,11 @@ mod tests {
             },
             data: bytes,
         }
+    }
+
+    fn write_mmap_tile_blob(path: &std::path::Path, tile: &MmapTileBlob) {
+        let mut bytes = tile.header.to_bytes().to_vec();
+        bytes.extend_from_slice(&tile.data);
+        std::fs::write(path, bytes).unwrap();
     }
 }
