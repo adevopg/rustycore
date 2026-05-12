@@ -181,7 +181,9 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 
 **What's implemented:**
 - A single SMSG_PHASE_SHIFT_CHANGE serializer with constant payload.
-- `wow-entities::PhaseShift` now carries C++-like phase refs, visible map id refs and UI map phase id refs with refcount semantics.
+- `wow-constants::PhaseShiftFlags` / `PhaseFlags` mirror the C++ enum bit values.
+- `wow-entities::PhaseShift` now carries C++-like phase refs, `PersonalGuid`, visible map id refs and UI map phase id refs with refcount semantics.
+- `PhaseShift::can_see` now mirrors the C++ pure predicate for `Unphased`, `AlwaysVisible`, `Inverse`, `InverseUnphased`, `NoCosmetic`, and personal phases.
 - Terrain swap metadata loading exists for `terrain_worldmap` / `terrain_swap_defaults`, including C++ DB2+hotfix `UiMapXMapArt.PhaseID` validation for `IsUiMapPhase`.
 - `Phase.db2` and `PhaseXPhaseGroup.db2` are loaded with hotfix overlays, exposing C++-like personal/cosmetic phase checks and `GetPhasesForGroup`.
 - Creature spawn `terrainSwapMap` is validated against `Map.ParentMapID` and applied to the creature `PhaseShift` visible-map ids.
@@ -260,10 +262,10 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>12h, splitear).
 
-- [ ] **#PHASE.1** Define `PhaseShiftFlags` (u32 bitflags) and `PhaseFlags` (u16 bitflags) in `crates/wow-constants/src/phasing.rs` matching the C++ enums byte-for-byte (L)
+- [x] **#PHASE.1** Define `PhaseShiftFlags` (u32 bitflags) and `PhaseFlags` (u16 bitflags) in `crates/wow-constants/src/phasing.rs` matching the C++ enums byte-for-byte (L)
 - [x] **#PHASE.2** Define `PhaseShift` struct with C++-like phase refs, visible-map refs and UI-map-phase refs (implemented in `wow-entities::PhaseShift`; personal GUID depth still belongs to later façade work) (M)
 - [x] **#PHASE.3** Implement `PhaseShift::add_phase` / `remove_phase` / `add_visible_map_id` / `remove_visible_map_id` / `add_ui_map_phase_id` / `remove_ui_map_phase_id` with C++ refcount semantics for represented fields (M)
-- [ ] **#PHASE.4** Implement `PhaseShift::can_see` honouring `AlwaysVisible`, `Inverse`, `InverseUnphased`, `Unphased`, `NoCosmetic`; cover the `Personal` interaction (must also match `PersonalGuid`) (H)
+- [x] **#PHASE.4** Implement `PhaseShift::can_see` honouring `AlwaysVisible`, `Inverse`, `InverseUnphased`, `Unphased`, `NoCosmetic`; cover the `Personal` interaction (must also match `PersonalGuid`) (H)
 - [ ] **#PHASE.5** Add `phase_shift` and `suppressed_phase_shift` fields to the WorldObject base in `crates/wow-world/src/entities/world_object.rs` (and propagate to Player / Creature / GameObject / DynamicObject / AreaTrigger) (M)
 - [ ] **#PHASE.6** Define `PhaseInfoStruct`, `PhaseAreaInfo` (with `SubAreaExclusions: HashSet<u32>`, `Conditions: ConditionContainer`), `TerrainSwapInfo` (with `UiMapPhaseIDs: Vec<u32>`) data structs in `crates/wow-data/src/phasing.rs` (M)
 - [ ] **#PHASE.7** Implement loader for `phase_definitions` (id → `PhaseInfoStruct`) (L)
