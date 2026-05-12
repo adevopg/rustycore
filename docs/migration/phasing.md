@@ -187,6 +187,7 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 - `PhaseShift::can_see` now mirrors the C++ pure predicate for `Unphased`, `AlwaysVisible`, `Inverse`, `InverseUnphased`, `NoCosmetic`, and personal phases.
 - `wow-data::PhaseInfoStore` seeds C++ `_phaseInfoById` from `PhaseStore`, matching current `ObjectMgr::LoadPhases`.
 - `AreaTable.db2` is loaded with hotfix overlays for `ParentAreaID`, and `phase_area` rows are loaded into C++-like `PhaseInfoStore` area buckets with parent `SubAreaExclusions`.
+- `wow-world::phasing` implements the pure C++ `PhasingHandler::ResetPhaseShift`, `InheritPhaseShift`, `SetAlwaysVisible`, and `SetInversed` slices.
 - Terrain swap metadata loading exists for `terrain_worldmap` / `terrain_swap_defaults`, including C++ DB2+hotfix `UiMapXMapArt.PhaseID` validation for `IsUiMapPhase`.
 - `Phase.db2` and `PhaseXPhaseGroup.db2` are loaded with hotfix overlays, exposing C++-like personal/cosmetic phase checks and `GetPhasesForGroup`.
 - Creature spawn `terrainSwapMap` is validated against `Map.ParentMapID` and applied to the creature `PhaseShift` visible-map ids.
@@ -282,7 +283,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] **#PHASE.15** Implement `PhasingHandler::on_area_change` (parent-area walk via AreaTable.db2, condition evaluation per `PhaseAreaInfo`, suppression bookkeeping, aura re-application) (XL — split: walk + apply, re-apply auras, suppression bucket, controlled-unit propagation)
 - [ ] **#PHASE.16** Implement `PhasingHandler::on_map_change` (terrain-swap evaluation against `CONDITION_SOURCE_TYPE_TERRAIN_SWAP`, populate `VisibleMapIds` + `UiMapPhaseIds`) (H)
 - [ ] **#PHASE.17** Implement `PhasingHandler::on_condition_change` (re-evaluate every existing phase's `AreaConditions`, move to/from `SuppressedPhaseShift`, preserve aura-driven phases, mirror the visible-map suppression loop) (H)
-- [ ] **#PHASE.18** Implement `PhasingHandler::reset_phase_shift`, `inherit_phase_shift`, `set_always_visible`, `set_inversed` (M)
+- [x] **#PHASE.18** Implement `PhasingHandler::reset_phase_shift`, `inherit_phase_shift`, `set_always_visible`, `set_inversed` (M)
 - [ ] **#PHASE.19** Replace the constant SMSG_PHASE_SHIFT_CHANGE in `crates/wow-packet/src/packets/misc.rs` with a real serializer that takes `&PhaseShift` and writes flags + phase list + personal GUID + visible-map-id list + ui-map-phase-id list (M)
 - [ ] **#PHASE.20** Hook up `SPELL_AURA_PHASE` apply/remove and `SPELL_AURA_PHASE_GROUP` apply/remove in the (yet-to-be-fully-built) aura effect dispatcher to call `PhasingHandler::add_phase` / `add_phase_group` (M, depends on aura system)
 - [ ] **#PHASE.21** Implement `PersonalPhaseSpawns` (objects + grids + optional `Duration` countdown) and `PlayerPersonalPhasesTracker` (per-owner) in `crates/wow-world/src/phasing/personal.rs` (H)

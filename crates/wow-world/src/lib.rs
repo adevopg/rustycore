@@ -8,6 +8,7 @@
 pub mod entity_update_bridge;
 pub mod handlers;
 pub mod map_manager;
+pub mod phasing;
 pub mod session;
 
 pub use map_manager::{
