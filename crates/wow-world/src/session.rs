@@ -6,7 +6,7 @@
 //! `WorldSession` — per-player session that receives packets from the
 //! [`WorldSocket`](wow_network::WorldSocket) and dispatches them to handlers.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -82,6 +82,7 @@ const MAX_PACKETS_PER_UPDATE: usize = 100;
 pub struct MMapRuntimeConfigLikeCpp {
     pub data_dir: String,
     pub enabled: bool,
+    pub disabled_map_ids: HashSet<u32>,
 }
 
 impl Default for MMapRuntimeConfigLikeCpp {
@@ -89,7 +90,14 @@ impl Default for MMapRuntimeConfigLikeCpp {
         Self {
             data_dir: "./Data".to_string(),
             enabled: true,
+            disabled_map_ids: HashSet::new(),
         }
+    }
+}
+
+impl MMapRuntimeConfigLikeCpp {
+    pub fn pathfinding_enabled_for_map_like_cpp(&self, map_id: u32) -> bool {
+        self.enabled && !self.disabled_map_ids.contains(&map_id)
     }
 }
 

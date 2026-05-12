@@ -9,6 +9,7 @@
 //! world-server handshake (challenge → auth → encryption), creates a
 //! WorldSession for each client, and dispatches packets to handlers.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -445,6 +446,12 @@ async fn main() -> Result<()> {
             .context("Failed to load Map.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} maps from Map.db2", map_store.len());
+    let mmap_disabled_map_ids =
+        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store).await?;
+    info!(
+        "Loaded {} C++ mmap disable rows",
+        mmap_disabled_map_ids.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -806,7 +813,7 @@ async fn main() -> Result<()> {
     let world_port = world_config_u16(&world_configs, "CONFIG_PORT_WORLD", 8085);
     let instance_port = world_config_u16(&world_configs, "CONFIG_PORT_INSTANCE", 8086);
     let max_expansion = world_config_u8(&world_configs, "CONFIG_EXPANSION", 2);
-    let mmap_runtime_config = mmap_runtime_config_like_cpp(&world_configs);
+    let mmap_runtime_config = mmap_runtime_config_like_cpp(&world_configs, mmap_disabled_map_ids);
     info!(
         "WORLD: MMap pathfinding: {}, data directory: {}/mmaps",
         if mmap_runtime_config.enabled {
@@ -1005,11 +1012,51 @@ fn world_config_bool(configs: &WorldConfigSet, enum_name: &str, default: bool) -
     configs.get_bool(enum_name).unwrap_or(default)
 }
 
-fn mmap_runtime_config_like_cpp(configs: &WorldConfigSet) -> MMapRuntimeConfigLikeCpp {
+fn mmap_runtime_config_like_cpp(
+    configs: &WorldConfigSet,
+    disabled_map_ids: HashSet<u32>,
+) -> MMapRuntimeConfigLikeCpp {
     MMapRuntimeConfigLikeCpp {
         data_dir: wow_config::get_string_default("DataDir", "./Data"),
         enabled: world_config_bool(configs, "CONFIG_ENABLE_MMAPS", true),
+        disabled_map_ids,
     }
+}
+
+async fn load_mmap_disabled_map_ids_like_cpp(
+    world_db: &WorldDatabase,
+    map_store: &wow_data::MapStore,
+) -> Result<HashSet<u32>> {
+    const DISABLE_TYPE_MMAP_LIKE_CPP: u32 = 7;
+
+    let mut result = world_db
+        .direct_query("SELECT sourceType, entry, flags, params_0, params_1 FROM disables WHERE sourceType = 7")
+        .await
+        .context("Failed to query C++ mmap disables")?;
+    let mut disabled_map_ids = HashSet::new();
+
+    if result.is_empty() {
+        return Ok(disabled_map_ids);
+    }
+
+    loop {
+        let source_type = result.try_read::<u32>(0).unwrap_or(u32::MAX);
+        let entry = result.try_read::<u32>(1).unwrap_or(0);
+
+        if source_type == DISABLE_TYPE_MMAP_LIKE_CPP {
+            if map_store.get(entry).is_some() {
+                disabled_map_ids.insert(entry);
+            } else {
+                warn!("Map entry {entry} from `disables` doesn't exist in DB2, skipped");
+            }
+        }
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(disabled_map_ids)
 }
 
 fn loot_drop_rates_like_cpp(configs: &WorldConfigSet) -> LootDropRatesLikeCpp {
@@ -1755,6 +1802,7 @@ mod tests {
         load_world_config_from, loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
         world_config_bool, world_config_u8, world_config_u16,
     };
+    use std::collections::HashSet;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -1853,9 +1901,23 @@ mmap.enablePathFinding = 0
         .expect("config should load");
 
         let configs = wow_config::load_world_config_values();
-        let mmap_config = mmap_runtime_config_like_cpp(&configs);
+        let mmap_config = mmap_runtime_config_like_cpp(&configs, HashSet::from([1]));
         assert_eq!(mmap_config.data_dir, "/srv/wow-data");
         assert!(!mmap_config.enabled);
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(0));
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(1));
+    }
+
+    #[test]
+    fn mmap_runtime_config_applies_cpp_disable_mgr_map_gate() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str("mmap.enablePathFinding = 1\n")
+            .expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        let mmap_config = mmap_runtime_config_like_cpp(&configs, HashSet::from([571]));
+        assert!(mmap_config.pathfinding_enabled_for_map_like_cpp(0));
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(571));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
