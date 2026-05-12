@@ -9,6 +9,7 @@ pub mod idle;
 pub mod point;
 pub mod random;
 pub mod rotate;
+pub mod waypoint;
 
 pub use chase::{
     CHASE_RANGE_CHECK_INTERVAL_MS_LIKE_CPP, ChaseFinalizeAction, ChaseLaunchPlan,
@@ -76,4 +77,15 @@ pub use random::{
 pub use rotate::{
     RotateFacingSpline, RotateMovementGenerator, RotateMovementInform, RotateMovementUpdate,
     UNIT_STATE_ROTATING_LIKE_CPP,
+};
+pub use waypoint::{
+    UNIT_STATE_WAYPOINT_LOST_CONTROL_LIKE_CPP, UNIT_STATE_WAYPOINT_NOT_MOVE_LIKE_CPP,
+    UNIT_STATE_WAYPOINT_ROAMING_LIKE_CPP, UNIT_STATE_WAYPOINT_ROAMING_MOVE_LIKE_CPP,
+    WAYPOINT_BLOCKED_RETRY_MS_LIKE_CPP, WAYPOINT_INITIAL_DELAY_MS_LIKE_CPP,
+    WAYPOINT_PATH_FLAG_FOLLOW_PATH_BACKWARDS_MINIMUM_NODES_LIKE_CPP,
+    WAYPOINT_RESUME_GUARD_MS_LIKE_CPP, WaypointAnimation, WaypointArrivalAction,
+    WaypointCurrentInfo, WaypointFinalizeAction, WaypointInform, WaypointLaunchPlan,
+    WaypointMoveType, WaypointMovementAction, WaypointMovementGenerator, WaypointNode,
+    WaypointPath, WaypointPathEnded, WaypointRandomAtPathEnd, WaypointStarted,
+    WaypointUnitSnapshot,
 };
