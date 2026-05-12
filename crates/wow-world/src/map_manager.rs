@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
@@ -100,6 +101,27 @@ impl WorldMMapPathfinderLikeCpp {
         force_destination: bool,
     ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
         let creature_position = creature.position();
+        self.calculate_path_from_positions_like_cpp(
+            creature_position,
+            destination,
+            mesh_map_id,
+            instance_map_id,
+            instance_id,
+            filter_context,
+            force_destination,
+        )
+    }
+
+    pub fn calculate_path_from_positions_like_cpp(
+        &mut self,
+        start: Position,
+        destination: Position,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+        filter_context: PathQueryFilterContext,
+        force_destination: bool,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
         let context = self
             .mmap_manager
             .load_pathfinding_context_for_wow_position_like_cpp(
@@ -107,8 +129,8 @@ impl WorldMMapPathfinderLikeCpp {
                 mesh_map_id,
                 instance_map_id,
                 instance_id,
-                creature_position.x,
-                creature_position.y,
+                start.x,
+                start.y,
             )?;
 
         if !context.map_data_available
@@ -118,19 +140,93 @@ impl WorldMMapPathfinderLikeCpp {
             return Ok(None);
         }
 
-        calculate_creature_detour_path_like_cpp(
-            creature,
-            destination,
-            self.mmap_manager.get_mmap_data(mesh_map_id),
-            instance_map_id,
-            instance_id,
-            filter_context,
-            force_destination,
-        )
+        let Some(mmap_data) = self.mmap_manager.get_mmap_data(mesh_map_id) else {
+            return Ok(None);
+        };
+        let filter = create_path_query_filter_like_cpp(filter_context)?;
+        mmap_data
+            .calculate_path_for_instance_like_cpp(
+                instance_map_id,
+                instance_id,
+                &filter,
+                position_to_wow_point_like_cpp(start),
+                position_to_wow_point_like_cpp(destination),
+                DetourPathOptions {
+                    force_destination,
+                    ..DetourPathOptions::default()
+                },
+            )
+            .map_err(WorldDetourPathError::from)
     }
 
     pub fn mmap_manager(&self) -> &DetourMMapManager {
         &self.mmap_manager
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WorldMMapPathRequestLikeCpp {
+    pub start: Position,
+    pub destination: Position,
+    pub mesh_map_id: u32,
+    pub instance_map_id: u32,
+    pub instance_id: u32,
+    pub filter_context: PathQueryFilterContext,
+    pub force_destination: bool,
+}
+
+#[derive(Debug)]
+pub struct WorldMMapPathfinderWorkerLikeCpp {
+    request_tx: mpsc::Sender<WorldMMapPathfinderMessageLikeCpp>,
+}
+
+#[derive(Debug)]
+struct WorldMMapPathfinderMessageLikeCpp {
+    request: WorldMMapPathRequestLikeCpp,
+    response_tx: mpsc::Sender<Result<Option<DetourPolyPath>, WorldDetourPathError>>,
+}
+
+impl WorldMMapPathfinderWorkerLikeCpp {
+    pub fn spawn(data_dir: impl AsRef<Path>) -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<WorldMMapPathfinderMessageLikeCpp>();
+        let data_dir = data_dir.as_ref().to_path_buf();
+        thread::Builder::new()
+            .name("world-mmap-pathfinder-like-cpp".to_string())
+            .spawn(move || {
+                let mut pathfinder = WorldMMapPathfinderLikeCpp::new(data_dir);
+                while let Ok(message) = request_rx.recv() {
+                    let request = message.request;
+                    let result = pathfinder.calculate_path_from_positions_like_cpp(
+                        request.start,
+                        request.destination,
+                        request.mesh_map_id,
+                        request.instance_map_id,
+                        request.instance_id,
+                        request.filter_context,
+                        request.force_destination,
+                    );
+                    let _ = message.response_tx.send(result);
+                }
+            })
+            .expect("spawn mmap pathfinder worker");
+
+        Self { request_tx }
+    }
+
+    pub fn calculate_path_like_cpp(
+        &self,
+        request: WorldMMapPathRequestLikeCpp,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.request_tx
+            .send(WorldMMapPathfinderMessageLikeCpp {
+                request,
+                response_tx,
+            })
+            .map_err(|error| WorldDetourPathError::MMap(error.to_string()))?;
+        response_rx
+            .recv()
+            .map_err(|error| WorldDetourPathError::MMap(error.to_string()))?
     }
 }
 
@@ -2154,6 +2250,35 @@ mod tests {
                 .is_some()
         );
         assert_eq!(pathfinder.mmap_manager().get_loaded_tiles_count(), 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn world_mmap_pathfinder_worker_keeps_detour_off_session_thread_like_cpp() {
+        let root = unique_test_dir("world-mmap-pathfinder-worker-missing-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+        let params = wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 4096,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let worker = WorldMMapPathfinderWorkerLikeCpp::spawn(&root);
+        let result = worker.calculate_path_like_cpp(WorldMMapPathRequestLikeCpp {
+            start: Position::new(0.0, 0.0, 0.0, 0.0),
+            destination: Position::new(20.0, 0.0, 0.0, 0.0),
+            mesh_map_id: 1,
+            instance_map_id: 1,
+            instance_id: 42,
+            filter_context: PathQueryFilterContext::creature(true, false, false, false),
+            force_destination: false,
+        });
+
+        assert_eq!(result, Ok(None));
 
         std::fs::remove_dir_all(root).unwrap();
     }
