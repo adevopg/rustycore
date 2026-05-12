@@ -29,6 +29,16 @@ extern "C"
         return mesh->getMaxTiles();
     }
 
+    void rustycore_dt_nav_mesh_calc_tile_loc(dtNavMesh const* mesh, float const* position, int* tile_x, int* tile_y)
+    {
+        mesh->calcTileLoc(position, tile_x, tile_y);
+    }
+
+    bool rustycore_dt_nav_mesh_has_tile_at(dtNavMesh const* mesh, int tile_x, int tile_y, int layer)
+    {
+        return mesh->getTileAt(tile_x, tile_y, layer) != nullptr;
+    }
+
     dtStatus rustycore_dt_nav_mesh_add_tile_copy(
         dtNavMesh* mesh,
         unsigned char const* data,

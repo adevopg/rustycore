@@ -248,6 +248,18 @@ unsafe extern "C" {
         params: *const DetourNavMeshParams,
     ) -> DetourStatus;
     fn rustycore_dt_nav_mesh_get_max_tiles(mesh: *const RawDetourNavMesh) -> u32;
+    fn rustycore_dt_nav_mesh_calc_tile_loc(
+        mesh: *const RawDetourNavMesh,
+        position: *const f32,
+        tile_x: *mut i32,
+        tile_y: *mut i32,
+    );
+    fn rustycore_dt_nav_mesh_has_tile_at(
+        mesh: *const RawDetourNavMesh,
+        tile_x: i32,
+        tile_y: i32,
+        layer: i32,
+    ) -> bool;
     fn rustycore_dt_nav_mesh_add_tile_copy(
         mesh: *mut RawDetourNavMesh,
         data: *const u8,
@@ -427,6 +439,37 @@ impl DetourNavMesh {
         }
 
         Ok(())
+    }
+
+    #[must_use]
+    pub fn calc_tile_loc(&self, position: [f32; 3]) -> (i32, i32) {
+        let mut tile_x = -1;
+        let mut tile_y = -1;
+        unsafe {
+            rustycore_dt_nav_mesh_calc_tile_loc(
+                self.raw.as_ptr(),
+                position.as_ptr(),
+                &mut tile_x,
+                &mut tile_y,
+            );
+        }
+        (tile_x, tile_y)
+    }
+
+    #[must_use]
+    pub fn has_tile_at(&self, tile_x: i32, tile_y: i32, layer: i32) -> bool {
+        unsafe { rustycore_dt_nav_mesh_has_tile_at(self.raw.as_ptr(), tile_x, tile_y, layer) }
+    }
+
+    #[must_use]
+    pub fn have_tile_for_wow_position_like_cpp(&self, position: [f32; 3]) -> bool {
+        let detour_position = wow_position_to_detour_like_cpp(position);
+        let (tile_x, tile_y) = self.calc_tile_loc(detour_position);
+        if tile_x < 0 || tile_y < 0 {
+            return false;
+        }
+
+        self.has_tile_at(tile_x, tile_y, 0)
     }
 
     pub fn get_off_mesh_connection_poly_end_points(
@@ -2528,7 +2571,12 @@ mod tests {
 
         let tile_ref = mesh.add_tile(&tile).unwrap();
         assert_ne!(tile_ref, 0);
+        assert_eq!(mesh.calc_tile_loc([0.25, 0.0, 0.25]), (0, 0));
+        assert!(mesh.has_tile_at(0, 0, 0));
+        assert!(mesh.have_tile_for_wow_position_like_cpp([0.25, 0.25, 0.0]));
+        assert!(!mesh.have_tile_for_wow_position_like_cpp([2.0, 2.0, 0.0]));
         mesh.remove_tile(tile_ref).unwrap();
+        assert!(!mesh.has_tile_at(0, 0, 0));
     }
 
     #[test]
