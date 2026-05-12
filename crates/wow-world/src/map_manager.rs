@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -17,7 +18,8 @@ use wow_movement::{
 use wow_packet::packets::update::CreatureCreateData;
 use wow_recastdetour::{
     DetourNavMeshQueryError, DetourPathOptions, DetourPathType, DetourPolyPath,
-    DetourQueryFilterError, MMapData, PathQueryFilterContext, create_path_query_filter_like_cpp,
+    DetourQueryFilterError, MMapData, MMapManager as DetourMMapManager, MMapManagerError,
+    PathQueryFilterContext, create_path_query_filter_like_cpp,
 };
 
 /// Size of a grid cell in yards (64x64 yards like TrinityCore).
@@ -52,6 +54,7 @@ fn position_to_wow_point_like_cpp(position: Position) -> [f32; 3] {
 pub enum WorldDetourPathError {
     Filter(DetourQueryFilterError),
     Query(DetourNavMeshQueryError),
+    MMap(String),
 }
 
 impl From<DetourQueryFilterError> for WorldDetourPathError {
@@ -63,6 +66,71 @@ impl From<DetourQueryFilterError> for WorldDetourPathError {
 impl From<DetourNavMeshQueryError> for WorldDetourPathError {
     fn from(value: DetourNavMeshQueryError) -> Self {
         Self::Query(value)
+    }
+}
+
+impl From<MMapManagerError> for WorldDetourPathError {
+    fn from(value: MMapManagerError) -> Self {
+        Self::MMap(value.to_string())
+    }
+}
+
+#[derive(Debug)]
+pub struct WorldMMapPathfinderLikeCpp {
+    data_dir: PathBuf,
+    mmap_manager: DetourMMapManager,
+}
+
+impl WorldMMapPathfinderLikeCpp {
+    pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        Self {
+            data_dir: data_dir.as_ref().to_path_buf(),
+            mmap_manager: DetourMMapManager::new(),
+        }
+    }
+
+    pub fn calculate_creature_path_like_cpp(
+        &mut self,
+        creature: &WorldCreature,
+        destination: Position,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+        filter_context: PathQueryFilterContext,
+        force_destination: bool,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+        let creature_position = creature.position();
+        let context = self
+            .mmap_manager
+            .load_pathfinding_context_for_wow_position_like_cpp(
+                &self.data_dir,
+                mesh_map_id,
+                instance_map_id,
+                instance_id,
+                creature_position.x,
+                creature_position.y,
+            )?;
+
+        if !context.map_data_available
+            || !context.instance_query_available
+            || !context.tile_available
+        {
+            return Ok(None);
+        }
+
+        calculate_creature_detour_path_like_cpp(
+            creature,
+            destination,
+            self.mmap_manager.get_mmap_data(mesh_map_id),
+            instance_map_id,
+            instance_id,
+            filter_context,
+            force_destination,
+        )
+    }
+
+    pub fn mmap_manager(&self) -> &DetourMMapManager {
+        &self.mmap_manager
     }
 }
 
@@ -2037,6 +2105,60 @@ mod tests {
     }
 
     #[test]
+    fn world_mmap_pathfinder_falls_back_when_runtime_tile_missing_like_cpp() {
+        let root = unique_test_dir("world-mmap-pathfinder-missing-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+        let params = wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 4096,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54326);
+        let creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(0.0, 0.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let mut pathfinder = WorldMMapPathfinderLikeCpp::new(&root);
+        let filter_context = PathQueryFilterContext::creature(true, false, false, false);
+
+        assert_eq!(
+            pathfinder.calculate_creature_path_like_cpp(
+                &creature,
+                Position::new(20.0, 0.0, 0.0, 0.0),
+                1,
+                1,
+                42,
+                filter_context,
+                false,
+            ),
+            Ok(None)
+        );
+        assert!(
+            pathfinder
+                .mmap_manager()
+                .get_nav_mesh_query(1, 1, 42)
+                .is_some()
+        );
+        assert_eq!(pathfinder.mmap_manager().get_loaded_tiles_count(), 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn world_creature_begin_point_movement_uses_point_lifecycle_and_real_spline() {
         let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54323);
         let mut creature = WorldCreature::new(
@@ -2430,5 +2552,13 @@ mod tests {
         // Should not find creature far away
         let visible = manager.get_visible_creatures(0, 0, 1000.0, 1000.0, 0.0);
         assert!(visible.is_empty());
+    }
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rustycore-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
     }
 }
