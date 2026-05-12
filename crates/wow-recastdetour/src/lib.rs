@@ -4,6 +4,21 @@ pub const MMAP_MAGIC_LIKE_CPP: u32 = 0x4d4d_4150;
 pub const MMAP_VERSION_LIKE_CPP: u32 = 15;
 pub const MMAP_TILE_HEADER_SIZE_LIKE_CPP: usize = 20;
 
+pub const DT_POLYREF64_LIKE_CPP: bool = true;
+pub const DT_SALT_BITS_LIKE_CPP: u32 = 12;
+pub const DT_TILE_BITS_LIKE_CPP: u32 = 21;
+pub const DT_POLY_BITS_LIKE_CPP: u32 = 31;
+pub const DT_NAVMESH_MAGIC_LIKE_CPP: u32 = 0x444e_4156;
+pub const DT_NAVMESH_VERSION_LIKE_CPP: u32 = 7;
+pub const DT_NAVMESH_STATE_MAGIC_LIKE_CPP: u32 = 0x444e_4d53;
+pub const DT_NAVMESH_STATE_VERSION_LIKE_CPP: u32 = 1;
+pub const DT_EXT_LINK_LIKE_CPP: u16 = 0x8000;
+pub const DT_NULL_LINK_LIKE_CPP: u32 = 0xffff_ffff;
+pub const DT_OFFMESH_CON_BIDIR_LIKE_CPP: u32 = 1;
+pub const DT_MAX_AREAS_LIKE_CPP: usize = 64;
+pub const DT_TILE_FREE_DATA_LIKE_CPP: i32 = 0x01;
+pub const DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP: usize = 28;
+
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
 pub const NAV_AREA_GROUND_STEEP_LIKE_CPP: u8 = 10;
@@ -32,6 +47,53 @@ pub struct MmapTileHeader {
     pub size: u32,
     pub uses_liquids: bool,
     pub padding: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetourNavMeshParams {
+    pub origin: [f32; 3],
+    pub tile_width: f32,
+    pub tile_height: f32,
+    pub max_tiles: i32,
+    pub max_polys: i32,
+}
+
+impl DetourNavMeshParams {
+    pub fn parse(bytes: &[u8]) -> Result<Self, DetourNavMeshParamsError> {
+        if bytes.len() < DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP {
+            return Err(DetourNavMeshParamsError::TooShort {
+                actual: bytes.len(),
+                expected: DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP,
+            });
+        }
+
+        Ok(Self {
+            origin: [read_f32(bytes, 0), read_f32(bytes, 4), read_f32(bytes, 8)],
+            tile_width: read_f32(bytes, 12),
+            tile_height: read_f32(bytes, 16),
+            max_tiles: read_i32(bytes, 20),
+            max_polys: read_i32(bytes, 24),
+        })
+    }
+
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP] {
+        let mut bytes = [0; DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP];
+        bytes[0..4].copy_from_slice(&self.origin[0].to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.origin[1].to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.origin[2].to_le_bytes());
+        bytes[12..16].copy_from_slice(&self.tile_width.to_le_bytes());
+        bytes[16..20].copy_from_slice(&self.tile_height.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.max_tiles.to_le_bytes());
+        bytes[24..28].copy_from_slice(&self.max_polys.to_le_bytes());
+        bytes
+    }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum DetourNavMeshParamsError {
+    #[error("Detour navmesh params are too short: got {actual} bytes, expected {expected}")]
+    TooShort { actual: usize, expected: usize },
 }
 
 impl MmapTileHeader {
@@ -141,6 +203,24 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
+fn read_i32(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+fn read_f32(bytes: &[u8], offset: usize) -> f32 {
+    f32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +230,21 @@ mod tests {
         assert_eq!(MMAP_MAGIC_LIKE_CPP, 0x4d4d_4150);
         assert_eq!(MMAP_VERSION_LIKE_CPP, 15);
         assert_eq!(MMAP_TILE_HEADER_SIZE_LIKE_CPP, 20);
+
+        assert!(DT_POLYREF64_LIKE_CPP);
+        assert_eq!(DT_SALT_BITS_LIKE_CPP, 12);
+        assert_eq!(DT_TILE_BITS_LIKE_CPP, 21);
+        assert_eq!(DT_POLY_BITS_LIKE_CPP, 31);
+        assert_eq!(DT_NAVMESH_MAGIC_LIKE_CPP, 0x444e_4156);
+        assert_eq!(DT_NAVMESH_VERSION_LIKE_CPP, 7);
+        assert_eq!(DT_NAVMESH_STATE_MAGIC_LIKE_CPP, 0x444e_4d53);
+        assert_eq!(DT_NAVMESH_STATE_VERSION_LIKE_CPP, 1);
+        assert_eq!(DT_EXT_LINK_LIKE_CPP, 0x8000);
+        assert_eq!(DT_NULL_LINK_LIKE_CPP, 0xffff_ffff);
+        assert_eq!(DT_OFFMESH_CON_BIDIR_LIKE_CPP, 1);
+        assert_eq!(DT_MAX_AREAS_LIKE_CPP, 64);
+        assert_eq!(DT_TILE_FREE_DATA_LIKE_CPP, 1);
+        assert_eq!(DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP, 28);
 
         assert_eq!(NAV_AREA_EMPTY_LIKE_CPP, 0);
         assert_eq!(NAV_AREA_GROUND_LIKE_CPP, 11);
@@ -163,6 +258,28 @@ mod tests {
         assert_eq!(NavTerrainFlag::GROUND_STEEP.bits(), 0x02);
         assert_eq!(NavTerrainFlag::WATER.bits(), 0x04);
         assert_eq!(NavTerrainFlag::MAGMA_SLIME.bits(), 0x08);
+    }
+
+    #[test]
+    fn detour_nav_mesh_params_round_trips_cpp_layout() {
+        let params = DetourNavMeshParams {
+            origin: [-17_066.666, -17_066.666, -2_000.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 4_096,
+            max_polys: 32_768,
+        };
+
+        let bytes = params.to_bytes();
+        assert_eq!(bytes.len(), DT_NAV_MESH_PARAMS_SIZE_LIKE_CPP);
+        assert_eq!(DetourNavMeshParams::parse(&bytes), Ok(params));
+        assert_eq!(
+            DetourNavMeshParams::parse(&bytes[..27]),
+            Err(DetourNavMeshParamsError::TooShort {
+                actual: 27,
+                expected: 28,
+            })
+        );
     }
 
     #[test]
