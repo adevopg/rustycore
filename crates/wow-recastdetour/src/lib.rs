@@ -1,1 +1,233 @@
+use thiserror::Error;
 
+pub const MMAP_MAGIC_LIKE_CPP: u32 = 0x4d4d_4150;
+pub const MMAP_VERSION_LIKE_CPP: u32 = 15;
+pub const MMAP_TILE_HEADER_SIZE_LIKE_CPP: usize = 20;
+
+pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
+pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
+pub const NAV_AREA_GROUND_STEEP_LIKE_CPP: u8 = 10;
+pub const NAV_AREA_WATER_LIKE_CPP: u8 = 9;
+pub const NAV_AREA_MAGMA_SLIME_LIKE_CPP: u8 = 8;
+pub const NAV_AREA_MAX_VALUE_LIKE_CPP: u8 = NAV_AREA_GROUND_LIKE_CPP;
+pub const NAV_AREA_MIN_VALUE_LIKE_CPP: u8 = NAV_AREA_MAGMA_SLIME_LIKE_CPP;
+pub const NAV_AREA_ALL_MASK_LIKE_CPP: u8 = 0x3f;
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct NavTerrainFlag: u16 {
+        const EMPTY = 0x00;
+        const GROUND = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_GROUND_LIKE_CPP);
+        const GROUND_STEEP = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_GROUND_STEEP_LIKE_CPP);
+        const WATER = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_WATER_LIKE_CPP);
+        const MAGMA_SLIME = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_MAGMA_SLIME_LIKE_CPP);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MmapTileHeader {
+    pub mmap_magic: u32,
+    pub dt_version: u32,
+    pub mmap_version: u32,
+    pub size: u32,
+    pub uses_liquids: bool,
+    pub padding: [u8; 3],
+}
+
+impl MmapTileHeader {
+    #[must_use]
+    pub const fn new(dt_version: u32) -> Self {
+        Self {
+            mmap_magic: MMAP_MAGIC_LIKE_CPP,
+            dt_version,
+            mmap_version: MMAP_VERSION_LIKE_CPP,
+            size: 0,
+            uses_liquids: true,
+            padding: [0; 3],
+        }
+    }
+
+    pub fn parse(bytes: &[u8]) -> Result<Self, MmapTileHeaderError> {
+        if bytes.len() < MMAP_TILE_HEADER_SIZE_LIKE_CPP {
+            return Err(MmapTileHeaderError::TooShort {
+                actual: bytes.len(),
+                expected: MMAP_TILE_HEADER_SIZE_LIKE_CPP,
+            });
+        }
+
+        let header = Self {
+            mmap_magic: read_u32(bytes, 0),
+            dt_version: read_u32(bytes, 4),
+            mmap_version: read_u32(bytes, 8),
+            size: read_u32(bytes, 12),
+            uses_liquids: bytes[16] != 0,
+            padding: [bytes[17], bytes[18], bytes[19]],
+        };
+
+        if header.mmap_magic != MMAP_MAGIC_LIKE_CPP {
+            return Err(MmapTileHeaderError::BadMagic {
+                actual: header.mmap_magic,
+                expected: MMAP_MAGIC_LIKE_CPP,
+            });
+        }
+
+        if header.mmap_version != MMAP_VERSION_LIKE_CPP {
+            return Err(MmapTileHeaderError::BadMmapVersion {
+                actual: header.mmap_version,
+                expected: MMAP_VERSION_LIKE_CPP,
+            });
+        }
+
+        Ok(header)
+    }
+
+    pub fn validate_dt_version(&self, expected_dt_version: u32) -> Result<(), MmapTileHeaderError> {
+        if self.dt_version != expected_dt_version {
+            return Err(MmapTileHeaderError::BadDetourVersion {
+                actual: self.dt_version,
+                expected: expected_dt_version,
+            });
+        }
+
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; MMAP_TILE_HEADER_SIZE_LIKE_CPP] {
+        let mut bytes = [0; MMAP_TILE_HEADER_SIZE_LIKE_CPP];
+        bytes[0..4].copy_from_slice(&self.mmap_magic.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.dt_version.to_le_bytes());
+        bytes[8..12].copy_from_slice(&self.mmap_version.to_le_bytes());
+        bytes[12..16].copy_from_slice(&self.size.to_le_bytes());
+        bytes[16] = u8::from(self.uses_liquids);
+        bytes[17..20].copy_from_slice(&self.padding);
+        bytes
+    }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum MmapTileHeaderError {
+    #[error("mmap tile header is too short: got {actual} bytes, expected {expected}")]
+    TooShort { actual: usize, expected: usize },
+    #[error("bad mmap magic: got 0x{actual:08x}, expected 0x{expected:08x}")]
+    BadMagic { actual: u32, expected: u32 },
+    #[error("bad mmap version: got {actual}, expected {expected}")]
+    BadMmapVersion { actual: u32, expected: u32 },
+    #[error("bad Detour navmesh version: got {actual}, expected {expected}")]
+    BadDetourVersion { actual: u32, expected: u32 },
+}
+
+#[must_use]
+pub const fn pack_tile_id_like_cpp(x: i32, y: i32) -> u32 {
+    ((x as u32) << 16) | (y as u32 & 0xffff)
+}
+
+#[must_use]
+pub fn map_file_name_like_cpp(map_id: u32) -> String {
+    format!("mmaps/{map_id:04}.mmap")
+}
+
+#[must_use]
+pub fn tile_file_name_like_cpp(map_id: u32, x: i32, y: i32) -> String {
+    format!("mmaps/{map_id:04}{x:02}{y:02}.mmtile")
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mmap_constants_and_nav_flags_match_cpp() {
+        assert_eq!(MMAP_MAGIC_LIKE_CPP, 0x4d4d_4150);
+        assert_eq!(MMAP_VERSION_LIKE_CPP, 15);
+        assert_eq!(MMAP_TILE_HEADER_SIZE_LIKE_CPP, 20);
+
+        assert_eq!(NAV_AREA_EMPTY_LIKE_CPP, 0);
+        assert_eq!(NAV_AREA_GROUND_LIKE_CPP, 11);
+        assert_eq!(NAV_AREA_GROUND_STEEP_LIKE_CPP, 10);
+        assert_eq!(NAV_AREA_WATER_LIKE_CPP, 9);
+        assert_eq!(NAV_AREA_MAGMA_SLIME_LIKE_CPP, 8);
+        assert_eq!(NAV_AREA_ALL_MASK_LIKE_CPP, 0x3f);
+
+        assert_eq!(NavTerrainFlag::EMPTY.bits(), 0x00);
+        assert_eq!(NavTerrainFlag::GROUND.bits(), 0x01);
+        assert_eq!(NavTerrainFlag::GROUND_STEEP.bits(), 0x02);
+        assert_eq!(NavTerrainFlag::WATER.bits(), 0x04);
+        assert_eq!(NavTerrainFlag::MAGMA_SLIME.bits(), 0x08);
+    }
+
+    #[test]
+    fn mmap_tile_header_round_trips_cpp_layout() {
+        let header = MmapTileHeader {
+            mmap_magic: MMAP_MAGIC_LIKE_CPP,
+            dt_version: 7,
+            mmap_version: MMAP_VERSION_LIKE_CPP,
+            size: 123_456,
+            uses_liquids: true,
+            padding: [0, 0, 0],
+        };
+
+        let bytes = header.to_bytes();
+        assert_eq!(bytes.len(), MMAP_TILE_HEADER_SIZE_LIKE_CPP);
+        assert_eq!(MmapTileHeader::parse(&bytes), Ok(header));
+        assert_eq!(
+            MmapTileHeader::parse(&bytes)
+                .unwrap()
+                .validate_dt_version(7),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn mmap_tile_header_rejects_cpp_load_failures() {
+        assert_eq!(
+            MmapTileHeader::parse(&[0; 19]),
+            Err(MmapTileHeaderError::TooShort {
+                actual: 19,
+                expected: 20,
+            })
+        );
+
+        let mut bad_magic = MmapTileHeader::new(7).to_bytes();
+        bad_magic[0] = 0;
+        assert!(matches!(
+            MmapTileHeader::parse(&bad_magic),
+            Err(MmapTileHeaderError::BadMagic { .. })
+        ));
+
+        let mut bad_version = MmapTileHeader::new(7).to_bytes();
+        bad_version[8..12].copy_from_slice(&14_u32.to_le_bytes());
+        assert!(matches!(
+            MmapTileHeader::parse(&bad_version),
+            Err(MmapTileHeaderError::BadMmapVersion { .. })
+        ));
+
+        let header = MmapTileHeader::new(7);
+        assert_eq!(
+            header.validate_dt_version(8),
+            Err(MmapTileHeaderError::BadDetourVersion {
+                actual: 7,
+                expected: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn mmap_manager_small_helpers_match_cpp() {
+        assert_eq!(pack_tile_id_like_cpp(0x12, 0x34), 0x0012_0034);
+        assert_eq!(map_file_name_like_cpp(571), "mmaps/0571.mmap");
+        assert_eq!(
+            tile_file_name_like_cpp(571, 32, 48),
+            "mmaps/05713248.mmtile"
+        );
+    }
+}
