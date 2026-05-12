@@ -13,8 +13,10 @@ pub use generator::{
     MovementGeneratorState, MovementGeneratorType, MovementSlot,
 };
 pub use generators::{
+    AssistanceDistractFinalizeAction, AssistanceDistractMovementGenerator, DistractFacingSpline,
+    DistractFinalizeAction, DistractInitializeAction, DistractMovementGenerator,
     IdleMovementGenerator, RotateFacingSpline, RotateMovementGenerator, RotateMovementInform,
-    RotateMovementUpdate, UNIT_STATE_ROTATING_LIKE_CPP,
+    RotateMovementUpdate, UNIT_STATE_DISTRACTED_LIKE_CPP, UNIT_STATE_ROTATING_LIKE_CPP,
 };
 pub use motion_master::{
     DelayedAction, DelayedActionQueue, MotionMasterDelayedActionType, MotionMasterFlags,
