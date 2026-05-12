@@ -15,7 +15,10 @@ use wow_movement::{
     PathGenerator, PathType,
 };
 use wow_packet::packets::update::CreatureCreateData;
-use wow_recastdetour::{DetourPathType, DetourPolyPath};
+use wow_recastdetour::{
+    DetourNavMeshQueryError, DetourPathOptions, DetourPathType, DetourPolyPath,
+    DetourQueryFilterError, MMapData, PathQueryFilterContext, create_path_query_filter_like_cpp,
+};
 
 /// Size of a grid cell in yards (64x64 yards like TrinityCore).
 pub const GRID_SIZE: f32 = 64.0;
@@ -39,6 +42,28 @@ fn position_to_i32_tuple(position: Position) -> (i32, i32, i32) {
 
 fn position_from_detour_point_like_cpp(point: [f32; 3]) -> Position {
     Position::new(point[0], point[1], point[2], 0.0)
+}
+
+fn position_to_wow_point_like_cpp(position: Position) -> [f32; 3] {
+    [position.x, position.y, position.z]
+}
+
+#[derive(Debug, PartialEq)]
+pub enum WorldDetourPathError {
+    Filter(DetourQueryFilterError),
+    Query(DetourNavMeshQueryError),
+}
+
+impl From<DetourQueryFilterError> for WorldDetourPathError {
+    fn from(value: DetourQueryFilterError) -> Self {
+        Self::Filter(value)
+    }
+}
+
+impl From<DetourNavMeshQueryError> for WorldDetourPathError {
+    fn from(value: DetourNavMeshQueryError) -> Self {
+        Self::Query(value)
+    }
 }
 
 pub fn path_type_from_detour_like_cpp(path_type: DetourPathType) -> PathType {
@@ -67,6 +92,35 @@ pub fn path_generator_from_detour_like_cpp(
         force_destination,
     );
     path
+}
+
+pub fn calculate_creature_detour_path_like_cpp(
+    creature: &WorldCreature,
+    destination: Position,
+    mmap_data: Option<&MMapData>,
+    instance_map_id: u32,
+    instance_id: u32,
+    filter_context: PathQueryFilterContext,
+    force_destination: bool,
+) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+    let Some(mmap_data) = mmap_data else {
+        return Ok(None);
+    };
+
+    let filter = create_path_query_filter_like_cpp(filter_context)?;
+    mmap_data
+        .calculate_path_for_instance_like_cpp(
+            instance_map_id,
+            instance_id,
+            &filter,
+            position_to_wow_point_like_cpp(creature.position()),
+            position_to_wow_point_like_cpp(destination),
+            DetourPathOptions {
+                force_destination,
+                ..DetourPathOptions::default()
+            },
+        )
+        .map_err(WorldDetourPathError::from)
 }
 
 /// Coordinate of a grid cell.
@@ -1924,6 +1978,61 @@ mod tests {
                 .expect("fallback path metadata")
                 .path_type()
                 .contains(PathType::NOPATH)
+        );
+    }
+
+    #[test]
+    fn calculate_creature_detour_path_returns_none_until_runtime_mmap_exists_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54325);
+        let creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let dst = Position::new(20.0, 10.0, 0.0, 0.0);
+        let filter_context = PathQueryFilterContext::creature(true, false, false, false);
+
+        assert_eq!(
+            calculate_creature_detour_path_like_cpp(
+                &creature,
+                dst,
+                None,
+                0,
+                0,
+                filter_context,
+                false
+            ),
+            Ok(None)
+        );
+
+        let mmap_data = MMapData::new(wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 16,
+            max_polys: 16,
+        })
+        .expect("navmesh allocation");
+        assert_eq!(
+            calculate_creature_detour_path_like_cpp(
+                &creature,
+                dst,
+                Some(&mmap_data),
+                0,
+                0,
+                filter_context,
+                false,
+            ),
+            Ok(None)
         );
     }
 
