@@ -31,6 +31,7 @@ Current Rust status:
 - `#A06.8h.3e.13` adds a represented `MotionMaster::Update` driver over `MotionSubsystem`: C++ stall flags, `UPDATE` guard, top initialize/reset/update, natural pop, and end-of-tick delayed action drain.
 - `#A06.8h.3e.14` ports pure `MovementDefines` chase helpers into `wow-movement`: `ChaseRange`, `ChaseAngle`, C++ contact-distance tolerances and angle wrapping.
 - `#A06.8h.3e.15` ports pure jump/charge helper data into `wow-movement`: `JumpArrivalCastArgs`, `JumpChargeParams`, and a tagged replacement for the C++ speed/move-time union.
+- `#A06.8h.3e.16` adds the first runtime skeleton modules in `wow-movement`: `generator.rs` with C++ type/mode/priority/slot/flag values and a `MovementGenerator` trait, plus `motion_master.rs` with flags, delayed action ids and FIFO closure queue.
 - Still missing: generalized executable generator behavior against a real `Unit`, pathgen-backed destinations, real SmartAI/script dispatch for `MovementInform`, real `CallAssistance` map/AI effects, follow/chase/flee/random/waypoint/taxi/spline-chain runtime logic, and full runtime `MotionMaster` ownership outside the represented subsystem.
 
 ---
@@ -525,11 +526,11 @@ Generators do not own packet writers directly; every motion is serialized throug
 
 Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
-- [ ] **#MOVE-GEN.1** Create `crates/wow-movement/` with module skeleton: `motion_master.rs`, `generator.rs`, `defines.rs`, `generators/{idle,random,waypoint,chase,follow,...}.rs`. `wow-movement` exists and `defines.rs` is present; runtime `motion_master.rs`, `generator.rs` and concrete generator modules remain pending. (L)
-- [x] **#MOVE-GEN.2** Port `MovementGeneratorType` enum (0..18, identical values). Represented as `wow_entities::MovementGeneratorKind`; future runtime may re-export or relocate it. (L)
-- [x] **#MOVE-GEN.3** Port `MovementSlot` (DEFAULT/ACTIVE), `MovementGeneratorMode`, `MovementGeneratorPriority`. Represented in `wow-entities` with C++ numeric values. (L)
-- [x] **#MOVE-GEN.4** Port `MovementGeneratorFlags` bitflags (`bitflags!` crate already in workspace). Represented as exact `MOVEMENTGENERATOR_FLAG_*` constants in `wow-entities`; conversion to `bitflags!` remains optional cleanup, not a semantic gap. (L)
-- [ ] **#MOVE-GEN.5** Define `trait MovementGenerator { fn initialize, reset, update, deactivate, finalize, kind, ... }`. (M)
+- [ ] **#MOVE-GEN.1** Create `crates/wow-movement/` with module skeleton: `motion_master.rs`, `generator.rs`, `defines.rs`, `generators/{idle,random,waypoint,chase,follow,...}.rs`. `wow-movement`, `defines.rs`, `generator.rs` and `motion_master.rs` exist; concrete generator modules remain pending. (L)
+- [x] **#MOVE-GEN.2** Port `MovementGeneratorType` enum (0..18, identical values). Runtime enum exists in `wow-movement`; represented bridge equivalent exists as `wow_entities::MovementGeneratorKind`. (L)
+- [x] **#MOVE-GEN.3** Port `MovementSlot` (DEFAULT/ACTIVE), `MovementGeneratorMode`, `MovementGeneratorPriority`. Runtime values exist in `wow-movement`; represented values exist in `wow-entities`. (L)
+- [x] **#MOVE-GEN.4** Port `MovementGeneratorFlags` bitflags (`bitflags!` crate already in workspace). Runtime `bitflags!` exists in `wow-movement`; represented constants exist in `wow-entities`. (L)
+- [x] **#MOVE-GEN.5** Define `trait MovementGenerator { fn initialize, reset, update, deactivate, finalize, kind, ... }`. Owner `Unit` integration remains pending for `#MOVE-GEN.8/#MOVE-GEN.25`. (M)
 - [x] **#MOVE-GEN.6** Port `ChaseRange` + `ChaseAngle` structs with `is_angle_okay`, `upper_bound`, `lower_bound`. (L)
 - [x] **#MOVE-GEN.7** Port `MotionMasterFlags` + `MotionMasterDelayedActionType` + `DelayedAction` struct. Flags, enum IDs, FIFO validator resolution, and represented payload execution are in `wow-entities`; generalized `MotionMaster::Update` remains in `#MOVE-GEN.8/#MOVE-GEN.9`. (L)
 - [ ] **#MOVE-GEN.8** Implement `MotionMaster` core: stack per slot (`Vec<Box<dyn MovementGenerator>>`), `update(diff)` with delayed-action draining. Represented update sequencing exists in `MotionSubsystem`; runtime `Unit` ownership remains pending. (H)
@@ -644,14 +645,14 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 | C++ Symbol | Rust Equivalent | Notes |
 |---|---|---|
 | `class MotionMaster` | `struct MotionMaster { owner: ObjectGuid, default: Box<dyn MovementGenerator>, slots: [Vec<Box<dyn MovementGenerator>>; 2], delayed: VecDeque<DelayedAction>, flags: MotionMasterFlags, base_unit_states: HashMap<u32, *const dyn MovementGenerator> }` | Stack-per-slot |
-| `class MovementGenerator` (abstract) | `trait MovementGenerator: Send` | `fn initialize(&mut self, unit: &mut Unit)` etc. |
+| `class MovementGenerator` (abstract) | `wow_movement::MovementGenerator` | Trait surface exists; owner `Unit` integration is still pending |
 | `MovementGeneratorMedium<T,D>` (CRTP) | (drop entirely) | Trait + concrete impls suffice; no CRTP needed |
 | `FactoryHolder<MovementGenerator,Unit,MovementGeneratorType>` | `inventory::submit!` registration → fn pointer table indexed by `MovementGeneratorType` | Match the existing handler-dispatch pattern |
-| `MovementGeneratorType` (enum uint8) | `#[repr(u8)] enum MovementGeneratorType { Idle=0, Random=1, Waypoint=2, ... }` | Identical numeric values |
-| `MovementSlot` | `enum MovementSlot { Default, Active }` | — |
-| `MovementGeneratorFlags` | `bitflags! struct MovementGeneratorFlags: u16 { ... }` | Identical bit positions |
-| `MotionMasterFlags` | `bitflags! struct MotionMasterFlags: u8 { ... }` | — |
-| `DelayedAction` | `struct DelayedAction { kind: DelayedActionType, action: Box<dyn FnOnce(&mut MotionMaster)>, validator: Box<dyn Fn() -> bool> }` | Boxed closures |
+| `MovementGeneratorType` (enum uint8) | `wow_movement::MovementGeneratorType` | Identical numeric values |
+| `MovementSlot` | `wow_movement::MovementSlot` | — |
+| `MovementGeneratorFlags` | `wow_movement::MovementGeneratorFlags` | Identical bit positions |
+| `MotionMasterFlags` | `wow_movement::MotionMasterFlags` | Identical bit positions |
+| `DelayedAction` | `wow_movement::DelayedAction<M>` | Boxed closure + validator skeleton |
 | `std::deque<DelayedAction>` | `VecDeque<DelayedAction>` | — |
 | `std::multiset<MovementGenerator*, Comparator>` | `Vec<Box<dyn MovementGenerator>>` kept sorted by `(priority desc, insertion_idx)` | Multiset is overkill |
 | `unique_ptr<MovementGenerator, Deleter>` | `Box<dyn MovementGenerator>` | — |
@@ -702,7 +703,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - SplineChainMovementGenerator: **absent** (238 lines C++); `script_spline_chain_*` tables not loaded.
 - GenericMovementGenerator: represented constructor/lifecycle/inform exists; executable `FnOnce(MoveSplineInit)` launch and arrival `CastSpell` are pending.
 
-**Trait + enum surface.** The boxed runtime `trait MovementGenerator` still does not exist. Represented enum/flag surfaces do exist in `wow-entities`; pure `ChaseRange`, `ChaseAngle`, `JumpArrivalCastArgs` and `JumpChargeParams` exist in `wow-movement`. Remaining structural gap: move these represented pieces behind a real runtime `MotionMaster` API without duplicating or regressing the tested bridge behavior.
+**Trait + enum surface.** The first boxed runtime `MovementGenerator` trait and runtime enum/flag surfaces now exist in `wow-movement`. Represented enum/flag surfaces still exist in `wow-entities`; pure `ChaseRange`, `ChaseAngle`, `JumpArrivalCastArgs` and `JumpChargeParams` exist in `wow-movement`. Remaining structural gap: add concrete runtime generator modules and move represented behavior behind a real runtime `MotionMaster` API without duplicating or regressing the tested bridge behavior.
 
 **AI callback surface.** `Unit::MovementInform(type, id)` (the AI hook every generator calls on Finalize when `MOVEMENTGENERATOR_FLAG_INFORM_ENABLED`) has no Rust counterpart in `wow-ai`. Boss scripts that depend on waypoint/point arrival callbacks have nothing to attach to.
 

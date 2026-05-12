@@ -1,9 +1,19 @@
 pub mod defines;
+pub mod generator;
+pub mod motion_master;
 pub mod spline;
 
 pub use defines::{
     CONTACT_DISTANCE_LIKE_CPP, ChaseAngle, ChaseRange, JumpArrivalCastArgs, JumpChargeParams,
     JumpChargeSpec, normalize_orientation_like_cpp,
+};
+pub use generator::{
+    MovementGenerator, MovementGeneratorFlags, MovementGeneratorMode, MovementGeneratorPriority,
+    MovementGeneratorState, MovementGeneratorType, MovementSlot,
+};
+pub use motion_master::{
+    DelayedAction, DelayedActionQueue, MotionMasterDelayedActionType, MotionMasterFlags,
+    ResolvedDelayedAction,
 };
 pub use spline::{
     AnimTierTransition, FacingInfo, JumpSpeeds, MonsterMovePathData, MonsterMoveType, MoveSpline,
