@@ -213,6 +213,17 @@ impl PathGenerator {
         }
     }
 
+    pub fn normalize_path_like_cpp(&mut self, mut update_allowed_z: impl FnMut(Position) -> f32) {
+        for point in &mut self.path_points {
+            point.z = update_allowed_z(*point);
+        }
+    }
+
+    #[must_use]
+    pub fn is_invalid_destination_z_like_cpp(&self, target: Position) -> bool {
+        (target.z - self.actual_end_position.z) > 5.0
+    }
+
     pub fn clear(&mut self) {
         self.poly_length = 0;
         self.path_poly_refs = [INVALID_POLYREF_LIKE_CPP; MAX_PATH_LENGTH_LIKE_CPP];
@@ -399,6 +410,22 @@ mod tests {
         assert!(!path.path_type().contains(PathType::FARFROMPOLY_END));
         path.add_far_from_poly_flags(false, true);
         assert!(path.path_type().contains(PathType::FARFROMPOLY));
+    }
+
+    #[test]
+    fn normalize_path_and_invalid_destination_z_match_cpp_shape() {
+        let mut path = PathGenerator::new();
+        path.calculate_without_navmesh_like_cpp(pos(0.0, 0.0, 10.0), pos(5.0, 0.0, 20.0), false);
+
+        path.normalize_path_like_cpp(|point| if point.x < 1.0 { 7.0 } else { 12.0 });
+        assert_eq!(
+            path.path_points(),
+            &[pos(0.0, 0.0, 7.0), pos(5.0, 0.0, 12.0)]
+        );
+
+        assert!(!path.is_invalid_destination_z_like_cpp(pos(5.0, 0.0, 25.0)));
+        assert!(path.is_invalid_destination_z_like_cpp(pos(5.0, 0.0, 25.1)));
+        assert!(!path.is_invalid_destination_z_like_cpp(pos(5.0, 0.0, 1.0)));
     }
 
     #[test]
