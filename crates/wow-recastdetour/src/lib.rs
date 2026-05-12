@@ -43,6 +43,9 @@ pub const MAX_PATH_LENGTH_LIKE_CPP: usize = 74;
 pub const MAX_POINT_PATH_LENGTH_LIKE_CPP: usize = 74;
 pub const SMOOTH_PATH_STEP_SIZE_LIKE_CPP: f32 = 4.0;
 pub const SMOOTH_PATH_SLOP_LIKE_CPP: f32 = 0.3;
+pub const MAX_NUMBER_OF_GRIDS_LIKE_CPP: i32 = 64;
+pub const SIZE_OF_GRIDS_LIKE_CPP: f32 = 533.3333;
+pub const CENTER_GRID_ID_LIKE_CPP: i32 = MAX_NUMBER_OF_GRIDS_LIKE_CPP / 2;
 
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
@@ -2393,6 +2396,14 @@ pub const fn pack_tile_id_like_cpp(x: i32, y: i32) -> u32 {
 }
 
 #[must_use]
+pub fn mmap_tile_coords_for_wow_position_like_cpp(x: f32, y: f32) -> (i32, i32) {
+    (
+        (CENTER_GRID_ID_LIKE_CPP as f32 - x / SIZE_OF_GRIDS_LIKE_CPP) as i32,
+        (CENTER_GRID_ID_LIKE_CPP as f32 - y / SIZE_OF_GRIDS_LIKE_CPP) as i32,
+    )
+}
+
+#[must_use]
 pub fn map_file_name_like_cpp(map_id: u32) -> String {
     format!("mmaps/{map_id:04}.mmap")
 }
@@ -3511,6 +3522,22 @@ mod tests {
     #[test]
     fn mmap_manager_small_helpers_match_cpp() {
         assert_eq!(pack_tile_id_like_cpp(0x12, 0x34), 0x0012_0034);
+        assert_eq!(
+            mmap_tile_coords_for_wow_position_like_cpp(0.0, 0.0),
+            (32, 32)
+        );
+        assert_eq!(
+            mmap_tile_coords_for_wow_position_like_cpp(SIZE_OF_GRIDS_LIKE_CPP, 0.0),
+            (31, 32)
+        );
+        assert_eq!(
+            mmap_tile_coords_for_wow_position_like_cpp(-SIZE_OF_GRIDS_LIKE_CPP, 0.0),
+            (33, 32)
+        );
+        assert_eq!(
+            mmap_tile_coords_for_wow_position_like_cpp(0.0, SIZE_OF_GRIDS_LIKE_CPP),
+            (32, 31)
+        );
         assert_eq!(map_file_name_like_cpp(571), "mmaps/0571.mmap");
         assert_eq!(
             map_file_path_like_cpp("/srv/wow", 571),

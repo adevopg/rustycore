@@ -211,7 +211,7 @@ Tile generation is offline (`mmaps_generator` tool from Trinity); the runtime on
 **Suspicious / likely divergent (hipótesis pre-auditoría):**
 - The current `wow_ai::wander` linear-tween bypasses path-finding entirely; creatures will path through walls, off cliffs, into lava — visible immediately on any map with terrain.
 - Without `BuildShortcut` fallback, missing mmaps will hard-fail rather than degrade gracefully (C++ falls back to straight-line + `PATHFIND_NOT_USING_PATH`).
-- No mmap tile coordinate alignment with the VMap grid is documented anywhere — when both load, they need to agree on `tile_x = floor(64 - y / 533.333)` (note WoW's coord flip).
+- MMap tile coordinate alignment now has `mmap_tile_coords_for_wow_position_like_cpp`, matching C++ `gx = int(CENTER_GRID_ID - x / SIZE_OF_GRIDS)` / `gy = int(CENTER_GRID_ID - y / SIZE_OF_GRIDS)`.
 - Detour `dtPolyRef` is `uint64` — Rust must use `u64` and not `u32` (an easy mistake from older docs).
 - The C++ `dtQueryFilter` per-area cost table (`m_areaCost[64]`) needs to be initialised in `CreateFilter`; default `1.0` is fine for ground but lava/slime should be punitive (`100.0`+) — replicate or creatures will path through fire.
 - `FindSmoothPath` uses `MAX_SMOOTH_PATH_NODES = 74` (matching `MAX_POINT_PATH_LENGTH`); the buffer is stack-allocated in C++. Rust port must size matching.
@@ -360,7 +360,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - **Detour is not thread-safe.** `dtNavMesh` (read-only after load) is shareable, but `dtNavMeshQuery` holds per-search state and **must** be one-per-thread or one-per-map-instance. C++ keys it `(mapId, instanceId)`; the Rust `MapManager` design must match — sharing across threads will crash or silently corrupt paths.
 - **`dtPolyRef` is `uint64`**, NOT `uint32`. Old TC docs sometimes show `uint32`. Use `u64`.
 - **WoW coordinate flip.** Detour internally uses `(x, y_up, z)` with `y` as the up axis. WoW uses `(x, y, z_up)`. C++ `PathGenerator` does the swap inline (`InRangeYZX` is a giveaway — Y/Z/X order). Replicate or all paths are visibly off-axis.
-- **Tile coordinates.** A WoW map is 64×64 grid of 533.333-yard tiles. `tx = 32 - floor(y / 533.333)`, `ty = 32 - floor(x / 533.333)` — note the swap and the negation. Off-by-one here makes the wrong tile load and `findNearestPoly` returns INVALID_POLYREF.
+- **Tile coordinates.** A WoW map is a 64×64 grid of 533.333-yard tiles. C++ uses truncating `int(CENTER_GRID_ID - x / SIZE_OF_GRIDS)` and `int(CENTER_GRID_ID - y / SIZE_OF_GRIDS)` for mmap terrain tile coordinates; do not reuse the smaller 64-yard creature grid conversion here. Off-by-one here makes the wrong tile load and `findNearestPoly` returns INVALID_POLYREF.
 - **`MAX_PATH_LENGTH = 74` is canonical.** Trinity comment: "74 * 4.0 = 296y, way more than evade range". If you raise it, smooth-path `SMOOTH_PATH_STEP_SIZE=4.0` cost rises linearly. Don't change without good reason.
 - **`SMOOTH_PATH_SLOP = 0.3f`** is the steer-target tolerance. Lower → snappier; higher → more direct. Match C++.
 - **`BuildShortcut` is the safety net.** When mmaps are disabled or the map isn't in the allowlist, the path becomes `[start, end]` with `PATHFIND_NOT_USING_PATH`. Generators must be tolerant of this — chase will still work visually but creatures path through walls. Document this as a known degraded mode, not a bug.
@@ -389,7 +389,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 | `dtQueryFilter` | `struct DetourQueryFilter { include: u16, exclude: u16, area_cost: [f32; 64] }` (copy semantics) | Owned per `PathGenerator` |
 | `dtPoly` | accessed only through Detour FFI, not exposed to Rust | — |
 | `enum NavTerrain` | `bitflags! struct NavTerrain: u16 { const GROUND = 1; const MAGMA = 2; const SLIME = 4; const WATER = 8; const EMPTY = 16; }` | — |
-| `MMapManager` (singleton) | `struct MMapManager { maps: DashMap<u32, MMapData>, base_path: PathBuf, allowed_maps: HashSet<u32>, enabled: bool }` | DashMap for concurrent map load; `OnceCell` for global access |
+| `MMapManager` (singleton) | `struct MMapManager { loaded_mmaps: HashMap<u32, Option<MMapData>>, parent_map_data: HashMap<u32, u32>, loaded_tiles: u32, thread_safe_environment: bool }` | Rust keeps Detour state `!Send + !Sync`; runtime ownership must stay local or behind a dedicated owner, not in a shared `DashMap` |
 | `MMapData` | `struct MMapData { mesh: DetourNavMesh, queries: DashMap<u32, DetourNavMeshQuery>, loaded_tiles: HashSet<(u8, u8)> }` | Per-instance query map |
 | `MmapTileHeader` | `#[repr(C, packed)] struct MmapTileHeader { magic: [u8; 4], dt_version: u32, mmap_version: u32, size: u32, uses_liquids: u8, _padding: [u8; 3] }` | Matches on-disk layout |
 | `MAX_PATH_LENGTH` / `MAX_POINT_PATH_LENGTH` | `const MAX_PATH_LENGTH: usize = 74;` | — |
