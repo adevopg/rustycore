@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::{PI, TAU};
 
 use wow_constants::{TypeId, TypeMask};
@@ -193,14 +193,27 @@ impl WorldLocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VisibleMapIdRef {
+    references: i32,
+}
+
+impl VisibleMapIdRef {
+    pub const fn references(&self) -> i32 {
+        self.references
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PhaseShift {
     phases: BTreeSet<u32>,
+    visible_map_ids: BTreeMap<u32, VisibleMapIdRef>,
 }
 
 impl PhaseShift {
     pub fn from_phases(phases: impl IntoIterator<Item = u32>) -> Self {
         Self {
             phases: phases.into_iter().collect(),
+            visible_map_ids: BTreeMap::new(),
         }
     }
 
@@ -210,6 +223,45 @@ impl PhaseShift {
 
     pub fn clear(&mut self) {
         self.phases.clear();
+        self.visible_map_ids.clear();
+    }
+
+    pub fn add_visible_map_id_like_cpp(&mut self, visible_map_id: u32, references: i32) -> bool {
+        let inserted = !self.visible_map_ids.contains_key(&visible_map_id);
+        let entry = self
+            .visible_map_ids
+            .entry(visible_map_id)
+            .or_insert(VisibleMapIdRef { references: 0 });
+        entry.references += references;
+        inserted
+    }
+
+    pub fn remove_visible_map_id_like_cpp(&mut self, visible_map_id: u32) -> bool {
+        let Some(entry) = self.visible_map_ids.get_mut(&visible_map_id) else {
+            return false;
+        };
+        entry.references -= 1;
+        if entry.references == 0 {
+            self.visible_map_ids.remove(&visible_map_id);
+            return true;
+        }
+        false
+    }
+
+    pub fn has_visible_map_id_like_cpp(&self, visible_map_id: u32) -> bool {
+        self.visible_map_ids.contains_key(&visible_map_id)
+    }
+
+    pub fn visible_map_id_count_like_cpp(&self) -> usize {
+        self.visible_map_ids.len()
+    }
+
+    pub fn visible_map_ids_like_cpp(&self) -> impl Iterator<Item = u32> + '_ {
+        self.visible_map_ids.keys().copied()
+    }
+
+    pub fn visible_map_id_ref_like_cpp(&self, visible_map_id: u32) -> Option<&VisibleMapIdRef> {
+        self.visible_map_ids.get(&visible_map_id)
     }
 
     pub fn can_see(&self, other: &Self) -> bool {
@@ -1011,6 +1063,49 @@ mod tests {
 
         b.phase_shift_mut().insert(10);
         assert!(a.is_within_dist_in_map(&b, 2.0, true));
+    }
+
+    #[test]
+    fn phase_shift_visible_map_ids_reference_count_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+
+        assert!(phase_shift.add_visible_map_id_like_cpp(609, 1));
+        assert!(!phase_shift.add_visible_map_id_like_cpp(609, 1));
+        assert!(phase_shift.has_visible_map_id_like_cpp(609));
+        assert_eq!(phase_shift.visible_map_id_count_like_cpp(), 1);
+        assert_eq!(
+            phase_shift
+                .visible_map_id_ref_like_cpp(609)
+                .map(VisibleMapIdRef::references),
+            Some(2)
+        );
+        assert_eq!(
+            phase_shift.visible_map_ids_like_cpp().collect::<Vec<_>>(),
+            vec![609]
+        );
+
+        assert!(!phase_shift.remove_visible_map_id_like_cpp(609));
+        assert_eq!(
+            phase_shift
+                .visible_map_id_ref_like_cpp(609)
+                .map(VisibleMapIdRef::references),
+            Some(1)
+        );
+        assert!(phase_shift.remove_visible_map_id_like_cpp(609));
+        assert!(!phase_shift.has_visible_map_id_like_cpp(609));
+        assert!(!phase_shift.remove_visible_map_id_like_cpp(609));
+    }
+
+    #[test]
+    fn phase_shift_clear_removes_visible_map_ids_like_cpp() {
+        let mut phase_shift = PhaseShift::from_phases([10]);
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+
+        phase_shift.clear();
+
+        assert!(!phase_shift.has_visible_map_id_like_cpp(609));
+        assert!(phase_shift.visible_map_ids_like_cpp().next().is_none());
+        assert!(phase_shift.can_see(&PhaseShift::from_phases([20])));
     }
 
     #[test]
