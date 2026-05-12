@@ -40,6 +40,8 @@ pub const DT_STRAIGHTPATH_AREA_CROSSINGS_LIKE_CPP: i32 = 0x01;
 pub const DT_STRAIGHTPATH_ALL_CROSSINGS_LIKE_CPP: i32 = 0x02;
 pub const MAX_PATH_LENGTH_LIKE_CPP: usize = 74;
 pub const MAX_POINT_PATH_LENGTH_LIKE_CPP: usize = 74;
+pub const SMOOTH_PATH_STEP_SIZE_LIKE_CPP: f32 = 4.0;
+pub const SMOOTH_PATH_SLOP_LIKE_CPP: f32 = 0.3;
 
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
@@ -193,6 +195,13 @@ pub struct DetourPolyPath {
     pub point_path: DetourPointPath,
     pub start_far_from_poly: bool,
     pub end_far_from_poly: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetourSteerTarget {
+    pub position: [f32; 3],
+    pub flags: u8,
+    pub poly_ref: DetourPolyRef,
 }
 
 unsafe extern "C" {
@@ -1178,6 +1187,76 @@ pub fn build_raycast_poly_path_like_cpp(
     })
 }
 
+#[must_use]
+pub fn fixup_corridor_like_cpp(
+    path: &[DetourPolyRef],
+    max_path: usize,
+    visited: &[DetourPolyRef],
+) -> Vec<DetourPolyRef> {
+    let mut furthest_path = None;
+    let mut furthest_visited = None;
+
+    for i in (0..path.len()).rev() {
+        let mut found = false;
+        for j in (0..visited.len()).rev() {
+            if path[i] == visited[j] {
+                furthest_path = Some(i);
+                furthest_visited = Some(j);
+                found = true;
+            }
+        }
+        if found {
+            break;
+        }
+    }
+
+    let (Some(furthest_path), Some(furthest_visited)) = (furthest_path, furthest_visited) else {
+        return path.to_vec();
+    };
+
+    let req = visited.len() - furthest_visited;
+    let orig = (furthest_path + 1).min(path.len());
+    let mut size = path.len().saturating_sub(orig);
+    if req + size > max_path {
+        size = max_path.saturating_sub(req);
+    }
+
+    let mut fixed = Vec::with_capacity((req + size).min(max_path));
+    fixed.extend((0..req).map(|i| visited[(visited.len() - 1) - i]));
+    fixed.extend_from_slice(&path[orig..orig + size]);
+    fixed
+}
+
+pub fn get_steer_target_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    start_pos: [f32; 3],
+    end_pos: [f32; 3],
+    min_target_dist: f32,
+    path: &[DetourPolyRef],
+) -> Result<Option<DetourSteerTarget>, DetourNavMeshQueryError> {
+    const MAX_STEER_POINTS: usize = 3;
+
+    let steer_path = query.find_straight_path(start_pos, end_pos, path, MAX_STEER_POINTS, 0)?;
+    if steer_path.is_empty() {
+        return Ok(None);
+    }
+
+    let steer = steer_path.into_iter().find(|point| {
+        point.flags & DT_STRAIGHTPATH_OFFMESH_CONNECTION_LIKE_CPP != 0
+            || !detour_in_range(point.position, start_pos, min_target_dist, 1000.0)
+    });
+
+    Ok(steer.map(|point| {
+        let mut position = point.position;
+        position[1] = start_pos[1];
+        DetourSteerTarget {
+            position,
+            flags: point.flags,
+            poly_ref: point.poly_ref,
+        }
+    }))
+}
+
 fn add_far_from_poly_flags_like_cpp(
     path_type: &mut DetourPathType,
     start_far_from_poly: bool,
@@ -1912,6 +1991,8 @@ mod tests {
         assert_eq!(DT_INVALID_PARAM_LIKE_CPP, 1_u32 << 3);
         assert_eq!(MAX_PATH_LENGTH_LIKE_CPP, 74);
         assert_eq!(MAX_POINT_PATH_LENGTH_LIKE_CPP, 74);
+        assert_eq!(SMOOTH_PATH_STEP_SIZE_LIKE_CPP, 4.0);
+        assert_eq!(SMOOTH_PATH_SLOP_LIKE_CPP, 0.3);
         assert!(detour_status_failed(DT_FAILURE_LIKE_CPP));
         assert!(!detour_status_failed(DT_SUCCESS_LIKE_CPP));
 
@@ -2380,6 +2461,54 @@ mod tests {
                 .path_type
                 .contains(DetourPathType::FARFROMPOLY_END)
         );
+    }
+
+    #[test]
+    fn fixup_corridor_matches_cpp_common_polygon_splice() {
+        assert_eq!(
+            fixup_corridor_like_cpp(&[1, 2, 3, 4, 5], 8, &[7, 8, 3, 9]),
+            vec![9, 3, 4, 5]
+        );
+        assert_eq!(
+            fixup_corridor_like_cpp(&[1, 2, 3], 8, &[9, 8]),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            fixup_corridor_like_cpp(&[1, 2, 3, 4, 5], 3, &[7, 8, 3, 9]),
+            vec![9, 3, 4]
+        );
+    }
+
+    #[test]
+    fn get_steer_target_matches_cpp_slop_filter() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        mesh.add_tile(&generated_square_tile_blob(0, 0)).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+        let nearest = query
+            .find_nearest_poly([0.25, 0.0, 0.25], [3.0, 5.0, 3.0], &filter)
+            .unwrap();
+
+        let steer = get_steer_target_like_cpp(
+            &query,
+            [0.25, 2.0, 0.25],
+            [0.75, 0.0, 0.75],
+            SMOOTH_PATH_SLOP_LIKE_CPP,
+            &[nearest.poly_ref],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(steer.position, [0.75, 2.0, 0.75]);
+        assert_eq!(steer.flags, DT_STRAIGHTPATH_END_LIKE_CPP);
+        assert_eq!(steer.poly_ref, 0);
     }
 
     #[test]
