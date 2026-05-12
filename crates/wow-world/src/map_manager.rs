@@ -376,16 +376,17 @@ impl WorldCreature {
         ai.spline_id = ai.spline_id.saturating_add(1);
     }
 
-    pub fn begin_move_spline_like_cpp(&mut self, dst: Position) -> Option<(Position, MoveSpline)> {
-        let spline_id = self.spline_id().saturating_add(1);
+    fn launch_move_spline_init_like_cpp(
+        &mut self,
+        init: &mut MoveSplineInit,
+        dst: Position,
+    ) -> Option<(Position, MoveSpline)> {
+        let spline_id = init.args.spline_id;
         let active_spline_position = self
             .active_move_spline
             .as_ref()
             .filter(|spline| !spline.finalized() && !spline.on_transport)
             .and_then(MoveSpline::compute_position);
-        let mut init = MoveSplineInit::new(spline_id);
-        init.set_velocity(2.5);
-        init.move_to(dst);
 
         let now_ms = self.now_ms();
         let mut spline = self
@@ -431,6 +432,32 @@ impl WorldCreature {
             .add_unit_state(UnitState::ROAMING_MOVE.bits());
         self.active_move_spline = Some(spline.clone());
         Some((launch.real_position, spline))
+    }
+
+    pub fn begin_move_spline_like_cpp(&mut self, dst: Position) -> Option<(Position, MoveSpline)> {
+        let spline_id = self.spline_id().saturating_add(1);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_to(dst);
+
+        self.launch_move_spline_init_like_cpp(&mut init, dst)
+    }
+
+    pub fn begin_move_spline_by_path_like_cpp<I>(
+        &mut self,
+        path: I,
+    ) -> Option<(Position, MoveSpline)>
+    where
+        I: IntoIterator<Item = Position>,
+    {
+        let points = path.into_iter().collect::<Vec<_>>();
+        let dst = points.last().copied()?;
+        let spline_id = self.spline_id().saturating_add(1);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_by_path(points, 0);
+
+        self.launch_move_spline_init_like_cpp(&mut init, dst)
     }
 
     pub fn begin_point_movement_like_cpp(
@@ -1714,6 +1741,53 @@ mod tests {
                 .unit()
                 .has_unit_state(UnitState::ROAMING_MOVE.bits())
         );
+    }
+
+    #[test]
+    fn world_creature_move_spline_by_path_uses_cpp_moveby_path_bridge() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54322);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let path = [
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            Position::new(12.0, 11.0, 0.0, 0.0),
+            Position::new(15.0, 12.0, 0.0, 0.0),
+        ];
+
+        let (from, spline) = creature
+            .begin_move_spline_by_path_like_cpp(path)
+            .expect("valid multi-point path spline");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert!(creature.active_move_spline.is_some());
+        assert_eq!(creature.spline_id(), 2);
+        assert_eq!(creature.move_target(), Some(path[2]));
+        assert_eq!(spline.final_destination(), Some(path[2]));
+        assert_eq!(spline.monster_move_path_data().points, vec![path[2]]);
+        assert_eq!(spline.monster_move_path_data().packed_deltas.len(), 1);
+        assert!(
+            creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+        assert!(motion_spline.enabled);
+        assert_eq!(motion_spline.spline_id, spline.id());
+        assert_eq!(motion_spline.final_destination, Some((15, 12, 0)));
     }
 
     #[test]
