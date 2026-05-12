@@ -60,6 +60,20 @@ extern "C"
         return mesh->removeTile((dtTileRef)tile_ref, 0, 0);
     }
 
+    dtStatus rustycore_dt_nav_mesh_get_off_mesh_connection_poly_end_points(
+        dtNavMesh const* mesh,
+        uint64_t prev_ref,
+        uint64_t poly_ref,
+        float* start_pos,
+        float* end_pos)
+    {
+        return mesh->getOffMeshConnectionPolyEndPoints(
+            (dtPolyRef)prev_ref,
+            (dtPolyRef)poly_ref,
+            start_pos,
+            end_pos);
+    }
+
     dtNavMeshQuery* rustycore_dt_alloc_nav_mesh_query()
     {
         return dtAllocNavMeshQuery();

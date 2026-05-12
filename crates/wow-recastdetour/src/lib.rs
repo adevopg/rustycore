@@ -223,6 +223,13 @@ unsafe extern "C" {
         mesh: *mut RawDetourNavMesh,
         tile_ref: DetourTileRef,
     ) -> DetourStatus;
+    fn rustycore_dt_nav_mesh_get_off_mesh_connection_poly_end_points(
+        mesh: *const RawDetourNavMesh,
+        prev_ref: DetourPolyRef,
+        poly_ref: DetourPolyRef,
+        start_pos: *mut f32,
+        end_pos: *mut f32,
+    ) -> DetourStatus;
     fn rustycore_dt_alloc_nav_mesh_query() -> *mut RawDetourNavMeshQuery;
     fn rustycore_dt_free_nav_mesh_query(query: *mut RawDetourNavMeshQuery);
     fn rustycore_dt_nav_mesh_query_init(
@@ -384,6 +391,29 @@ impl DetourNavMesh {
         }
 
         Ok(())
+    }
+
+    pub fn get_off_mesh_connection_poly_end_points(
+        &self,
+        prev_ref: DetourPolyRef,
+        poly_ref: DetourPolyRef,
+    ) -> Result<([f32; 3], [f32; 3]), DetourNavMeshError> {
+        let mut start_pos = [0.0; 3];
+        let mut end_pos = [0.0; 3];
+        let status = unsafe {
+            rustycore_dt_nav_mesh_get_off_mesh_connection_poly_end_points(
+                self.raw.as_ptr(),
+                prev_ref,
+                poly_ref,
+                start_pos.as_mut_ptr(),
+                end_pos.as_mut_ptr(),
+            )
+        };
+        if detour_status_failed(status) {
+            return Err(DetourNavMeshError::OffMeshConnectionEndpointsFailed { status });
+        }
+
+        Ok((start_pos, end_pos))
     }
 
     #[must_use]
@@ -1258,6 +1288,7 @@ pub fn get_steer_target_like_cpp(
 }
 
 pub fn find_smooth_path_like_cpp(
+    nav_mesh: &DetourNavMesh,
     query: &DetourNavMeshQuery<'_>,
     filter: &DetourQueryFilter,
     start_pos: [f32; 3],
@@ -1344,7 +1375,31 @@ pub fn find_smooth_path_like_cpp(
         if offmesh_connection
             && detour_in_range(iter_pos, steer.position, SMOOTH_PATH_SLOP_LIKE_CPP, 1.0)
         {
-            return Err(DetourNavMeshQueryError::SmoothPathOffMeshUnsupported);
+            let mut prev_ref = 0;
+            let mut poly_ref = polys[0];
+            let mut npos = 0;
+            while npos < polys.len() && poly_ref != steer.poly_ref {
+                prev_ref = poly_ref;
+                poly_ref = polys[npos];
+                npos += 1;
+            }
+
+            polys.drain(0..npos);
+
+            if let Ok((connection_start_pos, connection_end_pos)) =
+                nav_mesh.get_off_mesh_connection_poly_end_points(prev_ref, poly_ref)
+            {
+                if smooth_path.len() < max_smooth_path_size {
+                    smooth_path.push(connection_start_pos);
+                }
+
+                iter_pos = connection_end_pos;
+                if let Some(first_poly) = polys.first().copied() {
+                    let height = query.get_poly_height(first_poly, iter_pos)?;
+                    iter_pos[1] = height;
+                }
+                iter_pos[1] += 0.5;
+            }
         }
 
         if smooth_path.len() < max_smooth_path_size {
@@ -1406,6 +1461,8 @@ pub enum DetourNavMeshError {
     AllocationFailed,
     #[error("Detour navmesh initialization failed with status 0x{status:08x}")]
     InitFailed { status: DetourStatus },
+    #[error("Detour off-mesh connection endpoints lookup failed with status 0x{status:08x}")]
+    OffMeshConnectionEndpointsFailed { status: DetourStatus },
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1450,8 +1507,6 @@ pub enum DetourNavMeshQueryError {
     VisitedBufferTooLarge { max_visited_size: usize },
     #[error("Detour raycast failed with status 0x{status:08x}")]
     RaycastFailed { status: DetourStatus },
-    #[error("Detour smooth path off-mesh connection handling is not ported yet")]
-    SmoothPathOffMeshUnsupported,
     #[error("Detour smooth path reached C++ MAX_POINT_PATH_LENGTH: {point_count}")]
     SmoothPathTooLong { point_count: usize },
 }
@@ -2635,8 +2690,13 @@ mod tests {
         let nearest = query
             .find_nearest_poly([0.25, 0.0, 0.25], [3.0, 5.0, 3.0], &filter)
             .unwrap();
+        assert!(matches!(
+            mesh.get_off_mesh_connection_poly_end_points(0, nearest.poly_ref),
+            Err(DetourNavMeshError::OffMeshConnectionEndpointsFailed { .. })
+        ));
 
         let smooth = find_smooth_path_like_cpp(
+            &mesh,
             &query,
             &filter,
             [0.25, 0.0, 0.25],
