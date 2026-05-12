@@ -40,7 +40,8 @@ Current Rust status:
 - `#A06.8h.3e.22` ports the direct runtime shape of `PointMovementGenerator` and `AssistanceMovementGenerator` into `wow-movement`: constructor flags/base state, `EVENT_CHARGE_PREPATH`, no-move/casting interruption, `UNIT_STATE_ROAMING_MOVE`, direct `MoveSplineInit` launch with speed/facing/final orientation/spell extras/close-enough, relaunch actions, point inform and assistance side-effect plan.
 - `#A06.8h.3e.23` ports `AbstractFollower` and represented runtime `FollowMovementGenerator` into `wow-movement`: follower target add/remove events, constructor/init/reset/update/deactivate/finalize flags, duration/check timers, `PositionOkay`, angle selection, follow move state, target-counter inform and pet-speed side-effect counters.
 - `#A06.8h.3e.24` ports represented runtime `ChaseMovementGenerator` into `wow-movement`: range-check timer, min/max/angle/LOS `PositionOkay`, mutual chase handling, lost-target/no-move/casting stops, chase move state, cannot-reach plan, walk-mode selection and target-counter inform.
-- Still missing: generalized executable generator behavior against a real `Unit`, pathgen-backed destinations, real SmartAI/script dispatch for `MovementInform`, real `CallAssistance` map/AI effects, follow/chase/flee/random/waypoint/taxi/spline-chain runtime logic, and full runtime `MotionMaster` ownership outside the represented subsystem.
+- `#A06.8h.3e.25` ports represented runtime `FleeingMovementGenerator` and `TimedFleeingMovementGenerator` into `wow-movement`: highest priority fleeing state, `UNIT_FLAG_FLEEING`, quiet-distance destination math, LOS/path retry timers, path length limit, fleeing move state, random travel delay bounds, speed-update relaunch, Player/Creature finalization differences and timed-flee inform output.
+- Still missing: generalized executable generator behavior against a real `Unit`, pathgen-backed destinations, real SmartAI/script dispatch for `MovementInform`, real `CallAssistance` map/AI effects, absent random/waypoint/taxi/spline-chain runtime logic, and full runtime `MotionMaster` ownership outside the represented subsystem.
 
 ---
 
@@ -315,15 +316,15 @@ Generators do not own packet writers directly; every motion is serialized throug
 - There is still no owner-backed runtime `MotionMaster` slot stack with real `Unit` context and full per-tick generator update for every concrete generator.
 
 **What's implemented:**
-- Runtime `MovementGeneratorType`, slot/mode/priority/flags, `MovementGenerator` trait, `MotionMasterFlags`, delayed action ids/queue, initial `MotionMaster` stack/update/filter core, `ChaseRange`, `ChaseAngle`, `RotateDirection`, `MovementWalkRunSpeedSelectionMode`, jump/charge parameter shapes, `IdleMovementGenerator`, `RotateMovementGenerator`, `DistractMovementGenerator`, `AssistanceDistractMovementGenerator`, `GenericMovementGenerator`, `PointMovementGenerator`, `AssistanceMovementGenerator`, `AbstractFollower`, `FollowMovementGenerator`, and `ChaseMovementGenerator`.
+- Runtime `MovementGeneratorType`, slot/mode/priority/flags, `MovementGenerator` trait, `MotionMasterFlags`, delayed action ids/queue, initial `MotionMaster` stack/update/filter core, `ChaseRange`, `ChaseAngle`, `RotateDirection`, `MovementWalkRunSpeedSelectionMode`, jump/charge parameter shapes, `IdleMovementGenerator`, `RotateMovementGenerator`, `DistractMovementGenerator`, `AssistanceDistractMovementGenerator`, `GenericMovementGenerator`, `PointMovementGenerator`, `AssistanceMovementGenerator`, `AbstractFollower`, `FollowMovementGenerator`, `ChaseMovementGenerator`, `FleeingMovementGenerator`, and `TimedFleeingMovementGenerator`.
 - Represented bridges in `wow-entities`/`wow-world` for Point/Generic/Idle/Rotate/Distract slices, direct creature point movement, facing-only rotate/distract splines, and canonical represented AI movement inform recording.
 - A legacy `wow_ai::wander::pick_wander_destination` linear-tween remains; it is **not** a generator and must be replaced by real generator pushes.
 - `crates/wow-world/src/handlers/movement.rs` parses client `CMSG_MOVE_*` opcodes and broadcasts movement updates, but it still does not drive the full owner-backed creature `MotionMaster`.
 
 **What's missing vs C++:**
-- **Most concrete runtime generators remain missing** — Random, Waypoint, Confused, Chase, Home, Flight, Point, Fleeing, Distract (+ Assistance, AssistanceDistract), Follow, Effect, SplineChain, Formation, Generic are not owner-backed runtime modules yet.
+- **Most concrete runtime generators remain missing owner backing** — Random, Waypoint, Confused, Home, Flight, Effect, SplineChain and Formation remain absent; Chase, Point, Fleeing, Distract (+ Assistance, AssistanceDistract), Follow and Generic have represented runtime modules but still need real owner `Unit`, pathgen where applicable and AI/script dispatch.
 - **Owner-backed runtime `MotionMaster` is still incomplete.** `wow-movement::MotionMaster` has boxed generator storage, priority ordering, delayed actions and top update/pop behavior, but still lacks real `Unit` owner context, default factory selection, owner finalize callbacks, public `Move*` API parity and map tick wiring.
-- **`AbstractFollower` helper does not exist.** No follower-target dirty tracking.
+- **`AbstractFollower` helper is represented only.** Target add/remove tracking exists in `wow-movement`; real owner/target `Unit` lookup and dirty tracking from actual map relocation still need owner-backed integration.
 - **`MovementInform` AI callback** is only represented for selected bridges; real SmartAI/script dispatch is not wired.
 - **`PropagateSpeedChange`** — speed changes never propagate to in-flight motion (because no in-flight motion exists).
 - **Waypoint loading** — no `WaypointManager`, no SQL reader for `waypoint_path*`, no `script_waypoint`, no `creature_formations`, no `script_spline_chain_meta`.
@@ -337,8 +338,8 @@ Generators do not own packet writers directly; every motion is serialized throug
 
 **Tests existing:**
 - 0 tests for any generator.
-- 0 tests for `MotionMaster` (does not exist).
-- 0 tests for `ChaseRange`/`ChaseAngle` (do not exist).
+- Runtime `MotionMaster` has unit coverage for priority ordering, delayed actions and top update/pop; owner-backed integration tests are still missing.
+- `ChaseRange`/`ChaseAngle` have unit coverage for C++ contact-distance and angle-wrap semantics.
 
 ---
 
@@ -549,7 +550,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] **#MOVE-GEN.12** `RandomMovementGenerator` (wander radius + delay + water/oxygen check). (H)
 - [ ] **#MOVE-GEN.13** `AbstractFollower` helper + `FollowMovementGenerator`. Runtime represented shape exists in `wow-movement`: target add/remove events, constructor/init/reset/update/deactivate/finalize flags, duration/check timers, `PositionOkay`, angle selection, `UNIT_STATE_FOLLOW_MOVE`, target-counter inform and pet-speed side-effect counters. Remaining work: real owner/target `Unit` lookup, `PathGenerator`, `GetNearPoint`, hover Z update, pet owner checks, real `MoveSplineInit` path launch and AI dispatch. (M)
 - [ ] **#MOVE-GEN.14** `ChaseMovementGenerator` (combat reposition + `ChaseRange`/`ChaseAngle`). Runtime represented shape exists in `wow-movement`: constructor/init/reset/update/deactivate/finalize flags, range-check timer, `PositionOkay` min/max/angle/LOS, mutual chase, lost-target/no-move/casting stops, `UNIT_STATE_CHASE_MOVE`, cannot-reach plan, walk-mode selection and target-counter inform. Remaining work: real owner/target `Unit`, `PathGenerator`, `GetNearPoint`, `ShortenPathUntilDist`, terrain/LOS/accessibility checks and actual `MoveSplineInit` path launch. (H)
-- [ ] **#MOVE-GEN.15** `FleeingMovementGenerator` + `TimedFleeingMovementGenerator`. (M)
+- [ ] **#MOVE-GEN.15** `FleeingMovementGenerator` + `TimedFleeingMovementGenerator`. Runtime represented shape exists in `wow-movement`: constructor/flags/base-state, `UNIT_FLAG_FLEEING`, quiet-distance destination math, LOS/path retry timers, path length limit, `UNIT_STATE_FLEEING_MOVE`, random delay bounds, speed-update relaunch, specialized Player/Creature finalizers and timed-flee `MovementInform(TIMED_FLEEING,0)`. Remaining work: real `ObjectAccessor` target lookup, `MovePositionToFirstCollision`, `PathGenerator`, owner `Unit` flag/state mutation, real `MoveSplineInit` path launch and AI dispatch. (M)
 - [ ] **#MOVE-GEN.16** `ConfusedMovementGenerator` (CC short hops). (M)
 - [ ] **#MOVE-GEN.17** `HomeMovementGenerator` + Evade integration. (M)
 - [ ] **#MOVE-GEN.18** `WaypointManager` SQL loader + `WaypointMovementGenerator`. (XL — split: loader L, generator H)
@@ -590,7 +591,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - [ ] Test: `ChaseMovementGenerator` with `ChaseRange::MaxRange=5` only repositions if target moves > MaxRange away.
 - [ ] Test: `ChaseAngle::is_angle_okay` returns true within `±tolerance`, false outside.
 - [ ] Test: `WaypointMovementGenerator` with 3 nodes and `delay=2000` ticks: at t=2000ms emits next-node move, at t=arrival fires `MovementInform(WAYPOINT, node_id)`.
-- [ ] Test: `FleeingMovementGenerator` with feared source at (0,0,0) picks point with `dot(direction_to_pick, direction_from_fearer) > 0`.
+- [x] Test: `FleeingMovementGenerator` destination math with feared source at (0,0,0) moves away in the too-close branch and preserves C++ quiet-distance branch constants.
 - [ ] Test: `HomeMovementGenerator` finalize calls `Creature::SetHomePosition` no-op if already at home (within tolerance).
 - [ ] Test: `FlightPathMovementGenerator` per-node `SMSG_FLIGHT_SPLINE_SYNC` sent at the configured node-arrival.
 - [ ] Test: `SplineChainMovementGenerator::ResumeFrom(SplineChainResumeInfo)` continues from `(SplineIndex, PointIndex, TimeToNext)`.
@@ -706,7 +707,7 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 - HomeMovementGenerator: **absent** (158 lines C++); evade flow has no return-to-home hook.
 - FlightPathMovementGenerator: **absent** (338 lines C++); no `TaxiPath.dbc` consumer; `SMSG_FLIGHT_SPLINE_SYNC` opcode is listed in `wow-constants/opcodes.rs` but no writer or caller.
 - PointMovementGenerator: runtime direct branch exists in `wow-movement`, including close-enough/facing/spell extras and assistance plan; represented creature bridge exists in `wow-world`, including canonical represented `MovementInform(POINT,id)`. Real pathgen, owner Unit wiring, formation signal, real `CallAssistance` and real SmartAI/script dispatch are pending.
-- FleeingMovementGenerator + TimedFleeingMovementGenerator: **absent** (282 lines C++).
+- FleeingMovementGenerator + TimedFleeingMovementGenerator: runtime represented shape exists, including fleeing flag/state, quiet-distance random destination branches, LOS/path retry timers, path length limit, move-state launch plan, speed-update relaunch, Player/Creature finalization differences and timed-flee inform. Real `ObjectAccessor`, `MovePositionToFirstCollision`, `PathGenerator`, owner `Unit` mutation, actual path launch and AI dispatch remain pending.
 - FollowMovementGenerator: runtime represented shape exists, including `AbstractFollower`, timers, `PositionOkay`, angle selection and inform planning. Real owner/target `Unit`, `PathGenerator`, `GetNearPoint`, pet checks and actual path launch remain pending.
 - FormationMovementGenerator: **absent** (222 lines C++); `creature_formations` table not loaded.
 - SplineChainMovementGenerator: **absent** (238 lines C++); `script_spline_chain_*` tables not loaded.

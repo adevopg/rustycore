@@ -1,5 +1,6 @@
 pub mod chase;
 pub mod distract;
+pub mod fleeing;
 pub mod follow;
 pub mod generic;
 pub mod idle;
@@ -16,6 +17,16 @@ pub use distract::{
     AssistanceDistractFinalizeAction, AssistanceDistractMovementGenerator, DistractFacingSpline,
     DistractFinalizeAction, DistractInitializeAction, DistractMovementGenerator,
     UNIT_STATE_DISTRACTED_LIKE_CPP,
+};
+pub use fleeing::{
+    FLEEING_LOS_RETRY_MS_LIKE_CPP, FLEEING_PATH_LENGTH_LIMIT_LIKE_CPP,
+    FLEEING_PATH_RETRY_MS_LIKE_CPP, FLEEING_RANDOM_DELAY_MAX_MS_LIKE_CPP,
+    FLEEING_RANDOM_DELAY_MIN_MS_LIKE_CPP, FleeingDestinationPlan, FleeingFinalizeAction,
+    FleeingLaunchPlan, FleeingMovementAction, FleeingMovementGenerator, FleeingPathResult,
+    FleeingRandomInputs, FleeingUnitSnapshot, MAX_QUIET_DISTANCE_LIKE_CPP,
+    MIN_QUIET_DISTANCE_LIKE_CPP, TimedFleeingFinalizeAction, TimedFleeingInform,
+    TimedFleeingMovementGenerator, UNIT_FLAG_FLEEING_LIKE_CPP, UNIT_STATE_FLEEING_LIKE_CPP,
+    UNIT_STATE_FLEEING_MOVE_LIKE_CPP, compute_flee_destination_like_cpp,
 };
 pub use follow::{
     AbstractFollower, AbstractFollowerEvent, FOLLOW_CHECK_INTERVAL_MS_LIKE_CPP,
