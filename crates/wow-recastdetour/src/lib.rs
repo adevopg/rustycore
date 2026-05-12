@@ -121,6 +121,11 @@ pub struct RawDetourNavMeshQuery {
     _private: [u8; 0],
 }
 
+#[repr(C)]
+pub struct RawDetourQueryFilter {
+    _private: [u8; 0],
+}
+
 pub type DetourStatus = u32;
 pub type DetourTileRef = u64;
 
@@ -150,6 +155,21 @@ unsafe extern "C" {
         mesh: *const RawDetourNavMesh,
         max_nodes: i32,
     ) -> DetourStatus;
+    fn rustycore_dt_alloc_query_filter() -> *mut RawDetourQueryFilter;
+    fn rustycore_dt_free_query_filter(filter: *mut RawDetourQueryFilter);
+    fn rustycore_dt_query_filter_get_include_flags(filter: *const RawDetourQueryFilter) -> u16;
+    fn rustycore_dt_query_filter_set_include_flags(filter: *mut RawDetourQueryFilter, flags: u16);
+    fn rustycore_dt_query_filter_get_exclude_flags(filter: *const RawDetourQueryFilter) -> u16;
+    fn rustycore_dt_query_filter_set_exclude_flags(filter: *mut RawDetourQueryFilter, flags: u16);
+    fn rustycore_dt_query_filter_get_area_cost(
+        filter: *const RawDetourQueryFilter,
+        area: i32,
+    ) -> f32;
+    fn rustycore_dt_query_filter_set_area_cost(
+        filter: *mut RawDetourQueryFilter,
+        area: i32,
+        cost: f32,
+    );
     fn rustycore_dt_free(ptr: *mut std::ffi::c_void);
     fn rustycore_dt_create_square_tile_data(
         tile_x: i32,
@@ -267,6 +287,64 @@ impl Drop for DetourNavMeshQuery<'_> {
     }
 }
 
+#[derive(Debug)]
+pub struct DetourQueryFilter {
+    raw: NonNull<RawDetourQueryFilter>,
+    _not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl DetourQueryFilter {
+    pub fn new() -> Result<Self, DetourQueryFilterError> {
+        let raw = NonNull::new(unsafe { rustycore_dt_alloc_query_filter() })
+            .ok_or(DetourQueryFilterError::AllocationFailed)?;
+
+        Ok(Self {
+            raw,
+            _not_send_or_sync: PhantomData,
+        })
+    }
+
+    #[must_use]
+    pub fn include_flags(&self) -> u16 {
+        unsafe { rustycore_dt_query_filter_get_include_flags(self.raw.as_ptr()) }
+    }
+
+    pub fn set_include_flags(&mut self, flags: u16) {
+        unsafe { rustycore_dt_query_filter_set_include_flags(self.raw.as_ptr(), flags) };
+    }
+
+    #[must_use]
+    pub fn exclude_flags(&self) -> u16 {
+        unsafe { rustycore_dt_query_filter_get_exclude_flags(self.raw.as_ptr()) }
+    }
+
+    pub fn set_exclude_flags(&mut self, flags: u16) {
+        unsafe { rustycore_dt_query_filter_set_exclude_flags(self.raw.as_ptr(), flags) };
+    }
+
+    pub fn area_cost(&self, area: usize) -> Result<f32, DetourQueryFilterError> {
+        let area = validate_area_index(area)?;
+        Ok(unsafe { rustycore_dt_query_filter_get_area_cost(self.raw.as_ptr(), area) })
+    }
+
+    pub fn set_area_cost(&mut self, area: usize, cost: f32) -> Result<(), DetourQueryFilterError> {
+        let area = validate_area_index(area)?;
+        unsafe { rustycore_dt_query_filter_set_area_cost(self.raw.as_ptr(), area, cost) };
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn as_raw(&self) -> *mut RawDetourQueryFilter {
+        self.raw.as_ptr()
+    }
+}
+
+impl Drop for DetourQueryFilter {
+    fn drop(&mut self) {
+        unsafe { rustycore_dt_free_query_filter(self.raw.as_ptr()) };
+    }
+}
+
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum DetourNavMeshError {
     #[error("Detour navmesh allocation failed")]
@@ -293,9 +371,28 @@ pub enum DetourNavMeshQueryError {
     InitFailed { status: DetourStatus },
 }
 
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum DetourQueryFilterError {
+    #[error("Detour query filter allocation failed")]
+    AllocationFailed,
+    #[error("Detour query filter area index is out of range: {area} >= {max}")]
+    AreaIndexOutOfRange { area: usize, max: usize },
+}
+
 #[must_use]
 pub const fn detour_status_failed(status: DetourStatus) -> bool {
     status & DT_FAILURE_LIKE_CPP != 0
+}
+
+fn validate_area_index(area: usize) -> Result<i32, DetourQueryFilterError> {
+    if area >= DT_MAX_AREAS_LIKE_CPP {
+        return Err(DetourQueryFilterError::AreaIndexOutOfRange {
+            area,
+            max: DT_MAX_AREAS_LIKE_CPP,
+        });
+    }
+
+    Ok(area as i32)
 }
 
 impl DetourNavMeshParams {
@@ -802,6 +899,41 @@ mod tests {
 
         let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
         assert!(!query.as_raw().is_null());
+    }
+
+    #[test]
+    fn detour_query_filter_defaults_and_mutators_match_cpp() {
+        let mut filter = DetourQueryFilter::new().unwrap();
+
+        assert_eq!(filter.include_flags(), 0xffff);
+        assert_eq!(filter.exclude_flags(), 0);
+        assert_eq!(filter.area_cost(0).unwrap(), 1.0);
+        assert_eq!(filter.area_cost(DT_MAX_AREAS_LIKE_CPP - 1).unwrap(), 1.0);
+
+        filter.set_include_flags(
+            (NavTerrainFlag::GROUND | NavTerrainFlag::WATER | NavTerrainFlag::MAGMA_SLIME).bits(),
+        );
+        filter.set_exclude_flags(NavTerrainFlag::GROUND_STEEP.bits());
+        filter
+            .set_area_cost(NAV_AREA_MAGMA_SLIME_LIKE_CPP as usize, 100.0)
+            .unwrap();
+
+        assert_eq!(
+            filter.include_flags(),
+            (NavTerrainFlag::GROUND | NavTerrainFlag::WATER | NavTerrainFlag::MAGMA_SLIME).bits()
+        );
+        assert_eq!(filter.exclude_flags(), NavTerrainFlag::GROUND_STEEP.bits());
+        assert_eq!(
+            filter.area_cost(NAV_AREA_MAGMA_SLIME_LIKE_CPP as usize),
+            Ok(100.0)
+        );
+        assert_eq!(
+            filter.area_cost(DT_MAX_AREAS_LIKE_CPP),
+            Err(DetourQueryFilterError::AreaIndexOutOfRange {
+                area: DT_MAX_AREAS_LIKE_CPP,
+                max: DT_MAX_AREAS_LIKE_CPP,
+            })
+        );
     }
 
     #[test]

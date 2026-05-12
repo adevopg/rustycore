@@ -75,6 +75,46 @@ extern "C"
         return query->init(mesh, max_nodes);
     }
 
+    dtQueryFilter* rustycore_dt_alloc_query_filter()
+    {
+        return new dtQueryFilter();
+    }
+
+    void rustycore_dt_free_query_filter(dtQueryFilter* filter)
+    {
+        delete filter;
+    }
+
+    uint16_t rustycore_dt_query_filter_get_include_flags(dtQueryFilter const* filter)
+    {
+        return filter->getIncludeFlags();
+    }
+
+    void rustycore_dt_query_filter_set_include_flags(dtQueryFilter* filter, uint16_t flags)
+    {
+        filter->setIncludeFlags(flags);
+    }
+
+    uint16_t rustycore_dt_query_filter_get_exclude_flags(dtQueryFilter const* filter)
+    {
+        return filter->getExcludeFlags();
+    }
+
+    void rustycore_dt_query_filter_set_exclude_flags(dtQueryFilter* filter, uint16_t flags)
+    {
+        filter->setExcludeFlags(flags);
+    }
+
+    float rustycore_dt_query_filter_get_area_cost(dtQueryFilter const* filter, int area)
+    {
+        return filter->getAreaCost(area);
+    }
+
+    void rustycore_dt_query_filter_set_area_cost(dtQueryFilter* filter, int area, float cost)
+    {
+        filter->setAreaCost(area, cost);
+    }
+
     void rustycore_dt_free(void* ptr)
     {
         dtFree(ptr);
