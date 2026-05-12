@@ -38,6 +38,8 @@ pub const DT_STRAIGHTPATH_END_LIKE_CPP: u8 = 0x02;
 pub const DT_STRAIGHTPATH_OFFMESH_CONNECTION_LIKE_CPP: u8 = 0x04;
 pub const DT_STRAIGHTPATH_AREA_CROSSINGS_LIKE_CPP: i32 = 0x01;
 pub const DT_STRAIGHTPATH_ALL_CROSSINGS_LIKE_CPP: i32 = 0x02;
+pub const MAX_PATH_LENGTH_LIKE_CPP: usize = 74;
+pub const MAX_POINT_PATH_LENGTH_LIKE_CPP: usize = 74;
 
 pub const NAV_AREA_EMPTY_LIKE_CPP: u8 = 0;
 pub const NAV_AREA_GROUND_LIKE_CPP: u8 = 11;
@@ -56,6 +58,22 @@ bitflags::bitflags! {
         const GROUND_STEEP = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_GROUND_STEEP_LIKE_CPP);
         const WATER = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_WATER_LIKE_CPP);
         const MAGMA_SLIME = 1 << (NAV_AREA_MAX_VALUE_LIKE_CPP - NAV_AREA_MAGMA_SLIME_LIKE_CPP);
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct DetourPathType: u8 {
+        const BLANK = 0x00;
+        const NORMAL = 0x01;
+        const SHORTCUT = 0x02;
+        const INCOMPLETE = 0x04;
+        const NOPATH = 0x08;
+        const NOT_USING_PATH = 0x10;
+        const SHORT = 0x20;
+        const FARFROMPOLY_START = 0x40;
+        const FARFROMPOLY_END = 0x80;
+        const FARFROMPOLY = Self::FARFROMPOLY_START.bits() | Self::FARFROMPOLY_END.bits();
     }
 }
 
@@ -160,6 +178,21 @@ pub struct DetourRaycast {
     pub hit_t: f32,
     pub hit_normal: [f32; 3],
     pub path: Vec<DetourPolyRef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetourPointPath {
+    pub points: Vec<[f32; 3]>,
+    pub actual_end: [f32; 3],
+    pub path_type: DetourPathType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetourPolyPath {
+    pub poly_refs: Vec<DetourPolyRef>,
+    pub point_path: DetourPointPath,
+    pub start_far_from_poly: bool,
+    pub end_far_from_poly: bool,
 }
 
 unsafe extern "C" {
@@ -857,6 +890,200 @@ pub fn update_path_query_filter_like_cpp(
     }
 }
 
+pub fn get_poly_by_location_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    filter: &DetourQueryFilter,
+    point: [f32; 3],
+) -> Result<(DetourPolyRef, f32), DetourNavMeshQueryError> {
+    let low = query.find_nearest_poly(point, [3.0, 5.0, 3.0], filter)?;
+    if low.poly_ref != 0 {
+        return Ok((low.poly_ref, detour_distance(low.nearest_point, point)));
+    }
+
+    let high = query.find_nearest_poly(point, [3.0, 50.0, 3.0], filter)?;
+    if high.poly_ref != 0 {
+        return Ok((high.poly_ref, detour_distance(high.nearest_point, point)));
+    }
+
+    Ok((0, f32::MAX))
+}
+
+pub fn build_straight_point_path_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    start_point: [f32; 3],
+    end_point: [f32; 3],
+    poly_refs: &[DetourPolyRef],
+    point_path_limit: usize,
+    mut path_type: DetourPathType,
+    force_destination: bool,
+) -> Result<DetourPointPath, DetourNavMeshQueryError> {
+    let mut points = query
+        .find_straight_path(start_point, end_point, poly_refs, point_path_limit, 0)?
+        .into_iter()
+        .map(|point| point.position)
+        .collect::<Vec<_>>();
+
+    if poly_refs.len() == 1 && points.len() == 1 {
+        points.push(end_point);
+    } else if points.len() < 2 {
+        return Ok(DetourPointPath {
+            points: vec![start_point, end_point],
+            actual_end: end_point,
+            path_type: path_type | DetourPathType::SHORTCUT | DetourPathType::NOPATH,
+        });
+    } else if points.len() >= point_path_limit {
+        return Ok(DetourPointPath {
+            points: vec![start_point, end_point],
+            actual_end: end_point,
+            path_type: path_type | DetourPathType::SHORTCUT | DetourPathType::SHORT,
+        });
+    }
+
+    let mut actual_end = points.last().copied().unwrap_or(end_point);
+    if force_destination
+        && (!path_type.contains(DetourPathType::NORMAL)
+            || !detour_in_range(end_point, actual_end, 1.0, 1.0))
+    {
+        actual_end = end_point;
+        if detour_distance_sq(points.last().copied().unwrap_or(start_point), end_point)
+            < 0.3 * detour_distance_sq(start_point, end_point)
+        {
+            if let Some(last) = points.last_mut() {
+                *last = end_point;
+            }
+        } else {
+            points = vec![start_point, end_point];
+        }
+        path_type = DetourPathType::NORMAL | DetourPathType::NOT_USING_PATH;
+    }
+
+    Ok(DetourPointPath {
+        points,
+        actual_end,
+        path_type,
+    })
+}
+
+pub fn build_straight_poly_path_like_cpp(
+    query: &DetourNavMeshQuery<'_>,
+    filter: &DetourQueryFilter,
+    start_point: [f32; 3],
+    mut end_point: [f32; 3],
+    point_path_limit: usize,
+    force_destination: bool,
+) -> Result<DetourPolyPath, DetourNavMeshQueryError> {
+    let (start_poly, dist_to_start_poly) =
+        get_poly_by_location_like_cpp(query, filter, start_point)?;
+    let (end_poly, dist_to_end_poly) = get_poly_by_location_like_cpp(query, filter, end_point)?;
+
+    if start_poly == 0 || end_poly == 0 {
+        return Ok(DetourPolyPath {
+            poly_refs: Vec::new(),
+            point_path: DetourPointPath {
+                points: vec![start_point, end_point],
+                actual_end: end_point,
+                path_type: DetourPathType::NOPATH | DetourPathType::SHORTCUT,
+            },
+            start_far_from_poly: false,
+            end_far_from_poly: false,
+        });
+    }
+
+    let start_far_from_poly = dist_to_start_poly > 7.0;
+    let end_far_from_poly = dist_to_end_poly > 7.0;
+    let mut path_type = DetourPathType::NORMAL;
+    if start_far_from_poly || end_far_from_poly {
+        if let Ok((closest, _)) = query.closest_point_on_poly(end_poly, end_point) {
+            end_point = closest;
+        }
+        path_type = DetourPathType::INCOMPLETE;
+        add_far_from_poly_flags_like_cpp(&mut path_type, start_far_from_poly, end_far_from_poly);
+    }
+
+    let poly_refs = if start_poly == end_poly {
+        vec![start_poly]
+    } else {
+        let path = query.find_path(
+            start_poly,
+            end_poly,
+            start_point,
+            end_point,
+            filter,
+            MAX_PATH_LENGTH_LIKE_CPP,
+        )?;
+        if path.is_empty() {
+            return Ok(DetourPolyPath {
+                poly_refs: path,
+                point_path: DetourPointPath {
+                    points: vec![start_point, end_point],
+                    actual_end: end_point,
+                    path_type: DetourPathType::NOPATH | DetourPathType::SHORTCUT,
+                },
+                start_far_from_poly,
+                end_far_from_poly,
+            });
+        }
+        path
+    };
+
+    if poly_refs.last().copied() == Some(end_poly)
+        && !path_type.contains(DetourPathType::INCOMPLETE)
+    {
+        path_type = DetourPathType::NORMAL;
+    } else {
+        path_type = DetourPathType::INCOMPLETE;
+    }
+    add_far_from_poly_flags_like_cpp(&mut path_type, start_far_from_poly, end_far_from_poly);
+
+    let point_path = build_straight_point_path_like_cpp(
+        query,
+        start_point,
+        end_point,
+        &poly_refs,
+        point_path_limit,
+        path_type,
+        force_destination,
+    )?;
+
+    Ok(DetourPolyPath {
+        poly_refs,
+        point_path,
+        start_far_from_poly,
+        end_far_from_poly,
+    })
+}
+
+fn add_far_from_poly_flags_like_cpp(
+    path_type: &mut DetourPathType,
+    start_far_from_poly: bool,
+    end_far_from_poly: bool,
+) {
+    if start_far_from_poly {
+        path_type.insert(DetourPathType::FARFROMPOLY_START);
+    }
+    if end_far_from_poly {
+        path_type.insert(DetourPathType::FARFROMPOLY_END);
+    }
+}
+
+fn detour_distance(left: [f32; 3], right: [f32; 3]) -> f32 {
+    detour_distance_sq(left, right).sqrt()
+}
+
+fn detour_distance_sq(left: [f32; 3], right: [f32; 3]) -> f32 {
+    let dx = left[0] - right[0];
+    let dy = left[1] - right[1];
+    let dz = left[2] - right[2];
+    dx * dx + dy * dy + dz * dz
+}
+
+fn detour_in_range(first: [f32; 3], second: [f32; 3], range: f32, height: f32) -> bool {
+    let dx = second[0] - first[0];
+    let dy = second[1] - first[1];
+    let dz = second[2] - first[2];
+    (dx * dx + dz * dz) < range * range && dy.abs() < height
+}
+
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum DetourNavMeshError {
     #[error("Detour navmesh allocation failed")]
@@ -1550,6 +1777,8 @@ mod tests {
         assert_eq!(DT_IN_PROGRESS_LIKE_CPP, 1_u32 << 29);
         assert_eq!(DT_OUT_OF_MEMORY_LIKE_CPP, 1_u32 << 2);
         assert_eq!(DT_INVALID_PARAM_LIKE_CPP, 1_u32 << 3);
+        assert_eq!(MAX_PATH_LENGTH_LIKE_CPP, 74);
+        assert_eq!(MAX_POINT_PATH_LENGTH_LIKE_CPP, 74);
         assert!(detour_status_failed(DT_FAILURE_LIKE_CPP));
         assert!(!detour_status_failed(DT_SUCCESS_LIKE_CPP));
 
@@ -1565,6 +1794,15 @@ mod tests {
         assert_eq!(NavTerrainFlag::GROUND_STEEP.bits(), 0x02);
         assert_eq!(NavTerrainFlag::WATER.bits(), 0x04);
         assert_eq!(NavTerrainFlag::MAGMA_SLIME.bits(), 0x08);
+
+        assert_eq!(DetourPathType::NORMAL.bits(), 0x01);
+        assert_eq!(DetourPathType::SHORTCUT.bits(), 0x02);
+        assert_eq!(DetourPathType::INCOMPLETE.bits(), 0x04);
+        assert_eq!(DetourPathType::NOPATH.bits(), 0x08);
+        assert_eq!(DetourPathType::NOT_USING_PATH.bits(), 0x10);
+        assert_eq!(DetourPathType::SHORT.bits(), 0x20);
+        assert_eq!(DetourPathType::FARFROMPOLY_START.bits(), 0x40);
+        assert_eq!(DetourPathType::FARFROMPOLY_END.bits(), 0x80);
     }
 
     #[test]
@@ -1884,6 +2122,69 @@ mod tests {
             Err(DetourNavMeshQueryError::FindStraightPathFailed {
                 status: DT_FAILURE_LIKE_CPP | DT_INVALID_PARAM_LIKE_CPP,
             })
+        );
+    }
+
+    #[test]
+    fn detour_build_straight_poly_path_handles_same_poly_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mut mesh = DetourNavMesh::new(&params).unwrap();
+        mesh.add_tile(&generated_square_tile_blob(0, 0)).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+
+        let path = build_straight_poly_path_like_cpp(
+            &query,
+            &filter,
+            [0.25, 0.0, 0.25],
+            [0.75, 0.0, 0.75],
+            MAX_POINT_PATH_LENGTH_LIKE_CPP,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(path.poly_refs.len(), 1);
+        assert_eq!(path.point_path.path_type, DetourPathType::NORMAL);
+        assert_eq!(
+            path.point_path.points,
+            vec![[0.25, 0.0, 0.25], [0.75, 0.0, 0.75]]
+        );
+        assert_eq!(path.point_path.actual_end, [0.75, 0.0, 0.75]);
+    }
+
+    #[test]
+    fn detour_build_straight_poly_path_reports_missing_poly_like_cpp() {
+        let params = DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 1.0,
+            tile_height: 1.0,
+            max_tiles: 16,
+            max_polys: 128,
+        };
+        let mesh = DetourNavMesh::new(&params).unwrap();
+        let query = DetourNavMeshQuery::new(&mesh, 1024).unwrap();
+        let filter = DetourQueryFilter::new().unwrap();
+
+        let path = build_straight_poly_path_like_cpp(
+            &query,
+            &filter,
+            [0.25, 0.0, 0.25],
+            [0.75, 0.0, 0.75],
+            MAX_POINT_PATH_LENGTH_LIKE_CPP,
+            false,
+        )
+        .unwrap();
+
+        assert!(path.poly_refs.is_empty());
+        assert_eq!(
+            path.point_path.path_type,
+            DetourPathType::SHORTCUT | DetourPathType::NOPATH
         );
     }
 
