@@ -525,10 +525,10 @@ Generators do not own packet writers directly; every motion is serialized throug
 
 Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** (<1h), **M** (1-4h), **H** (4-12h), **XL** (>12h).
 
-- [ ] **#MOVE-GEN.1** Create `crates/wow-movement/` with module skeleton: `motion_master.rs`, `generator.rs`, `defines.rs`, `generators/{idle,random,waypoint,chase,follow,...}.rs`. (L)
-- [ ] **#MOVE-GEN.2** Port `MovementGeneratorType` enum (0..18, identical values). (L)
-- [ ] **#MOVE-GEN.3** Port `MovementSlot` (DEFAULT/ACTIVE), `MovementGeneratorMode`, `MovementGeneratorPriority`. (L)
-- [ ] **#MOVE-GEN.4** Port `MovementGeneratorFlags` bitflags (`bitflags!` crate already in workspace). (L)
+- [ ] **#MOVE-GEN.1** Create `crates/wow-movement/` with module skeleton: `motion_master.rs`, `generator.rs`, `defines.rs`, `generators/{idle,random,waypoint,chase,follow,...}.rs`. `wow-movement` exists and `defines.rs` is present; runtime `motion_master.rs`, `generator.rs` and concrete generator modules remain pending. (L)
+- [x] **#MOVE-GEN.2** Port `MovementGeneratorType` enum (0..18, identical values). Represented as `wow_entities::MovementGeneratorKind`; future runtime may re-export or relocate it. (L)
+- [x] **#MOVE-GEN.3** Port `MovementSlot` (DEFAULT/ACTIVE), `MovementGeneratorMode`, `MovementGeneratorPriority`. Represented in `wow-entities` with C++ numeric values. (L)
+- [x] **#MOVE-GEN.4** Port `MovementGeneratorFlags` bitflags (`bitflags!` crate already in workspace). Represented as exact `MOVEMENTGENERATOR_FLAG_*` constants in `wow-entities`; conversion to `bitflags!` remains optional cleanup, not a semantic gap. (L)
 - [ ] **#MOVE-GEN.5** Define `trait MovementGenerator { fn initialize, reset, update, deactivate, finalize, kind, ... }`. (M)
 - [x] **#MOVE-GEN.6** Port `ChaseRange` + `ChaseAngle` structs with `is_angle_okay`, `upper_bound`, `lower_bound`. (L)
 - [x] **#MOVE-GEN.7** Port `MotionMasterFlags` + `MotionMasterDelayedActionType` + `DelayedAction` struct. Flags, enum IDs, FIFO validator resolution, and represented payload execution are in `wow-entities`; generalized `MotionMaster::Update` remains in `#MOVE-GEN.8/#MOVE-GEN.9`. (L)
@@ -685,24 +685,24 @@ Numbered for cross-reference from `MIGRATION_ROADMAP.md` §5. Complexity: **L** 
 
 **Scope.** Cross-checked `/home/server/woltk-trinity-legacy/src/server/game/Movement/MotionMaster.{h,cpp}` (246 + 1376 lines), `MovementGenerator.{h,cpp}` (154 + 61), `MovementDefines.{h,cpp}` (142 + 48), `AbstractFollower.{h,cpp}` (36 + 31), and all 13 generator pairs under `MovementGenerators/` (3134 lines total of `.cpp`) against the Rust workspace at `/home/server/rustycore/crates/`.
 
-**MotionMaster: absent.** There is **no `MotionMaster` struct anywhere in the workspace**. No slot stack, no per-Unit `update(diff)`, no delayed-action queue, no priority comparator, no `PropagateSpeedChange`, no `StopOnDeath`. The C++ class exposes ~38 public `Move*` factories — Rust ships **0**.
+**MotionMaster: represented, not runtime-complete.** `wow-entities::MotionSubsystem` now carries Trinity movement generator ids, default/active slots, mode/priority ordering, generator flags, base-unit-state counts, delayed-action flags/types/payloads, and a represented `MotionMaster::Update` sequence. There is still no standalone runtime `MotionMaster` with owner `Unit`, boxed executable `MovementGenerator` trait objects, real finalize callbacks for every generator, `PropagateSpeedChange`, or full public `Move*` API parity.
 
-**Generators: 0 of 13 ported.**
-- IdleMovementGenerator + Rotate + Distract + AssistanceDistract: **absent** (231 lines C++).
+**Generators: partially represented, not 13/13 runtime-complete.**
+- IdleMovementGenerator + Rotate + Distract + AssistanceDistract: represented lifecycle exists; creature rotate/distract bridge can launch facing-only `MoveSplineInit`; real generic SmartAI/script dispatch is still pending.
 - RandomMovementGenerator: **absent** (263 lines C++) — substituted by a non-equivalent `wow_ai::wander` linear-tween that does not implement the `MovementGenerator` lifecycle.
 - WaypointMovementGenerator: **absent** (469 lines C++); no `WaypointManager`, no SQL loader for `waypoint_path`/`waypoint_path_node`.
 - ConfusedMovementGenerator: **absent** (177 lines C++).
-- ChaseMovementGenerator: **absent** (260 lines C++); `ChaseRange`/`ChaseAngle` structs do not exist.
+- ChaseMovementGenerator: **absent** (260 lines C++); pure `ChaseRange`/`ChaseAngle` helpers are ported in `wow-movement`.
 - HomeMovementGenerator: **absent** (158 lines C++); evade flow has no return-to-home hook.
 - FlightPathMovementGenerator: **absent** (338 lines C++); no `TaxiPath.dbc` consumer; `SMSG_FLIGHT_SPLINE_SYNC` opcode is listed in `wow-constants/opcodes.rs` but no writer or caller.
-- PointMovementGenerator: **absent** (227 lines C++); no `MovementInform(POINT_MOTION_TYPE, id)` callback path.
+- PointMovementGenerator: represented lifecycle and direct no-pathgen creature bridge exist, including canonical represented `MovementInform(POINT,id)`; pathgen, close-enough/facing/spell extras, formation signal and real SmartAI/script dispatch are pending.
 - FleeingMovementGenerator + TimedFleeingMovementGenerator: **absent** (282 lines C++).
 - FollowMovementGenerator: **absent** (215 lines C++); `AbstractFollower` helper missing.
 - FormationMovementGenerator: **absent** (222 lines C++); `creature_formations` table not loaded.
 - SplineChainMovementGenerator: **absent** (238 lines C++); `script_spline_chain_*` tables not loaded.
-- GenericMovementGenerator: **absent** (99 lines C++).
+- GenericMovementGenerator: represented constructor/lifecycle/inform exists; executable `FnOnce(MoveSplineInit)` launch and arrival `CastSpell` are pending.
 
-**Trait + enum surface.** `trait MovementGenerator` does not exist. `MovementGeneratorType` enum does not exist. `MovementSlot`, `MovementGeneratorMode`, `MovementGeneratorPriority`, `MovementGeneratorFlags`, `MotionMasterFlags`, `MotionMasterDelayedActionType` — all absent. `ChaseRange`, `ChaseAngle`, `JumpArrivalCastArgs`, `JumpChargeParams` — all absent.
+**Trait + enum surface.** The boxed runtime `trait MovementGenerator` still does not exist. Represented enum/flag surfaces do exist in `wow-entities`; pure `ChaseRange`, `ChaseAngle`, `JumpArrivalCastArgs` and `JumpChargeParams` exist in `wow-movement`. Remaining structural gap: move these represented pieces behind a real runtime `MotionMaster` API without duplicating or regressing the tested bridge behavior.
 
 **AI callback surface.** `Unit::MovementInform(type, id)` (the AI hook every generator calls on Finalize when `MOVEMENTGENERATOR_FLAG_INFORM_ENABLED`) has no Rust counterpart in `wow-ai`. Boss scripts that depend on waypoint/point arrival callbacks have nothing to attach to.
 
