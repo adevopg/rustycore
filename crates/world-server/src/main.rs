@@ -766,14 +766,33 @@ async fn main() -> Result<()> {
     let player_registry = Arc::new(PlayerRegistry::new());
     let object_accessor = wow_world::new_shared_object_accessor();
 
-    let condition_load_report =
+    let mut condition_load_report =
         wow_data::conditions::load_condition_rows_like_cpp(world_db.as_ref(), |_| 0)
             .await
             .context("Failed to load C++ conditions table")?;
+    let externally_skipped_conditions =
+        wow_data::conditions::apply_external_condition_validation_like_cpp(
+            &mut condition_load_report,
+            wow_data::conditions::ConditionExternalValidationStoresLikeCpp {
+                item_store: Some(item_store.as_ref()),
+                spell_store: Some(spell_store.as_ref()),
+                area_table_store: Some(area_table_store.as_ref()),
+                skill_store: Some(skill_store.as_ref()),
+                map_store: Some(map_store.as_ref()),
+                phase_store: Some(phase_store.as_ref()),
+                max_skill_value: Some(max_skill_value_like_cpp(&world_configs)),
+            },
+        );
     for skipped in &condition_load_report.skipped {
         warn!(
             "Condition row skipped during C++ load-shape parsing: {:?}: {:?}",
             skipped.row, skipped.reason
+        );
+    }
+    for skipped in &externally_skipped_conditions {
+        warn!(
+            "Condition row skipped during C++ external validation: {:?}: {:?}",
+            skipped.condition, skipped.reason
         );
     }
     for warning in &condition_load_report.warnings {
@@ -783,8 +802,9 @@ async fn main() -> Result<()> {
     let condition_attachment_report =
         wow_data::attach_loaded_conditions_like_cpp(condition_store.as_ref(), None, None, None);
     info!(
-        "Loaded C++ ConditionMgr store: {} buckets, {} spell-click aura spell ids, {} deferred spell implicit target conditions",
+        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} deferred spell implicit target conditions",
         condition_store.bucket_count(),
+        externally_skipped_conditions.len(),
         condition_attachment_report.spell_click_aura_spell_ids.len(),
         condition_attachment_report.deferred_spell_implicit_target_condition_count
     );
@@ -1093,6 +1113,15 @@ fn world_config_f32(configs: &WorldConfigSet, enum_name: &str, default: f32) -> 
 
 fn world_config_bool(configs: &WorldConfigSet, enum_name: &str, default: bool) -> bool {
     configs.get_bool(enum_name).unwrap_or(default)
+}
+
+fn max_skill_value_like_cpp(configs: &WorldConfigSet) -> u32 {
+    let max_player_level = u32::from(world_config_u8(configs, "CONFIG_MAX_PLAYER_LEVEL", 80));
+    if max_player_level > 60 {
+        300 + ((max_player_level - 60) * 75) / 10
+    } else {
+        max_player_level * 5
+    }
 }
 
 fn mmap_runtime_config_like_cpp(

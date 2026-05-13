@@ -77,6 +77,19 @@ pub struct SkillStore {
 }
 
 impl SkillStore {
+    /// Build a minimal skill-line store for validation/tests.
+    pub fn from_skill_lines_like_cpp(skill_ids: impl IntoIterator<Item = u16>) -> Self {
+        Self {
+            abilities_by_skill: skill_ids
+                .into_iter()
+                .map(|skill_id| (skill_id, Vec::new()))
+                .collect(),
+            starting_skills: HashMap::new(),
+            total_abilities: 0,
+            total_race_class: 0,
+        }
+    }
+
     /// Load both DB2 files from `{data_dir}/dbc/{locale}/`.
     pub fn load(data_dir: &str, locale: &str) -> Result<Self> {
         let dbc_dir = Path::new(data_dir).join("dbc").join(locale);
@@ -429,6 +442,13 @@ impl SkillStore {
     /// Number of distinct skills (unique skill_line IDs).
     pub fn skill_count(&self) -> usize {
         self.abilities_by_skill.len()
+    }
+
+    /// C++ `sSkillLineStore.LookupEntry(skillId)` existence check for loaded skill lines.
+    pub fn contains_skill_line_like_cpp(&self, skill_id: u32) -> bool {
+        u16::try_from(skill_id)
+            .ok()
+            .is_some_and(|skill_id| self.abilities_by_skill.contains_key(&skill_id))
     }
 
     /// Number of SkillRaceClassInfo records loaded.

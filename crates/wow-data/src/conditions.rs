@@ -584,21 +584,57 @@ pub enum ConditionTypeValidationErrorLikeCpp {
     InvalidSkillValue(u32),
     InvalidSpellEffectIndex(u32),
     ZeroItemCount,
-    InvalidComparisonType { field: u8, value: u32 },
+    InvalidComparisonType {
+        field: u8,
+        value: u32,
+    },
     InvalidDrunkenState(u32),
     InvalidObjectTypeId(u32),
     InvalidTypeMask(u32),
-    InvalidTargetSelector { field: u8, value: u32, max: u32 },
-    SelfTargetSelector { field: u8, value: u32 },
+    InvalidTargetSelector {
+        field: u8,
+        value: u32,
+        max: u32,
+    },
+    SelfTargetSelector {
+        field: u8,
+        value: u32,
+    },
     InvalidRelationType(u32),
     InvalidReactionRankMask(u32),
     DeprecatedSpawnMask,
     InvalidUnitState(u32),
     InvalidCreatureType(u32),
-    InvalidStandState { value1: u32, value2: u32 },
+    InvalidStandState {
+        value1: u32,
+        value2: u32,
+    },
     InvalidPetTypeMask(u32),
     InvalidBattlePetCount(u32),
     UnsupportedInstanceInfoGuidData,
+    NonExistingItem {
+        condition_type: ConditionType,
+        item_id: u32,
+    },
+    NonExistingSpell {
+        condition_type: ConditionType,
+        spell_id: u32,
+    },
+    NonExistingArea {
+        condition_type: ConditionType,
+        area_id: u32,
+    },
+    NonExistingSkill(u32),
+    SkillValueAboveConfigMax {
+        skill_id: u32,
+        value: u32,
+        max: u32,
+    },
+    NonExistingMap {
+        condition_type: ConditionType,
+        map_id: u32,
+    },
+    NonExistingPhase(u32),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -613,6 +649,25 @@ pub enum ConditionSourceValidationErrorLikeCpp {
     InvalidAreaTriggerSourceEntry(i32),
     InvalidObjectIdVisibilityObjectType(u32),
     UncheckedObjectIdVisibilityObjectType(u32),
+    NonExistingTerrainSwapMap(u32),
+    NonExistingPhaseArea(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternallySkippedConditionLikeCpp {
+    pub condition: Condition,
+    pub reason: ConditionRowSkipReason,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ConditionExternalValidationStoresLikeCpp<'a> {
+    pub item_store: Option<&'a crate::ItemStore>,
+    pub spell_store: Option<&'a crate::SpellStore>,
+    pub area_table_store: Option<&'a crate::AreaTableStore>,
+    pub skill_store: Option<&'a crate::SkillStore>,
+    pub map_store: Option<&'a crate::MapStore>,
+    pub phase_store: Option<&'a crate::PhaseStore>,
+    pub max_skill_value: Option<u32>,
 }
 
 pub fn validate_condition_type_static_like_cpp(
@@ -895,6 +950,147 @@ pub fn validate_condition_source_static_like_cpp(
     }
 
     Ok(())
+}
+
+pub fn validate_condition_type_external_like_cpp(
+    condition: &Condition,
+    stores: ConditionExternalValidationStoresLikeCpp<'_>,
+) -> Result<(), ConditionTypeValidationErrorLikeCpp> {
+    use ConditionTypeValidationErrorLikeCpp as Error;
+
+    if condition.reference_id != 0 {
+        return Ok(());
+    }
+
+    match condition.condition_type {
+        ConditionType::Aura | ConditionType::Spell => {
+            if let Some(store) = stores.spell_store
+                && store.get(condition.condition_value1 as i32).is_none()
+            {
+                return Err(Error::NonExistingSpell {
+                    condition_type: condition.condition_type,
+                    spell_id: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::Item | ConditionType::ItemEquipped => {
+            if let Some(store) = stores.item_store
+                && store.get(condition.condition_value1).is_none()
+            {
+                return Err(Error::NonExistingItem {
+                    condition_type: condition.condition_type,
+                    item_id: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::ZoneId => {
+            if let Some(store) = stores.area_table_store
+                && store.get(condition.condition_value1).is_none()
+            {
+                return Err(Error::NonExistingArea {
+                    condition_type: condition.condition_type,
+                    area_id: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::Skill => {
+            if let Some(store) = stores.skill_store
+                && !store.contains_skill_line_like_cpp(condition.condition_value1)
+            {
+                return Err(Error::NonExistingSkill(condition.condition_value1));
+            }
+            if let Some(max) = stores.max_skill_value
+                && condition.condition_value2 > max
+            {
+                return Err(Error::SkillValueAboveConfigMax {
+                    skill_id: condition.condition_value1,
+                    value: condition.condition_value2,
+                    max,
+                });
+            }
+        }
+        ConditionType::MapId => {
+            if let Some(store) = stores.map_store
+                && store.get(condition.condition_value1).is_none()
+            {
+                return Err(Error::NonExistingMap {
+                    condition_type: condition.condition_type,
+                    map_id: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::PhaseId => {
+            if let Some(store) = stores.phase_store
+                && !store.contains(condition.condition_value1)
+            {
+                return Err(Error::NonExistingPhase(condition.condition_value1));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+pub fn validate_condition_source_external_like_cpp(
+    condition: &Condition,
+    stores: ConditionExternalValidationStoresLikeCpp<'_>,
+) -> Result<(), ConditionSourceValidationErrorLikeCpp> {
+    use ConditionSourceValidationErrorLikeCpp as Error;
+
+    match condition.source_type {
+        ConditionSourceType::TerrainSwap => {
+            if let Some(store) = stores.map_store
+                && store.get(condition.source_entry as u32).is_none()
+            {
+                return Err(Error::NonExistingTerrainSwapMap(
+                    condition.source_entry as u32,
+                ));
+            }
+        }
+        ConditionSourceType::Phase => {
+            if condition.source_entry != 0
+                && let Some(store) = stores.area_table_store
+                && store.get(condition.source_entry as u32).is_none()
+            {
+                return Err(Error::NonExistingPhaseArea(condition.source_entry as u32));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+pub fn apply_external_condition_validation_like_cpp(
+    report: &mut ConditionLoadReport,
+    stores: ConditionExternalValidationStoresLikeCpp<'_>,
+) -> Vec<ExternallySkippedConditionLikeCpp> {
+    let mut kept = Vec::with_capacity(report.conditions.len());
+    let mut skipped = Vec::new();
+
+    for condition in report.conditions.drain(..) {
+        if let Err(reason) = validate_condition_type_external_like_cpp(&condition, stores) {
+            skipped.push(ExternallySkippedConditionLikeCpp {
+                condition,
+                reason: ConditionRowSkipReason::ConditionTypeValidationFailed(reason),
+            });
+            continue;
+        }
+
+        if let Err(reason) = validate_condition_source_external_like_cpp(&condition, stores) {
+            skipped.push(ExternallySkippedConditionLikeCpp {
+                condition,
+                reason: ConditionRowSkipReason::ConditionSourceValidationFailed(reason),
+            });
+            continue;
+        }
+
+        kept.push(condition);
+    }
+
+    report.conditions = kept;
+    skipped
 }
 
 const fn convert_legacy_type_id_like_cpp(legacy_type_id: u32) -> u32 {
@@ -1532,6 +1728,20 @@ pub async fn load_condition_rows_like_cpp(
 mod tests {
     use super::*;
 
+    fn spell_info(spell_id: i32) -> crate::SpellInfo {
+        crate::SpellInfo {
+            spell_id,
+            cast_time_ms: 0,
+            cooldown_ms: 0,
+            recovery_time_ms: 0,
+            effect_type: 0,
+            effect_base_points: 0,
+            effect_bonus_coefficient: 0.0,
+            aura_type: None,
+            display_flags: 0,
+        }
+    }
+
     fn condition_row(
         source_type: ConditionSourceType,
         condition_type: ConditionType,
@@ -1918,6 +2128,171 @@ mod tests {
             legacy_type_mask.condition_value1,
             (TypeMask::UNIT | TypeMask::GAME_OBJECT).bits()
         );
+    }
+
+    #[test]
+    fn condition_external_type_validation_uses_loaded_stores_like_cpp() {
+        let item_store = crate::ItemStore::from_records([crate::ItemRecord {
+            id: 100,
+            class_id: 0,
+            subclass_id: 0,
+            material: 0,
+            inventory_type: 0,
+            sheathe_type: 0,
+            random_select: 0,
+            random_suffix_group_id: 0,
+        }]);
+        let mut spell_store = crate::SpellStore::new();
+        spell_store.insert(200, spell_info(200));
+        let area_store = crate::AreaTableStore::from_entries([crate::AreaTableEntry {
+            id: 300,
+            parent_area_id: 0,
+        }]);
+        let skill_store = crate::SkillStore::from_skill_lines_like_cpp([400]);
+        let map_store = crate::MapStore::from_entries([crate::MapEntry {
+            id: 500,
+            parent_map_id: -1,
+            cosmetic_parent_map_id: -1,
+            instance_type: 0,
+            flags1: 0,
+        }]);
+        let phase_store =
+            crate::PhaseStore::from_entries([crate::PhaseEntry { id: 600, flags: 0 }]);
+        let stores = ConditionExternalValidationStoresLikeCpp {
+            item_store: Some(&item_store),
+            spell_store: Some(&spell_store),
+            area_table_store: Some(&area_store),
+            skill_store: Some(&skill_store),
+            map_store: Some(&map_store),
+            phase_store: Some(&phase_store),
+            max_skill_value: Some(450),
+        };
+
+        for condition in [
+            Condition {
+                condition_type: ConditionType::Item,
+                condition_value1: 100,
+                condition_value2: 1,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Aura,
+                condition_value1: 200,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ZoneId,
+                condition_value1: 300,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Skill,
+                condition_value1: 400,
+                condition_value2: 450,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::MapId,
+                condition_value1: 500,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::PhaseId,
+                condition_value1: 600,
+                ..Condition::default()
+            },
+        ] {
+            assert_eq!(
+                validate_condition_type_external_like_cpp(&condition, stores),
+                Ok(())
+            );
+        }
+
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::ItemEquipped,
+                    condition_value1: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionTypeValidationErrorLikeCpp::NonExistingItem { item_id: 999, .. })
+        ));
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::Skill,
+                    condition_value1: 400,
+                    condition_value2: 451,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionTypeValidationErrorLikeCpp::SkillValueAboveConfigMax {
+                    value: 451,
+                    max: 450,
+                    ..
+                }
+            )
+        ));
+    }
+
+    #[test]
+    fn condition_external_source_validation_uses_loaded_stores_like_cpp() {
+        let area_store = crate::AreaTableStore::from_entries([crate::AreaTableEntry {
+            id: 7,
+            parent_area_id: 0,
+        }]);
+        let map_store = crate::MapStore::from_entries([crate::MapEntry {
+            id: 571,
+            parent_map_id: -1,
+            cosmetic_parent_map_id: -1,
+            instance_type: 0,
+            flags1: 0,
+        }]);
+        let stores = ConditionExternalValidationStoresLikeCpp {
+            area_table_store: Some(&area_store),
+            map_store: Some(&map_store),
+            ..ConditionExternalValidationStoresLikeCpp::default()
+        };
+
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::TerrainSwap,
+                    source_entry: 571,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::TerrainSwap,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingTerrainSwapMap(999))
+        ));
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::Phase,
+                    source_entry: 99,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingPhaseArea(
+                99
+            ))
+        ));
     }
 
     #[test]
