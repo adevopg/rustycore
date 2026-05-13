@@ -41,6 +41,11 @@ pub struct ConditionSourceInfo<'a> {
     pub condition_targets: [Option<&'a WorldObject>; MAX_CONDITION_TARGETS],
     pub unit_targets: [Option<ConditionUnitSnapshot>; MAX_CONDITION_TARGETS],
     pub unit_aura_targets: [Option<&'a [ConditionAuraEffectSnapshot]>; MAX_CONDITION_TARGETS],
+    pub unit_relation_targets: [Option<&'a [ConditionUnitRelationSnapshot]>; MAX_CONDITION_TARGETS],
+    pub nearby_creature_targets:
+        [Option<&'a [ConditionNearbyCreatureSnapshot]>; MAX_CONDITION_TARGETS],
+    pub nearby_gameobject_targets:
+        [Option<&'a [ConditionNearbyGameObjectSnapshot]>; MAX_CONDITION_TARGETS],
     pub player_targets: [Option<ConditionPlayerSnapshot>; MAX_CONDITION_TARGETS],
     pub player_quest_targets: [Option<ConditionPlayerQuestSnapshot<'a>>; MAX_CONDITION_TARGETS],
     pub player_progression_targets:
@@ -72,6 +77,30 @@ pub struct ConditionUnitSnapshot {
 pub struct ConditionAuraEffectSnapshot {
     pub spell_id: u32,
     pub effect_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionUnitRelationSnapshot {
+    pub to_target_index: usize,
+    pub in_party: bool,
+    pub in_raid_or_party: bool,
+    pub owned_by: bool,
+    pub passenger_of: bool,
+    pub created_by: bool,
+    pub reaction: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConditionNearbyCreatureSnapshot {
+    pub entry: u32,
+    pub distance: f32,
+    pub is_alive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConditionNearbyGameObjectSnapshot {
+    pub entry: u32,
+    pub distance: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -245,6 +274,9 @@ impl<'a> ConditionSourceInfo<'a> {
             condition_targets,
             unit_targets: [None; MAX_CONDITION_TARGETS],
             unit_aura_targets: [None; MAX_CONDITION_TARGETS],
+            unit_relation_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_creature_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_gameobject_targets: [None; MAX_CONDITION_TARGETS],
             player_targets: [None; MAX_CONDITION_TARGETS],
             player_quest_targets: [None; MAX_CONDITION_TARGETS],
             player_progression_targets: [None; MAX_CONDITION_TARGETS],
@@ -263,6 +295,9 @@ impl<'a> ConditionSourceInfo<'a> {
             condition_targets: [None; MAX_CONDITION_TARGETS],
             unit_targets: [None; MAX_CONDITION_TARGETS],
             unit_aura_targets: [None; MAX_CONDITION_TARGETS],
+            unit_relation_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_creature_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_gameobject_targets: [None; MAX_CONDITION_TARGETS],
             player_targets: [None; MAX_CONDITION_TARGETS],
             player_quest_targets: [None; MAX_CONDITION_TARGETS],
             player_progression_targets: [None; MAX_CONDITION_TARGETS],
@@ -292,6 +327,36 @@ impl<'a> ConditionSourceInfo<'a> {
     ) {
         if target_index < MAX_CONDITION_TARGETS {
             self.unit_aura_targets[target_index] = Some(aura_effects);
+        }
+    }
+
+    pub fn set_unit_relation_target_snapshot(
+        &mut self,
+        target_index: usize,
+        relations: &'a [ConditionUnitRelationSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.unit_relation_targets[target_index] = Some(relations);
+        }
+    }
+
+    pub fn set_nearby_creature_target_snapshot(
+        &mut self,
+        target_index: usize,
+        creatures: &'a [ConditionNearbyCreatureSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.nearby_creature_targets[target_index] = Some(creatures);
+        }
+    }
+
+    pub fn set_nearby_gameobject_target_snapshot(
+        &mut self,
+        target_index: usize,
+        gameobjects: &'a [ConditionNearbyGameObjectSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.nearby_gameobject_targets[target_index] = Some(gameobjects);
         }
     }
 
@@ -455,6 +520,8 @@ pub fn condition_meets_basic_like_cpp<'a>(
         let unit = source_info.unit_targets[target_index];
         let unit_auras =
             source_info.unit_aura_targets[target_index].filter(|_| is_unit_object_like_cpp(object));
+        let unit_relations = source_info.unit_relation_targets[target_index]
+            .filter(|_| is_unit_object_like_cpp(object));
         let is_player = is_player_object_like_cpp(object);
         let player = source_info.player_targets[target_index].filter(|_| is_player);
         let player_quests = source_info.player_quest_targets[target_index].filter(|_| is_player);
@@ -594,21 +661,96 @@ pub fn condition_meets_basic_like_cpp<'a>(
                     );
                 }
             }
-            ConditionType::RelationTo => {
-                if RelationType::from_u32(condition.condition_value2)
-                    != Some(RelationType::SelfRelation)
-                {
-                    return ConditionMeetResult::Unsupported;
+            ConditionType::NearCreature => {
+                if let Some(creatures) = source_info.nearby_creature_targets[target_index] {
+                    let alive_required = condition.condition_value3 == 0;
+                    cond_meets = creatures.iter().any(|creature| {
+                        creature.entry == condition.condition_value1
+                            && creature.distance <= condition.condition_value2 as f32
+                            && (!alive_required || creature.is_alive)
+                    });
                 }
+            }
+            ConditionType::NearGameObject => {
+                if let Some(gameobjects) = source_info.nearby_gameobject_targets[target_index] {
+                    cond_meets = gameobjects.iter().any(|gameobject| {
+                        gameobject.entry == condition.condition_value1
+                            && gameobject.distance <= condition.condition_value2 as f32
+                    });
+                }
+            }
+            ConditionType::RelationTo => {
+                let Some(relation_type) = RelationType::from_u32(condition.condition_value2) else {
+                    return ConditionMeetResult::Unsupported;
+                };
 
-                if let Some(to_object) = usize::try_from(condition.condition_value1)
+                if let Some(to_target_index) = usize::try_from(condition.condition_value1)
                     .ok()
                     .filter(|target| *target < MAX_CONDITION_TARGETS)
-                    .and_then(|target| source_info.condition_targets[target])
-                    && is_unit_object_like_cpp(object)
-                    && is_unit_object_like_cpp(to_object)
                 {
-                    cond_meets = std::ptr::eq(object, to_object);
+                    if let Some(to_object) = source_info.condition_targets[to_target_index]
+                        && is_unit_object_like_cpp(object)
+                        && is_unit_object_like_cpp(to_object)
+                    {
+                        cond_meets = match relation_type {
+                            RelationType::SelfRelation => std::ptr::eq(object, to_object),
+                            RelationType::InParty => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.in_party),
+                            RelationType::InRaidOrParty => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.in_raid_or_party),
+                            RelationType::OwnedBy => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.owned_by),
+                            RelationType::PassengerOf => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.passenger_of),
+                            RelationType::CreatedBy => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.created_by),
+                            RelationType::Max => false,
+                        };
+                    }
+                }
+            }
+            ConditionType::ReactionTo => {
+                if let Some(to_target_index) = usize::try_from(condition.condition_value1)
+                    .ok()
+                    .filter(|target| *target < MAX_CONDITION_TARGETS)
+                {
+                    if let Some(to_object) = source_info.condition_targets[to_target_index]
+                        && is_unit_object_like_cpp(object)
+                        && is_unit_object_like_cpp(to_object)
+                        && let Some(relation) = unit_relations.and_then(|relations| {
+                            relations
+                                .iter()
+                                .find(|relation| relation.to_target_index == to_target_index)
+                        })
+                    {
+                        cond_meets =
+                            ((1_u32 << relation.reaction) & condition.condition_value2) != 0;
+                    }
                 }
             }
             ConditionType::PhaseId => {
@@ -1336,8 +1478,104 @@ mod tests {
         };
         assert_eq!(
             condition_meets_basic_like_cpp(&party_condition, &mut other_info, |_, _| false),
-            ConditionMeetResult::Unsupported
+            ConditionMeetResult::Evaluated(false)
         );
+    }
+
+    #[test]
+    fn basic_condition_meets_relation_reaction_and_nearby_snapshots_like_cpp() {
+        let target = world_object(571, 2);
+        let other = world_object(571, 2);
+        let relations = [ConditionUnitRelationSnapshot {
+            to_target_index: 1,
+            in_party: true,
+            in_raid_or_party: true,
+            owned_by: true,
+            passenger_of: true,
+            created_by: true,
+            reaction: 4,
+        }];
+        let nearby_creatures = [
+            ConditionNearbyCreatureSnapshot {
+                entry: 1001,
+                distance: 10.0,
+                is_alive: true,
+            },
+            ConditionNearbyCreatureSnapshot {
+                entry: 1002,
+                distance: 5.0,
+                is_alive: false,
+            },
+        ];
+        let nearby_gameobjects = [ConditionNearbyGameObjectSnapshot {
+            entry: 2001,
+            distance: 12.0,
+        }];
+        let mut info = ConditionSourceInfo::from_targets(Some(&target), Some(&other), None);
+        info.set_unit_relation_target_snapshot(0, &relations);
+        info.set_nearby_creature_target_snapshot(0, &nearby_creatures);
+        info.set_nearby_gameobject_target_snapshot(0, &nearby_gameobjects);
+
+        let conditions = vec![
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::InParty as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::OwnedBy as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::PassengerOf as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::CreatedBy as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ReactionTo,
+                condition_value1: 1,
+                condition_value2: 1 << 4,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearCreature,
+                condition_value1: 1001,
+                condition_value2: 10,
+                condition_value3: 0,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearCreature,
+                condition_value1: 1002,
+                condition_value2: 5,
+                condition_value3: 1,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearGameObject,
+                condition_value1: 2001,
+                condition_value2: 12,
+                ..Condition::default()
+            },
+        ];
+
+        for condition in &conditions {
+            assert_eq!(
+                condition_meets_basic_like_cpp(condition, &mut info, |_, _| false),
+                ConditionMeetResult::Evaluated(true),
+                "{condition:?}"
+            );
+        }
     }
 
     #[test]
