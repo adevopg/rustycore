@@ -334,6 +334,52 @@ pub fn remove_visible_map_id_like_cpp(
     Some(PhaseVisibilityUpdate::new(false, changed))
 }
 
+/// C++ `PhasingHandler::OnMapChange` core terrain-swap pass.
+///
+/// The condition predicate represents
+/// `sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_TERRAIN_SWAP, id, srcInfo)`.
+pub fn on_map_change_like_cpp(
+    object: &mut WorldObject,
+    terrain_swap_store: &TerrainSwapStore,
+    mut terrain_swap_conditions_pass: impl FnMut(u32, &WorldObject) -> bool,
+) -> PhaseVisibilityUpdate {
+    object.phase_shift_mut().clear_visible_map_ids_like_cpp();
+    object.phase_shift_mut().clear_ui_map_phase_ids_like_cpp();
+    object
+        .suppressed_phase_shift_mut()
+        .clear_visible_map_ids_like_cpp();
+
+    let object_map_id = object.map_id();
+    for (map_id, terrain_swap_ids) in terrain_swap_store.terrain_swaps_by_map_like_cpp() {
+        for terrain_swap_id in terrain_swap_ids {
+            let Some(terrain_swap_info) = terrain_swap_store.terrain_swap_info(*terrain_swap_id)
+            else {
+                continue;
+            };
+
+            if terrain_swap_conditions_pass(terrain_swap_info.id, object) {
+                if map_id == object_map_id {
+                    object
+                        .phase_shift_mut()
+                        .add_visible_map_id_like_cpp(terrain_swap_info.id, 1);
+                }
+
+                for ui_map_phase_id in &terrain_swap_info.ui_map_phase_ids {
+                    object
+                        .phase_shift_mut()
+                        .add_ui_map_phase_id_like_cpp(*ui_map_phase_id, 1);
+                }
+            } else if map_id == object_map_id {
+                object
+                    .suppressed_phase_shift_mut()
+                    .add_visible_map_id_like_cpp(terrain_swap_info.id, 1);
+            }
+        }
+    }
+
+    PhaseVisibilityUpdate::new(false, true)
+}
+
 /// C++ `PhasingHandler::SendToPlayer(Player const*, PhaseShift const&)` packet build step.
 pub fn phase_shift_change_for_player_like_cpp(
     player_guid: ObjectGuid,
@@ -455,8 +501,14 @@ mod tests {
     }
 
     fn terrain_swap_store() -> TerrainSwapStore {
-        let map_store = MapStore::from_entries([map(571, -1), map(609, 571)]);
-        TerrainSwapStore::from_rows_like_cpp(&map_store, [(609, 42), (609, 43)], [], |_| true)
+        let map_store =
+            MapStore::from_entries([map(1, -1), map(571, -1), map(609, 571), map(700, 1)]);
+        TerrainSwapStore::from_rows_like_cpp(
+            &map_store,
+            [(609, 42), (609, 43), (700, 70)],
+            [(571, 609), (1, 700)],
+            |_| true,
+        )
     }
 
     #[test]
@@ -639,10 +691,45 @@ mod tests {
         let mut object = world_object();
 
         assert_eq!(
-            add_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 700),
+            add_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 999),
             None
         );
+        assert!(!object.phase_shift().has_visible_map_id_like_cpp(999));
+    }
+
+    #[test]
+    fn on_map_change_rebuilds_visible_ui_and_suppressed_swaps_like_cpp() {
+        let terrain_swap_store = terrain_swap_store();
+        let mut object = world_object();
+        object.world_relocate(571, object.position());
+        object.phase_shift_mut().add_visible_map_id_like_cpp(999, 1);
+        object
+            .phase_shift_mut()
+            .add_ui_map_phase_id_like_cpp(999, 1);
+        object
+            .suppressed_phase_shift_mut()
+            .add_visible_map_id_like_cpp(998, 1);
+
+        let update = on_map_change_like_cpp(&mut object, &terrain_swap_store, |id, _| id != 609);
+
+        assert_eq!(update, PhaseVisibilityUpdate::new(false, true));
+        assert!(!object.phase_shift().has_visible_map_id_like_cpp(999));
+        assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(999));
+        assert!(
+            !object
+                .suppressed_phase_shift()
+                .has_visible_map_id_like_cpp(998)
+        );
+        assert!(!object.phase_shift().has_visible_map_id_like_cpp(609));
+        assert!(
+            object
+                .suppressed_phase_shift()
+                .has_visible_map_id_like_cpp(609)
+        );
+        assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(42));
+        assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(43));
         assert!(!object.phase_shift().has_visible_map_id_like_cpp(700));
+        assert!(object.phase_shift().has_ui_map_phase_id_like_cpp(70));
     }
 
     #[test]

@@ -87,6 +87,12 @@ impl TerrainSwapStore {
             .unwrap_or(&[])
     }
 
+    pub fn terrain_swaps_by_map_like_cpp(&self) -> impl Iterator<Item = (u32, &[u32])> + '_ {
+        self.terrain_swap_ids_by_map
+            .iter()
+            .map(|(map_id, terrain_swaps)| (*map_id, terrain_swaps.as_slice()))
+    }
+
     pub fn validate_spawn_terrain_swap_like_cpp(
         &self,
         map_store: &MapStore,
@@ -206,6 +212,10 @@ mod tests {
 
         assert_eq!(store.terrain_swaps_for_map(571), &[609]);
         assert!(store.terrain_swaps_for_map(999).is_empty());
+        assert_eq!(
+            store.terrain_swaps_by_map_like_cpp().collect::<Vec<_>>(),
+            vec![(571, [609].as_slice())]
+        );
     }
 
     #[test]

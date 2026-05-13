@@ -385,6 +385,10 @@ impl PhaseShift {
         inserted
     }
 
+    pub fn clear_visible_map_ids_like_cpp(&mut self) {
+        self.visible_map_ids.clear();
+    }
+
     pub fn remove_visible_map_id_like_cpp(&mut self, visible_map_id: u32) -> bool {
         let Some(entry) = self.visible_map_ids.get_mut(&visible_map_id) else {
             return false;
@@ -421,6 +425,10 @@ impl PhaseShift {
             .or_insert(UiMapPhaseIdRef { references: 0 });
         entry.references += references;
         inserted
+    }
+
+    pub fn clear_ui_map_phase_ids_like_cpp(&mut self) {
+        self.ui_map_phase_ids.clear();
     }
 
     pub fn remove_ui_map_phase_id_like_cpp(&mut self, ui_map_phase_id: u32) -> bool {
