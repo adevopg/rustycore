@@ -1182,6 +1182,7 @@ mod tests {
             active_quest_objective_counts: Default::default(),
             rewarded_quests: Default::default(),
             inventory_item_counts: Default::default(),
+            party_member_phase_states: Default::default(),
             player_name: format!("Player{}", guid.counter()),
             account_id: guid.counter() as u32,
             race: 1,

@@ -12,6 +12,7 @@ use wow_core::ObjectGuid;
 use wow_data::{AreaTableStore, PhaseGroupStore, PhaseInfoStore, PhaseStore, TerrainSwapStore};
 use wow_entities::{PhaseShift, Unit, WorldObject};
 use wow_packet::packets::misc::{PhaseShiftChange, PhaseShiftDataPhase};
+use wow_packet::packets::party::{PartyMemberPhase, PartyMemberPhaseStates};
 
 #[path = "phasing/personal.rs"]
 pub mod personal;
@@ -742,6 +743,28 @@ pub fn phase_shift_change_for_player_like_cpp(
     })
 }
 
+/// C++ `PhasingHandler::FillPartyMemberPhase`.
+pub fn party_member_phase_states_like_cpp(
+    phase_shift: &PhaseShift,
+) -> Result<PartyMemberPhaseStates, PhaseShiftPacketBuildError> {
+    let phases = phase_shift
+        .phases_like_cpp()
+        .map(|phase| {
+            Ok(PartyMemberPhase {
+                flags: u32::from(phase.flags().bits()),
+                id: u16::try_from(phase.id())
+                    .map_err(|_| PhaseShiftPacketBuildError::PhaseIdOutOfRange(phase.id()))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PartyMemberPhaseStates {
+        phase_shift_flags: phase_shift.flags_like_cpp().bits(),
+        personal_guid: phase_shift.personal_guid_like_cpp(),
+        phases,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1422,6 +1445,36 @@ mod tests {
         assert_eq!(packet.visible_map_ids, vec![609]);
         assert!(packet.preload_map_ids.is_empty());
         assert_eq!(packet.ui_map_phase_ids, vec![42]);
+    }
+
+    #[test]
+    fn party_member_phase_states_copy_phase_shift_like_cpp() {
+        let personal_guid = ObjectGuid::create_player(1, 99);
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_phase_like_cpp(10, PhaseFlags::COSMETIC, 1);
+        phase_shift.add_phase_like_cpp(20, PhaseFlags::PERSONAL, 1);
+        phase_shift.set_personal_guid_like_cpp(personal_guid);
+
+        let states = party_member_phase_states_like_cpp(&phase_shift).unwrap();
+
+        assert_eq!(
+            states.phase_shift_flags,
+            phase_shift.flags_like_cpp().bits()
+        );
+        assert_eq!(states.personal_guid, personal_guid);
+        assert_eq!(
+            states.phases,
+            vec![
+                PartyMemberPhase {
+                    flags: u32::from(PhaseFlags::COSMETIC.bits()),
+                    id: 10,
+                },
+                PartyMemberPhase {
+                    flags: u32::from(PhaseFlags::PERSONAL.bits()),
+                    id: 20,
+                },
+            ]
+        );
     }
 
     #[test]

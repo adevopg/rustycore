@@ -15,7 +15,10 @@ use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
 use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
-use crate::phasing::{init_db_phase_shift_like_cpp, init_db_visible_map_id_like_cpp};
+use crate::phasing::{
+    init_db_phase_shift_like_cpp, init_db_visible_map_id_like_cpp,
+    party_member_phase_states_like_cpp,
+};
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
@@ -3855,6 +3858,10 @@ impl WorldSession {
                     .collect(),
                 rewarded_quests: self.rewarded_quests.clone(),
                 inventory_item_counts: self.represented_inventory_item_counts_like_cpp(),
+                party_member_phase_states: party_member_phase_states_like_cpp(
+                    self.represented_player_phase_shift_like_cpp(),
+                )
+                .unwrap_or_default(),
                 player_name: name.to_string(),
                 account_id: self.account_id,
                 race,
@@ -3896,6 +3903,9 @@ impl WorldSession {
                 .collect();
             info.rewarded_quests = self.rewarded_quests.clone();
             info.inventory_item_counts = self.represented_inventory_item_counts_like_cpp();
+            info.party_member_phase_states =
+                party_member_phase_states_like_cpp(self.represented_player_phase_shift_like_cpp())
+                    .unwrap_or_default();
         }
     }
 
@@ -9092,6 +9102,7 @@ mod tests {
             active_quest_objective_counts: Default::default(),
             rewarded_quests: Default::default(),
             inventory_item_counts: Default::default(),
+            party_member_phase_states: Default::default(),
             player_name: format!("Player{}", guid.counter()),
             account_id: guid.counter() as u32,
             race: 1,

@@ -157,6 +157,7 @@ fn send_party_update(group: &GroupInfo, registry: &PlayerRegistry, _vra: u32) {
                     position_x: pos.x as i16,
                     position_y: pos.y as i16,
                     position_z: pos.z as i16,
+                    phases: other.party_member_phase_states.clone(),
                 };
                 let _ = member_entry.send_tx.send(full_state.to_bytes());
             }
@@ -568,6 +569,7 @@ mod tests {
             active_quest_objective_counts: Default::default(),
             rewarded_quests: Default::default(),
             inventory_item_counts: Default::default(),
+            party_member_phase_states: Default::default(),
             player_name: format!("Player{}", guid.low_value()),
             account_id: 1,
             race: 1,
@@ -668,6 +670,51 @@ mod tests {
             !sent
                 .windows(master_bytes.len())
                 .any(|window| window == master_bytes.as_slice())
+        );
+    }
+
+    #[test]
+    fn party_member_full_state_carries_phase_states_like_cpp() {
+        let leader = ObjectGuid::create_player(1, 42);
+        let member = ObjectGuid::create_player(1, 77);
+        let (leader_tx, leader_rx) = bounded(8);
+        let (member_tx, _member_rx) = bounded(8);
+        let registry = PlayerRegistry::default();
+        registry.insert(leader, broadcast_info(leader, leader_tx));
+        registry.insert(member, broadcast_info(member, member_tx));
+        if let Some(mut info) = registry.get_mut(&member) {
+            info.party_member_phase_states =
+                wow_packet::packets::party::PartyMemberPhaseStates {
+                    phase_shift_flags: 0x08,
+                    personal_guid: ObjectGuid::EMPTY,
+                    phases: vec![wow_packet::packets::party::PartyMemberPhase {
+                        flags: 0x02,
+                        id: 20,
+                    }],
+                };
+        }
+        let mut group = GroupInfo::new(leader);
+        group.members.push(member);
+
+        send_party_update(&group, &registry, 0);
+
+        let _party_update = leader_rx.try_recv().unwrap();
+        let full_state = leader_rx.try_recv().unwrap();
+        assert_eq!(
+            u16::from_le_bytes([full_state[0], full_state[1]]),
+            ServerOpcodes::PartyMemberFullState as u16
+        );
+        let phase_bytes = [
+            0x08, 0x00, 0x00, 0x00, // PhaseShiftFlags
+            0x01, 0x00, 0x00, 0x00, // List.Count
+            0x00, 0x00, // PersonalGUID packed mask + empty payload
+            0x02, 0x00, 0x00, 0x00, // phase.Flags
+            0x14, 0x00, // phase.Id
+        ];
+        assert!(
+            full_state
+                .windows(phase_bytes.len())
+                .any(|window| window == phase_bytes)
         );
     }
 

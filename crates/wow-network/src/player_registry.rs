@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use wow_core::{ObjectGuid, Position};
 use wow_packet::packets::loot::LootEntry;
+use wow_packet::packets::party::PartyMemberPhaseStates;
 
 #[derive(Clone, Debug)]
 pub enum SessionCommand {
@@ -85,6 +86,8 @@ pub struct PlayerBroadcastInfo {
     pub rewarded_quests: HashSet<u32>,
     /// Direct inventory item counts, keyed by item entry, used for remote quest-loot gates.
     pub inventory_item_counts: HashMap<u32, u32>,
+    /// C++ `PartyMemberPhaseStates` snapshot for SMSG_PARTY_MEMBER_FULL_STATE.
+    pub party_member_phase_states: PartyMemberPhaseStates,
     /// Character name — used for whisper target lookups.
     pub player_name: String,
     /// Account ID — kept for future same-account filtering.

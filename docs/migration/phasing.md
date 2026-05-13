@@ -187,6 +187,7 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 - `wow-entities::WorldObject` owns C++ `_phaseShift` / `_suppressedPhaseShift` equivalents and exposes mutable accessors for both.
 - `PhaseShift::can_see` now mirrors the C++ pure predicate for `Unphased`, `AlwaysVisible`, `Inverse`, `InverseUnphased`, `NoCosmetic`, and personal phases.
 - Session DB visibility for creature/gameobject spawns now applies `PhaseShift::can_see` before sending create blocks, using the same DB phase initialization helper as the represented/canonical spawn state.
+- `SMSG_PARTY_MEMBER_FULL_STATE` now carries C++ `PartyMemberPhaseStates` from the member phase snapshot instead of an always-empty phase block.
 - `wow-data::PhaseInfoStore` seeds C++ `_phaseInfoById` from `PhaseStore`, matching current `ObjectMgr::LoadPhases`.
 - `AreaTable.db2` is loaded with hotfix overlays for `ParentAreaID`, and `phase_area` rows are loaded into C++-like `PhaseInfoStore` area buckets with parent `SubAreaExclusions`.
 - `wow-world::phasing` implements the pure C++ `PhasingHandler::ResetPhaseShift`, `InheritPhaseShift`, `SetAlwaysVisible`, and `SetInversed` slices.
@@ -206,7 +207,7 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 - `MultiPersonalPhaseTracker` per-map; private spawn lifecycle.
 - Full integration of `PhaseShift::can_see` into every canonical map/grid notifier codepath; session DB spawn visibility and the map creature visibility query can now apply the predicate, and the session `ObjectAccessor` player object preserves represented player phase, but full player phase ownership is still represented until live `Player` phase lifecycle hooks land.
 - GameObject/transport terrain swap application is still missing because Rust does not yet have the canonical C++ `GameObject::Create` / transport runtime path wired.
-- `PartyMemberPhaseStates` piece of `SMSG_PARTY_MEMBER_FULL_STATE`.
+- Live refresh triggers for `PartyMemberPhaseStates` when a party member's phase changes are still tied to the remaining phase lifecycle hooks.
 
 **Suspicious / likely divergent (hipótesis pre-auditoría):**
 - The constant SMSG_PHASE_SHIFT_CHANGE payload uses `PhaseShiftFlags::Unphased = 0x08` always; once any aura-phase or area-phase is applied, that field has to flip off `Unphased` and on `NoCosmetic`/etc. as appropriate, otherwise client-side phase intersection drifts.
@@ -295,7 +296,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] **#PHASE.24** Implement `InitDbPhaseShift` / `InitDbPersonalOwnership` / `InitDbVisibleMapId` so creature/gameobject DB rows that carry `phaseUseFlags` / `PhaseId` / `PhaseGroup` / `terrainSwapMap` columns produce correct phase state at spawn (M; partial: C++ helper semantics implemented; visible creature spawn/respawn path now selects and applies `phaseUseFlags`/`phaseid`/`phasegroup` plus `terrainSwapMap`; visible gameobject path now records represented `GameObject::GetPhaseShift()` from the same DB columns until canonical GO ownership lands; remaining spawn paths still need areatrigger/transport wiring and DB personal owner loader)
 - [x] **#PHASE.25** Implement `GetTerrainMapId(phaseShift, mapId, terrain, x, y)` so collision / area lookups select the alt map when a swap is active at coordinates (`terrain_map_id_for_phase_shift_like_cpp` + `TerrainGridFilesLikeCpp` / `TerrainGridFileIndexLikeCpp` in `crates/wow-world/src/map_manager.rs`) (M)
 - [ ] **#PHASE.26** Integrate `PhaseShift::can_see` into the Rust visibility / grid-notifier path (the C++ `WorldObject::CanSeeOrDetect` chain) so phased objects actually become invisible (H; partial: session creature/gameobject DB create paths now filter through `PhaseShift::can_see` against represented player phase, `MapManager::get_visible_creatures_in_phase` mirrors the C++ grid searcher phase filter for canonical creature queries, and the `ObjectAccessor` player snapshot preserves represented player phase; remaining live player phase lifecycle hooks, non-DB object paths, and all grid notifier callsites stay open)
-- [ ] **#PHASE.27** Implement `FillPartyMemberPhase` for `SMSG_PARTY_MEMBER_FULL_STATE` so the group UI knows when a member is out of phase (M)
+- [x] **#PHASE.27** Implement `FillPartyMemberPhase` for `SMSG_PARTY_MEMBER_FULL_STATE` so the group UI knows when a member is out of phase (`PartyMemberPhaseStates` serializer + `party_member_phase_states_like_cpp` + player-registry snapshot feeding group full-state packets; live phase-change resend hooks remain tracked by #PHASE.15/#PHASE.17/#PHASE.26) (M)
 - [ ] **#PHASE.28** Add `PrintToChat` / `FormatPhases` admin/debug helpers (L)
 - [ ] **#PHASE.29** Wire `OnConditionChange` to be re-fired by relevant condition triggers (quest state change, aura apply, item add — all in the C++ `Condition::Meets` triggers) (M, depends on Conditions module)
 - [ ] **#PHASE.30** Documentation: cross-link `phasing.md` ↔ `conditions.md` ↔ `maps.md` (`MultiPersonalPhaseTracker` ownership) (L)
