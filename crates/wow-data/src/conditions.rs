@@ -1045,6 +1045,29 @@ impl ConditionEntriesByTypeStore {
             .sum()
     }
 
+    /// C++ `SpellsUsedInSpellClickConditions` load-time index.
+    pub fn spells_used_in_spell_click_conditions_like_cpp(&self) -> std::collections::HashSet<u32> {
+        self.entries_for_source_type_like_cpp(ConditionSourceType::SpellClickEvent)
+            .into_iter()
+            .flat_map(HashMap::values)
+            .flat_map(|conditions| conditions.iter())
+            .filter(|condition| condition.condition_type == ConditionType::Aura)
+            .map(|condition| condition.condition_value1)
+            .collect()
+    }
+
+    /// C++ `ConditionMgr::IsSpellUsedInSpellClickConditions`.
+    pub fn is_spell_used_in_spell_click_conditions_like_cpp(&self, spell_id: u32) -> bool {
+        self.entries_for_source_type_like_cpp(ConditionSourceType::SpellClickEvent)
+            .into_iter()
+            .flat_map(HashMap::values)
+            .flat_map(|conditions| conditions.iter())
+            .any(|condition| {
+                condition.condition_type == ConditionType::Aura
+                    && condition.condition_value1 == spell_id
+            })
+    }
+
     /// C++ `ConditionMgr::GetSearcherTypeMaskForConditionList`.
     pub fn get_searcher_type_mask_for_condition_list_like_cpp(
         &self,
@@ -2427,6 +2450,46 @@ mod tests {
             .conditions_for_like_cpp(ConditionSourceType::Phase, first.id_like_cpp())
             .unwrap();
         assert_eq!(phase_bucket.as_slice(), &[first, second]);
+    }
+
+    #[test]
+    fn spell_click_aura_spell_index_matches_cpp_load_builder() {
+        let aura_spell_click = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            source_group: 7,
+            source_entry: 20,
+            condition_type: ConditionType::Aura,
+            condition_value1: 100,
+            ..Condition::default()
+        };
+        let non_aura_spell_click = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            source_group: 7,
+            source_entry: 21,
+            condition_type: ConditionType::MapId,
+            condition_value1: 571,
+            ..Condition::default()
+        };
+        let aura_other_source = Condition {
+            source_type: ConditionSourceType::Spell,
+            source_group: 0,
+            source_entry: 100,
+            condition_type: ConditionType::Aura,
+            condition_value1: 200,
+            ..Condition::default()
+        };
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([
+            aura_spell_click,
+            non_aura_spell_click,
+            aura_other_source,
+        ]);
+
+        assert_eq!(
+            store.spells_used_in_spell_click_conditions_like_cpp(),
+            std::collections::HashSet::from([100])
+        );
+        assert!(store.is_spell_used_in_spell_click_conditions_like_cpp(100));
+        assert!(!store.is_spell_used_in_spell_click_conditions_like_cpp(200));
     }
 
     #[test]
