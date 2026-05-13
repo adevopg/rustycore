@@ -7,7 +7,7 @@
 
 use std::{collections::HashSet, error::Error, fmt};
 
-use wow_constants::{PhaseFlags, TypeId};
+use wow_constants::{PhaseFlags, PhaseShiftFlags, TypeId};
 use wow_core::ObjectGuid;
 use wow_data::{AreaTableStore, PhaseGroupStore, PhaseInfoStore, PhaseStore, TerrainSwapStore};
 use wow_entities::{PhaseShift, Unit, WorldObject};
@@ -15,6 +15,10 @@ use wow_packet::packets::misc::{PhaseShiftChange, PhaseShiftDataPhase};
 
 #[path = "phasing/personal.rs"]
 pub mod personal;
+
+pub const PHASE_USE_FLAGS_ALWAYS_VISIBLE: u8 = 0x01;
+pub const PHASE_USE_FLAGS_INVERSE: u8 = 0x02;
+const DEFAULT_PHASE: u32 = 169;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhaseVisibilityUpdate {
@@ -151,6 +155,82 @@ pub fn phase_flags_for_id_like_cpp(phase_store: &PhaseStore, phase_id: u32) -> P
     }
 
     PhaseFlags::NONE
+}
+
+/// C++ `PhasingHandler::InitDbPhaseShift`.
+pub fn init_db_phase_shift_like_cpp(
+    phase_shift: &mut PhaseShift,
+    phase_store: &PhaseStore,
+    phase_group_store: &PhaseGroupStore,
+    phase_use_flags: u8,
+    phase_id: u16,
+    phase_group_id: u32,
+) {
+    phase_shift.clear_phases_like_cpp();
+    phase_shift.set_db_phase_shift_like_cpp(true);
+
+    let mut flags = PhaseShiftFlags::NONE;
+    if phase_use_flags & PHASE_USE_FLAGS_ALWAYS_VISIBLE != 0 {
+        flags |= PhaseShiftFlags::ALWAYS_VISIBLE | PhaseShiftFlags::UNPHASED;
+    }
+    if phase_use_flags & PHASE_USE_FLAGS_INVERSE != 0 {
+        flags |= PhaseShiftFlags::INVERSE;
+    }
+
+    if phase_id != 0 {
+        let phase_id = u32::from(phase_id);
+        phase_shift.add_phase_like_cpp(
+            phase_id,
+            phase_flags_for_id_like_cpp(phase_store, phase_id),
+            1,
+        );
+    } else if phase_group_id != 0
+        && let Some(phases_in_group) = phase_group_store.phases_for_group(phase_group_id)
+    {
+        for phase_in_group in phases_in_group {
+            phase_shift.add_phase_like_cpp(
+                *phase_in_group,
+                phase_flags_for_id_like_cpp(phase_store, *phase_in_group),
+                1,
+            );
+        }
+    }
+
+    if phase_shift.phase_count_like_cpp() == 0 || phase_shift.has_phase_like_cpp(DEFAULT_PHASE) {
+        if flags.contains(PhaseShiftFlags::INVERSE) {
+            flags |= PhaseShiftFlags::INVERSE_UNPHASED;
+        } else {
+            flags |= PhaseShiftFlags::UNPHASED;
+        }
+    }
+
+    phase_shift.set_flags_like_cpp(flags);
+}
+
+/// C++ `PhasingHandler::InitDbPersonalOwnership`.
+pub fn init_db_personal_ownership_like_cpp(
+    phase_shift: &mut PhaseShift,
+    personal_guid: ObjectGuid,
+) {
+    assert!(phase_shift.is_db_phase_shift_like_cpp());
+    assert!(phase_shift.has_personal_phase_like_cpp());
+    phase_shift.set_personal_guid_like_cpp(personal_guid);
+}
+
+/// C++ `PhasingHandler::InitDbVisibleMapId`.
+pub fn init_db_visible_map_id_like_cpp(
+    phase_shift: &mut PhaseShift,
+    terrain_swap_store: &TerrainSwapStore,
+    visible_map_id: i32,
+) {
+    phase_shift.clear_visible_map_ids_like_cpp();
+    if let Ok(visible_map_id) = u32::try_from(visible_map_id)
+        && terrain_swap_store
+            .terrain_swap_info(visible_map_id)
+            .is_some()
+    {
+        phase_shift.add_visible_map_id_like_cpp(visible_map_id, 1);
+    }
 }
 
 /// C++ `PhasingHandler::ResetPhaseShift`.
@@ -1215,6 +1295,96 @@ mod tests {
                 .flags_like_cpp()
                 .contains(PhaseShiftFlags::UNPHASED)
         );
+    }
+
+    #[test]
+    fn init_db_phase_shift_uses_cpp_flags_phase_and_group_priority() {
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let mut phase_shift = PhaseShift::default();
+
+        init_db_phase_shift_like_cpp(
+            &mut phase_shift,
+            &phase_store,
+            &phase_group_store,
+            PHASE_USE_FLAGS_ALWAYS_VISIBLE | PHASE_USE_FLAGS_INVERSE,
+            20,
+            7,
+        );
+
+        assert!(phase_shift.is_db_phase_shift_like_cpp());
+        assert!(phase_shift.has_phase_like_cpp(20));
+        assert!(!phase_shift.has_phase_like_cpp(10));
+        assert_eq!(
+            phase_shift.flags_like_cpp(),
+            PhaseShiftFlags::ALWAYS_VISIBLE | PhaseShiftFlags::UNPHASED | PhaseShiftFlags::INVERSE
+        );
+    }
+
+    #[test]
+    fn init_db_phase_shift_uses_group_and_unphased_fallback_like_cpp() {
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let mut phase_shift = PhaseShift::default();
+
+        init_db_phase_shift_like_cpp(
+            &mut phase_shift,
+            &phase_store,
+            &phase_group_store,
+            PHASE_USE_FLAGS_INVERSE,
+            0,
+            7,
+        );
+
+        assert!(phase_shift.has_phase_like_cpp(10));
+        assert!(phase_shift.has_phase_like_cpp(20));
+        assert!(!phase_shift.has_phase_like_cpp(99));
+        assert_eq!(phase_shift.flags_like_cpp(), PhaseShiftFlags::INVERSE);
+
+        init_db_phase_shift_like_cpp(
+            &mut phase_shift,
+            &phase_store,
+            &phase_group_store,
+            PHASE_USE_FLAGS_INVERSE,
+            0,
+            0,
+        );
+
+        assert_eq!(
+            phase_shift.flags_like_cpp(),
+            PhaseShiftFlags::INVERSE | PhaseShiftFlags::INVERSE_UNPHASED
+        );
+    }
+
+    #[test]
+    fn init_db_personal_ownership_stamps_personal_guid_like_cpp() {
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let personal_guid = ObjectGuid::create_player(1, 42);
+        let mut phase_shift = PhaseShift::default();
+
+        init_db_phase_shift_like_cpp(&mut phase_shift, &phase_store, &phase_group_store, 0, 20, 0);
+        init_db_personal_ownership_like_cpp(&mut phase_shift, personal_guid);
+
+        assert_eq!(phase_shift.personal_guid_like_cpp(), personal_guid);
+    }
+
+    #[test]
+    fn init_db_visible_map_id_resets_visible_maps_only_like_cpp() {
+        let terrain_swap_store = terrain_swap_store();
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(700, 1);
+        phase_shift.add_ui_map_phase_id_like_cpp(70, 1);
+
+        init_db_visible_map_id_like_cpp(&mut phase_shift, &terrain_swap_store, 609);
+
+        assert!(!phase_shift.has_visible_map_id_like_cpp(700));
+        assert!(phase_shift.has_visible_map_id_like_cpp(609));
+        assert!(phase_shift.has_ui_map_phase_id_like_cpp(70));
+
+        init_db_visible_map_id_like_cpp(&mut phase_shift, &terrain_swap_store, -1);
+        assert_eq!(phase_shift.visible_map_id_count_like_cpp(), 0);
+        assert!(phase_shift.has_ui_map_phase_id_like_cpp(70));
     }
 
     #[test]

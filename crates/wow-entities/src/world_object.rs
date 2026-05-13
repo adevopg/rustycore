@@ -351,6 +351,10 @@ impl PhaseShift {
         self.flags
     }
 
+    pub fn set_flags_like_cpp(&mut self, flags: PhaseShiftFlags) {
+        self.flags = flags;
+    }
+
     pub const fn personal_guid_like_cpp(&self) -> ObjectGuid {
         self.personal_guid
     }
@@ -370,6 +374,10 @@ impl PhaseShift {
 
     pub fn set_db_phase_shift_like_cpp(&mut self, is_db_phase_shift: bool) {
         self.is_db_phase_shift = is_db_phase_shift;
+    }
+
+    pub const fn is_db_phase_shift_like_cpp(&self) -> bool {
+        self.is_db_phase_shift
     }
 
     pub fn clear(&mut self) {

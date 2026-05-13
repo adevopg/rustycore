@@ -15,6 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
 use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
+use crate::phasing::init_db_visible_map_id_like_cpp;
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
@@ -1515,11 +1516,11 @@ impl WorldSession {
                                         terrain_swap_map,
                                     )
                                 {
-                                    creature
-                                        .unit_mut()
-                                        .world_mut()
-                                        .phase_shift_mut()
-                                        .add_visible_map_id_like_cpp(terrain_swap_map, 1);
+                                    init_db_visible_map_id_like_cpp(
+                                        creature.unit_mut().world_mut().phase_shift_mut(),
+                                        terrain_swap_store,
+                                        i32::try_from(terrain_swap_map).unwrap_or(-1),
+                                    );
                                     i32::try_from(terrain_swap_map).unwrap_or(-1)
                                 } else {
                                     -1
