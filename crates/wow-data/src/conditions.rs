@@ -287,6 +287,27 @@ pub const fn condition_source_can_have_id_set_like_cpp(source_type: ConditionSou
     matches!(source_type, ConditionSourceType::SmartEvent)
 }
 
+/// C++ `ConditionMgr::CanHaveConditionType`.
+pub const fn condition_source_can_have_condition_type_like_cpp(
+    source_type: ConditionSourceType,
+    condition_type: ConditionType,
+) -> bool {
+    match source_type {
+        ConditionSourceType::SpawnGroup => matches!(
+            condition_type,
+            ConditionType::None
+                | ConditionType::ActiveEvent
+                | ConditionType::InstanceInfo
+                | ConditionType::MapId
+                | ConditionType::WorldState
+                | ConditionType::RealmAchievement
+                | ConditionType::DifficultyId
+                | ConditionType::ScenarioStep
+        ),
+        _ => true,
+    }
+}
+
 pub const fn condition_source_type_name_like_cpp(source_type: ConditionSourceType) -> &'static str {
     match source_type {
         ConditionSourceType::None => "None",
@@ -1594,6 +1615,26 @@ mod tests {
         ));
         assert!(!condition_source_can_have_id_set_like_cpp(
             ConditionSourceType::SpellClickEvent,
+        ));
+    }
+
+    #[test]
+    fn source_condition_type_allowance_matches_cpp_spawn_group_special_case() {
+        assert!(condition_source_can_have_condition_type_like_cpp(
+            ConditionSourceType::SpawnGroup,
+            ConditionType::MapId,
+        ));
+        assert!(condition_source_can_have_condition_type_like_cpp(
+            ConditionSourceType::SpawnGroup,
+            ConditionType::ScenarioStep,
+        ));
+        assert!(!condition_source_can_have_condition_type_like_cpp(
+            ConditionSourceType::SpawnGroup,
+            ConditionType::Aura,
+        ));
+        assert!(condition_source_can_have_condition_type_like_cpp(
+            ConditionSourceType::NpcVendor,
+            ConditionType::Aura,
         ));
     }
 
