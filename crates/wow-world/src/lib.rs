@@ -5,6 +5,7 @@
 
 //! World server core: session management, handlers, and world state.
 
+pub mod conditions;
 pub mod entity_update_bridge;
 pub mod handlers;
 pub mod map_manager;
