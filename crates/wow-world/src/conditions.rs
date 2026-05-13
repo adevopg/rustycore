@@ -148,6 +148,196 @@ pub fn is_object_meeting_not_grouped_conditions_like_cpp<'a>(
     true
 }
 
+/// C++ `ConditionMgr::HasConditionsForNotGroupedEntry`.
+pub fn has_conditions_for_not_grouped_entry_like_cpp(
+    condition_store: &ConditionEntriesByTypeStore,
+    source_type: ConditionSourceType,
+    entry: u32,
+) -> bool {
+    (source_type as u32) > ConditionSourceType::None as u32
+        && (source_type as u32) < ConditionSourceType::Max as u32
+        && condition_store
+            .conditions_for_like_cpp(source_type, ConditionId::new(0, entry as i32, 0))
+            .is_some()
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingSpellClickConditions`.
+pub fn is_object_meeting_spell_click_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    creature_id: u32,
+    spell_id: u32,
+    clicker: Option<&'a WorldObject>,
+    target: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::SpellClickEvent,
+        ConditionId::new(creature_id, spell_id as i32, 0),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(clicker, target, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
+/// C++ `ConditionMgr::HasConditionsForSpellClickEvent`.
+pub fn has_conditions_for_spell_click_event_like_cpp(
+    condition_store: &ConditionEntriesByTypeStore,
+    creature_id: u32,
+    spell_id: u32,
+) -> bool {
+    condition_store
+        .conditions_for_like_cpp(
+            ConditionSourceType::SpellClickEvent,
+            ConditionId::new(creature_id, spell_id as i32, 0),
+        )
+        .is_some()
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingVehicleSpellConditions`.
+pub fn is_object_meeting_vehicle_spell_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    creature_id: u32,
+    spell_id: u32,
+    player: Option<&'a WorldObject>,
+    vehicle: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::VehicleSpell,
+        ConditionId::new(creature_id, spell_id as i32, 0),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(player, vehicle, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingSmartEventConditions`.
+pub fn is_object_meeting_smart_event_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    entry_or_guid: i64,
+    event_id: u32,
+    source_type: u32,
+    unit: Option<&'a WorldObject>,
+    base_object: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::SmartEvent,
+        ConditionId::new(event_id + 1, entry_or_guid as i32, source_type),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(unit, base_object, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingVendorItemConditions`.
+pub fn is_object_meeting_vendor_item_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    creature_id: u32,
+    item_id: u32,
+    player: Option<&'a WorldObject>,
+    vendor: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::NpcVendor,
+        ConditionId::new(creature_id, item_id as i32, 0),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(player, vendor, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
+/// C++ `ConditionMgr::GetConditionsForAreaTrigger`.
+pub fn conditions_for_area_trigger_like_cpp(
+    condition_store: &ConditionEntriesByTypeStore,
+    area_trigger_id: u32,
+    is_server_side: bool,
+) -> Option<&[Condition]> {
+    condition_store
+        .conditions_for_like_cpp(
+            ConditionSourceType::AreaTrigger,
+            ConditionId::new(area_trigger_id, i32::from(is_server_side), 0),
+        )
+        .map(|conditions| conditions.as_slice())
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingTrainerSpellConditions`.
+pub fn is_object_meeting_trainer_spell_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    trainer_id: u32,
+    spell_id: u32,
+    player: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::NpcVendor,
+        ConditionId::new(trainer_id, spell_id as i32, 0),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(player, None, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
+/// C++ `ConditionMgr::IsObjectMeetingVisibilityByObjectIdConditions`.
+pub fn is_object_meeting_visibility_by_object_id_conditions_like_cpp<'a>(
+    condition_store: &'a ConditionEntriesByTypeStore,
+    object_type: u32,
+    entry: u32,
+    seer: Option<&'a WorldObject>,
+    meets: impl FnMut(&'a Condition, &mut ConditionSourceInfo<'a>) -> bool,
+) -> bool {
+    if let Some(conditions) = condition_store.conditions_for_like_cpp(
+        ConditionSourceType::ObjectIdVisibility,
+        ConditionId::new(object_type, entry as i32, 0),
+    ) {
+        let mut source_info = ConditionSourceInfo::from_targets(seer, None, None);
+        return is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            meets,
+        );
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +518,248 @@ mod tests {
             &mut info,
             |condition, _| condition.condition_value1 == 10,
         ));
+    }
+
+    #[test]
+    fn has_not_grouped_conditions_uses_cpp_zero_group_entry_key() {
+        let condition = Condition {
+            source_type: ConditionSourceType::Phase,
+            source_group: 0,
+            source_entry: -1,
+            source_id: 0,
+            condition_type: ConditionType::Aura,
+            ..Condition::default()
+        };
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([condition]);
+
+        assert!(has_conditions_for_not_grouped_entry_like_cpp(
+            &store,
+            ConditionSourceType::Phase,
+            u32::MAX,
+        ));
+        assert!(!has_conditions_for_not_grouped_entry_like_cpp(
+            &store,
+            ConditionSourceType::None,
+            u32::MAX,
+        ));
+    }
+
+    #[test]
+    fn spell_click_conditions_use_cpp_key_and_target_order() {
+        let condition = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            source_group: 123,
+            source_entry: -1,
+            source_id: 0,
+            condition_type: ConditionType::Aura,
+            ..Condition::default()
+        };
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([condition]);
+        let clicker = world_object(571, 1);
+        let target = world_object(1, 2);
+
+        assert!(has_conditions_for_spell_click_event_like_cpp(
+            &store,
+            123,
+            u32::MAX,
+        ));
+        assert!(is_object_meeting_spell_click_conditions_like_cpp(
+            &store,
+            123,
+            u32::MAX,
+            Some(&clicker),
+            Some(&target),
+            |_, source_info| {
+                std::ptr::eq(source_info.condition_targets[0].unwrap(), &clicker)
+                    && std::ptr::eq(source_info.condition_targets[1].unwrap(), &target)
+            },
+        ));
+    }
+
+    #[test]
+    fn vehicle_vendor_and_trainer_conditions_match_cpp_keys_and_targets() {
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([
+            Condition {
+                source_type: ConditionSourceType::VehicleSpell,
+                source_group: 10,
+                source_entry: 20,
+                condition_type: ConditionType::Aura,
+                ..Condition::default()
+            },
+            Condition {
+                source_type: ConditionSourceType::NpcVendor,
+                source_group: 30,
+                source_entry: 40,
+                condition_type: ConditionType::Aura,
+                ..Condition::default()
+            },
+        ]);
+        let player = world_object(571, 1);
+        let other = world_object(571, 1);
+
+        assert!(is_object_meeting_vehicle_spell_conditions_like_cpp(
+            &store,
+            10,
+            20,
+            Some(&player),
+            Some(&other),
+            |_, source_info| {
+                std::ptr::eq(source_info.condition_targets[0].unwrap(), &player)
+                    && std::ptr::eq(source_info.condition_targets[1].unwrap(), &other)
+            },
+        ));
+        assert!(is_object_meeting_vendor_item_conditions_like_cpp(
+            &store,
+            30,
+            40,
+            Some(&player),
+            Some(&other),
+            |_, source_info| {
+                std::ptr::eq(source_info.condition_targets[0].unwrap(), &player)
+                    && std::ptr::eq(source_info.condition_targets[1].unwrap(), &other)
+            },
+        ));
+        assert!(is_object_meeting_trainer_spell_conditions_like_cpp(
+            &store,
+            30,
+            40,
+            Some(&player),
+            |_, source_info| std::ptr::eq(source_info.condition_targets[0].unwrap(), &player),
+        ));
+    }
+
+    #[test]
+    fn smart_event_and_visibility_conditions_match_cpp_composite_keys() {
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([
+            Condition {
+                source_type: ConditionSourceType::SmartEvent,
+                source_group: 8,
+                source_entry: -7,
+                source_id: 9,
+                condition_type: ConditionType::Aura,
+                ..Condition::default()
+            },
+            Condition {
+                source_type: ConditionSourceType::ObjectIdVisibility,
+                source_group: 11,
+                source_entry: -1,
+                source_id: 0,
+                condition_type: ConditionType::Aura,
+                ..Condition::default()
+            },
+        ]);
+        let unit = world_object(571, 1);
+        let base = world_object(571, 1);
+
+        assert!(is_object_meeting_smart_event_conditions_like_cpp(
+            &store,
+            -7,
+            7,
+            9,
+            Some(&unit),
+            Some(&base),
+            |_, source_info| {
+                std::ptr::eq(source_info.condition_targets[0].unwrap(), &unit)
+                    && std::ptr::eq(source_info.condition_targets[1].unwrap(), &base)
+            },
+        ));
+        assert!(
+            is_object_meeting_visibility_by_object_id_conditions_like_cpp(
+                &store,
+                11,
+                u32::MAX,
+                Some(&unit),
+                |_, source_info| std::ptr::eq(source_info.condition_targets[0].unwrap(), &unit),
+            )
+        );
+    }
+
+    #[test]
+    fn area_trigger_lookup_uses_server_side_as_cpp_source_entry() {
+        let client_condition = Condition {
+            source_type: ConditionSourceType::AreaTrigger,
+            source_group: 77,
+            source_entry: 0,
+            condition_type: ConditionType::Aura,
+            condition_value1: 10,
+            ..Condition::default()
+        };
+        let server_condition = Condition {
+            source_type: ConditionSourceType::AreaTrigger,
+            source_group: 77,
+            source_entry: 1,
+            condition_type: ConditionType::Aura,
+            condition_value1: 20,
+            ..Condition::default()
+        };
+        let store = ConditionEntriesByTypeStore::from_conditions_like_cpp([
+            client_condition,
+            server_condition,
+        ]);
+
+        assert_eq!(
+            conditions_for_area_trigger_like_cpp(&store, 77, false).unwrap()[0].condition_value1,
+            10
+        );
+        assert_eq!(
+            conditions_for_area_trigger_like_cpp(&store, 77, true).unwrap()[0].condition_value1,
+            20
+        );
+    }
+
+    #[test]
+    fn specialized_condition_lookups_default_to_true_when_missing_like_cpp() {
+        let store = ConditionEntriesByTypeStore::default();
+
+        assert!(is_object_meeting_spell_click_conditions_like_cpp(
+            &store,
+            1,
+            2,
+            None,
+            None,
+            |_, _| false,
+        ));
+        assert!(is_object_meeting_vehicle_spell_conditions_like_cpp(
+            &store,
+            1,
+            2,
+            None,
+            None,
+            |_, _| false,
+        ));
+        assert!(is_object_meeting_smart_event_conditions_like_cpp(
+            &store,
+            1,
+            2,
+            3,
+            None,
+            None,
+            |_, _| false,
+        ));
+        assert!(is_object_meeting_vendor_item_conditions_like_cpp(
+            &store,
+            1,
+            2,
+            None,
+            None,
+            |_, _| false,
+        ));
+        assert!(is_object_meeting_trainer_spell_conditions_like_cpp(
+            &store,
+            1,
+            2,
+            None,
+            |_, _| false,
+        ));
+        assert!(
+            is_object_meeting_visibility_by_object_id_conditions_like_cpp(
+                &store,
+                1,
+                2,
+                None,
+                |_, _| false,
+            )
+        );
+        assert!(conditions_for_area_trigger_like_cpp(&store, 1, false).is_none());
     }
 }
