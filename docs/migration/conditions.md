@@ -3,9 +3,9 @@
 > **C++ canonical path:** `src/server/game/Conditions/` (`ConditionMgr`, `DisableMgr`)
 > **Rust target crate(s):** `crates/wow-data/` (load `conditions` table, store `ConditionContainer` keyed by `(SourceType, SourceGroup, SourceEntry)`), `crates/wow-world/src/conditions/` (the `Meets` evaluator with access to `Player`/`Unit`/`Map`), no dedicated crate yet.
 > **Layer:** L7 (Game systems — depends on Entities/Player+Unit L4, Quests L6, Reputation L6, Achievements L7, Map L4, World/DB2 L1; depended on by Phasing L7, Loot L6, Gossip L6, SmartScripts L7, SpellMgr L5, Vendors, Trainers, Graveyards, AreaTriggers, Conversation, GameObjects)
-> **Status:** ❌ not started — there is no `ConditionMgr` in Rust, no `Condition` struct, no `conditions` table loader. Several upstream systems (Phasing, Gossip menus, Loot drops, Vendor item visibility, Trainer spell prerequisites) depend on a working ConditionMgr; right now those callsites either return "always true" or are absent entirely.
-> **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed ❌ — silent-default bug catalogued in §13)
-> **Last updated:** 2026-05-01
+> **Status:** 🟡 in progress — core data shapes, SQL row parsing, static load validation, condition grouping/reference semantics, searcher masks, partial `Condition::Meets`, and specialized lookup helpers are implemented. Full external-store validation, downstream source-type attachment, remaining evaluator branches, DB2 helpers, `DisableMgr`, and startup wiring remain open.
+> **Audited vs C++:** ✅ audited 2026-05-01; implementation progress re-checked against C++ continuously during port work.
+> **Last updated:** 2026-05-13
 
 ---
 
@@ -139,6 +139,11 @@ Out-of-tree consumers (each calls `sConditionMgr` extensively):
 - `Spawn groups` — `_SPAWN_GROUP`.
 - `Object visibility` — `_OBJECT_ID_VISIBILITY` (filter creatures/gameobjects by entry).
 
+**Phasing contract:**
+- `PhasingHandler::OnAreaChange` needs `CONDITION_SOURCE_TYPE_PHASE` buckets attached to each `PhaseAreaInfo` as a reload-safe `ConditionsReference`/weak handle, mirroring C++ `PhaseRef::AreaConditions`.
+- `PhasingHandler::OnMapChange` and `OnConditionChange` need `IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_TERRAIN_SWAP, terrainSwapId, object)` with C++ OR-of-AND `ElseGroup` semantics and `NegativeCondition` support.
+- Do not mark phasing lifecycle tasks complete while ConditionMgr still uses injected predicates or "always true" fallbacks; those are test seams only, not C++ parity.
+
 ---
 
 ## 6. SQL / DB queries (if any)
@@ -197,11 +202,30 @@ ConditionMgr is server-internal — it emits no packets directly. Indirectly, wh
 - Stub-level dependencies: a few packets (`crates/wow-packet/src/packets/character.rs`, `quest.rs`, `update.rs`) write `0` for `UnlockedConditionalAppearanceCount`, `ConditionalDescriptionText count`, `ContentTuningConditionMask`, `ConditionalTransmog.Size` — none of these are ConditionMgr concerns, they are unrelated DB2-driven optional client fields.
 
 **What's implemented:**
-- Nothing in ConditionMgr.
+- `crates/wow-constants/src/conditions.rs` defines C++-value-compatible `ConditionType`, `ConditionSourceType`, `RelationType`, `ConditionInstanceInfo`, `MAX_CONDITION_TARGETS`, and `ComparisonType` constants/enums from `ConditionMgr.h` / `Util.h`.
+- `crates/wow-data/src/conditions.rs` defines the owned `Condition`, `ConditionId`, and `ConditionContainer` data shapes with C++ constructor defaults and `Condition::isLoaded` parity.
+- `crates/wow-data/src/conditions.rs` implements C++ `Condition::ToString`, `CanHaveSourceGroupSet`, `CanHaveSourceIdSet`, and `CanHaveConditionType` helpers for SQL/debug logs and source/type compatibility. Rust intentionally names `CONDITION_PRIVATE_OBJECT` as `Private Object`; the inspected C++ static name table appears to omit that slot.
+- `crates/wow-data/src/conditions.rs` implements the C++ `StaticConditionTypeData[]` field-usage metadata, useless-value detection helper, legacy object/type-mask normalization, and the pure `isConditionTypeValid` checks that do not require SpellMgr/ObjectMgr/DB2 stores (including aura effect index, item count, comparison/range masks, relation target selectors, stand state, pet type, and battle-pet count limits). Rust keeps the corrected `Private Object`/`String ID` slots explicit because the inspected legacy table appears shifted around `CONDITION_PRIVATE_OBJECT`.
+- `crates/wow-data/src/conditions.rs` implements C++ `Condition::GetSearcherTypeMaskForCondition` and `ConditionMgr::GetSearcherTypeMaskForConditionList`, including `ElseGroup` AND/OR aggregation and recursive reference-mask expansion.
+- `crates/wow-world/src/conditions.rs` defines runtime `ConditionSourceInfo` with 3 target slots, derived map context, and last-failed-condition tracking.
+- `crates/wow-world/src/conditions.rs` implements a partial, explicit C++ `Condition::Meets` evaluator for represented state (`NONE`, `MAPID`, `ZONEID`, `AREAID`, object entry/type mask aliases including creature/gameobject spawn-id snapshots, `PRIVATE_OBJECT`, `STRING_ID`, `CLASS`, `RACE`, `LEVEL`, `ALIVE`, `HP_VAL`, `HP_PCT`, `UNIT_STATE`, `IN_WATER`, `STAND_STATE`, `CHARMED`, `CREATURE_TYPE`, `DISTANCE_TO`, `RELATION_TO` self-only, `TEAM`, `GENDER`, `DRUNKENSTATE`, `GAMEMASTER`, `PET_TYPE`, `TAXI`, `PHASEID`, `TERRAIN_SWAP`) and returns `Unsupported` instead of silently passing unported player/DB2/runtime branches. Unit-only, creature-only, object-only, and player-only checks use explicit snapshots until Rust has real `WorldObject -> Unit/Creature/GameObject/Player` views.
+- `crates/wow-world/src/conditions.rs` implements C++ `IsObjectMeetToConditions` OR-of-AND `ElseGroup` aggregation and `IsObjectMeetingNotGroupedConditions` lookup with injected per-condition evaluator.
+- `crates/wow-world/src/conditions.rs` implements C++ specialized condition lookups for spell-click, vehicle spell, smart event, vendor item, area trigger, trainer spell, and object-id visibility keys.
+- `crates/wow-world/src/conditions.rs` implements the runtime loot-condition bridge equivalent to C++ `LootTemplate::LinkConditions` + `LootItem::AllowedForPlayer`: a `LootStoreItemContext` resolves `(SourceType, SourceGroup, SourceEntry)` and evaluates the matching bucket with the looter as target0.
+- `wow-data::ConditionEntriesByTypeStore` builds the C++ `SpellsUsedInSpellClickConditions` auxiliary index from `SPELL_CLICK_EVENT` rows whose condition type is `AURA`, and exposes the `IsSpellUsedInSpellClickConditions` query.
+- `wow-data::GraveyardStore` ports C++ `ObjectMgr::LoadGraveyardZones`, `FindGraveyardData`, and `ConditionMgr::addToGraveyardData` data attachment with reload-safe `ConditionsReference` handles.
+- `wow-data::GossipStore` ports the C++ `GossipMenus` / `GossipMenuItems` condition holders plus `ConditionMgr::addToGossipMenus` and `addToGossipMenuItems` attachment semantics, including the C++ no-error behaviour when a menu exists but no `TextID` matches the condition `SourceEntry`.
+- `wow-data::attach_loaded_conditions_like_cpp` mirrors the final attachment pass of C++ `ConditionMgr::LoadConditions` for represented systems: gossip menus/options, spell-click aura spell index, phase areas, and graveyards. Spell implicit target conditions are counted as deferred until Rust has a full `SpellInfo`/`SpellEffectInfo` model.
+- `wow-database::WorldStatements::SEL_CONDITIONS` plus `wow-data::load_condition_rows_like_cpp` parse the C++ `conditions` table projection, including negative reference rows, reference templates, and C++-equivalent non-fatal useless-data warnings on reference rows/templates; full validation/indexing remains open under `#COND.7`, `#COND.20`, `#COND.21`, and `#COND.22`.
+- `wow-data::parse_condition_rows_like_cpp` now applies C++ load-shape/source checks that do not require external stores: allowed `SourceGroup`, allowed `SourceId`, max `ConditionTarget`, internal `REFERENCE_CONDITION` handling, `SPELL_IMPLICIT_TARGET` effect-mask nonzero, `AREATRIGGER` SourceEntry 0/1, `OBJECT_ID_VISIBILITY` object type restrictions, and `ErrorType/ErrorTextId` normalization with warnings.
+- `wow-data::ConditionEntriesByTypeStore` groups parsed rows by `ConditionSourceType` and `ConditionId`, and `ConditionsReference` mirrors the C++ weak-reference holder used by downstream modules across reloads.
+- `wow-data::PhaseInfoStore::attach_phase_conditions_like_cpp` ports C++ `ConditionMgr::addToPhases`: `SourceEntry = 0` attaches a phase bucket to every area owned by the phase, non-zero `SourceEntry` attaches only to that concrete area/phase pair, and missing area/phase pairs are reported.
 
 **What's missing vs C++:**
-- Everything: data types (`Condition`, `ConditionSourceInfo`, `ConditionId`, `ConditionContainer`), enums (`ConditionTypes` ~58, `ConditionSourceType` ~33), the loader, the per-type evaluators, the source-type index builders, the `IsPlayerMeetingCondition` / `IsMeetingWorldStateExpression` / `IsUnitMeetingCondition` static helpers, `DisableMgr`.
-- All downstream callsites (Phasing, Loot, Gossip, Vendors, Trainers, etc.) currently behave as if every condition passes.
+- External-store-backed validation in `isConditionTypeValid` / `isSourceTypeValid` (spell, item, quest, faction, area, achievement, phase, DB2, loot/gossip/trainer/vendor/spawn references).
+- Source-type index builders/attachments into downstream systems (spell implicit targets) and startup/reload wiring. Gossip, phase and graveyard attachment plus a represented final attachment pass exist in `wow-data`; loot has a runtime bridge from `LootStoreItemContext`, but all production fill callsites still need to pass the ConditionMgr-backed predicate.
+- Remaining runtime `Condition::Meets` branches that need real player/unit/map/DB2 state, plus `IsPlayerMeetingCondition`, `IsMeetingWorldStateExpression`, `IsUnitMeetingCondition`, and `DisableMgr`.
+- Downstream callsites are only partially prepared; Loot/Gossip/Vendors/Trainers/Phasing still need real ConditionMgr integration before they can claim full parity.
 
 **Suspicious / likely divergent (hipótesis pre-auditoría):**
 - Without ConditionMgr, every NPC vendor sells every item to every player; loot tables are unfiltered; quest gossip menus show all options; phases never suppress; spell-click NPCs accept any clicker. This is not "divergent", it is "absent" — once a feature is built that requires conditions, expect immediate-and-loud regressions.
@@ -251,35 +275,35 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>12h, splitear).
 
-- [ ] **#COND.1** Define `ConditionTypes` enum (~58 variants + `MAX`) in `crates/wow-constants/src/conditions.rs` matching C++ values byte-for-byte (including the deprecated `SPAWNMASK_DEPRECATED = 19` and `OBJECT_ENTRY_GUID_LEGACY = 31` / `TYPE_MASK_LEGACY = 32`) (M)
-- [ ] **#COND.2** Define `ConditionSourceType` enum (~33 variants + `MAX_DB_ALLOWED` + internal `REFERENCE_CONDITION` + `MAX`) (M)
-- [ ] **#COND.3** Define auxiliary enums `RelationType` (6), `InstanceInfo` (4), `MaxConditionTargets = 3`, plus `ComparisonType` (referenced by `_LEVEL`, `_HP_VAL`, `_HP_PCT`, `_DISTANCE_TO`, `_BATTLE_PET_COUNT`) (L)
-- [ ] **#COND.4** Define `Condition` struct in `crates/wow-data/src/conditions.rs` with all 16 fields (`SourceType`, `SourceGroup`, `SourceEntry`, `SourceId`, `ElseGroup`, `ConditionType`, `ConditionTarget`, `ConditionValue1/2/3`, `ConditionStringValue1`, `ErrorType`, `ErrorTextId`, `ReferenceId`, `ScriptId`, `NegativeCondition`) and a `Default` impl (M)
-- [ ] **#COND.5** Define `ConditionSourceInfo` (3-target array, optional `Map` ref, mutable `LastFailedCondition` slot) (L)
-- [ ] **#COND.6** Define `ConditionId` `(SourceGroup, SourceEntry, SourceId)` with `Hash`/`Eq` (L)
-- [ ] **#COND.7** Implement loader for `conditions` table — single SQL query, build `ConditionEntriesByTypeArray` (`[ConditionsByEntryMap; CONDITION_SOURCE_TYPE_MAX]`), validate every row via `is_source_type_valid` + `is_condition_type_valid`, drop invalid rows with `tc_log_error("sql.sql", …)`-equivalent (XL — split: row parser, validator, indexer)
-- [ ] **#COND.8** Resolve `ReferenceId` chains during load — a condition with `SourceTypeOrReferenceId < 0` is a reference; expand once flat (M)
-- [ ] **#COND.9** Implement `Condition::meets` evaluator — the giant switch over `ConditionType`. Split by category: presence/equality (NONE, ZONEID, AREAID, MAPID, TEAM, CLASS, RACE, GENDER, LEVEL, ALIVE, IN_WATER, GAMEMASTER, CHARMED, TAXI, PRIVATE_OBJECT) (M)
+- [x] **#COND.1** Define `ConditionTypes` enum (~58 variants + `MAX`) in `crates/wow-constants/src/conditions.rs` matching C++ values byte-for-byte (including the deprecated `SPAWNMASK_DEPRECATED = 19` and `OBJECT_ENTRY_GUID_LEGACY = 31` / `TYPE_MASK_LEGACY = 32`) (M)
+- [x] **#COND.2** Define `ConditionSourceType` enum (~33 variants + `MAX_DB_ALLOWED` + internal `REFERENCE_CONDITION` + `MAX`) (M)
+- [x] **#COND.3** Define auxiliary enums `RelationType` (6), `InstanceInfo` (4), `MaxConditionTargets = 3`, plus `ComparisonType` (referenced by `_LEVEL`, `_HP_VAL`, `_HP_PCT`, `_DISTANCE_TO`, `_BATTLE_PET_COUNT`) (L)
+- [x] **#COND.4** Define `Condition` struct in `crates/wow-data/src/conditions.rs` with all 16 fields (`SourceType`, `SourceGroup`, `SourceEntry`, `SourceId`, `ElseGroup`, `ConditionType`, `ConditionTarget`, `ConditionValue1/2/3`, `ConditionStringValue1`, `ErrorType`, `ErrorTextId`, `ReferenceId`, `ScriptId`, `NegativeCondition`) and a `Default` impl (M)
+- [x] **#COND.5** Define `ConditionSourceInfo` (3-target array, optional `Map` ref, mutable `LastFailedCondition` slot) (L)
+- [x] **#COND.6** Define `ConditionId` `(SourceGroup, SourceEntry, SourceId)` with `Hash`/`Eq` (L)
+- [ ] **#COND.7** Implement loader for `conditions` table — single SQL query, build `ConditionEntriesByTypeArray` (`[ConditionsByEntryMap; CONDITION_SOURCE_TYPE_MAX]`), validate every row via `is_source_type_valid` + `is_condition_type_valid`, drop invalid rows with `tc_log_error("sql.sql", …)`-equivalent (XL — split: row parser, validator, indexer; partial: SQL statement + row parser + self-reference skip + negative reference/template handling + reference useless-data warnings + shape validation + error-field normalization + ConditionStore grouping implemented)
+- [x] **#COND.8** Port `ReferenceId` row semantics — negative `ConditionTypeOrReference` rows keep `ReferenceId`, negative `SourceTypeOrReferenceId` rows are stored under `CONDITION_SOURCE_TYPE_REFERENCE_CONDITION`; C++ does **not** expand them flat during load, it resolves them recursively at evaluation/searcher-mask time (M)
+- [ ] **#COND.9** Implement `Condition::meets` evaluator — the giant switch over `ConditionType`. Split by category: presence/equality (NONE, ZONEID, AREAID, MAPID, TEAM, CLASS, RACE, GENDER, LEVEL, ALIVE, IN_WATER, GAMEMASTER, CHARMED, TAXI, PRIVATE_OBJECT) (M; partial: `NONE`, `MAPID`, `ZONEID`, `AREAID`, `CLASS`, `RACE`, `GENDER`, `LEVEL`, `ALIVE`, `IN_WATER`, `TEAM`, `GAMEMASTER`, `CHARMED`, `TAXI`, `PRIVATE_OBJECT`)
 - [ ] **#COND.10** `Condition::meets` — inventory and progression (ITEM, ITEM_EQUIPPED, SKILL, SPELL, ACHIEVEMENT, REALM_ACHIEVEMENT, TITLE, BATTLE_PET_COUNT) (M)
 - [ ] **#COND.11** `Condition::meets` — quest (QUESTREWARDED, QUESTTAKEN, QUEST_NONE, QUEST_COMPLETE, QUESTSTATE, QUEST_OBJECTIVE_PROGRESS, DAILY_QUEST_DONE) (M)
-- [ ] **#COND.12** `Condition::meets` — combat / unit-state (AURA, UNIT_STATE, HP_VAL, HP_PCT, STAND_STATE, DRUNKENSTATE, PET_TYPE, CREATURE_TYPE) (M)
-- [ ] **#COND.13** `Condition::meets` — relational (RELATION_TO with 6 RelationType variants, REACTION_TO with rank-mask, DISTANCE_TO with ComparisonType, NEAR_CREATURE, NEAR_GAMEOBJECT) (M)
+- [ ] **#COND.12** `Condition::meets` — combat / unit-state (AURA, UNIT_STATE, HP_VAL, HP_PCT, STAND_STATE, DRUNKENSTATE, PET_TYPE, CREATURE_TYPE) (M; partial: `UNIT_STATE`, `HP_VAL`, `HP_PCT`, `STAND_STATE` with C++ exact/sit/stand modes, `DRUNKENSTATE`, `PET_TYPE`, `CREATURE_TYPE`)
+- [ ] **#COND.13** `Condition::meets` — relational (RELATION_TO with 6 RelationType variants, REACTION_TO with rank-mask, DISTANCE_TO with ComparisonType, NEAR_CREATURE, NEAR_GAMEOBJECT) (M; partial: `DISTANCE_TO` using C++ target selector and combat-reach-adjusted `WorldObject::distance`; `RELATION_TO` self variant only)
 - [ ] **#COND.14** `Condition::meets` — world/server (WORLD_STATE, ACTIVE_EVENT, INSTANCE_INFO with 4 InstanceInfo modes, REPUTATION_RANK, DIFFICULTY_ID) (M)
-- [ ] **#COND.15** `Condition::meets` — phasing/scenario/scene (PHASEID, TERRAIN_SWAP, SCENARIO_STEP, SCENE_IN_PROGRESS, PLAYER_CONDITION) — note: PLAYER_CONDITION delegates to `IsPlayerMeetingCondition` over a DB2 entry (M)
-- [ ] **#COND.16** `Condition::meets` — object identity (OBJECT_ENTRY_GUID, TYPE_MASK, OBJECT_ENTRY_GUID_LEGACY, TYPE_MASK_LEGACY, STRING_ID) (M)
-- [ ] **#COND.17** Implement `IsObjectMeetToConditions` family with the OR-of-AND semantics (group by `ElseGroup`, AND inside each, OR across) and `NegativeCondition` flip per row (M)
-- [ ] **#COND.18** Implement `IsObjectMeetingNotGroupedConditions` (single-bucket lookup → evaluate); used by Phasing, AreaTriggers, Graveyards, ObjectVisibility (M)
-- [ ] **#COND.19** Implement specialized lookups: `IsObjectMeetingSpellClickConditions(creatureId, spellId, …)`, `IsObjectMeetingVehicleSpellConditions`, `IsObjectMeetingSmartEventConditions`, `IsObjectMeetingVendorItemConditions`, `IsObjectMeetingTrainerSpellConditions`, `IsObjectMeetingVisibilityByObjectIdConditions` — each has its own keyed map built during load (H)
-- [ ] **#COND.20** Implement source-type index builders: `add_to_loot_template`, `add_to_gossip_menus`, `add_to_gossip_menu_items`, `add_to_spell_implicit_target_conditions`, `add_to_phases`, `add_to_graveyard_data` (H — depends on Loot/Gossip/Phasing/Graveyard data structures already existing or being co-built)
-- [ ] **#COND.21** Implement `is_condition_type_valid` per type — validates `ConditionValue1/2/3/StringValue1` against the relevant store (spell exists, item exists, faction exists, area exists, etc.); log + drop invalid rows (XL — split per category like #COND.9-16)
-- [ ] **#COND.22** Implement `is_source_type_valid` per source — validates that the `(SourceGroup, SourceEntry)` references something real (gossip menu exists, loot template entry exists, etc.) (H)
+- [ ] **#COND.15** `Condition::meets` — phasing/scenario/scene (PHASEID, TERRAIN_SWAP, SCENARIO_STEP, SCENE_IN_PROGRESS, PLAYER_CONDITION) — note: PLAYER_CONDITION delegates to `IsPlayerMeetingCondition` over a DB2 entry (M; partial: `PHASEID`, `TERRAIN_SWAP`)
+- [x] **#COND.16** `Condition::meets` — object identity (OBJECT_ENTRY_GUID, TYPE_MASK, OBJECT_ENTRY_GUID_LEGACY, TYPE_MASK_LEGACY, STRING_ID) (M; object entry/type-mask aliases with explicit creature/gameobject spawn-id snapshots and string-id snapshots implemented)
+- [x] **#COND.17** Implement `IsObjectMeetToConditions` family with the OR-of-AND semantics (group by `ElseGroup`, AND inside each, OR across) and `NegativeCondition` flip per row (`ElseGroup` aggregation and reference expansion are implemented; individual `Condition::meets` including `NegativeCondition` remains split across #COND.9-#COND.16) (M)
+- [x] **#COND.18** Implement `IsObjectMeetingNotGroupedConditions` (single-bucket lookup → evaluate); used by Phasing, AreaTriggers, Graveyards, ObjectVisibility (M)
+- [x] **#COND.19** Implement specialized lookups: `IsObjectMeetingSpellClickConditions(creatureId, spellId, …)`, `IsObjectMeetingVehicleSpellConditions`, `IsObjectMeetingSmartEventConditions`, `IsObjectMeetingVendorItemConditions`, `IsObjectMeetingTrainerSpellConditions`, `IsObjectMeetingVisibilityByObjectIdConditions` — each has its own keyed map built during load (implemented with C++ key parity and target ordering; load-time auxiliary sets such as `SpellsUsedInSpellClickConditions` remain tracked by #COND.20) (H)
+- [ ] **#COND.20** Implement source-type index builders: `add_to_loot_template`, `add_to_gossip_menus`, `add_to_gossip_menu_items`, `add_to_spell_implicit_target_conditions`, `add_to_phases`, `add_to_graveyard_data` (H — depends on Loot/Gossip/Phasing/Graveyard data structures already existing or being co-built; partial: `add_to_gossip_menus`, `add_to_gossip_menu_items`, `add_to_phases`, `add_to_graveyard_data`, represented final attachment pass, loot C++ key/target bridge, and `SpellsUsedInSpellClickConditions` are ported; spell implicit target, startup/reload and production callsite wiring remain open)
+- [ ] **#COND.21** Implement `is_condition_type_valid` per type — validates `ConditionValue1/2/3/StringValue1` against the relevant store (spell exists, item exists, faction exists, area exists, etc.); log + drop invalid rows (XL — split per category like #COND.9-16; partial: static field-usage metadata, useless-value detection, legacy object/type-mask normalization, and pure no-store validation implemented; external-store validation still open)
+- [ ] **#COND.22** Implement `is_source_type_valid` per source — validates that the `(SourceGroup, SourceEntry)` references something real (gossip menu exists, loot template entry exists, etc.) (H; partial: pure no-store checks for internal reference source, spell implicit target mask, area trigger source entry, and object-id visibility type restrictions implemented)
 - [ ] **#COND.23** Implement `IsPlayerMeetingCondition(player, &PlayerConditionEntry)` — large pure DB2 evaluator (~70 sub-checks: race, class, gender, native gender, power type, skill, language, min level, max level, max factionId, gender, ChrSpecializationID, areaGroup, mapId, teleport access, faction, achievement, lfg status, currency, content tuning, item slot, transmog, raceMask, classMask, prevQuestID, currQuestID, currentCompletedQuestID, spellID, itemID, currencyID, weatherID, ContentTuningID, …). Owns ~600 lines in C++. (XL — split into 6-8 sub-tasks per logical group)
 - [ ] **#COND.24** Implement `IsMeetingWorldStateExpression(map, &WorldStateExpressionEntry)` — RPN-style byte-coded evaluator (operators, immediate values, world-state lookups, function calls). (H)
 - [ ] **#COND.25** Implement `IsUnitMeetingCondition(a, b, &UnitConditionEntry)` (M)
-- [ ] **#COND.26** Implement `Condition::get_searcher_type_mask_for_condition` — for early-exit during grid searches (M)
-- [ ] **#COND.27** Implement `Condition::to_string(ext)` — the debug formatter used in `tc_log_error` (L)
+- [x] **#COND.26** Implement `Condition::get_searcher_type_mask_for_condition` — for early-exit during grid searches (M)
+- [x] **#COND.27** Implement `Condition::to_string(ext)` — the debug formatter used in `tc_log_error` (L)
 - [ ] **#COND.28** Implement `ConditionMgr::clean` and reload semantics — drop and rebuild all index buckets, invalidate `weak_ptr`s in downstream `ConditionsReference` holders (M)
-- [ ] **#COND.29** Implement `ConditionsReference` weak-pointer wrapper for downstream modules (Phasing, Loot, Gossip) so they can hold a non-owning handle that survives reload safely (M)
+- [x] **#COND.29** Implement `ConditionsReference` weak-pointer wrapper for downstream modules (Phasing, Loot, Gossip) so they can hold a non-owning handle that survives reload safely (M; downstream wiring remains tracked by each source-type index builder task)
 - [ ] **#COND.30** Implement `DisableMgr` with all 8 `DisableType` variants, `LoadDisables`, `IsDisabledFor` per type, and the convenience helpers `IsPathfindingEnabled`, `IsVMAPDisabledFor`, `IsMMAPDisabledFor` (H)
 - [ ] **#COND.31** Wire `sConditionMgr` access pattern (singleton via `OnceCell` / `&'static`) into the world startup sequence so dependents can call it after `LoadConditions` (L)
 - [ ] **#COND.32** Documentation cross-links: `conditions.md` ↔ `phasing.md` (TERRAIN_SWAP, PHASE), `loot.md` (every LOOT_TEMPLATE source), `gossip.md` (when written), `spells.md` (SPELL_IMPLICIT_TARGET, SPELL_PROC, SPELL_CLICK_EVENT) (L)
@@ -303,11 +327,11 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 <!-- REFINE.024:END tests-required -->
 
-- [ ] Test: `conditions` table loader rejects rows with bogus `SourceType` and logs the error.
+- [x] Test: `conditions` table loader rejects rows with bogus `SourceType` and logs the error. (Parser skip reason covered; logging adapter remains part of final load-service wiring.)
 - [ ] Test: `conditions` table loader rejects rows with bogus `(SourceType, SourceEntry)` (e.g. CONDITION_SOURCE_TYPE_NPC_VENDOR with non-existent creatureId).
-- [ ] Test: `ReferenceId` resolves correctly — a condition row with negative `SourceTypeOrReferenceId` is replaced by the referenced bucket during load.
+- [x] Test: `ReferenceId` resolves correctly — negative source/type rows are parsed into reference-template buckets and runtime evaluation recursively expands `ReferenceId` buckets, matching C++ load/evaluation split.
 - [ ] Test: OR-of-AND semantics — group A `{X AND Y}`, group B `{Z}`. Pass X+Y but not Z → meets. Pass Z but neither X nor Y → meets. Pass nothing → fail.
-- [ ] Test: `NegativeCondition = 1` flips the row's truth value before AND-aggregation.
+- [x] Test: `NegativeCondition = 1` flips the row's truth value before AND-aggregation.
 - [ ] Test: each ConditionType evaluator — one positive and one negative sample per ConditionType, fed a synthetic `WorldObject` fixture; for the Player-state types, a synthetic `Player` fixture.
 - [ ] Test: `CONDITION_REPUTATION_RANK` with rankMask — Honored set, mask = `1 << REP_HONORED` → meets; mask = `1 << REP_EXALTED` → fails.
 - [ ] Test: `CONDITION_QUESTSTATE` with state mask covering INCOMPLETE+COMPLETE — both states pass, NONE fails.
@@ -330,7 +354,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 | Scope | Decision | C++ retained | Evidence |
 |---|---|---|---|
-| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 4 files / 4800 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/DisableMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.h` | `crates/wow-data/` (load `conditions` table, store `ConditionContainer` keyed by `(SourceType, SourceGroup, SourceEntry)`), `crates/wow-world/src/conditions/` (the `Meets` evaluator with access to `Player`/`Unit`/`Map`), no dedicated crate yet. \| ❌ not started — there is no `ConditionMgr` in Rust, no `Condition` struct, no `conditions` table loader. Several upstream systems (Phasing, Gossip menus, Loot drops, Vendor item visibility, Trainer spell prerequisites) depend on a working ConditionMgr; right now those callsites either return "always true" or are absent entirely. |
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 4 files / 4800 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/DisableMgr.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.h` | `crates/wow-data/` (conditions table row parsing, static validation, storage), `crates/wow-world/src/conditions.rs` (runtime condition evaluation and lookup helpers), downstream modules still to wire. |
 
 <!-- REFINE.025:END product-scope -->
 
@@ -390,25 +414,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 ## 13. Audit (2026-05-01)
 
-**Verdict: ❌ confirmed — completely absent. Critical silent-default bug (the entire module).**
+**Historical initial-audit verdict:** ConditionMgr was absent when this plan was opened. That is no longer true: constants, row shapes, SQL projection, parser, grouping, partial evaluator, specialized lookups, static validation, reference semantics, and phase attachment have since been added. The remaining risk is now narrower: any consumer not wired to the new store/evaluator still behaves permissively until its source-type builder/callsite is closed.
 
-Evidence collected by exhaustive grep across `crates/`:
-
-- `grep -rn "evaluate_conditions\|condition_meets\|ConditionMgr\|conditions::" crates/ --include='*.rs'` returns **zero hits**. No struct, no enum, no module, no loader, no evaluator.
-- The `LogFilter::Condition` variant noted in §8 (`crates/wow-logging/src/lib.rs:84`) remains the only mention of the word "Condition" in the wow-logging tree, and it has no producers.
-- Mentions of the word "condition" in code are unrelated: `npc_vendor.PlayerConditionID` is selected by `wow-database/src/statements/world.rs:148` but the column is **read into the row and never evaluated** — it just rides along into the `VendorInventory` packet's `player_condition_failed` field (`misc.rs:1686`) where a hard-coded `0` is written, meaning every item is unconditionally "available". `update.rs:2128` only references `Owner conditional fields` in a doc comment.
-- No `conditions` SQL table loader anywhere in `wow-database`. No `disables` loader either (DisableMgr is also absent).
-
-**Silent-default bug — confirmed and quantified.** Because no callsite ever invokes a ConditionMgr, every system that *would* gate behaviour on `conditions` rows currently behaves as "all rows pass". Consumers verified silently-permissive:
+Current downstream gaps still capable of silent permissive behaviour:
 
 | Consumer | File | Behaviour right now |
 |---|---|---|
-| Loot drops | `crates/wow-loot/` (entire crate) | Every loot row drops; `LOOT_TEMPLATE` rows in `conditions` are ignored. |
-| NPC vendors | `wow-packet/src/packets/misc.rs:1686` | `player_condition_failed = 0` always — every vendor item is shown to every player. |
-| Gossip menus / options | gossip dispatch in `wow-world/src/handlers/` | Every menu/option visible; `GOSSIP_MENU` and `GOSSIP_MENU_OPTION` rows ignored. |
-| Trainer spells | `handlers/trainer.rs` | All trainer rows shown unconditionally (`TRAINER_SPELL` rows ignored). |
+| Loot drops | `crates/wow-loot/`, `crates/wow-world/src/conditions.rs` | Loot condition link/reference checking and C++ key/target runtime bridge exist, but all production loot fill callsites still need to pass the ConditionMgr-backed predicate. |
+| NPC vendors | `wow-packet/src/packets/misc.rs:1686` | Vendor condition lookup exists in `wow-world`, but packet availability still needs full runtime evaluation before claiming parity. |
+| Gossip menus / options | `crates/wow-data/src/gossip.rs`, gossip dispatch in `wow-world/src/handlers/` | C++ gossip condition holders and attachment semantics exist; handler still queries DB on demand and must be wired to the global store/evaluator. |
+| Trainer spells | `handlers/trainer.rs` | Trainer condition lookup exists in `wow-world`; full handler integration/runtime evaluation remains open. |
 | Spell implicit targets | `wow-spell` | No filter on AoE / chained targets. |
-| Phasing area entry | `phasing.md` (also ❌) | N/A — phasing itself stubbed (see phasing audit). |
+| Phasing area entry | `crates/wow-data/src/phasing.rs`, `crates/wow-world/src/phasing.rs` | Phase-area load and C++ `addToPhases` attachment are ported; global startup/reload wiring and live evaluator integration remain open. |
 | Smart-script branches | not yet implemented | N/A. |
 
-**Migration unblock priority:** ConditionMgr is the L7 keystone. Phasing, Loot quest filtering, Gossip polish, Vendors, Trainers all unblock here. Recommend tackling **#COND.1 → #COND.20** before any of the dependent modules can claim ✅. No code change made by this audit; all 32 sub-tasks (#COND.1 – #COND.32) remain accurate and are still the work plan.
+**Migration unblock priority:** ConditionMgr is the L7 keystone. Phasing, Loot quest filtering, Gossip polish, Vendors, Trainers all unblock here. Continue closing **#COND.7**, **#COND.20**, **#COND.21**, and **#COND.22** before dependent modules can claim full parity.

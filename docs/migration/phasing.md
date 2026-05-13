@@ -1,9 +1,9 @@
 # Migration: Phasing
 
 > **C++ canonical path:** `src/server/game/Phasing/` (`PhaseShift`, `PhasingHandler`, `PersonalPhaseTracker`)
-> **Rust target crate(s):** `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load `phase_definitions`/`phase_area`/`terrain_swap_defaults`/`terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet.
+> **Rust target crate(s):** `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load C++ `Phase.db2`-seeded phase info / `phase_area` / `terrain_swap_defaults` / `terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet.
 > **Layer:** L7 (Game systems — depends on Conditions L7, Maps L4, Entities/Unit L4, Aura/Spell L5; depended on by Visibility/Grid loading L4)
-> **Status:** 🔧 broken — only a 1-shot SMSG_PHASE_SHIFT_CHANGE stub that always sends `PhaseShiftFlags::Unphased` with empty phase/visible-map/UI-map lists. No PhaseShift state on objects, no `PhasingHandler::OnAreaChange`, no condition-driven phase suppression, no personal phases, no terrain-swap evaluation, no controlled-unit propagation, no SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration.
+> **Status:** 🔧 broken — core `PhaseShift` state and the real SMSG_PHASE_SHIFT_CHANGE packet shape exist, but login still uses the default empty phase shift and the runtime lifecycle is incomplete. No `PhasingHandler::OnAreaChange`, no condition-driven phase suppression, no personal phases, no full terrain-swap evaluation, no controlled-unit propagation, no SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration.
 > **Audited vs C++:** ✅ audited 2026-05-01 (status confirmed 🔧 — hardcoded-Unphased bug located at `misc.rs:1628`)
 > **Last updated:** 2026-05-01
 
@@ -46,7 +46,7 @@ All paths relative to `/home/server/woltk-trinity-legacy/`.
 | `src/server/game/Phasing/PersonalPhaseTracker.cpp` | 202 | `LoadGrid`/`UnloadGrid`, `RegisterTrackedObject`, `OnOwnerPhasesChanged`, `MarkAllPhasesForDeletion`, `Update` (1-minute despawn countdown), `IsGridLoadedForPhase`/`SetGridLoadedForPhase` |
 
 Out-of-tree touchpoints:
-- `src/server/game/Globals/ObjectMgr.cpp` — `LoadPhases` (loads `phase_definitions`, `phase_area`), `LoadTerrainSwapDefaults` (loads `terrain_swap_defaults`, `terrain_worldmap`).
+- `src/server/game/Globals/ObjectMgr.cpp` — `LoadPhases` (seeds phase info from `sPhaseStore`, loads `phase_area`), `LoadTerrainSwapDefaults` (loads `terrain_swap_defaults`, `terrain_worldmap`).
 - `src/server/game/Maps/Map.cpp` — owns `MultiPersonalPhaseTracker _multiPersonalPhaseTracker` and calls its `LoadGrid`/`UnloadGrid`/`Update` from grid lifecycle hooks.
 - `src/server/game/Spells/Auras/SpellAuraEffects.cpp` — `SPELL_AURA_PHASE` / `SPELL_AURA_PHASE_GROUP` apply/remove handlers call `PhasingHandler::AddPhase` / `AddPhaseGroup`.
 - `src/server/game/Conditions/ConditionMgr.cpp` — `CONDITION_SOURCE_TYPE_PHASE` and `CONDITION_SOURCE_TYPE_TERRAIN_SWAP` rule storage.
@@ -66,7 +66,7 @@ Out-of-tree touchpoints:
 | `PhasingHandler` | static class | Façade: every callsite that mutates phases goes through here so controlled units (pets/vehicles/totems) inherit; also the only place that emits SMSG_PHASE_SHIFT_CHANGE |
 | `PhasingHandler::ControlledUnitVisitor` | private inner class | Walks `Unit::m_Controlled`, `m_SummonSlot`, `Vehicle::Seats[].Passenger` with a "visited" small_vector to avoid revisiting in cycles |
 | `PhaseAreaInfo` | struct (defined in ObjectMgr) | One row of `phase_area`: `PhaseInfo: PhaseInfoStruct const*`, `Conditions: ConditionContainer`, `SubAreaExclusions: unordered_set<u32>` |
-| `PhaseInfoStruct` | struct (defined in ObjectMgr) | One row of `phase_definitions`: `Id`, `Flags` (server-side use flags) |
+| `PhaseInfoStruct` | struct (defined in ObjectMgr) | One phase entry seeded from `sPhaseStore`: `Id`, `Areas` |
 | `TerrainSwapInfo` | struct | One row of `terrain_swap_defaults`/`terrain_worldmap`: `Id` (alt map ID), `UiMapPhaseIDs: vector<u32>` |
 | `PHASE_USE_FLAGS_*` | constants | `NORMAL=0`, `ALWAYS_VISIBLE=1`, `INVERSE=2` (DB column flags consumed by `InitDbPhaseShift`) |
 | `DEFAULT_PHASE = 169` | constant | The "no phase" fallback used by `Unphased` flag interactions |
@@ -122,6 +122,10 @@ Out-of-tree touchpoints:
 - `Conversation`, `AreaTrigger`, `Scene`, `Garrison`, `Scenario` modules — push personal phases on mission start, pop on completion.
 - `SmartScript` `SMART_ACTION_ADD_PHASE` / `REMOVE_PHASE` / `RANDOM_PHASE_GROUP` — script-driven phase mutation.
 
+**Cross-module blockers:**
+- See `conditions.md`: `#COND.4`, `#COND.7`, `#COND.17`, `#COND.18`, `#COND.20` and `#COND.29` are the minimum ConditionMgr surface needed before `#PHASE.8`, `#PHASE.15`, `#PHASE.16`, `#PHASE.17` and `#PHASE.29` can become fully wired. Until `ConditionsReference` exists, Rust phasing may keep injected predicates for unit tests but cannot claim parity with C++ `PhaseRef::AreaConditions`.
+- See `maps.md`: `#MAPS.6`, `#MAPS.7`, `#MAPS.8`, `#MAPS.9`, `#MAPS.10`, `#MAPS.13`, `#MAPS.15`, `#MAPS.16`, `#MAPS.17`, `#MAPS.18` and `#MAPS.20` are the minimum Map/Grid surface for `#PHASE.22`, `#PHASE.23` and the remaining `#PHASE.26` visibility/grid notifier work. `MultiPersonalPhaseTracker` cannot be complete without C++-style grid load/unload and nearby-cell visitation.
+
 ---
 
 ## 6. SQL / DB queries (if any)
@@ -130,8 +134,8 @@ The Phasing module itself does no direct SQL; ObjectMgr loads its data:
 
 | Statement / Source | Purpose | DB |
 |---|---|---|
-| `SELECT ID, flags FROM phase_definitions` | Load `PhaseInfoStruct` per phaseId (fed into `_PhaseInfoById` map) | world |
-| `SELECT AreaId, PhaseId, SubAreaExclusions, Flags FROM phase_area` | Load `vector<PhaseAreaInfo>` per area; the join with `conditions WHERE SourceTypeOrReferenceId = 26 (CONDITION_SOURCE_TYPE_PHASE)` produces `PhaseAreaInfo::Conditions` | world |
+| `for (PhaseEntry const* phase : sPhaseStore)` | Seed `PhaseInfoStruct` per phaseId into `_phaseInfoById` | DB2 |
+| `SELECT AreaId, PhaseId FROM phase_area` | Load `vector<PhaseAreaInfo>` per area; C++ `ConditionMgr::LoadConditions` later attaches `conditions WHERE SourceTypeOrReferenceId = 26 (CONDITION_SOURCE_TYPE_PHASE)` into `PhaseAreaInfo::Conditions` | world |
 | `SELECT MapId, TerrainSwapMap FROM terrain_swap_defaults` | Default terrain swaps applied by `OnMapChange` to all players on that map (subject to conditions) | world |
 | `SELECT TerrainSwapMap, UiMapPhaseId FROM terrain_worldmap` | UI-map phase IDs attached to a terrain swap (rendered as alt minimap) | world |
 | `SELECT SourceTypeOrReferenceId, SourceGroup, SourceEntry, … FROM conditions WHERE SourceTypeOrReferenceId IN (25,26)` | Backing conditions for `CONDITION_SOURCE_TYPE_TERRAIN_SWAP` (25) and `CONDITION_SOURCE_TYPE_PHASE` (26) — owned by ConditionMgr, non-owning pointed-to by `PhaseRef::AreaConditions` | world |
@@ -177,28 +181,42 @@ No CMSG opcode is consumed by Phasing directly — phase state is purely server-
 <!-- REFINE.021:END rust-target-coverage -->
 
 **Files in `/home/server/rustycore`:**
-- `crates/wow-packet/src/packets/misc.rs` — ~30 lines around `PhaseShiftChange` (1611–1638). Only sends a hard-coded "Unphased, no phases, no visible maps, no UI maps" packet. Sufficient to keep the client rendering, **not** sufficient for any quest, instance, garrison, scenario, terrain-swap, or personal-spawn scenario.
+- `crates/wow-packet/src/packets/misc.rs` — `PhaseShiftChange` now carries flags, personal GUID, phase refs, visible map IDs, preload map IDs and UI map phase IDs with the C++ byte-count prefixes.
+- `crates/wow-world/src/phasing.rs` — C++ `PhasingHandler` pure slices plus the `SendToPlayer` packet build step from a real `PhaseShift`.
 
 **What's implemented:**
-- A single SMSG_PHASE_SHIFT_CHANGE serializer with constant payload.
+- SMSG_PHASE_SHIFT_CHANGE wire serializer plus `wow-world::phasing::phase_shift_change_for_player_like_cpp`, mirroring C++ `PhasingHandler::SendToPlayer(Player const*, PhaseShift const&)`.
+- `wow-constants::PhaseShiftFlags` / `PhaseFlags` mirror the C++ enum bit values.
+- `wow-entities::PhaseShift` now carries C++-like phase refs, `PersonalGuid`, visible map id refs and UI map phase id refs with refcount semantics.
+- `wow-entities::WorldObject` owns C++ `_phaseShift` / `_suppressedPhaseShift` equivalents and exposes mutable accessors for both.
+- `PhaseShift::can_see` now mirrors the C++ pure predicate for `Unphased`, `AlwaysVisible`, `Inverse`, `InverseUnphased`, `NoCosmetic`, and personal phases.
+- Session DB visibility for creature/gameobject spawns now applies `PhaseShift::can_see` before sending create blocks, using the same DB phase initialization helper as the represented/canonical spawn state.
+- `SMSG_PARTY_MEMBER_FULL_STATE` now carries C++ `PartyMemberPhaseStates` from the member phase snapshot instead of an always-empty phase block.
+- `wow-data::PhaseInfoStore` seeds C++ `_phaseInfoById` from `PhaseStore`, matching current `ObjectMgr::LoadPhases`.
+- `AreaTable.db2` is loaded with hotfix overlays for `ParentAreaID`, and `phase_area` rows are loaded into C++-like `PhaseInfoStore` area buckets with parent `SubAreaExclusions`.
+- `wow-world::phasing` implements the pure C++ `PhasingHandler::ResetPhaseShift`, `InheritPhaseShift`, `SetAlwaysVisible`, and `SetInversed` slices.
+- `wow-world::phasing` implements the core C++ `PhasingHandler::AddPhase` / `RemovePhase` / phase-group / visible-map mutations plus `OnMapChange` and `OnAreaChange` rebuild passes with injected condition/aura inputs; `ControlledUnitVisitor` selection/visited rules are ported, but runtime world-object recursion and canonical ConditionMgr wiring are not wired yet.
+- Terrain swap metadata loading exists for `terrain_worldmap` / `terrain_swap_defaults`, including C++ DB2+hotfix `UiMapXMapArt.PhaseID` validation for `IsUiMapPhase`.
+- `Phase.db2` and `PhaseXPhaseGroup.db2` are loaded with hotfix overlays, exposing C++-like personal/cosmetic phase checks and `GetPhasesForGroup`.
+- Creature spawn `terrainSwapMap` is validated against `Map.ParentMapID` and applied to the creature `PhaseShift` visible-map ids.
+- `wow-world::phasing` ports C++ `PhasingHandler::FormatPhases` and the C++ `PrintToChat` argument formatter as `PhaseShiftChatSnapshot`; actual GM/chat command wiring remains pending until the Rust command layer exists.
 
 **What's missing vs C++:**
-- `PhaseShift` data type. There is no per-object phase state at all.
-- `PhasingHandler` façade — none of the public methods exist.
-- `PhaseAreaInfo` / `PhaseInfoStruct` / `TerrainSwapInfo` data structures and their loaders in ObjectMgr-equivalent.
-- `phase_definitions` / `phase_area` / `terrain_swap_defaults` / `terrain_worldmap` SQL loading.
+- Full `PhasingHandler` façade — only reset/inherit/visibility-flag helpers and packet build are implemented.
+- Canonical `ConditionContainer` storage/evaluation inside `PhaseAreaInfo`.
+- `phase_area` condition attachment; the old plan reference to `phase_definitions` does not apply to this C++ branch because phase info is seeded from `sPhaseStore`.
 - `CONDITION_SOURCE_TYPE_PHASE` and `CONDITION_SOURCE_TYPE_TERRAIN_SWAP` integration with the (also-missing) ConditionMgr.
 - `OnAreaChange` / `OnMapChange` / `OnConditionChange` lifecycle hooks.
 - Aura integration (`SPELL_AURA_PHASE`, `SPELL_AURA_PHASE_GROUP`).
 - `ControlledUnitVisitor` recursive propagation through pets/vehicles/totems.
 - `MultiPersonalPhaseTracker` per-map; private spawn lifecycle.
-- `PhaseShift::CanSee` — and the integration of that predicate into the visibility / grid-notifier codepaths.
-- DB2 reads of `Phase.db2` / `PhaseXPhaseGroup.db2`.
-- `PartyMemberPhaseStates` piece of `SMSG_PARTY_MEMBER_FULL_STATE`.
+- Full integration of `PhaseShift::can_see` into every canonical map/grid notifier codepath; session DB spawn visibility and the map creature visibility query can now apply the predicate, and the session `ObjectAccessor` player object preserves represented player phase, but full player phase ownership is still represented until live `Player` phase lifecycle hooks land.
+- GameObject/transport terrain swap application is still missing because Rust does not yet have the canonical C++ `GameObject::Create` / transport runtime path wired.
+- Live refresh triggers for `PartyMemberPhaseStates` when a party member's phase changes are still tied to the remaining phase lifecycle hooks.
 
 **Suspicious / likely divergent (hipótesis pre-auditoría):**
 - The constant SMSG_PHASE_SHIFT_CHANGE payload uses `PhaseShiftFlags::Unphased = 0x08` always; once any aura-phase or area-phase is applied, that field has to flip off `Unphased` and on `NoCosmetic`/etc. as appropriate, otherwise client-side phase intersection drifts.
-- Without `PhaseShift::CanSee`, every `WorldObject::IsWithinSightDist`-style call in the (also-WIP) Rust visibility layer is implicitly `true` for phasing; quest-driven duplicate-NPC areas (e.g. Borean Tundra D.E.H.T.A.) will show all variants simultaneously.
+- Canonical `WorldObject::CanSeeOrDetect` parity is not complete until live player phase mutation hooks and every grid notifier/filter callsite use the same predicate; DB spawn send paths, the map creature visibility query, and the `ObjectAccessor` player snapshot now carry/apply phase, but non-DB/runtime object visibility still needs audit.
 - The packet writes `PreloadMapIDs` count even though we never preload any swap maps — fine for now but must align with eventual terrain-swap implementation to avoid double-counting bytes.
 
 **Tests existing:**
@@ -257,36 +275,36 @@ Numera los items para poder referenciarlos desde `MIGRATION_ROADMAP.md` sección
 
 Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>12h, splitear).
 
-- [ ] **#PHASE.1** Define `PhaseShiftFlags` (u32 bitflags) and `PhaseFlags` (u16 bitflags) in `crates/wow-constants/src/phasing.rs` matching the C++ enums byte-for-byte (L)
-- [ ] **#PHASE.2** Define `PhaseShift` struct in `crates/wow-world/src/phasing/phase_shift.rs` with `BTreeMap<u16, PhaseRef>` (mirrors FlatSet ordering), `BTreeMap<u32, VisibleMapIdRef>`, `BTreeMap<u32, UiMapPhaseIdRef>`, plus refcount counters and personal GUID (M)
-- [ ] **#PHASE.3** Implement `PhaseShift::add_phase` / `remove_phase` / `add_visible_map_id` / `remove_visible_map_id` / `add_ui_map_phase_id` / `remove_ui_map_phase_id` with the same refcount semantics as C++ (`ModifyPhasesReferences`, `UpdateUnphasedFlag`, `UpdatePersonalGuid`) (M)
-- [ ] **#PHASE.4** Implement `PhaseShift::can_see` honouring `AlwaysVisible`, `Inverse`, `InverseUnphased`, `Unphased`, `NoCosmetic`; cover the `Personal` interaction (must also match `PersonalGuid`) (H)
-- [ ] **#PHASE.5** Add `phase_shift` and `suppressed_phase_shift` fields to the WorldObject base in `crates/wow-world/src/entities/world_object.rs` (and propagate to Player / Creature / GameObject / DynamicObject / AreaTrigger) (M)
-- [ ] **#PHASE.6** Define `PhaseInfoStruct`, `PhaseAreaInfo` (with `SubAreaExclusions: HashSet<u32>`, `Conditions: ConditionContainer`), `TerrainSwapInfo` (with `UiMapPhaseIDs: Vec<u32>`) data structs in `crates/wow-data/src/phasing.rs` (M)
-- [ ] **#PHASE.7** Implement loader for `phase_definitions` (id → `PhaseInfoStruct`) (L)
-- [ ] **#PHASE.8** Implement loader for `phase_area` (areaId → `Vec<PhaseAreaInfo>`) joined with `conditions WHERE SourceTypeOrReferenceId = 26` (M)
-- [ ] **#PHASE.9** Implement loader for `terrain_swap_defaults` (mapId → `Vec<TerrainSwapInfo>`) (L)
-- [ ] **#PHASE.10** Implement loader for `terrain_worldmap` (terrainSwapMapId → `Vec<UiMapPhaseId>`) and merge into `TerrainSwapInfo::UiMapPhaseIDs` (L)
-- [ ] **#PHASE.11** Wire up `Phase.db2` (PhaseStore) loading in `crates/wow-data` and expose `is_personal_phase(phaseId)` / `is_cosmetic_phase(phaseId)` (M)
-- [ ] **#PHASE.12** Wire up `PhaseXPhaseGroup.db2` and expose `get_phases_for_group(groupId) -> Option<&Vec<u32>>` (M)
-- [ ] **#PHASE.13** Implement `PhasingHandler::add_phase` / `remove_phase` static façade including `ControlledUnitVisitor` recursion through pets, summon slots, and vehicle passengers (H)
-- [ ] **#PHASE.14** Implement `PhasingHandler::add_phase_group` / `remove_phase_group` using `get_phases_for_group` (M)
-- [ ] **#PHASE.15** Implement `PhasingHandler::on_area_change` (parent-area walk via AreaTable.db2, condition evaluation per `PhaseAreaInfo`, suppression bookkeeping, aura re-application) (XL — split: walk + apply, re-apply auras, suppression bucket, controlled-unit propagation)
-- [ ] **#PHASE.16** Implement `PhasingHandler::on_map_change` (terrain-swap evaluation against `CONDITION_SOURCE_TYPE_TERRAIN_SWAP`, populate `VisibleMapIds` + `UiMapPhaseIds`) (H)
-- [ ] **#PHASE.17** Implement `PhasingHandler::on_condition_change` (re-evaluate every existing phase's `AreaConditions`, move to/from `SuppressedPhaseShift`, preserve aura-driven phases, mirror the visible-map suppression loop) (H)
-- [ ] **#PHASE.18** Implement `PhasingHandler::reset_phase_shift`, `inherit_phase_shift`, `set_always_visible`, `set_inversed` (M)
-- [ ] **#PHASE.19** Replace the constant SMSG_PHASE_SHIFT_CHANGE in `crates/wow-packet/src/packets/misc.rs` with a real serializer that takes `&PhaseShift` and writes flags + phase list + personal GUID + visible-map-id list + ui-map-phase-id list (M)
+- [x] **#PHASE.1** Define `PhaseShiftFlags` (u32 bitflags) and `PhaseFlags` (u16 bitflags) in `crates/wow-constants/src/phasing.rs` matching the C++ enums byte-for-byte (L)
+- [x] **#PHASE.2** Define `PhaseShift` struct with C++-like phase refs, visible-map refs and UI-map-phase refs (implemented in `wow-entities::PhaseShift`; personal GUID depth still belongs to later façade work) (M)
+- [x] **#PHASE.3** Implement `PhaseShift::add_phase` / `remove_phase` / `add_visible_map_id` / `remove_visible_map_id` / `add_ui_map_phase_id` / `remove_ui_map_phase_id` with C++ refcount semantics for represented fields (M)
+- [x] **#PHASE.4** Implement `PhaseShift::can_see` honouring `AlwaysVisible`, `Inverse`, `InverseUnphased`, `Unphased`, `NoCosmetic`; cover the `Personal` interaction (must also match `PersonalGuid`) (H)
+- [x] **#PHASE.5** Add `phase_shift` and `suppressed_phase_shift` fields to the WorldObject base (actual Rust owner: `crates/wow-entities/src/world_object.rs`) and propagate through Player / Creature / GameObject / DynamicObject / AreaTrigger via their embedded `WorldObject`/`Unit` base (M)
+- [x] **#PHASE.6** Define `PhaseInfoStruct`, `PhaseAreaInfo` (with `SubAreaExclusions: HashSet<u32>`, `Conditions: ConditionContainer`), `TerrainSwapInfo` (with `UiMapPhaseIDs: Vec<u32>`) data structs in `crates/wow-data/src/phasing.rs` (M; `PhaseInfoStruct` / `PhaseAreaInfo` / phase condition container exist; `TerrainSwapInfo` is in `terrain_swap.rs`)
+- [x] **#PHASE.7** Implement current C++ phase-info seed (`sPhaseStore` → `_phaseInfoById`; old `phase_definitions` plan entry corrected because this branch no longer loads that table) (L)
+- [ ] **#PHASE.8** Implement loader for `phase_area` (areaId → `Vec<PhaseAreaInfo>`) joined with `conditions WHERE SourceTypeOrReferenceId = 26` (M; partial: `phase_area` rows + AreaTable parent `SubAreaExclusions` are loaded, and C++ `ConditionMgr::addToPhases` attachment semantics are ported; global startup/reload wiring remains open)
+- [x] **#PHASE.9** Implement loader for `terrain_swap_defaults` (mapId → `Vec<TerrainSwapInfo>`) (L)
+- [x] **#PHASE.10** Implement loader for `terrain_worldmap` (terrainSwapMapId → `Vec<UiMapPhaseId>`) and merge into `TerrainSwapInfo::UiMapPhaseIDs`, validating via C++ DB2+hotfix `UiMapXMapArt.PhaseID` (L)
+- [x] **#PHASE.11** Wire up `Phase.db2` (PhaseStore) loading in `crates/wow-data` and expose `is_personal_phase(phaseId)` / `is_cosmetic_phase(phaseId)` (M)
+- [x] **#PHASE.12** Wire up `PhaseXPhaseGroup.db2` and expose `get_phases_for_group(groupId) -> Option<&Vec<u32>>` equivalent (M)
+- [ ] **#PHASE.13** Implement `PhasingHandler::add_phase` / `remove_phase` static façade including `ControlledUnitVisitor` recursion through pets, summon slots, and vehicle passengers (H; partial: single-object C++ core mutation plus `ControlledUnitVisitor` selection/visited rules implemented in `wow-world::phasing`; live ObjectAccessor-style recursion still open)
+- [ ] **#PHASE.14** Implement `PhasingHandler::add_phase_group` / `remove_phase_group` using `get_phases_for_group` (M; partial: single-object group mutation implemented in `wow-world::phasing`; controlled-unit traversal remains under #PHASE.13)
+- [ ] **#PHASE.15** Implement `PhasingHandler::on_area_change` (parent-area walk via AreaTable.db2, condition evaluation per `PhaseAreaInfo`, suppression bookkeeping, aura re-application) (XL; partial: parent walk, sub-area exclusions, active/suppressed buckets and injected aura phase/group re-application implemented; canonical ConditionMgr/aura/runtime hook/control propagation remain open)
+- [ ] **#PHASE.16** Implement `PhasingHandler::on_map_change` (terrain-swap evaluation against `CONDITION_SOURCE_TYPE_TERRAIN_SWAP`, populate `VisibleMapIds` + `UiMapPhaseIds`) (H; partial: terrain-swap rebuild pass implemented with injected predicate; canonical ConditionMgr/runtime hook remains open)
+- [ ] **#PHASE.17** Implement `PhasingHandler::on_condition_change` (re-evaluate every existing phase's `AreaConditions`, move to/from `SuppressedPhaseShift`, preserve aura-driven phases, mirror the visible-map suppression loop) (H; partial: C++ core active/suppressed phase and visible-map mutation implemented with injected condition predicates; canonical ConditionMgr `AreaConditions` handles, runtime hook, Unit `OnPhaseChange`/controlled propagation and aura dispatcher integration remain open)
+- [x] **#PHASE.18** Implement `PhasingHandler::reset_phase_shift`, `inherit_phase_shift`, `set_always_visible`, `set_inversed` (M)
+- [x] **#PHASE.19** Replace the constant SMSG_PHASE_SHIFT_CHANGE in `crates/wow-packet/src/packets/misc.rs` with a real serializer/builder that takes `&PhaseShift` and writes flags + phase list + personal GUID + visible-map-id list + ui-map-phase-id list (M; runtime hooks still tracked in #PHASE.15/#PHASE.16/#PHASE.17/#PHASE.26)
 - [ ] **#PHASE.20** Hook up `SPELL_AURA_PHASE` apply/remove and `SPELL_AURA_PHASE_GROUP` apply/remove in the (yet-to-be-fully-built) aura effect dispatcher to call `PhasingHandler::add_phase` / `add_phase_group` (M, depends on aura system)
-- [ ] **#PHASE.21** Implement `PersonalPhaseSpawns` (objects + grids + optional `Duration` countdown) and `PlayerPersonalPhasesTracker` (per-owner) in `crates/wow-world/src/phasing/personal.rs` (H)
-- [ ] **#PHASE.22** Implement `MultiPersonalPhaseTracker` on each `Map` with `LoadGrid` / `UnloadGrid` / `RegisterTrackedObject` / `OnOwnerPhaseChanged` / `MarkAllPhasesForDeletion` / `Update(diff)` (XL — splittable per method)
-- [ ] **#PHASE.23** Wire `MultiPersonalPhaseTracker::update` into the per-map tick (1-minute countdown semantics from `PersonalPhaseSpawns::DELETE_TIME_DEFAULT`) (M)
-- [ ] **#PHASE.24** Implement `InitDbPhaseShift` / `InitDbPersonalOwnership` / `InitDbVisibleMapId` so creature/gameobject DB rows that carry `phaseUseFlags` / `PhaseId` / `PhaseGroup` / `terrainSwapMap` columns produce correct phase state at spawn (M)
-- [ ] **#PHASE.25** Implement `GetTerrainMapId(phaseShift, mapId, terrain, x, y)` so collision / area lookups select the alt map when a swap is active at coordinates (M)
-- [ ] **#PHASE.26** Integrate `PhaseShift::can_see` into the Rust visibility / grid-notifier path (the C++ `WorldObject::CanSeeOrDetect` chain) so phased objects actually become invisible (H)
-- [ ] **#PHASE.27** Implement `FillPartyMemberPhase` for `SMSG_PARTY_MEMBER_FULL_STATE` so the group UI knows when a member is out of phase (M)
-- [ ] **#PHASE.28** Add `PrintToChat` / `FormatPhases` admin/debug helpers (L)
+- [x] **#PHASE.21** Implement `PersonalPhaseSpawns` (objects + grids + optional `Duration` countdown) and `PlayerPersonalPhasesTracker` (per-owner) in `crates/wow-world/src/phasing/personal.rs` (H)
+- [ ] **#PHASE.22** Implement `MultiPersonalPhaseTracker` on each `Map` with `LoadGrid` / `UnloadGrid` / `RegisterTrackedObject` / `OnOwnerPhaseChanged` / `MarkAllPhasesForDeletion` / `Update(diff)` (XL — splittable per method; partial: C++ core multi-owner state machine plus `MapInstance` ownership/load/unload/register/update/remove-list hooks implemented; actual DB personal spawn loader and live grid lifecycle callsites remain open)
+- [ ] **#PHASE.23** Wire `MultiPersonalPhaseTracker::update` into the per-map tick (1-minute countdown semantics from `PersonalPhaseSpawns::DELETE_TIME_DEFAULT`) (M; partial: `MapInstance::update_personal_phases_like_cpp` queues expired objects and `remove_personal_phase_objects_like_cpp` removes them; server tick callsite remains open)
+- [ ] **#PHASE.24** Implement `InitDbPhaseShift` / `InitDbPersonalOwnership` / `InitDbVisibleMapId` so creature/gameobject DB rows that carry `phaseUseFlags` / `PhaseId` / `PhaseGroup` / `terrainSwapMap` columns produce correct phase state at spawn (M; partial: C++ helper semantics implemented; visible creature spawn/respawn path now selects and applies `phaseUseFlags`/`phaseid`/`phasegroup` plus `terrainSwapMap`; visible gameobject path now records represented `GameObject::GetPhaseShift()` from the same DB columns until canonical GO ownership lands; remaining spawn paths still need areatrigger/transport wiring and DB personal owner loader)
+- [x] **#PHASE.25** Implement `GetTerrainMapId(phaseShift, mapId, terrain, x, y)` so collision / area lookups select the alt map when a swap is active at coordinates (`terrain_map_id_for_phase_shift_like_cpp` + `TerrainGridFilesLikeCpp` / `TerrainGridFileIndexLikeCpp` in `crates/wow-world/src/map_manager.rs`) (M)
+- [ ] **#PHASE.26** Integrate `PhaseShift::can_see` into the Rust visibility / grid-notifier path (the C++ `WorldObject::CanSeeOrDetect` chain) so phased objects actually become invisible (H; partial: session creature/gameobject DB create paths now filter through `PhaseShift::can_see` against represented player phase, `MapManager::get_visible_creatures_in_phase` mirrors the C++ grid searcher phase filter for canonical creature queries, and the `ObjectAccessor` player snapshot preserves represented player phase; remaining live player phase lifecycle hooks, non-DB object paths, and all grid notifier callsites stay open)
+- [x] **#PHASE.27** Implement `FillPartyMemberPhase` for `SMSG_PARTY_MEMBER_FULL_STATE` so the group UI knows when a member is out of phase (`PartyMemberPhaseStates` serializer + `party_member_phase_states_like_cpp` + player-registry snapshot feeding group full-state packets; live phase-change resend hooks remain tracked by #PHASE.15/#PHASE.17/#PHASE.26) (M)
+- [x] **#PHASE.28** Add `PrintToChat` / `FormatPhases` admin/debug helpers (`format_phases_like_cpp` + `print_to_chat_snapshot_like_cpp`; concrete GM/chat command integration remains tracked outside the pure phasing port because Rust has no equivalent command layer yet) (L)
 - [ ] **#PHASE.29** Wire `OnConditionChange` to be re-fired by relevant condition triggers (quest state change, aura apply, item add — all in the C++ `Condition::Meets` triggers) (M, depends on Conditions module)
-- [ ] **#PHASE.30** Documentation: cross-link `phasing.md` ↔ `conditions.md` ↔ `maps.md` (`MultiPersonalPhaseTracker` ownership) (L)
+- [x] **#PHASE.30** Documentation: cross-link `phasing.md` ↔ `conditions.md` ↔ `maps.md` (`MultiPersonalPhaseTracker` ownership and ConditionMgr phase/terrain-swap blockers) (L)
 
 ---
 
@@ -315,11 +333,11 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] Test: `Personal` phase intersection requires matching `PersonalGuid` on both sides (different owners → not visible to each other even with same phaseId).
 - [ ] Test: `OnAreaChange` walks parent-area chain — placing a player in a sub-area whose parent has a phase entry applies the parent phase.
 - [ ] Test: `OnAreaChange` honours `SubAreaExclusions` — a phase tied to area A but excluded for sub-area B does not apply when player stands in B.
-- [ ] Test: `OnConditionChange` moves a phase from `Phases` to `SuppressedPhaseShift` when its condition starts failing, and back when it passes again — refcount preserved across both directions.
+- [x] Test: `OnConditionChange` moves phases and visible-map IDs between `Phases`/`VisibleMapIds` and `SuppressedPhaseShift` when injected C++ condition predicates flip, preserving refcounts for represented fields.
 - [ ] Test: `SPELL_AURA_PHASE` apply adds phase to ALL controlled units (pet, vehicle passengers); remove pulls them all back.
 - [ ] Test: SMSG_PHASE_SHIFT_CHANGE wire format — given a known PhaseShift fixture, the bytes match the legacy C++ binary output.
-- [ ] Test: `MultiPersonalPhaseTracker` despawns personal-phase spawns 60 s after the owner's phase set no longer contains them.
-- [ ] Test: `MultiPersonalPhaseTracker::LoadGrid` only loads spawns whose phase the owner currently holds.
+- [x] Test: `MultiPersonalPhaseTracker` despawns personal-phase spawns 60 s after the owner's phase set no longer contains them.
+- [x] Test: `MultiPersonalPhaseTracker::LoadGrid` only loads spawns whose phase the owner currently holds.
 - [ ] Test: `terrain_swap_defaults` — entering a map with a terrain swap whose conditions pass produces `VisibleMapIds = [swapMapId]` and the matching `UiMapPhaseIds`; failing conditions instead populate `SuppressedPhaseShift`.
 - [ ] Test: `GetTerrainMapId` — when `VisibleMapIds` contains the alt and the alt has area data at (x,y), return alt; else return the source.
 
@@ -335,7 +353,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 | Scope | Decision | C++ retained | Evidence |
 |---|---|---|---|
-| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 6 files / 1421 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhasingHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhaseShift.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PersonalPhaseTracker.cpp` | `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load `phase_definitions`/`phase_area`/`terrain_swap_defaults`/`terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet. \| 🔧 broken — only a 1-shot SMSG_PHASE_SHIFT_CHANGE stub that always sends `PhaseShiftFlags::Unphased` with empty phase/visible-map/UI-map lists. No PhaseShift state on objects, no `PhasingHandler::OnAreaChange`, no condition-driven phase suppression, no personal phases, no terrain-swap evaluation, no controlled-unit propagation, no SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration. |
+| `active_port_scope` | Full C++ surface remains in migration scope; no product exclusion recorded. | 6 files / 1421 lines; refs: `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhasingHandler.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PhaseShift.cpp`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PersonalPhaseTracker.cpp` | `crates/wow-world/` (PhasingHandler logic, per-map MultiPersonalPhaseTracker), `crates/wow-data/` (load C++ `Phase.db2`-seeded phase info / `phase_area` / `terrain_swap_defaults` / `terrain_worldmap`), `crates/wow-packet/src/packets/misc.rs` (already has `PhaseShiftChange` stub). No dedicated `wow-phasing` crate yet. \| 🔧 broken — SMSG_PHASE_SHIFT_CHANGE is still incomplete and runtime hooks remain open: `PhasingHandler::OnAreaChange`, condition-driven phase suppression, personal phases, full terrain-swap evaluation, controlled-unit propagation, and SPELL_AURA_PHASE / SPELL_AURA_PHASE_GROUP integration. |
 
 <!-- REFINE.025:END product-scope -->
 
@@ -370,18 +388,18 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 
 | C++ Symbol | Rust Equivalent | Notes |
 |---|---|---|
-| `class PhaseShift` | `struct PhaseShift` (in `crates/wow-world/src/phasing/phase_shift.rs`) | Plain struct; `Clone` for `InheritPhaseShift` semantics |
-| `Trinity::Containers::FlatSet<PhaseRef>` | `BTreeMap<u16, PhaseRef>` or sorted `Vec<PhaseRef>` | `PhaseRef` ordering is by `Id` only; iteration must be ordered for deterministic packet output |
+| `class PhaseShift` | `struct PhaseShift` (in `crates/wow-entities/src/world_object.rs`) | Plain struct; `Clone` for `InheritPhaseShift` semantics |
+| `Trinity::Containers::FlatSet<PhaseRef>` | `BTreeMap<u32, PhaseRef>` | `PhaseRef` ordering is by `Id` only; iteration is ordered for deterministic packet output |
 | `std::map<u32, VisibleMapIdRef>` | `BTreeMap<u32, VisibleMapIdRef>` | Ordered iteration matters for packet output |
 | `EnumFlag<PhaseShiftFlags>` | `bitflags!` macro on a `u32` newtype | Use `.contains` / `.insert` / `.remove` |
-| `ObjectGuid PersonalGuid` | `ObjectGuid` (same type as elsewhere in `wow-shared`) | `ObjectGuid::EMPTY` when no personal owner |
+| `ObjectGuid PersonalGuid` | `ObjectGuid` (in `wow-core`) | `ObjectGuid::EMPTY` when no personal owner |
 | `class PhasingHandler` (all-static) | `pub mod phasing_handler { pub fn add_phase(...) ... }` | Free functions in a module — no need to keep the static-class shape |
 | `ControlledUnitVisitor` | `struct ControlledUnitVisitor { visited: SmallVec<[*const WorldObject; 8]> }` | Use `&Unit` references; `SmallVec` of guids if pointer-stable references aren't ergonomic |
 | `std::vector<Condition> const* AreaConditions` | `Option<Weak<Vec<Condition>>>` or `ConditionsRef` handle | Non-owning borrow into ConditionMgr-owned storage |
 | `MultiPersonalPhaseTracker _multiPersonalPhaseTracker` (member of `Map`) | Field on `Map` struct: `personal_phases: MultiPersonalPhaseTracker` | Composition, not inheritance |
 | `PersonalPhaseSpawns::DELETE_TIME_DEFAULT = 1min` | `const DELETE_TIME_DEFAULT: Duration = Duration::from_secs(60);` | — |
 | `PhaseShift::CanSee` | `impl PhaseShift { pub fn can_see(&self, other: &Self) -> bool }` | Pure function, easy to unit-test exhaustively |
-| `WorldPackets::Misc::PhaseShiftChange` | `crates/wow-packet/src/packets/misc.rs::PhaseShiftChange` | Already stubbed — replace constant payload with `&PhaseShift` source |
+| `WorldPackets::Misc::PhaseShiftChange` | `crates/wow-packet/src/packets/misc.rs::PhaseShiftChange` + `wow-world::phasing::phase_shift_change_for_player_like_cpp` | Wire serializer and C++ `SendToPlayer` build step exist; lifecycle send hooks remain open |
 | `SPELL_AURA_PHASE` aura handler | Aura effect arm in the spell engine | Calls `phasing_handler::add_phase` on apply, `remove_phase` on remove |
 | `sObjectMgr->GetPhasesForArea` | `data::phasing::get_phases_for_area(area_id) -> Option<&[PhaseAreaInfo]>` | Loaded once at startup; immutable for the life of the world |
 | `sDB2Manager.GetPhasesForGroup` | `db2::phase_group::phases_for_group(group_id) -> Option<&[u32]>` | Read from `PhaseXPhaseGroup.db2` |
@@ -422,8 +440,8 @@ The struct only carries a `player_guid`; there is no `PhaseShift` field. The sin
 - Quest-driven phased duplicates (Borean Tundra D.E.H.T.A., Death Knight starting zone) will render every variant simultaneously once those NPCs land.
 - `SMSG_PARTY_MEMBER_FULL_STATE` writes `PhaseShiftFlags = 0` (`packets/party.rs:281`) so party UI never marks anyone out-of-phase.
 - `OnAreaChange` / `OnMapChange` / `OnConditionChange` are not called anywhere — the packet is fire-and-forget at login. Crossing into phased areas re-sends nothing.
-- DB tables `phase_definitions`, `phase_area`, `terrain_swap_defaults`, `terrain_worldmap` are not loaded by `wow-database`.
-- `Phase.db2` and `PhaseXPhaseGroup.db2` are not parsed by `wow-data`.
+- DB table `phase_area` is loaded, but its `ConditionContainer` attachment is still a placeholder until canonical ConditionMgr support is wired; terrain swap tables are loaded; phase info is seeded from `Phase.db2` like this C++ branch rather than from the legacy `phase_definitions` table.
+- `Phase.db2` and `PhaseXPhaseGroup.db2` are parsed, but phase/group validation is not yet applied to creature/gameobject/transport spawn rows.
 
 **Coupling to ConditionMgr:** §8's claim is correct that this can't be fixed properly without ConditionMgr (also ❌). #PHASE.15 / #PHASE.16 / #PHASE.17 explicitly take a `ConditionContainer`. Treat #PHASE.* as blocked-on #COND.1–#COND.20.
 

@@ -2330,105 +2330,109 @@ impl WorldSession {
             let mut refund_cleanup_tx = SqlTransaction::new();
             match char_db.query(&eq_stmt).await {
                 Ok(mut eq_result) => {
-                    loop {
-                        let slot: u8 = eq_result.read(0);
-                        let item_entry: u32 = eq_result.try_read(1).unwrap_or(0);
-                        let item_db_guid: u64 = eq_result.try_read(2).unwrap_or(0);
-                        let item_count: u32 = eq_result.try_read(3).unwrap_or(1);
-                        let item_durability: u32 = eq_result.try_read(4).unwrap_or(0);
-                        let item_context = eq_result
-                            .try_read::<u8>(5)
-                            .and_then(<ItemContext as num_traits::FromPrimitive>::from_u8)
-                            .unwrap_or(ItemContext::None);
-                        let item_flags = eq_result.try_read::<u32>(6).unwrap_or(0);
-                        let item_played_time = eq_result.try_read::<u32>(7).unwrap_or(0);
-                        let refund_decision = loaded_item_refund_decision(
-                            item_flags,
-                            item_played_time,
-                            eq_result.try_read::<u64>(8),
-                            eq_result.try_read::<u16>(9),
-                        );
-                        if item_entry > 0 && (slot as usize) < 141 {
-                            let item_max_durability = self
-                                .item_template_max_durability(item_entry)
-                                .max(item_durability);
-                            let item_guid = ObjectGuid::create_item(realm_id, item_db_guid as i64);
-                            let stored_flags = match refund_decision {
-                                LoadedItemRefundDecision::Clear { new_flags } => {
-                                    append_item_refund_clear_statements(
-                                        char_db.as_ref(),
-                                        &mut refund_cleanup_tx,
-                                        item_db_guid,
-                                        new_flags,
-                                    );
-                                    new_flags
-                                }
-                                LoadedItemRefundDecision::None
-                                | LoadedItemRefundDecision::Valid { .. } => item_flags,
-                            };
-                            inv_slots[slot as usize] = item_guid;
-                            item_creates.push(wow_packet::packets::update::ItemCreateData {
-                                item_guid,
-                                entry_id: item_entry as i32,
-                                owner_guid: guid,
-                                contained_in: guid,
-                                stack_count: item_count,
-                                durability: item_durability,
-                                max_durability: item_max_durability,
-                                random_properties_seed: 0,
-                                random_properties_id: 0,
-                                context: 0,
-                            });
-                            let inventory_type =
-                                self.item_template_inventory_type(item_entry).or_else(|| {
-                                    if slot < 19 {
-                                        slot_to_inventory_type(slot)
-                                    } else {
-                                        None
-                                    }
-                                });
-                            let inventory_item = InventoryItem {
-                                guid: item_guid,
-                                entry_id: item_entry,
-                                db_guid: item_db_guid,
-                                inventory_type,
-                            };
-                            if WorldSession::is_buyback_slot(slot) {
-                                self.insert_buyback_item_like_cpp(slot, inventory_item);
-                            } else {
-                                self.insert_inventory_item_like_cpp(slot, inventory_item);
-                            }
-                            let mut item_object = self.make_inventory_item_object(
-                                item_guid,
-                                item_entry,
-                                guid,
-                                item_count,
-                                item_durability,
-                                item_context,
-                                slot,
+                    if !eq_result.is_empty() {
+                        loop {
+                            let slot: u8 = eq_result.read(0);
+                            let item_entry: u32 = eq_result.try_read(1).unwrap_or(0);
+                            let item_db_guid: u64 = eq_result.try_read(2).unwrap_or(0);
+                            let item_count: u32 = eq_result.try_read(3).unwrap_or(1);
+                            let item_durability: u32 = eq_result.try_read(4).unwrap_or(0);
+                            let item_context = eq_result
+                                .try_read::<u8>(5)
+                                .and_then(<ItemContext as num_traits::FromPrimitive>::from_u8)
+                                .unwrap_or(ItemContext::None);
+                            let item_flags = eq_result.try_read::<u32>(6).unwrap_or(0);
+                            let item_played_time = eq_result.try_read::<u32>(7).unwrap_or(0);
+                            let refund_decision = loaded_item_refund_decision(
+                                item_flags,
+                                item_played_time,
+                                eq_result.try_read::<u64>(8),
+                                eq_result.try_read::<u16>(9),
                             );
-                            item_object.set_create_played_time(item_played_time);
-                            item_object.replace_all_item_flags(ItemFieldFlags::from_bits_retain(
-                                stored_flags,
-                            ));
-                            if let LoadedItemRefundDecision::Valid {
-                                paid_money,
-                                paid_extended_cost,
-                            } = refund_decision
-                            {
-                                item_object.set_refund_recipient(guid);
-                                item_object.set_paid_money(paid_money);
-                                item_object.set_paid_extended_cost(u32::from(paid_extended_cost));
+                            if item_entry > 0 && (slot as usize) < 141 {
+                                let item_max_durability = self
+                                    .item_template_max_durability(item_entry)
+                                    .max(item_durability);
+                                let item_guid =
+                                    ObjectGuid::create_item(realm_id, item_db_guid as i64);
+                                let stored_flags = match refund_decision {
+                                    LoadedItemRefundDecision::Clear { new_flags } => {
+                                        append_item_refund_clear_statements(
+                                            char_db.as_ref(),
+                                            &mut refund_cleanup_tx,
+                                            item_db_guid,
+                                            new_flags,
+                                        );
+                                        new_flags
+                                    }
+                                    LoadedItemRefundDecision::None
+                                    | LoadedItemRefundDecision::Valid { .. } => item_flags,
+                                };
+                                inv_slots[slot as usize] = item_guid;
+                                item_creates.push(wow_packet::packets::update::ItemCreateData {
+                                    item_guid,
+                                    entry_id: item_entry as i32,
+                                    owner_guid: guid,
+                                    contained_in: guid,
+                                    stack_count: item_count,
+                                    durability: item_durability,
+                                    max_durability: item_max_durability,
+                                    random_properties_seed: 0,
+                                    random_properties_id: 0,
+                                    context: 0,
+                                });
+                                let inventory_type =
+                                    self.item_template_inventory_type(item_entry).or_else(|| {
+                                        if slot < 19 {
+                                            slot_to_inventory_type(slot)
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                let inventory_item = InventoryItem {
+                                    guid: item_guid,
+                                    entry_id: item_entry,
+                                    db_guid: item_db_guid,
+                                    inventory_type,
+                                };
+                                if WorldSession::is_buyback_slot(slot) {
+                                    self.insert_buyback_item_like_cpp(slot, inventory_item);
+                                } else {
+                                    self.insert_inventory_item_like_cpp(slot, inventory_item);
+                                }
+                                let mut item_object = self.make_inventory_item_object(
+                                    item_guid,
+                                    item_entry,
+                                    guid,
+                                    item_count,
+                                    item_durability,
+                                    item_context,
+                                    slot,
+                                );
+                                item_object.set_create_played_time(item_played_time);
+                                item_object.replace_all_item_flags(
+                                    ItemFieldFlags::from_bits_retain(stored_flags),
+                                );
+                                if let LoadedItemRefundDecision::Valid {
+                                    paid_money,
+                                    paid_extended_cost,
+                                } = refund_decision
+                                {
+                                    item_object.set_refund_recipient(guid);
+                                    item_object.set_paid_money(paid_money);
+                                    item_object
+                                        .set_paid_extended_cost(u32::from(paid_extended_cost));
+                                }
+                                item_object.set_state(ItemUpdateState::Unchanged);
+                                self.insert_inventory_item_object(item_object);
+                                // Slots 0-18 also populate VisibleItems for character model
+                                if (slot as usize) < 19 {
+                                    visible_items[slot as usize] = (item_entry as i32, 0, 0);
+                                }
                             }
-                            item_object.set_state(ItemUpdateState::Unchanged);
-                            self.insert_inventory_item_object(item_object);
-                            // Slots 0-18 also populate VisibleItems for character model
-                            if (slot as usize) < 19 {
-                                visible_items[slot as usize] = (item_entry as i32, 0, 0);
+                            if !eq_result.next_row() {
+                                break;
                             }
-                        }
-                        if !eq_result.next_row() {
-                            break;
                         }
                     }
                 }
@@ -3000,6 +3004,19 @@ impl WorldSession {
             let loot_id: u32 = result.try_read::<Option<u32>>(23).flatten().unwrap_or(0);
             let gold_min: u32 = result.try_read::<Option<u32>>(24).flatten().unwrap_or(0);
             let gold_max: u32 = result.try_read::<Option<u32>>(25).flatten().unwrap_or(0);
+            let phase_use_flags: u8 = result
+                .try_read::<u8>(26)
+                .or_else(|| result.try_read::<i16>(26).map(|value| value.max(0) as u8))
+                .unwrap_or(0);
+            let phase_id: u16 = result
+                .try_read::<u16>(27)
+                .or_else(|| result.try_read::<i32>(27).map(|value| value.max(0) as u16))
+                .unwrap_or(0);
+            let phase_group_id: u32 = result
+                .try_read::<u32>(28)
+                .or_else(|| result.try_read::<i32>(28).map(|value| value.max(0) as u32))
+                .unwrap_or(0);
+            let terrain_swap_map: i32 = result.try_read(29).unwrap_or(-1);
 
             let display_id = if model_id > 0 {
                 model_id
@@ -3011,6 +3028,20 @@ impl WorldSession {
                 }
                 continue;
             };
+
+            let (target_phase_shift, _) = self.db_spawn_phase_shift_like_cpp(
+                map_id,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+                terrain_swap_map,
+            );
+            if !self.can_see_phase_shift_like_cpp(&target_phase_shift) {
+                if !result.next_row() {
+                    break;
+                }
+                continue;
+            }
 
             let health = if cur_health > 0 {
                 cur_health as i64
@@ -3073,6 +3104,10 @@ impl WorldSession {
                 gold_max,
                 None,
                 0,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+                terrain_swap_map,
             );
 
             if !result.next_row() {
@@ -3198,6 +3233,19 @@ impl WorldSession {
                 let loot_id: u32 = cr.try_read::<Option<u32>>(23).flatten().unwrap_or(0);
                 let gold_min: u32 = cr.try_read::<Option<u32>>(24).flatten().unwrap_or(0);
                 let gold_max: u32 = cr.try_read::<Option<u32>>(25).flatten().unwrap_or(0);
+                let phase_use_flags: u8 = cr
+                    .try_read::<u8>(26)
+                    .or_else(|| cr.try_read::<i16>(26).map(|value| value.max(0) as u8))
+                    .unwrap_or(0);
+                let phase_id: u16 = cr
+                    .try_read::<u16>(27)
+                    .or_else(|| cr.try_read::<i32>(27).map(|value| value.max(0) as u16))
+                    .unwrap_or(0);
+                let phase_group_id: u32 = cr
+                    .try_read::<u32>(28)
+                    .or_else(|| cr.try_read::<i32>(28).map(|value| value.max(0) as u32))
+                    .unwrap_or(0);
+                let terrain_swap_map: i32 = cr.try_read(29).unwrap_or(-1);
 
                 let display_id = if model_id > 0 {
                     model_id
@@ -3209,6 +3257,20 @@ impl WorldSession {
                     }
                     continue;
                 };
+
+                let (target_phase_shift, _) = self.db_spawn_phase_shift_like_cpp(
+                    map_id,
+                    phase_use_flags,
+                    phase_id,
+                    phase_group_id,
+                    terrain_swap_map,
+                );
+                if !self.can_see_phase_shift_like_cpp(&target_phase_shift) {
+                    if !cr.next_row() {
+                        break;
+                    }
+                    continue;
+                }
 
                 let health = if cur_health > 0 {
                     cur_health as i64
@@ -3272,6 +3334,10 @@ impl WorldSession {
                         gold_max,
                         None,
                         0,
+                        phase_use_flags,
+                        phase_id,
+                        phase_group_id,
+                        terrain_swap_map,
                     );
                 }
 
@@ -3352,10 +3418,49 @@ impl WorldSession {
                 let go_type: u8 = go_result.try_read(12).unwrap_or(0);
                 let display_id: u32 = go_result.try_read(13).unwrap_or(0);
                 let scale: f32 = go_result.try_read(15).unwrap_or(1.0);
-                let data0: u32 = go_result.try_read(16).unwrap_or(0);
-                let data1: u32 = go_result.try_read(17).unwrap_or(0);
+                let _data0: u32 = go_result.try_read(16).unwrap_or(0);
+                let _data1: u32 = go_result.try_read(17).unwrap_or(0);
+                let phase_use_flags: u8 = go_result
+                    .try_read::<u8>(18)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i16>(18)
+                            .map(|value| value.max(0) as u8)
+                    })
+                    .unwrap_or(0);
+                let phase_id: u16 = go_result
+                    .try_read::<u16>(19)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i32>(19)
+                            .map(|value| value.max(0) as u16)
+                    })
+                    .unwrap_or(0);
+                let phase_group_id: u32 = go_result
+                    .try_read::<u32>(20)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i32>(20)
+                            .map(|value| value.max(0) as u32)
+                    })
+                    .unwrap_or(0);
+                let terrain_swap_map: i32 = go_result.try_read(21).unwrap_or(-1);
 
                 if display_id == 0 {
+                    if !go_result.next_row() {
+                        break;
+                    }
+                    continue;
+                }
+
+                let (target_phase_shift, _) = self.db_spawn_phase_shift_like_cpp(
+                    map_id,
+                    phase_use_flags,
+                    phase_id,
+                    phase_group_id,
+                    terrain_swap_map,
+                );
+                if !self.can_see_phase_shift_like_cpp(&target_phase_shift) {
                     if !go_result.next_row() {
                         break;
                     }
@@ -3372,6 +3477,14 @@ impl WorldSession {
                     spawn_guid as i64,
                 );
                 new_visible_gos.insert(guid);
+                self.record_represented_gameobject_db_phase_shift_like_cpp(
+                    guid,
+                    map_id,
+                    phase_use_flags,
+                    phase_id,
+                    phase_group_id,
+                    terrain_swap_map,
+                );
 
                 if !self.visible_gameobjects.contains(&guid) {
                     let go_pos = Position::new(pos_x, pos_y, pos_z, orientation);
@@ -3402,6 +3515,9 @@ impl WorldSession {
             .filter(|g| !new_visible_gos.contains(g))
             .cloned()
             .collect();
+        for guid in &removed_gos {
+            self.represented_gameobject_phase_shifts.remove(guid);
+        }
 
         if !new_go_blocks.is_empty() {
             debug!(
@@ -3772,9 +3888,36 @@ impl WorldSession {
             let display_id: u32 = result.try_read(13).unwrap_or(0);
             let _name: String = result.read_string(14);
             let scale: f32 = result.try_read(15).unwrap_or(1.0);
+            let phase_use_flags: u8 = result
+                .try_read::<u8>(18)
+                .or_else(|| result.try_read::<i16>(18).map(|value| value.max(0) as u8))
+                .unwrap_or(0);
+            let phase_id: u16 = result
+                .try_read::<u16>(19)
+                .or_else(|| result.try_read::<i32>(19).map(|value| value.max(0) as u16))
+                .unwrap_or(0);
+            let phase_group_id: u32 = result
+                .try_read::<u32>(20)
+                .or_else(|| result.try_read::<i32>(20).map(|value| value.max(0) as u32))
+                .unwrap_or(0);
+            let terrain_swap_map: i32 = result.try_read(21).unwrap_or(-1);
 
             // Skip gameobjects with no display
             if display_id == 0 {
+                if !result.next_row() {
+                    break;
+                }
+                continue;
+            }
+
+            let (target_phase_shift, _) = self.db_spawn_phase_shift_like_cpp(
+                map_id,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+                terrain_swap_map,
+            );
+            if !self.can_see_phase_shift_like_cpp(&target_phase_shift) {
                 if !result.next_row() {
                     break;
                 }
@@ -3807,6 +3950,14 @@ impl WorldSession {
 
             blocks.push(UpdateObject::create_gameobject_block(create_data));
             go_guids.push(guid);
+            self.record_represented_gameobject_db_phase_shift_like_cpp(
+                guid,
+                map_id,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+                terrain_swap_map,
+            );
 
             if !result.next_row() {
                 break;

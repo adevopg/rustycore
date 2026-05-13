@@ -9,6 +9,7 @@
 //! world-server handshake (challenge → auth → encryption), creates a
 //! WorldSession for each client, and dispatches packets to handlers.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -35,7 +36,10 @@ use wow_network::world_socket::{AccountInfo, AccountLookup};
 use wow_network::{
     GroupRegistry, LootDropRatesLikeCpp, PendingInvites, PlayerRegistry, SessionResources,
 };
-use wow_world::{MapManager as LegacyMapManager, SharedMapManager, WorldSession};
+use wow_world::{
+    MMapRuntimeConfigLikeCpp, MapManager as LegacyMapManager, SharedMapManager,
+    WorldMMapPathfinderWorkerLikeCpp, WorldSession,
+};
 
 type SharedCanonicalMapManager = Arc<Mutex<wow_map::MapManager>>;
 
@@ -443,6 +447,55 @@ async fn main() -> Result<()> {
             .context("Failed to load Map.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} maps from Map.db2", map_store.len());
+    let mmap_disabled_map_ids =
+        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store).await?;
+    info!(
+        "Loaded {} C++ mmap disable rows",
+        mmap_disabled_map_ids.len()
+    );
+    let ui_map_x_map_art_store = Arc::new(
+        wow_data::UiMapXMapArtStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load UiMapXMapArt.db2 / hotfix rows")?,
+    );
+    let area_table_store = Arc::new(
+        wow_data::AreaTableStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load AreaTable.db2 / hotfix rows")?,
+    );
+    let phase_store = Arc::new(
+        wow_data::PhaseStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load Phase.db2 / hotfix rows")?,
+    );
+    let phase_group_store = Arc::new(
+        wow_data::PhaseGroupStore::load_with_hotfixes(&data_dir, &locale, &phase_store, &hotfix_db)
+            .await
+            .context("Failed to load PhaseXPhaseGroup.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} phases and {} phase-group rows",
+        phase_store.len(),
+        phase_group_store.len()
+    );
+    let mut phase_info_store = wow_data::PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
+    phase_info_store
+        .load_area_phases_like_cpp(world_db.as_ref(), &area_table_store, &phase_store)
+        .await
+        .context("Failed to load phase_area rows")?;
+    let phase_info_store = Arc::new(phase_info_store);
+    info!(
+        "Seeded {} phase info records and {} phase area rows",
+        phase_info_store.phase_info_count(),
+        phase_info_store.phase_area_count()
+    );
+    let terrain_swap_store = Arc::new(
+        wow_data::load_terrain_swaps(world_db.as_ref(), &map_store, |phase_id| {
+            ui_map_x_map_art_store.is_ui_map_phase(phase_id)
+        })
+        .await
+        .context("Failed to load C++ terrain swap stores")?,
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -783,6 +836,9 @@ async fn main() -> Result<()> {
         dungeon_encounter_store: Some(Arc::clone(&dungeon_encounter_store)),
         map_store: Some(Arc::clone(&map_store)),
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
+        terrain_swap_store: Some(Arc::clone(&terrain_swap_store)),
+        phase_store: Some(Arc::clone(&phase_store)),
+        phase_group_store: Some(Arc::clone(&phase_group_store)),
         quest_store: Some(Arc::clone(&quest_store)),
         quest_xp_store: Some(Arc::clone(&quest_xp_store)),
         player_xp_table: Some(Arc::clone(&player_xp_table)),
@@ -804,6 +860,24 @@ async fn main() -> Result<()> {
     let world_port = world_config_u16(&world_configs, "CONFIG_PORT_WORLD", 8085);
     let instance_port = world_config_u16(&world_configs, "CONFIG_PORT_INSTANCE", 8086);
     let max_expansion = world_config_u8(&world_configs, "CONFIG_EXPANSION", 2);
+    let mmap_runtime_config = mmap_runtime_config_like_cpp(&world_configs, mmap_disabled_map_ids);
+    info!(
+        "WORLD: MMap pathfinding: {}, data directory: {}/mmaps",
+        if mmap_runtime_config.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        mmap_runtime_config.data_dir
+    );
+    let mmap_pathfinder = mmap_runtime_config.enabled.then(|| {
+        Arc::new(
+            WorldMMapPathfinderWorkerLikeCpp::spawn_with_parent_map_data_like_cpp(
+                &mmap_runtime_config.data_dir,
+                map_store.parent_child_map_data_like_cpp(),
+            ),
+        )
+    });
 
     let realm_addr: SocketAddr = format!("{bind_ip}:{world_port}")
         .parse()
@@ -823,6 +897,8 @@ async fn main() -> Result<()> {
         let smap = Arc::clone(&shared_map);
         let accessor = Arc::clone(&object_accessor);
         let port = instance_port;
+        let mmap_config = mmap_runtime_config.clone();
+        let mmap_pathfinder = mmap_pathfinder.clone();
         async move {
             if let Err(e) = wow_network::start_world_listener(
                 realm_addr,
@@ -832,6 +908,7 @@ async fn main() -> Result<()> {
                     let mgr = Arc::clone(&mgr);
                     let smap = Arc::clone(&smap);
                     let accessor = Arc::clone(&accessor);
+                    let mmap_pathfinder = mmap_pathfinder.clone();
                     create_session(
                         account,
                         pkt_rx,
@@ -842,6 +919,8 @@ async fn main() -> Result<()> {
                         accessor,
                         port,
                         max_expansion,
+                        mmap_config.clone(),
+                        mmap_pathfinder,
                     )
                 },
             )
@@ -989,6 +1068,53 @@ fn world_config_f32(configs: &WorldConfigSet, enum_name: &str, default: f32) -> 
 
 fn world_config_bool(configs: &WorldConfigSet, enum_name: &str, default: bool) -> bool {
     configs.get_bool(enum_name).unwrap_or(default)
+}
+
+fn mmap_runtime_config_like_cpp(
+    configs: &WorldConfigSet,
+    disabled_map_ids: HashSet<u32>,
+) -> MMapRuntimeConfigLikeCpp {
+    MMapRuntimeConfigLikeCpp {
+        data_dir: wow_config::get_string_default("DataDir", "./Data"),
+        enabled: world_config_bool(configs, "CONFIG_ENABLE_MMAPS", true),
+        disabled_map_ids,
+    }
+}
+
+async fn load_mmap_disabled_map_ids_like_cpp(
+    world_db: &WorldDatabase,
+    map_store: &wow_data::MapStore,
+) -> Result<HashSet<u32>> {
+    const DISABLE_TYPE_MMAP_LIKE_CPP: u32 = 7;
+
+    let mut result = world_db
+        .direct_query("SELECT sourceType, entry, flags, params_0, params_1 FROM disables WHERE sourceType = 7")
+        .await
+        .context("Failed to query C++ mmap disables")?;
+    let mut disabled_map_ids = HashSet::new();
+
+    if result.is_empty() {
+        return Ok(disabled_map_ids);
+    }
+
+    loop {
+        let source_type = result.try_read::<u32>(0).unwrap_or(u32::MAX);
+        let entry = result.try_read::<u32>(1).unwrap_or(0);
+
+        if source_type == DISABLE_TYPE_MMAP_LIKE_CPP {
+            if map_store.get(entry).is_some() {
+                disabled_map_ids.insert(entry);
+            } else {
+                warn!("Map entry {entry} from `disables` doesn't exist in DB2, skipped");
+            }
+        }
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(disabled_map_ids)
 }
 
 fn loot_drop_rates_like_cpp(configs: &WorldConfigSet) -> LootDropRatesLikeCpp {
@@ -1436,6 +1562,8 @@ async fn create_session(
     object_accessor: wow_world::SharedObjectAccessor,
     instance_port: u16,
     max_expansion: u8,
+    mmap_runtime_config: MMapRuntimeConfigLikeCpp,
+    mmap_pathfinder: Option<Arc<WorldMMapPathfinderWorkerLikeCpp>>,
 ) {
     info!(
         "Creating session for account {} (bnet_id={})",
@@ -1565,6 +1693,15 @@ async fn create_session(
     if let Some(ref store) = resources.map_difficulty_store {
         session.set_map_difficulty_store(Arc::clone(store));
     }
+    if let Some(ref store) = resources.terrain_swap_store {
+        session.set_terrain_swap_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.phase_store {
+        session.set_phase_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.phase_group_store {
+        session.set_phase_group_store(Arc::clone(store));
+    }
     if let Some(ref store) = resources.quest_store {
         session.set_quest_store(Arc::clone(store));
     }
@@ -1579,6 +1716,10 @@ async fn create_session(
     }
     session.set_loot_drop_rates_like_cpp(resources.loot_drop_rates);
     session.set_enable_ae_loot_like_cpp(resources.enable_ae_loot);
+    session.set_mmap_runtime_config_like_cpp(mmap_runtime_config);
+    if let Some(pathfinder) = mmap_pathfinder {
+        session.set_mmap_pathfinder_like_cpp(pathfinder);
+    }
     session.set_object_accessor(object_accessor);
     if let (Some(greg), Some(pinv)) = (&resources.group_registry, &resources.pending_invites) {
         session.set_group_registry(Arc::clone(greg), Arc::clone(pinv));
@@ -1729,9 +1870,10 @@ fn locale_id_to_name(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_world_config_from, loot_drop_rates_like_cpp, world_config_bool, world_config_u8,
-        world_config_u16,
+        load_world_config_from, loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
+        world_config_bool, world_config_u8, world_config_u16,
     };
+    use std::collections::HashSet;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -1816,6 +1958,37 @@ Rate.Drop.Money = 6
 
         let configs = wow_config::load_world_config_values();
         assert!(world_config_bool(&configs, "CONFIG_ENABLE_AE_LOOT", false));
+    }
+
+    #[test]
+    fn mmap_runtime_config_uses_cpp_world_config_key_and_data_dir() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str(
+            r#"
+DataDir = "/srv/wow-data"
+mmap.enablePathFinding = 0
+"#,
+        )
+        .expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        let mmap_config = mmap_runtime_config_like_cpp(&configs, HashSet::from([1]));
+        assert_eq!(mmap_config.data_dir, "/srv/wow-data");
+        assert!(!mmap_config.enabled);
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(0));
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(1));
+    }
+
+    #[test]
+    fn mmap_runtime_config_applies_cpp_disable_mgr_map_gate() {
+        let _guard = TEST_LOCK.lock().expect("test lock poisoned");
+        wow_config::load_config_from_str("mmap.enablePathFinding = 1\n")
+            .expect("config should load");
+
+        let configs = wow_config::load_world_config_values();
+        let mmap_config = mmap_runtime_config_like_cpp(&configs, HashSet::from([571]));
+        assert!(mmap_config.pathfinding_enabled_for_map_like_cpp(0));
+        assert!(!mmap_config.pathfinding_enabled_for_map_like_cpp(571));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

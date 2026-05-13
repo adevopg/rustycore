@@ -15,6 +15,7 @@ pub enum WorldStatements {
     SEL_SMART_SCRIPTS,
     DEL_GAMEOBJECT,
     DEL_EVENT_GAMEOBJECT,
+    SEL_GRAVEYARD_ZONE,
     INS_GRAVEYARD_ZONE,
     DEL_GRAVEYARD_ZONE,
     INS_GAME_TELE,
@@ -85,6 +86,12 @@ pub enum WorldStatements {
     SEL_GAMEOBJECT_SPAWNS,
     /// Load all static areatrigger spawn rows into the C++ AreaTriggerDataStore-style spawn store.
     SEL_AREATRIGGER_SPAWNS,
+    /// Load C++ terrain world map definitions.
+    SEL_TERRAIN_WORLD_MAPS,
+    /// Load C++ terrain swap default definitions.
+    SEL_TERRAIN_SWAP_DEFAULTS,
+    /// Load C++ phase area definitions.
+    SEL_PHASE_AREAS,
     /// Load C++ spawn group templates.
     SEL_SPAWN_GROUP_TEMPLATES,
     /// Load C++ spawn group members.
@@ -195,6 +202,8 @@ pub enum WorldStatements {
     SEL_LOOT_TEMPLATE_CONDITION_REFERENCE_USES,
     /// Load distinct C++ ConditionMgr reference-condition template IDs for startup validation.
     SEL_CONDITION_REFERENCE_TEMPLATE_IDS,
+    /// Load all C++ ConditionMgr conditions rows.
+    SEL_CONDITIONS,
     /// Load C++ ItemEnchantmentMgr random enchantment groups.
     SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE,
     /// Load all area trigger teleport destinations.
@@ -236,6 +245,7 @@ impl StatementDef for WorldStatements {
             ),
             Self::DEL_GAMEOBJECT => "DELETE FROM gameobject WHERE guid = ?",
             Self::DEL_EVENT_GAMEOBJECT => "DELETE FROM game_event_gameobject WHERE guid = ?",
+            Self::SEL_GRAVEYARD_ZONE => "SELECT ID, GhostZone FROM graveyard_zone",
             Self::INS_GRAVEYARD_ZONE => "INSERT INTO graveyard_zone (ID, GhostZone) VALUES (?, ?)",
             Self::DEL_GRAVEYARD_ZONE => "DELETE FROM graveyard_zone WHERE ID = ? AND GhostZone = ?",
             Self::INS_GAME_TELE => {
@@ -403,7 +413,8 @@ impl StatementDef for WorldStatements {
                 "ct.speed_walk, ct.speed_run, ct.scale, ct.unit_class, ",
                 "ct.BaseAttackTime, ct.RangeAttackTime, ",
                 "ctm.CreatureDisplayID, ",
-                "ctdiff.LootID, ctdiff.GoldMin, ctdiff.GoldMax ",
+                "ctdiff.LootID, ctdiff.GoldMin, ctdiff.GoldMax, ",
+                "c.phaseUseFlags, c.phaseid, c.phasegroup, c.terrainSwapMap ",
                 "FROM creature c ",
                 "JOIN creature_template ct ON c.id = ct.entry ",
                 "LEFT JOIN creature_template_difficulty ctdiff ON ct.entry = ctdiff.Entry AND ctdiff.DifficultyID = 0 ",
@@ -437,7 +448,8 @@ impl StatementDef for WorldStatements {
                 "SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z, g.orientation, ",
                 "g.rotation0, g.rotation1, g.rotation2, g.rotation3, ",
                 "g.animprogress, g.state, ",
-                "gt.type, gt.displayId, gt.name, gt.size, gt.Data0, gt.Data1 ",
+                "gt.type, gt.displayId, gt.name, gt.size, gt.Data0, gt.Data1, ",
+                "g.phaseUseFlags, g.phaseid, g.phasegroup, g.terrainSwapMap ",
                 "FROM gameobject g ",
                 "JOIN gameobject_template gt ON g.id = gt.entry ",
                 "WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?",
@@ -452,6 +464,13 @@ impl StatementDef for WorldStatements {
             Self::SEL_AREATRIGGER_SPAWNS => {
                 "SELECT SpawnId, AreaTriggerCreatePropertiesId, IsCustom, MapId, SpawnDifficulties, PosX, PosY, PosZ, Orientation, PhaseUseFlags, PhaseId, PhaseGroup, SpellForVisuals, ScriptName FROM `areatrigger`"
             }
+            Self::SEL_TERRAIN_WORLD_MAPS => {
+                "SELECT TerrainSwapMap, UiMapPhaseId FROM `terrain_worldmap`"
+            }
+            Self::SEL_TERRAIN_SWAP_DEFAULTS => {
+                "SELECT MapId, TerrainSwapMap FROM `terrain_swap_defaults`"
+            }
+            Self::SEL_PHASE_AREAS => "SELECT AreaId, PhaseId FROM `phase_area`",
             Self::SEL_SPAWN_GROUP_TEMPLATES => {
                 "SELECT groupId, groupName, groupFlags FROM spawn_group_template"
             }
@@ -641,6 +660,12 @@ impl StatementDef for WorldStatements {
                 "FROM conditions ",
                 "WHERE SourceTypeOrReferenceId < 0 AND SourceGroup = 0 AND SourceEntry = 0 AND SourceId = 0 ",
                 "ORDER BY -SourceTypeOrReferenceId",
+            ),
+            Self::SEL_CONDITIONS => concat!(
+                "SELECT SourceTypeOrReferenceId, SourceGroup, SourceEntry, SourceId, ElseGroup, ",
+                "ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, ",
+                "COALESCE(ConditionStringValue1, ''), NegativeCondition, ErrorType, ErrorTextId, COALESCE(ScriptName, '') ",
+                "FROM conditions",
             ),
             Self::SEL_ITEM_RANDOM_ENCHANTMENT_TEMPLATE => {
                 "SELECT Id, EnchantmentId, Chance FROM item_random_enchantment_template"

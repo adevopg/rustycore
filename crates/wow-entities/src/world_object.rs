@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::f32::consts::{PI, TAU};
 
-use wow_constants::{TypeId, TypeMask};
+use wow_constants::{PhaseFlags, PhaseShiftFlags, TypeId, TypeMask};
 use wow_core::{ObjectGuid, Position};
 
 use crate::{
@@ -193,30 +193,430 @@ impl WorldLocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VisibleMapIdRef {
+    references: i32,
+}
+
+impl VisibleMapIdRef {
+    pub const fn references(&self) -> i32 {
+        self.references
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiMapPhaseIdRef {
+    references: i32,
+}
+
+impl UiMapPhaseIdRef {
+    pub const fn references(&self) -> i32 {
+        self.references
+    }
+}
+
+const DEFAULT_PHASE: u32 = 169;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseRef {
+    id: u32,
+    flags: PhaseFlags,
+    references: i32,
+}
+
+impl PhaseRef {
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub const fn flags(&self) -> PhaseFlags {
+        self.flags
+    }
+
+    pub const fn references(&self) -> i32 {
+        self.references
+    }
+
+    pub const fn is_personal(&self) -> bool {
+        self.flags.contains(PhaseFlags::PERSONAL)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhaseShift {
-    phases: BTreeSet<u32>,
+    flags: PhaseShiftFlags,
+    personal_guid: ObjectGuid,
+    phases: BTreeMap<u32, PhaseRef>,
+    visible_map_ids: BTreeMap<u32, VisibleMapIdRef>,
+    ui_map_phase_ids: BTreeMap<u32, UiMapPhaseIdRef>,
+    non_cosmetic_references: i32,
+    cosmetic_references: i32,
+    personal_references: i32,
+    default_references: i32,
+    is_db_phase_shift: bool,
+}
+
+impl Default for PhaseShift {
+    fn default() -> Self {
+        Self {
+            flags: PhaseShiftFlags::UNPHASED,
+            personal_guid: ObjectGuid::EMPTY,
+            phases: BTreeMap::new(),
+            visible_map_ids: BTreeMap::new(),
+            ui_map_phase_ids: BTreeMap::new(),
+            non_cosmetic_references: 0,
+            cosmetic_references: 0,
+            personal_references: 0,
+            default_references: 0,
+            is_db_phase_shift: false,
+        }
+    }
 }
 
 impl PhaseShift {
     pub fn from_phases(phases: impl IntoIterator<Item = u32>) -> Self {
-        Self {
-            phases: phases.into_iter().collect(),
+        let mut phase_shift = Self::default();
+        for phase_id in phases {
+            phase_shift.add_phase_like_cpp(phase_id, PhaseFlags::NONE, 1);
         }
+        phase_shift
     }
 
     pub fn insert(&mut self, phase_id: u32) {
-        self.phases.insert(phase_id);
+        self.add_phase_like_cpp(phase_id, PhaseFlags::NONE, 1);
+    }
+
+    pub fn add_phase_like_cpp(
+        &mut self,
+        phase_id: u32,
+        flags: PhaseFlags,
+        references: i32,
+    ) -> bool {
+        let inserted = !self.phases.contains_key(&phase_id);
+        let entry = self.phases.entry(phase_id).or_insert(PhaseRef {
+            id: phase_id,
+            flags,
+            references: 0,
+        });
+        entry.references += references;
+        let phase_ref = *entry;
+        self.modify_phase_reference_counters(phase_ref, references);
+        inserted
+    }
+
+    pub fn remove_phase_like_cpp(&mut self, phase_id: u32) -> bool {
+        let Some(mut phase_ref) = self.phases.get(&phase_id).copied() else {
+            return false;
+        };
+
+        phase_ref.references -= 1;
+        self.modify_phase_reference_counters(phase_ref, -1);
+        if phase_ref.references == 0 {
+            self.phases.remove(&phase_id);
+            return true;
+        }
+
+        if let Some(entry) = self.phases.get_mut(&phase_id) {
+            entry.references = phase_ref.references;
+        }
+        false
+    }
+
+    pub fn remove_phase_all_references_like_cpp(&mut self, phase_id: u32) -> Option<PhaseRef> {
+        let phase_ref = self.phases.remove(&phase_id)?;
+        self.modify_phase_reference_counters(phase_ref, -phase_ref.references);
+        Some(phase_ref)
+    }
+
+    pub fn has_phase_like_cpp(&self, phase_id: u32) -> bool {
+        self.phases.contains_key(&phase_id)
+    }
+
+    pub fn phase_ref_like_cpp(&self, phase_id: u32) -> Option<&PhaseRef> {
+        self.phases.get(&phase_id)
+    }
+
+    pub fn phases_like_cpp(&self) -> impl Iterator<Item = &PhaseRef> + '_ {
+        self.phases.values()
+    }
+
+    pub fn phase_snapshot_like_cpp(&self) -> Vec<PhaseRef> {
+        self.phases.values().copied().collect()
+    }
+
+    pub fn phase_count_like_cpp(&self) -> usize {
+        self.phases.len()
+    }
+
+    pub const fn flags_like_cpp(&self) -> PhaseShiftFlags {
+        self.flags
+    }
+
+    pub fn set_flags_like_cpp(&mut self, flags: PhaseShiftFlags) {
+        self.flags = flags;
+    }
+
+    pub const fn personal_guid_like_cpp(&self) -> ObjectGuid {
+        self.personal_guid
+    }
+
+    pub fn set_personal_guid_like_cpp(&mut self, guid: ObjectGuid) {
+        self.personal_guid = guid;
+    }
+
+    pub fn set_always_visible_like_cpp(&mut self, apply: bool) {
+        self.flags.set(PhaseShiftFlags::ALWAYS_VISIBLE, apply);
+    }
+
+    pub fn set_inversed_like_cpp(&mut self, apply: bool) {
+        self.flags.set(PhaseShiftFlags::INVERSE, apply);
+        self.update_unphased_flag_like_cpp();
+    }
+
+    pub fn set_db_phase_shift_like_cpp(&mut self, is_db_phase_shift: bool) {
+        self.is_db_phase_shift = is_db_phase_shift;
+    }
+
+    pub const fn is_db_phase_shift_like_cpp(&self) -> bool {
+        self.is_db_phase_shift
     }
 
     pub fn clear(&mut self) {
+        self.clear_phases_like_cpp();
+        self.visible_map_ids.clear();
+        self.ui_map_phase_ids.clear();
+    }
+
+    pub fn clear_phases_like_cpp(&mut self) {
+        self.flags &= PhaseShiftFlags::ALWAYS_VISIBLE | PhaseShiftFlags::INVERSE;
+        self.personal_guid = ObjectGuid::EMPTY;
         self.phases.clear();
+        self.non_cosmetic_references = 0;
+        self.cosmetic_references = 0;
+        self.personal_references = 0;
+        self.default_references = 0;
+        self.update_unphased_flag_like_cpp();
+    }
+
+    pub fn add_visible_map_id_like_cpp(&mut self, visible_map_id: u32, references: i32) -> bool {
+        let inserted = !self.visible_map_ids.contains_key(&visible_map_id);
+        let entry = self
+            .visible_map_ids
+            .entry(visible_map_id)
+            .or_insert(VisibleMapIdRef { references: 0 });
+        entry.references += references;
+        inserted
+    }
+
+    pub fn clear_visible_map_ids_like_cpp(&mut self) {
+        self.visible_map_ids.clear();
+    }
+
+    pub fn remove_visible_map_id_like_cpp(&mut self, visible_map_id: u32) -> bool {
+        let Some(entry) = self.visible_map_ids.get_mut(&visible_map_id) else {
+            return false;
+        };
+        entry.references -= 1;
+        if entry.references == 0 {
+            self.visible_map_ids.remove(&visible_map_id);
+            return true;
+        }
+        false
+    }
+
+    pub fn remove_visible_map_id_all_references_like_cpp(
+        &mut self,
+        visible_map_id: u32,
+    ) -> Option<VisibleMapIdRef> {
+        self.visible_map_ids.remove(&visible_map_id)
+    }
+
+    pub fn has_visible_map_id_like_cpp(&self, visible_map_id: u32) -> bool {
+        self.visible_map_ids.contains_key(&visible_map_id)
+    }
+
+    pub fn visible_map_id_count_like_cpp(&self) -> usize {
+        self.visible_map_ids.len()
+    }
+
+    pub fn visible_map_ids_like_cpp(&self) -> impl Iterator<Item = u32> + '_ {
+        self.visible_map_ids.keys().copied()
+    }
+
+    pub fn visible_map_id_snapshot_like_cpp(&self) -> Vec<(u32, VisibleMapIdRef)> {
+        self.visible_map_ids
+            .iter()
+            .map(|(visible_map_id, visible_map_ref)| (*visible_map_id, visible_map_ref.clone()))
+            .collect()
+    }
+
+    pub fn visible_map_id_ref_like_cpp(&self, visible_map_id: u32) -> Option<&VisibleMapIdRef> {
+        self.visible_map_ids.get(&visible_map_id)
+    }
+
+    pub fn add_ui_map_phase_id_like_cpp(&mut self, ui_map_phase_id: u32, references: i32) -> bool {
+        let inserted = !self.ui_map_phase_ids.contains_key(&ui_map_phase_id);
+        let entry = self
+            .ui_map_phase_ids
+            .entry(ui_map_phase_id)
+            .or_insert(UiMapPhaseIdRef { references: 0 });
+        entry.references += references;
+        inserted
+    }
+
+    pub fn clear_ui_map_phase_ids_like_cpp(&mut self) {
+        self.ui_map_phase_ids.clear();
+    }
+
+    pub fn remove_ui_map_phase_id_like_cpp(&mut self, ui_map_phase_id: u32) -> bool {
+        let Some(entry) = self.ui_map_phase_ids.get_mut(&ui_map_phase_id) else {
+            return false;
+        };
+        entry.references -= 1;
+        if entry.references == 0 {
+            self.ui_map_phase_ids.remove(&ui_map_phase_id);
+            return true;
+        }
+        false
+    }
+
+    pub fn has_ui_map_phase_id_like_cpp(&self, ui_map_phase_id: u32) -> bool {
+        self.ui_map_phase_ids.contains_key(&ui_map_phase_id)
+    }
+
+    pub fn ui_map_phase_ids_like_cpp(&self) -> impl Iterator<Item = u32> + '_ {
+        self.ui_map_phase_ids.keys().copied()
+    }
+
+    pub fn ui_map_phase_id_ref_like_cpp(&self, ui_map_phase_id: u32) -> Option<&UiMapPhaseIdRef> {
+        self.ui_map_phase_ids.get(&ui_map_phase_id)
     }
 
     pub fn can_see(&self, other: &Self) -> bool {
-        self.phases.is_empty()
-            || other.phases.is_empty()
-            || self.phases.iter().any(|phase| other.phases.contains(phase))
+        if self.flags.contains(PhaseShiftFlags::UNPHASED)
+            && other.flags.contains(PhaseShiftFlags::UNPHASED)
+        {
+            return true;
+        }
+
+        if self.flags.contains(PhaseShiftFlags::ALWAYS_VISIBLE)
+            || other.flags.contains(PhaseShiftFlags::ALWAYS_VISIBLE)
+        {
+            return true;
+        }
+
+        if self.flags.contains(PhaseShiftFlags::INVERSE)
+            && other.flags.contains(PhaseShiftFlags::INVERSE)
+        {
+            return true;
+        }
+
+        let exclude_phases_with_flag = if self.flags.contains(PhaseShiftFlags::NO_COSMETIC)
+            && other.flags.contains(PhaseShiftFlags::NO_COSMETIC)
+        {
+            PhaseFlags::COSMETIC
+        } else {
+            PhaseFlags::NONE
+        };
+
+        if !self.flags.contains(PhaseShiftFlags::INVERSE)
+            && !other.flags.contains(PhaseShiftFlags::INVERSE)
+        {
+            return self.phases.iter().any(|(phase_id, phase_ref)| {
+                other.phases.contains_key(phase_id)
+                    && !phase_ref.flags.intersects(exclude_phases_with_flag)
+                    && (!phase_ref.flags.contains(PhaseFlags::PERSONAL)
+                        || self.personal_guid == other.personal_guid)
+            });
+        }
+
+        if other.flags.contains(PhaseShiftFlags::INVERSE) {
+            return check_inverse_phase_shift_like_cpp(self, other, exclude_phases_with_flag);
+        }
+
+        check_inverse_phase_shift_like_cpp(other, self, exclude_phases_with_flag)
     }
+
+    pub fn has_personal_phase_like_cpp(&self) -> bool {
+        self.phases.values().any(PhaseRef::is_personal)
+    }
+
+    fn modify_phase_reference_counters(&mut self, phase_ref: PhaseRef, references: i32) {
+        if self.is_db_phase_shift {
+            return;
+        }
+
+        if phase_ref.flags.contains(PhaseFlags::COSMETIC) {
+            self.cosmetic_references += references;
+        } else if phase_ref.id != DEFAULT_PHASE {
+            self.non_cosmetic_references += references;
+        } else {
+            self.default_references += references;
+        }
+
+        if phase_ref.flags.contains(PhaseFlags::PERSONAL) {
+            self.personal_references += references;
+        }
+
+        self.flags
+            .set(PhaseShiftFlags::NO_COSMETIC, self.cosmetic_references != 0);
+        self.update_unphased_flag_like_cpp();
+        self.update_personal_guid_like_cpp();
+    }
+
+    fn update_unphased_flag_like_cpp(&mut self) {
+        let unphased_flag = if !self.flags.contains(PhaseShiftFlags::INVERSE) {
+            PhaseShiftFlags::UNPHASED
+        } else {
+            PhaseShiftFlags::INVERSE_UNPHASED
+        };
+        let opposite_flag = if !self.flags.contains(PhaseShiftFlags::INVERSE) {
+            PhaseShiftFlags::INVERSE_UNPHASED
+        } else {
+            PhaseShiftFlags::UNPHASED
+        };
+
+        self.flags.remove(opposite_flag);
+        self.flags.set(
+            unphased_flag,
+            !(self.non_cosmetic_references != 0 && self.default_references == 0),
+        );
+    }
+
+    fn update_personal_guid_like_cpp(&mut self) {
+        if self.personal_references == 0 {
+            self.personal_guid = ObjectGuid::EMPTY;
+        }
+    }
+}
+
+fn check_inverse_phase_shift_like_cpp(
+    phase_shift: &PhaseShift,
+    excluded_phase_shift: &PhaseShift,
+    exclude_phases_with_flag: PhaseFlags,
+) -> bool {
+    if phase_shift.flags.contains(PhaseShiftFlags::UNPHASED)
+        && excluded_phase_shift
+            .flags
+            .contains(PhaseShiftFlags::INVERSE_UNPHASED)
+    {
+        return false;
+    }
+
+    for phase in phase_shift.phases.values() {
+        if phase.flags.intersects(exclude_phases_with_flag) {
+            continue;
+        }
+
+        if excluded_phase_shift
+            .phases
+            .get(&phase.id)
+            .is_some_and(|excluded| !excluded.flags.intersects(exclude_phases_with_flag))
+        {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -346,6 +746,10 @@ impl WorldObject {
 
     pub const fn suppressed_phase_shift(&self) -> &PhaseShift {
         &self.suppressed_phase_shift
+    }
+
+    pub fn suppressed_phase_shift_mut(&mut self) -> &mut PhaseShift {
+        &mut self.suppressed_phase_shift
     }
 
     pub const fn db_phase(&self) -> i32 {
@@ -1014,6 +1418,103 @@ mod tests {
     }
 
     #[test]
+    fn phase_shift_visible_map_ids_reference_count_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+
+        assert!(phase_shift.add_visible_map_id_like_cpp(609, 1));
+        assert!(!phase_shift.add_visible_map_id_like_cpp(609, 1));
+        assert!(phase_shift.has_visible_map_id_like_cpp(609));
+        assert_eq!(phase_shift.visible_map_id_count_like_cpp(), 1);
+        assert_eq!(
+            phase_shift
+                .visible_map_id_ref_like_cpp(609)
+                .map(VisibleMapIdRef::references),
+            Some(2)
+        );
+        assert_eq!(
+            phase_shift.visible_map_ids_like_cpp().collect::<Vec<_>>(),
+            vec![609]
+        );
+
+        assert!(!phase_shift.remove_visible_map_id_like_cpp(609));
+        assert_eq!(
+            phase_shift
+                .visible_map_id_ref_like_cpp(609)
+                .map(VisibleMapIdRef::references),
+            Some(1)
+        );
+        assert!(phase_shift.remove_visible_map_id_like_cpp(609));
+        assert!(!phase_shift.has_visible_map_id_like_cpp(609));
+        assert!(!phase_shift.remove_visible_map_id_like_cpp(609));
+    }
+
+    #[test]
+    fn phase_shift_can_remove_all_phase_and_visible_map_references_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_phase_like_cpp(20, PhaseFlags::PERSONAL, 2);
+        phase_shift.add_visible_map_id_like_cpp(609, 2);
+
+        let removed_phase = phase_shift
+            .remove_phase_all_references_like_cpp(20)
+            .expect("phase should be removed");
+        assert_eq!(removed_phase.references(), 2);
+        assert!(!phase_shift.has_phase_like_cpp(20));
+        assert!(!phase_shift.has_personal_phase_like_cpp());
+
+        let removed_visible_map = phase_shift
+            .remove_visible_map_id_all_references_like_cpp(609)
+            .expect("visible map should be removed");
+        assert_eq!(removed_visible_map.references(), 2);
+        assert!(!phase_shift.has_visible_map_id_like_cpp(609));
+    }
+
+    #[test]
+    fn phase_shift_clear_removes_visible_map_ids_like_cpp() {
+        let mut phase_shift = PhaseShift::from_phases([10]);
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+        phase_shift.add_ui_map_phase_id_like_cpp(42, 1);
+
+        phase_shift.clear();
+
+        assert!(!phase_shift.has_visible_map_id_like_cpp(609));
+        assert!(phase_shift.visible_map_ids_like_cpp().next().is_none());
+        assert!(!phase_shift.has_ui_map_phase_id_like_cpp(42));
+        assert!(phase_shift.ui_map_phase_ids_like_cpp().next().is_none());
+        assert!(phase_shift.can_see(&PhaseShift::default()));
+        assert!(!phase_shift.can_see(&PhaseShift::from_phases([20])));
+    }
+
+    #[test]
+    fn phase_shift_ui_map_phase_ids_reference_count_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+
+        assert!(phase_shift.add_ui_map_phase_id_like_cpp(42, 1));
+        assert!(!phase_shift.add_ui_map_phase_id_like_cpp(42, 1));
+        assert!(phase_shift.has_ui_map_phase_id_like_cpp(42));
+        assert_eq!(
+            phase_shift
+                .ui_map_phase_id_ref_like_cpp(42)
+                .map(UiMapPhaseIdRef::references),
+            Some(2)
+        );
+        assert_eq!(
+            phase_shift.ui_map_phase_ids_like_cpp().collect::<Vec<_>>(),
+            vec![42]
+        );
+
+        assert!(!phase_shift.remove_ui_map_phase_id_like_cpp(42));
+        assert_eq!(
+            phase_shift
+                .ui_map_phase_id_ref_like_cpp(42)
+                .map(UiMapPhaseIdRef::references),
+            Some(1)
+        );
+        assert!(phase_shift.remove_ui_map_phase_id_like_cpp(42));
+        assert!(!phase_shift.has_ui_map_phase_id_like_cpp(42));
+        assert!(!phase_shift.remove_ui_map_phase_id_like_cpp(42));
+    }
+
+    #[test]
     fn angle_helpers_match_cpp_position_relative_angle_semantics() {
         let mut object = WorldObject::new(false, TypeId::Unit, TypeMask::UNIT);
         object.relocate(Position::new(0.0, 0.0, 0.0, PI / 2.0));
@@ -1232,5 +1733,88 @@ mod tests {
         assert!((roundtrip.y - offset.y).abs() < 0.0001);
         assert!((roundtrip.z - offset.z).abs() < 0.0001);
         assert!((roundtrip.orientation - offset.orientation).abs() < 0.0001);
+    }
+
+    #[test]
+    fn phase_shift_phase_refs_update_flags_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+
+        assert!(
+            phase_shift
+                .flags_like_cpp()
+                .contains(PhaseShiftFlags::UNPHASED)
+        );
+        assert!(phase_shift.add_phase_like_cpp(10, PhaseFlags::NONE, 1));
+        assert!(phase_shift.has_phase_like_cpp(10));
+        assert!(
+            !phase_shift
+                .flags_like_cpp()
+                .contains(PhaseShiftFlags::UNPHASED)
+        );
+        assert_eq!(
+            phase_shift.phase_ref_like_cpp(10).map(PhaseRef::references),
+            Some(1)
+        );
+
+        assert!(!phase_shift.add_phase_like_cpp(10, PhaseFlags::NONE, 1));
+        assert_eq!(
+            phase_shift.phase_ref_like_cpp(10).map(PhaseRef::references),
+            Some(2)
+        );
+        assert!(!phase_shift.remove_phase_like_cpp(10));
+        assert!(phase_shift.remove_phase_like_cpp(10));
+        assert!(
+            phase_shift
+                .flags_like_cpp()
+                .contains(PhaseShiftFlags::UNPHASED)
+        );
+    }
+
+    #[test]
+    fn phase_shift_can_see_honors_always_visible_like_cpp() {
+        let viewer = PhaseShift::from_phases([10]);
+        let mut target = PhaseShift::from_phases([20]);
+
+        assert!(!viewer.can_see(&target));
+        target.set_always_visible_like_cpp(true);
+        assert!(viewer.can_see(&target));
+    }
+
+    #[test]
+    fn phase_shift_can_see_requires_matching_personal_guid_like_cpp() {
+        let personal_owner = ObjectGuid::create_player(1, 42);
+        let other_owner = ObjectGuid::create_player(1, 43);
+        let mut viewer = PhaseShift::default();
+        let mut target = PhaseShift::default();
+
+        viewer.add_phase_like_cpp(10, PhaseFlags::PERSONAL, 1);
+        target.add_phase_like_cpp(10, PhaseFlags::PERSONAL, 1);
+        viewer.set_personal_guid_like_cpp(personal_owner);
+        target.set_personal_guid_like_cpp(other_owner);
+        assert!(viewer.has_personal_phase_like_cpp());
+        assert!(!viewer.can_see(&target));
+
+        target.set_personal_guid_like_cpp(personal_owner);
+        assert!(viewer.can_see(&target));
+    }
+
+    #[test]
+    fn phase_shift_can_see_honors_inverse_like_cpp() {
+        let normal = PhaseShift::from_phases([10]);
+        let mut inverse_same = PhaseShift::from_phases([10]);
+        inverse_same.set_inversed_like_cpp(true);
+        assert!(!normal.can_see(&inverse_same));
+
+        let mut inverse_other = PhaseShift::from_phases([20]);
+        inverse_other.set_inversed_like_cpp(true);
+        assert!(normal.can_see(&inverse_other));
+
+        let mut unphased = PhaseShift::default();
+        let mut inverse_unphased = PhaseShift::default();
+        inverse_unphased.set_inversed_like_cpp(true);
+        assert!(!unphased.can_see(&inverse_unphased));
+
+        unphased.set_always_visible_like_cpp(true);
+        assert!(unphased.can_see(&inverse_unphased));
     }
 }

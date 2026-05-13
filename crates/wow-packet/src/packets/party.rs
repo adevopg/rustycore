@@ -286,6 +286,42 @@ impl ServerPacket for PartyUpdate {
 
 // ── PartyMemberFullState (SMSG_PARTY_MEMBER_FULL_STATE 0x2759) ───────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartyMemberPhase {
+    pub flags: u32,
+    pub id: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartyMemberPhaseStates {
+    pub phase_shift_flags: u32,
+    pub personal_guid: ObjectGuid,
+    pub phases: Vec<PartyMemberPhase>,
+}
+
+impl PartyMemberPhaseStates {
+    fn write(&self, w: &mut WorldPacket) {
+        w.write_uint32(self.phase_shift_flags);
+        w.write_uint32(self.phases.len() as u32);
+        w.write_packed_guid(&self.personal_guid);
+
+        for phase in &self.phases {
+            w.write_uint32(phase.flags);
+            w.write_uint16(phase.id);
+        }
+    }
+}
+
+impl Default for PartyMemberPhaseStates {
+    fn default() -> Self {
+        Self {
+            phase_shift_flags: 0,
+            personal_guid: ObjectGuid::EMPTY,
+            phases: Vec::new(),
+        }
+    }
+}
+
 pub struct PartyMemberFullState {
     pub member_guid: ObjectGuid,
     pub for_enemy: bool,
@@ -302,6 +338,7 @@ pub struct PartyMemberFullState {
     pub position_x: i16,
     pub position_y: i16,
     pub position_z: i16,
+    pub phases: PartyMemberPhaseStates,
 }
 
 impl ServerPacket for PartyMemberFullState {
@@ -331,10 +368,7 @@ impl ServerPacket for PartyMemberFullState {
         w.write_int32(0); // VehicleSeat
         w.write_int32(0); // Auras.Count
 
-        // PartyMemberPhaseStates.Write() — empty:
-        w.write_int32(0); // PhaseShiftFlags
-        w.write_int32(0); // List.Count
-        w.write_packed_guid(&ObjectGuid::EMPTY); // PersonalGUID
+        self.phases.write(w);
 
         // CTROptions.Write() — empty:
         w.write_uint32(0); // ContentTuningConditionMask
@@ -357,7 +391,7 @@ impl ServerPacket for PartyMemberFullState {
 
 #[cfg(test)]
 mod tests {
-    use super::{OptOutOfLoot, SetLootMethod};
+    use super::{OptOutOfLoot, PartyMemberPhase, PartyMemberPhaseStates, SetLootMethod};
     use crate::{ClientPacket, WorldPacket};
     use wow_core::ObjectGuid;
 
@@ -390,5 +424,31 @@ mod tests {
         let opt_out = OptOutOfLoot::read(&mut pkt).unwrap();
 
         assert!(opt_out.pass_on_loot);
+    }
+
+    #[test]
+    fn party_member_phase_states_writes_cpp_order() {
+        let states = PartyMemberPhaseStates {
+            phase_shift_flags: 0x08,
+            personal_guid: ObjectGuid::EMPTY,
+            phases: vec![PartyMemberPhase {
+                flags: 0x02,
+                id: 20,
+            }],
+        };
+        let mut pkt = WorldPacket::new_empty();
+
+        states.write(&mut pkt);
+
+        assert_eq!(
+            pkt.into_data(),
+            vec![
+                0x08, 0x00, 0x00, 0x00, // PhaseShiftFlags
+                0x01, 0x00, 0x00, 0x00, // List.Count
+                0x00, 0x00, // PersonalGUID packed mask + empty payload
+                0x02, 0x00, 0x00, 0x00, // phase.Flags
+                0x14, 0x00, // phase.Id
+            ]
+        );
     }
 }

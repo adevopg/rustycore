@@ -5,10 +5,15 @@
 
 //! Game data file readers (DB2/WDC4).
 
+pub mod area;
 pub mod area_trigger;
 pub mod chr_specialization;
+pub mod condition_attachments;
+pub mod conditions;
 pub mod currency;
 pub mod dungeon_encounter;
+pub mod gossip;
+pub mod graveyard;
 pub mod hotfix_cache;
 pub mod import_price;
 pub mod item;
@@ -25,6 +30,8 @@ pub mod item_random_suffix;
 pub mod item_stats;
 pub mod lock;
 pub mod map;
+pub mod phase;
+pub mod phasing;
 pub mod player_power;
 pub mod player_stats;
 pub mod quest;
@@ -33,14 +40,29 @@ pub mod rand_prop_points;
 pub mod skill;
 pub mod spell;
 pub mod spell_item_enchantment;
+pub mod terrain_swap;
+pub mod ui_map;
 pub mod wdc4;
 
+pub use area::{AreaTableEntry, AreaTableStore};
 pub use area_trigger::{
     AreaTriggerData, AreaTriggerStore, AreaTriggerTeleport, TriggerShape, load_area_triggers,
 };
 pub use chr_specialization::{ChrSpecializationEntry, ChrSpecializationStore};
+pub use condition_attachments::{
+    ConditionAttachmentReportLikeCpp, attach_loaded_conditions_like_cpp,
+};
+pub use conditions::{
+    Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionsByEntryMap,
+    ConditionsReference,
+};
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
+pub use gossip::{GossipConditionAttachmentReport, GossipMenu, GossipMenuItem, GossipStore};
+pub use graveyard::{
+    GraveyardConditionAttachmentReport, GraveyardData, GraveyardLoadReport, GraveyardStore,
+    GraveyardZoneRow,
+};
 pub use hotfix_cache::{
     HotfixBlobCache, HotfixId, HotfixRecord, HotfixRecordStatus, build_hotfix_blob_cache,
     hotfix_locale_mask,
@@ -71,6 +93,11 @@ pub use item_stats::{
 };
 pub use lock::{LockEntry, LockStore};
 pub use map::{MapDifficultyEntry, MapDifficultyStore, MapEntry, MapStore};
+pub use phase::{PhaseEntry, PhaseGroupStore, PhaseStore, PhaseXPhaseGroupEntry};
+pub use phasing::{
+    PhaseAreaInfo, PhaseConditionAttachmentReport, PhaseConditionContainer, PhaseInfoStore,
+    PhaseInfoStruct,
+};
 pub use player_power::{
     ClassPowerIndexRecord, Db2PlayerPowerIndexResolver, PlayerClassPowerIndexStore,
 };
@@ -79,3 +106,5 @@ pub use rand_prop_points::{RandPropPointsEntry, RandPropPointsStore};
 pub use skill::{SkillInfoEntry, SkillStore};
 pub use spell::{SpellInfo, SpellStore};
 pub use spell_item_enchantment::{SpellItemEnchantmentEntry, SpellItemEnchantmentStore};
+pub use terrain_swap::{TerrainSwapInfo, TerrainSwapStore, load_terrain_swaps};
+pub use ui_map::{UiMapXMapArtEntry, UiMapXMapArtStore};

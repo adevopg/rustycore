@@ -3069,6 +3069,7 @@ name = "wow-data"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "num-traits",
  "tracing",
  "wow-constants",
  "wow-core",
@@ -3170,6 +3171,7 @@ name = "wow-movement"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "wow-constants",
  "wow-core",
 ]
 
@@ -3233,6 +3235,8 @@ dependencies = [
 name = "wow-recastdetour"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
+ "cc",
  "thiserror",
 ]
 
@@ -3297,8 +3301,10 @@ dependencies = [
  "wow-instances",
  "wow-logging",
  "wow-loot",
+ "wow-movement",
  "wow-network",
  "wow-packet",
+ "wow-recastdetour",
 ]
 
 [[package]]

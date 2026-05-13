@@ -5,10 +5,16 @@
 
 //! World server core: session management, handlers, and world state.
 
+pub mod conditions;
 pub mod entity_update_bridge;
 pub mod handlers;
 pub mod map_manager;
+pub mod phasing;
 pub mod session;
 
-pub use map_manager::{GridCoord, MapManager, SharedMapManager, WorldCreature};
-pub use session::{SharedObjectAccessor, WorldSession, new_shared_object_accessor};
+pub use map_manager::{
+    GridCoord, MapManager, SharedMapManager, WorldCreature, WorldMMapPathfinderWorkerLikeCpp,
+};
+pub use session::{
+    MMapRuntimeConfigLikeCpp, SharedObjectAccessor, WorldSession, new_shared_object_accessor,
+};

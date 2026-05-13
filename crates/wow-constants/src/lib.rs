@@ -8,22 +8,26 @@
 //! This crate contains all the World of Warcraft protocol enums,
 //! opcodes, and flag types translated from the C# RustyCore source.
 
+pub mod conditions;
 pub mod creature;
 pub mod item;
 pub mod movement;
 pub mod object;
 pub mod opcodes;
+pub mod phasing;
 pub mod shared;
 pub mod spell;
 pub mod unit;
 pub mod update;
 
 // Re-export key types for convenience
+pub use conditions::*;
 pub use creature::*;
 pub use item::*;
 pub use movement::*;
 pub use object::*;
 pub use opcodes::*;
+pub use phasing::*;
 pub use shared::*;
 pub use spell::*;
 pub use unit::*;

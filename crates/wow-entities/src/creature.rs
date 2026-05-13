@@ -27,6 +27,12 @@ pub enum MovementGeneratorType {
     Idle = 0,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureMovementInform {
+    pub movement_type: u8,
+    pub movement_id: u32,
+}
+
 /// Canonical creature AI state owned by `wow-entities`.
 ///
 /// This mirrors the small legacy runtime state machine used by the world tick
@@ -74,6 +80,11 @@ pub struct CreatureAiOwnershipState {
     pub gold_max: u32,
     pub boss_id: Option<u32>,
     pub dungeon_encounter_id: u32,
+    pub phase_use_flags: u8,
+    pub phase_id: u16,
+    pub phase_group_id: u32,
+    pub terrain_swap_map: i32,
+    pub last_movement_inform: Option<CreatureMovementInform>,
 }
 
 impl Default for CreatureAiOwnershipState {
@@ -105,6 +116,11 @@ impl Default for CreatureAiOwnershipState {
             gold_max: 0,
             boss_id: None,
             dungeon_encounter_id: 0,
+            phase_use_flags: 0,
+            phase_id: 0,
+            phase_group_id: 0,
+            terrain_swap_map: -1,
+            last_movement_inform: None,
         }
     }
 }
@@ -877,6 +893,17 @@ impl Creature {
 
     pub fn set_ai_home_position(&mut self, position: Position) {
         self.ai_ownership.home_position = position;
+    }
+
+    pub fn record_ai_movement_inform(&mut self, movement_type: u8, movement_id: u32) {
+        self.ai_ownership.last_movement_inform = Some(CreatureMovementInform {
+            movement_type,
+            movement_id,
+        });
+    }
+
+    pub fn take_ai_movement_inform(&mut self) -> Option<CreatureMovementInform> {
+        self.ai_ownership.last_movement_inform.take()
     }
 
     pub const fn ai_position(&self) -> Position {
@@ -1947,6 +1974,8 @@ mod tests {
         assert_eq!(creature.ai_ownership().gold_max, 0);
         assert_eq!(creature.ai_ownership().boss_id, None);
         assert_eq!(creature.ai_ownership().dungeon_encounter_id, 0);
+        assert_eq!(creature.ai_ownership().terrain_swap_map, -1);
+        assert_eq!(creature.ai_ownership().last_movement_inform, None);
     }
 
     #[test]
@@ -2069,6 +2098,28 @@ mod tests {
         assert_eq!(creature.ai_ownership().unit_flags, 0x20);
         assert_eq!(creature.ai_ownership().min_damage, 5);
         assert_eq!(creature.ai_ownership().max_damage, 9);
+    }
+
+    #[test]
+    fn creature_ai_movement_inform_records_cpp_type_and_id_payload() {
+        let mut creature = Creature::new(false);
+
+        creature.record_ai_movement_inform(15, 8);
+        assert_eq!(
+            creature.ai_ownership().last_movement_inform,
+            Some(CreatureMovementInform {
+                movement_type: 15,
+                movement_id: 8,
+            })
+        );
+        assert_eq!(
+            creature.take_ai_movement_inform(),
+            Some(CreatureMovementInform {
+                movement_type: 15,
+                movement_id: 8,
+            })
+        );
+        assert_eq!(creature.ai_ownership().last_movement_inform, None);
     }
 
     #[test]

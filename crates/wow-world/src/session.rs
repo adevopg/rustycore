@@ -6,7 +6,7 @@
 //! `WorldSession` — per-player session that receives packets from the
 //! [`WorldSocket`](wow_network::WorldSocket) and dispatches them to handlers.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -14,13 +14,18 @@ use parking_lot::RwLock;
 use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
+use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
+use crate::phasing::{
+    init_db_phase_shift_like_cpp, init_db_visible_map_id_like_cpp,
+    party_member_phase_states_like_cpp,
+};
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
     ItemClass, ItemContext, ItemEnchantmentType, ItemFlags, ItemFlags2, ItemQuality, SellResult,
-    TypeId, TypeMask,
+    TypeId, TypeMask, UnitState,
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
@@ -29,8 +34,9 @@ use wow_data::{
     ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
     ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
     ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PlayerStatsStore,
-    RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PhaseGroupStore,
+    PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore,
+    SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -42,7 +48,7 @@ use wow_entities::{
     BUYBACK_SLOT_START, CanStoreItemArgs, CanUnequipItemArgs, INVENTORY_DEFAULT_SIZE,
     INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo,
     ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG,
-    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, Player, PlayerEnchantTimeUpdate,
+    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
     PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
     SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, VisibleItemValues, WorldObject,
     is_bag_pos, is_equipment_packed_pos, make_item_pos,
@@ -59,6 +65,7 @@ use wow_packet::packets::item::{
     ItemPushResult, ItemPushResultDisplayType, ItemTimeUpdate,
 };
 use wow_packet::packets::misc::{BuyFailed, SellResponse};
+use wow_recastdetour::PathQueryFilterContext;
 
 fn rounded_median_u32(sorted_values: &[u32]) -> u32 {
     debug_assert!(!sorted_values.is_empty());
@@ -77,6 +84,37 @@ use wow_packet::{ClientPacket, WorldPacket};
 
 /// Maximum number of packets processed per `update()` call.
 const MAX_PACKETS_PER_UPDATE: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MMapRuntimeConfigLikeCpp {
+    pub data_dir: String,
+    pub enabled: bool,
+    pub disabled_map_ids: HashSet<u32>,
+}
+
+impl Default for MMapRuntimeConfigLikeCpp {
+    fn default() -> Self {
+        Self {
+            data_dir: "./Data".to_string(),
+            enabled: true,
+            disabled_map_ids: HashSet::new(),
+        }
+    }
+}
+
+impl MMapRuntimeConfigLikeCpp {
+    pub fn pathfinding_enabled_for_map_like_cpp(&self, map_id: u32) -> bool {
+        self.enabled && !self.disabled_map_ids.contains(&map_id)
+    }
+
+    pub fn should_try_pathfinding_like_cpp(
+        &self,
+        map_id: u32,
+        owner_ignores_pathfinding: bool,
+    ) -> bool {
+        self.pathfinding_enabled_for_map_like_cpp(map_id) && !owner_ignores_pathfinding
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RepresentedLootRollVote {
@@ -653,6 +691,9 @@ pub struct WorldSession {
     // Map stores (Map.db2 + MapDifficulty.db2)
     map_store: Option<Arc<MapStore>>,
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
+    terrain_swap_store: Option<Arc<wow_data::TerrainSwapStore>>,
+    phase_store: Option<Arc<PhaseStore>>,
+    phase_group_store: Option<Arc<PhaseGroupStore>>,
 
     // Shared player registry for broadcasting to nearby sessions
     player_registry: Option<Arc<PlayerRegistry>>,
@@ -813,6 +854,9 @@ pub struct WorldSession {
     /// route through here so all sessions on the same map see the same world.
     /// `None` until the world server injects the manager (see `set_map_manager`).
     pub(crate) map_manager: Option<crate::map_manager::SharedMapManager>,
+    /// Dedicated Detour owner handle. The underlying `MMapManager` remains on
+    /// its worker thread because Detour state is not `Send + Sync`.
+    mmap_pathfinder_like_cpp: Option<Arc<WorldMMapPathfinderWorkerLikeCpp>>,
     /// Shared C++ `InstanceLockMgr` analogue used by raid-info and instance entry paths.
     pub(crate) instance_lock_mgr: Option<Arc<std::sync::RwLock<wow_instances::InstanceLockMgr>>>,
 
@@ -951,6 +995,8 @@ pub struct WorldSession {
     loot_drop_rates: LootDropRatesLikeCpp,
     /// C++ `CONFIG_ENABLE_AE_LOOT` represented switch.
     enable_ae_loot_like_cpp: bool,
+    /// C++ `CONFIG_ENABLE_MMAPS` + `DataDir` represented until map lifecycle owns real mmaps.
+    mmap_runtime_config_like_cpp: MMapRuntimeConfigLikeCpp,
     /// Session-local representation of `GameObject::m_unique_users` for no-GetLootId chest uses.
     pub(crate) represented_unique_gameobject_uses: std::collections::HashSet<wow_core::ObjectGuid>,
     /// Represented C++ `GameEvents::Trigger` and `TriggeringLinkedGameObject` hook points.
@@ -982,6 +1028,13 @@ pub struct WorldSession {
     pub(crate) visible_creatures: std::collections::HashSet<wow_core::ObjectGuid>,
     /// GUIDs of all game objects currently visible to this client.
     pub(crate) visible_gameobjects: std::collections::HashSet<wow_core::ObjectGuid>,
+    /// Represented C++ `GameObject::GetPhaseShift()` for visible DB-spawned
+    /// gameobjects until canonical gameobject map ownership lands.
+    pub(crate) represented_gameobject_phase_shifts:
+        std::collections::HashMap<wow_core::ObjectGuid, PhaseShift>,
+    /// Represented C++ `Player::GetPhaseShift()` for session DB visibility
+    /// filtering until canonical player `WorldObject` phase ownership lands.
+    pub(crate) represented_player_phase_shift: PhaseShift,
     /// Position at which visibility was last fully recalculated.
     pub(crate) last_visibility_pos: Option<wow_core::Position>,
 
@@ -1176,6 +1229,10 @@ pub struct PendingRespawn {
     pub gold_max: u32,
     pub boss_id: Option<u32>,
     pub dungeon_encounter_id: u32,
+    pub phase_use_flags: u8,
+    pub phase_id: u16,
+    pub phase_group_id: u32,
+    pub terrain_swap_map: i32,
 }
 
 fn is_represented_bag_slot(slot: u8) -> bool {
@@ -1245,6 +1302,9 @@ impl WorldSession {
             dungeon_encounter_store: None,
             map_store: None,
             map_difficulty_store: None,
+            terrain_swap_store: None,
+            phase_store: None,
+            phase_group_store: None,
             player_registry: None,
             object_accessor: None,
             group_registry: None,
@@ -1306,6 +1366,7 @@ impl WorldSession {
             creatures: std::collections::HashMap::new(),
             vendor_item_counts: HashMap::new(),
             map_manager: None,
+            mmap_pathfinder_like_cpp: None,
             combat_target: None,
             in_combat: false,
             player_alive_like_cpp: true,
@@ -1368,6 +1429,7 @@ impl WorldSession {
             represented_loot_roll_criteria_events: Vec::new(),
             loot_drop_rates: LootDropRatesLikeCpp::default(),
             enable_ae_loot_like_cpp: false,
+            mmap_runtime_config_like_cpp: MMapRuntimeConfigLikeCpp::default(),
             represented_unique_gameobject_uses: std::collections::HashSet::new(),
             represented_gameobject_use_effects: Vec::new(),
             represented_gameobject_use_states: std::collections::HashMap::new(),
@@ -1380,6 +1442,8 @@ impl WorldSession {
             represented_personal_loot_owners: std::collections::HashSet::new(),
             visible_creatures: std::collections::HashSet::new(),
             visible_gameobjects: std::collections::HashSet::new(),
+            represented_gameobject_phase_shifts: std::collections::HashMap::new(),
+            represented_player_phase_shift: PhaseShift::default(),
             last_visibility_pos: None,
             gossip_options: Vec::new(),
             gossip_source_guid: None,
@@ -1398,6 +1462,15 @@ impl WorldSession {
     /// Inject the shared map manager. Call once at session creation, before login.
     pub fn set_map_manager(&mut self, mgr: crate::map_manager::SharedMapManager) {
         self.map_manager = Some(mgr);
+    }
+
+    /// Inject the dedicated Detour worker handle. The session only sends
+    /// path requests; it never owns raw mmap/navmesh state.
+    pub fn set_mmap_pathfinder_like_cpp(
+        &mut self,
+        pathfinder: Arc<WorldMMapPathfinderWorkerLikeCpp>,
+    ) {
+        self.mmap_pathfinder_like_cpp = Some(pathfinder);
     }
 
     /// Inject the shared C++ `InstanceLockMgr` analogue.
@@ -1424,6 +1497,10 @@ impl WorldSession {
         gold_max: u32,
         boss_id: Option<u32>,
         dungeon_encounter_id: u32,
+        phase_use_flags: u8,
+        phase_id: u16,
+        phase_group_id: u32,
+        terrain_swap_map: i32,
     ) {
         let guid = create_data.guid;
         let entry = create_data.entry;
@@ -1433,6 +1510,13 @@ impl WorldSession {
         let faction = create_data.faction_template.max(0) as u32;
         let npc_flags = create_data.npc_flags as u32;
         let unit_flags = create_data.unit_flags;
+        let (db_phase_shift, validated_terrain_swap_map) = self.db_spawn_phase_shift_like_cpp(
+            map_id,
+            phase_use_flags,
+            phase_id,
+            phase_group_id,
+            terrain_swap_map,
+        );
 
         if let Some(manager) = &self.map_manager {
             let (grid_x, grid_y) = crate::map_manager::world_to_grid_coords(position.x, position.y);
@@ -1451,6 +1535,7 @@ impl WorldSession {
                             .set_entry(entry);
                         let _ = creature.unit_mut().world_mut().set_map(map_id as u32, 0);
                         creature.unit_mut().world_mut().relocate(position);
+                        *creature.unit_mut().world_mut().phase_shift_mut() = db_phase_shift.clone();
                         creature.unit_mut().set_level(level);
                         creature.unit_mut().set_max_health(u64::from(hp));
                         creature.unit_mut().set_health(u64::from(hp));
@@ -1464,6 +1549,10 @@ impl WorldSession {
                         creature.ai_ownership_mut().gold_max = gold_max;
                         creature.ai_ownership_mut().boss_id = boss_id;
                         creature.ai_ownership_mut().dungeon_encounter_id = dungeon_encounter_id;
+                        creature.ai_ownership_mut().phase_use_flags = phase_use_flags;
+                        creature.ai_ownership_mut().phase_id = phase_id;
+                        creature.ai_ownership_mut().phase_group_id = phase_group_id;
+                        creature.ai_ownership_mut().terrain_swap_map = validated_terrain_swap_map;
                         creature
                     },
                     create_data.clone(),
@@ -2331,8 +2420,16 @@ impl WorldSession {
         self.enable_ae_loot_like_cpp = enabled;
     }
 
+    pub fn set_mmap_runtime_config_like_cpp(&mut self, config: MMapRuntimeConfigLikeCpp) {
+        self.mmap_runtime_config_like_cpp = config;
+    }
+
     pub(crate) fn enable_ae_loot_like_cpp(&self) -> bool {
         self.enable_ae_loot_like_cpp
+    }
+
+    pub fn mmap_runtime_config_like_cpp(&self) -> &MMapRuntimeConfigLikeCpp {
+        &self.mmap_runtime_config_like_cpp
     }
 
     pub fn loot_drop_rates_like_cpp(&self) -> LootDropRatesLikeCpp {
@@ -3226,6 +3323,102 @@ impl WorldSession {
         self.map_difficulty_store = Some(store);
     }
 
+    pub fn set_terrain_swap_store(&mut self, store: Arc<wow_data::TerrainSwapStore>) {
+        self.terrain_swap_store = Some(store);
+    }
+
+    pub fn set_phase_store(&mut self, store: Arc<PhaseStore>) {
+        self.phase_store = Some(store);
+    }
+
+    pub fn set_phase_group_store(&mut self, store: Arc<PhaseGroupStore>) {
+        self.phase_group_store = Some(store);
+    }
+
+    pub(crate) fn record_represented_gameobject_db_phase_shift_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        map_id: u16,
+        phase_use_flags: u8,
+        phase_id: u16,
+        phase_group_id: u32,
+        terrain_swap_map: i32,
+    ) {
+        let (phase_shift, _) = self.db_spawn_phase_shift_like_cpp(
+            map_id,
+            phase_use_flags,
+            phase_id,
+            phase_group_id,
+            terrain_swap_map,
+        );
+        self.record_represented_gameobject_phase_shift_like_cpp(guid, phase_shift);
+    }
+
+    pub(crate) fn record_represented_gameobject_phase_shift_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        phase_shift: PhaseShift,
+    ) {
+        self.represented_gameobject_phase_shifts
+            .insert(guid, phase_shift);
+    }
+
+    pub(crate) fn db_spawn_phase_shift_like_cpp(
+        &self,
+        map_id: u16,
+        phase_use_flags: u8,
+        phase_id: u16,
+        phase_group_id: u32,
+        terrain_swap_map: i32,
+    ) -> (PhaseShift, i32) {
+        let mut phase_shift = PhaseShift::default();
+        if let (Some(phase_store), Some(phase_group_store)) =
+            (&self.phase_store, &self.phase_group_store)
+        {
+            init_db_phase_shift_like_cpp(
+                &mut phase_shift,
+                phase_store,
+                phase_group_store,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+            );
+        }
+
+        let mut validated_terrain_swap_map = -1;
+        if let (Some(map_store), Some(terrain_swap_store)) =
+            (&self.map_store, &self.terrain_swap_store)
+            && let Some(terrain_swap_map) = terrain_swap_store.validate_spawn_terrain_swap_like_cpp(
+                map_store,
+                u32::from(map_id),
+                terrain_swap_map,
+            )
+        {
+            init_db_visible_map_id_like_cpp(
+                &mut phase_shift,
+                terrain_swap_store,
+                i32::try_from(terrain_swap_map).unwrap_or(-1),
+            );
+            validated_terrain_swap_map = i32::try_from(terrain_swap_map).unwrap_or(-1);
+        }
+
+        (phase_shift, validated_terrain_swap_map)
+    }
+
+    pub(crate) fn represented_player_phase_shift_like_cpp(&self) -> &PhaseShift {
+        &self.represented_player_phase_shift
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_represented_player_phase_shift_like_cpp(&mut self, phase_shift: PhaseShift) {
+        self.represented_player_phase_shift = phase_shift;
+    }
+
+    pub(crate) fn can_see_phase_shift_like_cpp(&self, other: &PhaseShift) -> bool {
+        self.represented_player_phase_shift_like_cpp()
+            .can_see(other)
+    }
+
     pub(crate) fn map_difficulty_store(&self) -> Option<&Arc<MapDifficultyStore>> {
         self.map_difficulty_store.as_ref()
     }
@@ -3665,6 +3858,10 @@ impl WorldSession {
                     .collect(),
                 rewarded_quests: self.rewarded_quests.clone(),
                 inventory_item_counts: self.represented_inventory_item_counts_like_cpp(),
+                party_member_phase_states: party_member_phase_states_like_cpp(
+                    self.represented_player_phase_shift_like_cpp(),
+                )
+                .unwrap_or_default(),
                 player_name: name.to_string(),
                 account_id: self.account_id,
                 race,
@@ -3706,6 +3903,9 @@ impl WorldSession {
                 .collect();
             info.rewarded_quests = self.rewarded_quests.clone();
             info.inventory_item_counts = self.represented_inventory_item_counts_like_cpp();
+            info.party_member_phase_states =
+                party_member_phase_states_like_cpp(self.represented_player_phase_shift_like_cpp())
+                    .unwrap_or_default();
         }
     }
 
@@ -3728,6 +3928,7 @@ impl WorldSession {
             return None;
         }
         object.relocate(pos);
+        *object.phase_shift_mut() = self.represented_player_phase_shift.clone();
         object.object_mut().add_to_world();
         Some(object)
     }
@@ -7210,7 +7411,7 @@ impl WorldSession {
     /// Advances creature movement state and sends MonsterMove packets.
     pub(crate) fn tick_creatures_sync(&mut self) {
         use wow_packet::ServerPacket;
-        use wow_packet::packets::movement::MonsterMove;
+        use wow_packet::packets::movement::{MonsterMove, MovementMonsterSpline};
 
         // Collect packets to send (avoids borrow conflict with send_packet)
         let mut to_send: Vec<Vec<u8>> = Vec::new();
@@ -7286,6 +7487,10 @@ impl WorldSession {
                         gold_max: c.gold_max(),
                         boss_id: c.boss_id(),
                         dungeon_encounter_id: c.dungeon_encounter_id(),
+                        phase_use_flags: c.creature.ai_ownership().phase_use_flags,
+                        phase_id: c.creature.ai_ownership().phase_id,
+                        phase_group_id: c.creature.ai_ownership().phase_group_id,
+                        terrain_swap_map: c.creature.ai_ownership().terrain_swap_map,
                     });
                     tracing::info!(
                         "Corpse despawned: {:?} (entry {}) — respawn in {}s",
@@ -7350,11 +7555,17 @@ impl WorldSession {
                 r.gold_max,
                 r.boss_id,
                 r.dungeon_encounter_id,
+                r.phase_use_flags,
+                r.phase_id,
+                r.phase_group_id,
+                r.terrain_swap_map,
             );
             self.visible_creatures.insert(guid);
         }
         // ──────────────────────────────────────────────────────────────────
 
+        let mmap_runtime_config = self.mmap_runtime_config_like_cpp.clone();
+        let mmap_pathfinder = self.mmap_pathfinder_like_cpp.clone();
         for guid in guids {
             let _ = self.mutate_world_creature(guid, |creature| {
                 if !creature.is_alive() {
@@ -7372,23 +7583,74 @@ impl WorldSession {
                             }
                             if creature.should_wander() {
                                 let dst = creature.pick_wander_destination();
-                                let from = creature.position();
-                                let dist = from.distance(&dst);
-                                let dur = (((dist / 2.5) * 1000.0) as u32).max(500);
-                                creature.begin_move(dst);
-                                let sid = creature.spline_id();
-                                creature
+                                let owner_ignores_pathfinding = creature
                                     .creature
-                                    .set_ai_state(wow_entities::CreatureAiState::WalkingRandom);
-                                creature.reset_wander_timer();
-                                let pkt =
-                                    MonsterMove::single_destination(guid, from, sid, dur, 0, dst);
-                                to_send.push(pkt.to_bytes());
+                                    .unit()
+                                    .has_unit_state(UnitState::IGNORE_PATHFINDING.bits());
+                                let source_map_id = creature.map_id();
+                                let source_instance_id = creature.instance_id();
+                                let movement = if mmap_runtime_config
+                                    .should_try_pathfinding_like_cpp(
+                                        source_map_id,
+                                        owner_ignores_pathfinding,
+                                    ) {
+                                    let detour_path = mmap_pathfinder.as_ref().and_then(|worker| {
+                                        match worker.calculate_path_like_cpp(
+                                            WorldMMapPathRequestLikeCpp {
+                                                start: creature.position(),
+                                                destination: dst,
+                                                mesh_map_id: source_map_id,
+                                                instance_map_id: source_map_id,
+                                                instance_id: source_instance_id,
+                                                filter_context: PathQueryFilterContext::creature(
+                                                    true, false, false, false,
+                                                ),
+                                                force_destination: false,
+                                                phase_shift: creature.phase_shift().clone(),
+                                            },
+                                        ) {
+                                            Ok(path) => path,
+                                            Err(error) => {
+                                                tracing::warn!(
+                                                    "mmap pathfinding failed for creature {:?}: {:?}",
+                                                    guid,
+                                                    error
+                                                );
+                                                None
+                                            }
+                                        }
+                                    });
+                                    creature
+                                        .begin_move_spline_with_detour_path_like_cpp(
+                                            dst,
+                                            detour_path.as_ref(),
+                                            false,
+                                        )
+                                        .map(|(from, spline, _path)| (from, spline))
+                                } else {
+                                    creature.begin_move_spline_like_cpp(dst)
+                                };
+                                if let Some((from, move_spline)) = movement {
+                                    creature
+                                        .creature
+                                        .set_ai_state(wow_entities::CreatureAiState::WalkingRandom);
+                                    creature.reset_wander_timer();
+                                    let pkt = MonsterMove {
+                                        mover_guid: guid,
+                                        current_pos: from,
+                                        spline: MovementMonsterSpline::from_move_spline(
+                                            &move_spline,
+                                        ),
+                                    };
+                                    to_send.push(pkt.to_bytes());
+                                } else {
+                                    creature.reset_wander_timer();
+                                }
                             }
                         }
                     }
                     wow_entities::CreatureAiState::WalkingRandom => {
-                        if creature.movement_finished() {
+                        if creature.update_move_spline_like_cpp() || creature.movement_finished() {
                             creature.finish_move();
                             creature
                                 .creature
@@ -7463,6 +7725,7 @@ impl WorldSession {
     pub(crate) fn tick_combat_sync(&mut self) {
         use wow_packet::ServerPacket;
         use wow_packet::packets::combat::{AttackerStateUpdate, SAttackStop, VICTIM_STATE_HIT};
+        use wow_packet::packets::movement::MonsterMoveStop;
 
         let (player_guid, combat_target) = match (self.player_guid(), self.combat_target) {
             (Some(pg), Some(ct)) => (pg, ct),
@@ -7479,7 +7742,7 @@ impl WorldSession {
 
         // Gather combat data from the canonical map-owned creature before
         // emitting combat packets.
-        let Some((dmg, target_level, now_dead)) = self
+        let Some((dmg, target_level, now_dead, move_stop)) = self
             .mutate_world_creature(combat_target, |creature| {
                 if !creature.is_alive() {
                     return None;
@@ -7493,8 +7756,20 @@ impl WorldSession {
                 let dmg = creature.roll_damage().max(1);
                 let level = creature.level();
                 let died = creature.take_damage(dmg);
+                let move_stop = if died {
+                    creature.stop_move_spline_like_cpp().map(|stop| {
+                        MonsterMoveStop {
+                            mover_guid: combat_target,
+                            current_pos: stop.position,
+                            spline_id: stop.spline_id,
+                        }
+                        .to_bytes()
+                    })
+                } else {
+                    None
+                };
                 creature.record_swing();
-                Some((dmg, level, died))
+                Some((dmg, level, died, move_stop))
             })
             .flatten()
         else {
@@ -7522,6 +7797,9 @@ impl WorldSession {
         // (temporarily disabled to prevent client crash from malformed packet)
 
         if now_dead {
+            if let Some(bytes) = move_stop {
+                let _ = self.send_tx.send(bytes);
+            }
             let stop = SAttackStop {
                 attacker: player_guid,
                 victim: combat_target,
@@ -7925,6 +8203,9 @@ impl WorldSession {
         target_guid: ObjectGuid,
         damage_amount: u32,
     ) -> Result<(), &'static str> {
+        use wow_packet::ServerPacket;
+        use wow_packet::packets::movement::MonsterMoveStop;
+
         let _player_guid = self.player_guid().ok_or("No player GUID")?;
         let account_id = self.account_id;
 
@@ -7945,7 +8226,15 @@ impl WorldSession {
                         target_guid,
                         creature.entry()
                     );
-                    Some((creature.entry(), target_guid))
+                    let move_stop = creature.stop_move_spline_like_cpp().map(|stop| {
+                        MonsterMoveStop {
+                            mover_guid: target_guid,
+                            current_pos: stop.position,
+                            spline_id: stop.spline_id,
+                        }
+                        .to_bytes()
+                    });
+                    Some((creature.entry(), target_guid, move_stop))
                 } else {
                     None
                 }
@@ -7953,7 +8242,10 @@ impl WorldSession {
             .ok_or("Target creature not found")?;
 
         // Process creature death outside the mutable borrow
-        if let Some((entry, guid)) = kill_info {
+        if let Some((entry, guid, move_stop)) = kill_info {
+            if let Some(bytes) = move_stop {
+                let _ = self.send_tx.send(bytes);
+            }
             // Give XP for the kill
             let mob_level = self
                 .mutate_world_creature(guid, |creature| creature.level())
@@ -8141,8 +8433,8 @@ mod tests {
     use super::*;
     use wow_constants::{
         BagFamilyMask, EnchantmentSlot, InventoryResult, InventoryType, ItemBondingType, ItemClass,
-        ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ServerOpcodes,
-        SpellItemEnchantmentFlags,
+        ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, PhaseShiftFlags,
+        ServerOpcodes, SpellItemEnchantmentFlags,
     };
     use wow_core::{Position, guid::HighGuid};
     use wow_data::{
@@ -8159,6 +8451,7 @@ mod tests {
         AccessorObjectRef, BANK_SLOT_BAG_START, EQUIPMENT_SLOT_CHEST, INVENTORY_SLOT_BAG_START,
         REAGENT_BAG_SLOT_START, SendNewItemInstancePlan, SendNewItemModifier,
     };
+    use wow_movement::MoveSplineFlag;
     use wow_network::{GroupInfo, PlayerBroadcastInfo};
     use wow_packet::ServerPacket;
     use wow_packet::packets::loot::{
@@ -8187,6 +8480,19 @@ mod tests {
         );
 
         (session, pkt_tx, send_rx)
+    }
+
+    #[test]
+    fn mmap_runtime_config_matches_cpp_pathfinding_gate() {
+        let mut config = MMapRuntimeConfigLikeCpp::default();
+        config.disabled_map_ids.insert(571);
+
+        assert!(config.should_try_pathfinding_like_cpp(0, false));
+        assert!(!config.should_try_pathfinding_like_cpp(571, false));
+        assert!(!config.should_try_pathfinding_like_cpp(0, true));
+
+        config.enabled = false;
+        assert!(!config.should_try_pathfinding_like_cpp(0, false));
     }
 
     #[test]
@@ -8389,11 +8695,235 @@ mod tests {
             0,
             None,
             0,
+            0,
+            0,
+            0,
+            -1,
         );
     }
 
     #[test]
-    fn tick_creatures_sync_sends_cpp_like_monster_move_for_represented_wander() {
+    fn register_world_creature_applies_valid_terrain_swap_visible_map_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(609);
+        let map_store = Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: 0,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+            wow_data::MapEntry {
+                id: 609,
+                instance_type: 0,
+                parent_map_id: 571,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ]));
+        let terrain_swap_store = Arc::new(wow_data::TerrainSwapStore::from_rows_like_cpp(
+            &map_store,
+            [],
+            [],
+            |_| true,
+        ));
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_map_store(map_store);
+        session.set_terrain_swap_store(terrain_swap_store);
+        session.register_world_creature(
+            571,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            test_creature_create_data(guid, 9001, 25),
+            3,
+            5,
+            20.0,
+            0,
+            0,
+            0,
+            None,
+            0,
+            0,
+            0,
+            0,
+            609,
+        );
+
+        let guard = manager
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let creature = guard.find_creature(571, 0, guid).unwrap();
+        assert!(creature.phase_shift().has_visible_map_id_like_cpp(609));
+        assert_eq!(creature.creature.ai_ownership().terrain_swap_map, 609);
+    }
+
+    #[test]
+    fn register_world_creature_applies_db_phase_shift_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(710);
+        let phase_store = Arc::new(wow_data::PhaseStore::from_entries([
+            wow_data::PhaseEntry { id: 10, flags: 0 },
+            wow_data::PhaseEntry { id: 20, flags: 0 },
+        ]));
+        let phase_group_store = Arc::new(wow_data::PhaseGroupStore::from_entries(
+            &phase_store,
+            [wow_data::PhaseXPhaseGroupEntry {
+                id: 1,
+                phase_id: 20,
+                phase_group_id: 7,
+            }],
+        ));
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_phase_store(phase_store);
+        session.set_phase_group_store(phase_group_store);
+        session.register_world_creature(
+            571,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            test_creature_create_data(guid, 9001, 25),
+            3,
+            5,
+            20.0,
+            0,
+            0,
+            0,
+            None,
+            0,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE,
+            0,
+            7,
+            -1,
+        );
+
+        let guard = manager
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let creature = guard.find_creature(571, 0, guid).unwrap();
+        assert!(creature.phase_shift().is_db_phase_shift_like_cpp());
+        assert!(creature.phase_shift().has_phase_like_cpp(20));
+        assert_eq!(
+            creature.phase_shift().flags_like_cpp(),
+            PhaseShiftFlags::INVERSE
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().phase_use_flags,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE
+        );
+        assert_eq!(creature.creature.ai_ownership().phase_group_id, 7);
+    }
+
+    #[test]
+    fn represented_gameobject_phase_shift_applies_db_phase_and_visible_map_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let guid = ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 1, 900);
+        let phase_store = Arc::new(wow_data::PhaseStore::from_entries([wow_data::PhaseEntry {
+            id: 20,
+            flags: 0,
+        }]));
+        let phase_group_store = Arc::new(wow_data::PhaseGroupStore::from_entries(
+            &phase_store,
+            [wow_data::PhaseXPhaseGroupEntry {
+                id: 1,
+                phase_id: 20,
+                phase_group_id: 7,
+            }],
+        ));
+        let map_store = Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: 0,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+            wow_data::MapEntry {
+                id: 609,
+                instance_type: 0,
+                parent_map_id: 571,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ]));
+        let terrain_swap_store = Arc::new(wow_data::TerrainSwapStore::from_rows_like_cpp(
+            &map_store,
+            [],
+            [],
+            |_| true,
+        ));
+
+        session.set_phase_store(phase_store);
+        session.set_phase_group_store(phase_group_store);
+        session.set_map_store(map_store);
+        session.set_terrain_swap_store(terrain_swap_store);
+        session.record_represented_gameobject_db_phase_shift_like_cpp(
+            guid,
+            571,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE,
+            0,
+            7,
+            609,
+        );
+
+        let phase_shift = session
+            .represented_gameobject_phase_shifts
+            .get(&guid)
+            .unwrap();
+        assert!(phase_shift.is_db_phase_shift_like_cpp());
+        assert!(phase_shift.has_phase_like_cpp(20));
+        assert!(phase_shift.has_visible_map_id_like_cpp(609));
+        assert_eq!(phase_shift.flags_like_cpp(), PhaseShiftFlags::INVERSE);
+    }
+
+    #[test]
+    fn session_db_spawn_phase_visibility_uses_player_phase_can_see_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let phase_store = Arc::new(wow_data::PhaseStore::from_entries([wow_data::PhaseEntry {
+            id: 20,
+            flags: 0,
+        }]));
+        let phase_group_store = Arc::new(wow_data::PhaseGroupStore::from_entries(
+            &phase_store,
+            [wow_data::PhaseXPhaseGroupEntry {
+                id: 1,
+                phase_id: 20,
+                phase_group_id: 7,
+            }],
+        ));
+
+        session.set_phase_store(Arc::clone(&phase_store));
+        session.set_phase_group_store(Arc::clone(&phase_group_store));
+
+        let (target_phase_shift, _) = session.db_spawn_phase_shift_like_cpp(571, 0, 20, 0, -1);
+        assert!(!session.can_see_phase_shift_like_cpp(&target_phase_shift));
+
+        let mut player_phase_shift = PhaseShift::default();
+        init_db_phase_shift_like_cpp(
+            &mut player_phase_shift,
+            &phase_store,
+            &phase_group_store,
+            0,
+            20,
+            0,
+        );
+        session.set_represented_player_phase_shift_like_cpp(player_phase_shift);
+        assert!(session.can_see_phase_shift_like_cpp(&target_phase_shift));
+
+        let (always_visible_shift, _) = session.db_spawn_phase_shift_like_cpp(
+            571,
+            crate::phasing::PHASE_USE_FLAGS_ALWAYS_VISIBLE,
+            20,
+            0,
+            -1,
+        );
+        session.set_represented_player_phase_shift_like_cpp(PhaseShift::default());
+        assert!(session.can_see_phase_shift_like_cpp(&always_visible_shift));
+    }
+
+    #[test]
+    fn tick_creatures_sync_launches_real_move_spline_for_represented_wander() {
         let (mut session, _, send_rx) = make_session();
         let manager = shared_map_manager();
         let guid = test_creature_guid(77);
@@ -8426,9 +8956,13 @@ mod tests {
         );
         assert!(!pkt.has_bit().unwrap());
         assert_eq!(pkt.read_bits(3).unwrap(), 0);
-        assert_eq!(pkt.read_uint32().unwrap(), 0);
+        assert_eq!(
+            pkt.read_uint32().unwrap(),
+            MoveSplineFlag::SMOOTH_GROUND_PATH.bits()
+        );
         assert_eq!(pkt.read_int32().unwrap(), 0);
-        assert!(pkt.read_uint32().unwrap() >= 500);
+        let move_time = pkt.read_uint32().unwrap();
+        assert!(move_time > 0);
         assert_eq!(pkt.read_uint32().unwrap(), 0);
         assert_eq!(pkt.read_uint8().unwrap(), 0);
         assert_eq!(pkt.read_packed_guid().unwrap(), ObjectGuid::EMPTY);
@@ -8447,6 +8981,28 @@ mod tests {
         assert_eq!(pkt.read_float().unwrap(), destination.z);
         assert!(pkt.is_empty());
         assert!(send_rx.try_recv().is_err());
+
+        session
+            .mutate_world_creature(guid, |creature| {
+                let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+                assert!(motion_spline.enabled);
+                assert!(!motion_spline.finalized);
+                assert_eq!(motion_spline.spline_id, 2);
+                assert_eq!(motion_spline.duration_ms, move_time);
+                assert_eq!(
+                    motion_spline.final_destination,
+                    Some((
+                        destination.x as i32,
+                        destination.y as i32,
+                        destination.z as i32
+                    ))
+                );
+                assert_eq!(
+                    creature.state(),
+                    wow_entities::CreatureAiState::WalkingRandom
+                );
+            })
+            .unwrap();
     }
 
     fn install_stackable_test_item_template(
@@ -8546,6 +9102,7 @@ mod tests {
             active_quest_objective_counts: Default::default(),
             rewarded_quests: Default::default(),
             inventory_item_counts: Default::default(),
+            party_member_phase_states: Default::default(),
             player_name: format!("Player{}", guid.counter()),
             account_id: guid.counter() as u32,
             race: 1,
@@ -8704,6 +9261,46 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert_eq!(world_creature.current_hp(), 33);
+    }
+
+    #[tokio::test]
+    async fn killing_moving_creature_sends_cpp_like_monster_move_stop() {
+        let (mut session, _, send_rx) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_202);
+        session.player_guid = Some(ObjectGuid::create_player(1, 202));
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature
+                    .begin_move_spline_like_cpp(Position::new(20.0, 10.0, 0.0, 0.0))
+                    .expect("valid represented spline");
+            })
+            .unwrap();
+
+        session.apply_damage(guid, 40).await.unwrap();
+
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::OnMonsterMove as u16);
+        let mut pkt = WorldPacket::from_bytes(&sent[2..]);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert_eq!(pkt.read_float().unwrap(), 10.0);
+        assert_eq!(pkt.read_float().unwrap(), 10.0);
+        assert_eq!(pkt.read_float().unwrap(), 0.0);
+        assert_eq!(pkt.read_uint32().unwrap(), 3);
+        assert_eq!(pkt.read_float().unwrap(), 0.0);
+        assert_eq!(pkt.read_float().unwrap(), 0.0);
+        assert_eq!(pkt.read_float().unwrap(), 0.0);
+        assert!(!pkt.has_bit().unwrap());
+        assert_eq!(pkt.read_bits(3).unwrap(), 2);
+        assert_eq!(pkt.read_uint32().unwrap(), 0);
+        assert_eq!(pkt.read_int32().unwrap(), 0);
+        assert_eq!(pkt.read_uint32().unwrap(), 0);
+        assert_eq!(pkt.read_uint32().unwrap(), 0);
+        assert_eq!(pkt.read_uint8().unwrap(), 0);
+        assert_eq!(pkt.read_packed_guid().unwrap(), ObjectGuid::EMPTY);
+        assert_eq!(pkt.read_int8().unwrap(), -1);
     }
 
     #[test]
@@ -10512,6 +11109,29 @@ mod tests {
         assert!(accessor.find_connected_player(player_guid).is_none());
         assert!(session.inventory_items.is_empty());
         assert!(session.inventory_item_objects.is_empty());
+    }
+
+    #[test]
+    fn object_accessor_sync_preserves_represented_player_phase_shift_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let accessor = new_shared_object_accessor();
+        let player_guid = ObjectGuid::create_player(1, 43);
+
+        let mut player_phase_shift = PhaseShift::default();
+        player_phase_shift.add_phase_like_cpp(20, wow_constants::PhaseFlags::empty(), 1);
+        session.set_represented_player_phase_shift_like_cpp(player_phase_shift.clone());
+
+        session.set_object_accessor(Arc::clone(&accessor));
+        session.set_player_guid(Some(player_guid));
+        session.player_name = Some("Thrall".into());
+        session.player_position = Some(Position::new(1.0, 2.0, 3.0, 0.0));
+        session.current_map_id = 1;
+        session.sync_object_accessor_player();
+
+        let accessor = accessor.read();
+        let player = accessor.find_connected_player(player_guid).unwrap();
+        assert!(player.phase_shift().can_see(&player_phase_shift));
+        assert!(player.phase_shift().has_phase_like_cpp(20));
     }
 
     #[tokio::test]

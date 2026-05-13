@@ -1808,24 +1808,51 @@ impl ShowTradeSkillResponse {
 // Sent after AddToMap so the client knows which phases the player is in.
 // Without this, the client may not render any world objects.
 //
-// C# ref: PhasingHandler.SendToPlayer → PhaseShiftChange.Write()
+// C++ ref: `PhasingHandler::SendToPlayer` + `MiscPackets.cpp::PhaseShiftChange::Write`.
 // Format:
 //   WritePackedGuid(Client)         — player GUID
 //   Phaseshift.Write():
 //     WriteUInt32(PhaseShiftFlags)  — 0x08 = Unphased (default, no special phase)
-//     WriteInt32(Phases.Count)      — 0
+//     WriteUInt32(Phases.Count)     — 0
 //     WritePackedGuid(PersonalGUID) — empty
-//   WriteInt32(VisibleMapIDs * 2)  — 0 (size in bytes)
-//   WriteInt32(PreloadMapIDs * 2)  — 0
-//   WriteInt32(UiMapPhaseIDs * 2)  — 0
+//   WriteUInt32(VisibleMapIDs * 2)  — size in bytes, followed by u16 ids
+//   WriteUInt32(PreloadMapIDs * 2)  — size in bytes, followed by u16 ids
+//   WriteUInt32(UiMapPhaseIDs * 2)  — size in bytes, followed by u16 ids
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseShiftDataPhase {
+    pub phase_flags: u16,
+    pub id: u16,
+}
 
 pub struct PhaseShiftChange {
     pub player_guid: ObjectGuid,
+    pub phase_shift_flags: u32,
+    pub phases: Vec<PhaseShiftDataPhase>,
+    pub personal_guid: ObjectGuid,
+    pub visible_map_ids: Vec<u16>,
+    pub preload_map_ids: Vec<u16>,
+    pub ui_map_phase_ids: Vec<u16>,
 }
 
 impl PhaseShiftChange {
     pub fn default_for(player_guid: ObjectGuid) -> Self {
-        Self { player_guid }
+        Self {
+            player_guid,
+            phase_shift_flags: 0x08,
+            phases: Vec::new(),
+            personal_guid: ObjectGuid::EMPTY,
+            visible_map_ids: Vec::new(),
+            preload_map_ids: Vec::new(),
+            ui_map_phase_ids: Vec::new(),
+        }
+    }
+
+    pub fn with_visible_map_ids(player_guid: ObjectGuid, visible_map_ids: Vec<u16>) -> Self {
+        Self {
+            visible_map_ids,
+            ..Self::default_for(player_guid)
+        }
     }
 }
 
@@ -1836,15 +1863,28 @@ impl ServerPacket for PhaseShiftChange {
         // Client GUID
         pkt.write_packed_guid(&self.player_guid);
         // Phaseshift block: flags + phases count + personal guid
-        pkt.write_uint32(0x08); // PhaseShiftFlags::Unphased
-        pkt.write_int32(0); // Phases.Count = 0
-        pkt.write_packed_guid(&ObjectGuid::EMPTY); // PersonalGUID = empty
-        // VisibleMapIDs count * 2 (size in bytes)
-        pkt.write_int32(0);
-        // PreloadMapIDs count * 2
-        pkt.write_int32(0);
-        // UiMapPhaseIDs count * 2
-        pkt.write_int32(0);
+        pkt.write_uint32(self.phase_shift_flags);
+        pkt.write_uint32(self.phases.len() as u32);
+        pkt.write_packed_guid(&self.personal_guid);
+        for phase in &self.phases {
+            pkt.write_uint16(phase.phase_flags);
+            pkt.write_uint16(phase.id);
+        }
+        // VisibleMapIDs size in bytes
+        pkt.write_uint32((self.visible_map_ids.len() * 2) as u32);
+        for visible_map_id in &self.visible_map_ids {
+            pkt.write_uint16(*visible_map_id);
+        }
+        // PreloadMapIDs size in bytes
+        pkt.write_uint32((self.preload_map_ids.len() * 2) as u32);
+        for preload_map_id in &self.preload_map_ids {
+            pkt.write_uint16(*preload_map_id);
+        }
+        // UiMapPhaseIDs size in bytes
+        pkt.write_uint32((self.ui_map_phase_ids.len() * 2) as u32);
+        for ui_map_phase_id in &self.ui_map_phase_ids {
+            pkt.write_uint16(*ui_map_phase_id);
+        }
     }
 }
 
@@ -2377,6 +2417,38 @@ mod tests {
         assert_eq!(bytes.len(), 6);
         let opcode = u16::from_le_bytes([bytes[0], bytes[1]]);
         assert_eq!(opcode, 0x291c);
+    }
+
+    #[test]
+    fn phase_shift_change_default_matches_cpp_empty_layout() {
+        let pkt = PhaseShiftChange::default_for(ObjectGuid::EMPTY);
+        let mut body = crate::WorldPacket::new_empty();
+        pkt.write(&mut body);
+        let bytes = body.into_data();
+
+        assert_eq!(bytes.len(), 24);
+        assert_eq!(&bytes[0..2], &[0, 0]); // packed Client GUID
+        assert_eq!(u32::from_le_bytes(bytes[2..6].try_into().unwrap()), 0x08);
+        assert_eq!(u32::from_le_bytes(bytes[6..10].try_into().unwrap()), 0);
+        assert_eq!(&bytes[10..12], &[0, 0]); // packed PersonalGUID
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn phase_shift_change_visible_map_ids_use_cpp_byte_size_prefix() {
+        let pkt = PhaseShiftChange::with_visible_map_ids(ObjectGuid::EMPTY, vec![609, 700]);
+        let mut body = crate::WorldPacket::new_empty();
+        pkt.write(&mut body);
+        let bytes = body.into_data();
+
+        assert_eq!(bytes.len(), 28);
+        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 4);
+        assert_eq!(u16::from_le_bytes(bytes[16..18].try_into().unwrap()), 609);
+        assert_eq!(u16::from_le_bytes(bytes[18..20].try_into().unwrap()), 700);
+        assert_eq!(u32::from_le_bytes(bytes[20..24].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 0);
     }
 
     #[test]

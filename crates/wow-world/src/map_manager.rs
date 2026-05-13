@@ -1,12 +1,33 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use tracing::{debug, info, warn};
-use wow_constants::WeaponAttackType;
+use wow_constants::movement::MovementFlag;
+use wow_constants::{UnitStandStateType, UnitState, WeaponAttackType};
 use wow_core::{ObjectGuid, Position};
-use wow_entities::{Creature, CreatureAiState};
+use wow_entities::{
+    Creature, CreatureAiState, DistractMovementAction, EVENT_CHARGE_PREPATH, GenericMovementInform,
+    MovementGeneratorKind, PhaseShift, PointMovementAction, PointMovementInform,
+    RotateMovementUpdate,
+};
+use wow_movement::{
+    MoveSpline, MoveSplineInit, MoveSplineLaunchInput, MoveSplineStopInput, MoveSplineStopResult,
+    PathGenerator, PathType,
+};
 use wow_packet::packets::update::CreatureCreateData;
+use wow_recastdetour::{
+    CENTER_GRID_ID_LIKE_CPP, DetourNavMeshQueryError, DetourPathOptions, DetourPathType,
+    DetourPolyPath, DetourQueryFilterError, MAX_NUMBER_OF_GRIDS_LIKE_CPP, MMapData,
+    MMapManager as DetourMMapManager, MMapManagerError, PathQueryFilterContext,
+    SIZE_OF_GRIDS_LIKE_CPP, ThreadUnsafeMapData, create_path_query_filter_like_cpp,
+};
+
+use crate::phasing::personal::MultiPersonalPhaseTracker;
 
 /// Size of a grid cell in yards (64x64 yards like TrinityCore).
 pub const GRID_SIZE: f32 = 64.0;
@@ -24,6 +45,574 @@ pub const DEFAULT_GRID_UNLOAD_TIME: Duration = Duration::from_secs(300);
 /// inventing terrain values.
 pub const DEFAULT_MIN_HEIGHT_LIKE_CPP: f32 = -500.0;
 
+const MAP_MAGIC_LIKE_CPP: &[u8; 4] = b"MAPS";
+const MAP_VERSION_MAGIC_LIKE_CPP: u32 = 10;
+const MAP_FILE_HEADER_SIZE_LIKE_CPP: usize = 44;
+const TERRAIN_GRID_COUNT_LIKE_CPP: usize =
+    MAX_NUMBER_OF_GRIDS_LIKE_CPP as usize * MAX_NUMBER_OF_GRIDS_LIKE_CPP as usize;
+
+pub fn terrain_grid_coords_for_wow_position_like_cpp(x: f32, y: f32) -> (i32, i32) {
+    let center_grid_offset = SIZE_OF_GRIDS_LIKE_CPP / 2.0;
+    let x_offset = (x - center_grid_offset) / SIZE_OF_GRIDS_LIKE_CPP;
+    let y_offset = (y - center_grid_offset) / SIZE_OF_GRIDS_LIKE_CPP;
+    let grid_x = (x_offset + CENTER_GRID_ID_LIKE_CPP as f32 + 0.5) as i32;
+    let grid_y = (y_offset + CENTER_GRID_ID_LIKE_CPP as f32 + 0.5) as i32;
+
+    (
+        (MAX_NUMBER_OF_GRIDS_LIKE_CPP - 1) - grid_x,
+        (MAX_NUMBER_OF_GRIDS_LIKE_CPP - 1) - grid_y,
+    )
+}
+
+pub fn terrain_map_id_for_phase_shift_like_cpp(
+    phase_shift: &PhaseShift,
+    map_id: u32,
+    x: f32,
+    y: f32,
+    mut has_child_terrain_grid_file: impl FnMut(u32, i32, i32) -> bool,
+) -> u32 {
+    match phase_shift.visible_map_id_count_like_cpp() {
+        0 => map_id,
+        1 => phase_shift
+            .visible_map_ids_like_cpp()
+            .next()
+            .unwrap_or(map_id),
+        _ => {
+            let (grid_x, grid_y) = terrain_grid_coords_for_wow_position_like_cpp(x, y);
+            phase_shift
+                .visible_map_ids_like_cpp()
+                .find(|visible_map_id| has_child_terrain_grid_file(*visible_map_id, grid_x, grid_y))
+                .unwrap_or(map_id)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TerrainGridFilesLikeCpp {
+    map_id: u32,
+    grid_file_exists: Vec<bool>,
+    child_terrain: Vec<TerrainGridFilesLikeCpp>,
+}
+
+impl TerrainGridFilesLikeCpp {
+    pub fn load_root_like_cpp(
+        data_dir: impl AsRef<Path>,
+        map_id: u32,
+        parent_child_map_data: &HashMap<u32, Vec<u32>>,
+    ) -> io::Result<Self> {
+        Self::load_impl_like_cpp(data_dir.as_ref(), map_id, parent_child_map_data)
+    }
+
+    fn load_impl_like_cpp(
+        data_dir: &Path,
+        map_id: u32,
+        parent_child_map_data: &HashMap<u32, Vec<u32>>,
+    ) -> io::Result<Self> {
+        let grid_file_exists = discover_grid_map_files_like_cpp(data_dir, map_id)?;
+        let mut child_terrain = Vec::new();
+        if let Some(child_map_ids) = parent_child_map_data.get(&map_id) {
+            for child_map_id in child_map_ids {
+                child_terrain.push(Self::load_impl_like_cpp(
+                    data_dir,
+                    *child_map_id,
+                    parent_child_map_data,
+                )?);
+            }
+        }
+
+        Ok(Self {
+            map_id,
+            grid_file_exists,
+            child_terrain,
+        })
+    }
+
+    pub fn map_id(&self) -> u32 {
+        self.map_id
+    }
+
+    pub fn has_grid_file_like_cpp(&self, gx: i32, gy: i32) -> bool {
+        terrain_grid_bitset_index_like_cpp(gx, gy)
+            .and_then(|idx| self.grid_file_exists.get(idx).copied())
+            .unwrap_or(false)
+    }
+
+    pub fn has_child_terrain_grid_file_like_cpp(&self, map_id: u32, gx: i32, gy: i32) -> bool {
+        self.child_terrain
+            .iter()
+            .find(|child_terrain| child_terrain.map_id == map_id)
+            .is_some_and(|child_terrain| child_terrain.has_grid_file_like_cpp(gx, gy))
+    }
+
+    pub fn terrain_map_id_for_phase_shift_like_cpp(
+        &self,
+        phase_shift: &PhaseShift,
+        source_map_id: u32,
+        x: f32,
+        y: f32,
+    ) -> u32 {
+        terrain_map_id_for_phase_shift_like_cpp(
+            phase_shift,
+            source_map_id,
+            x,
+            y,
+            |map_id, gx, gy| self.has_child_terrain_grid_file_like_cpp(map_id, gx, gy),
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct TerrainGridFileIndexLikeCpp {
+    data_dir: PathBuf,
+    parent_child_map_data: HashMap<u32, Vec<u32>>,
+    parent_map_ids: HashMap<u32, u32>,
+    terrain_maps: HashMap<u32, TerrainGridFilesLikeCpp>,
+}
+
+impl TerrainGridFileIndexLikeCpp {
+    pub fn new(
+        data_dir: impl AsRef<Path>,
+        parent_child_map_data: impl IntoIterator<Item = (u32, Vec<u32>)>,
+    ) -> Self {
+        let parent_child_map_data: HashMap<u32, Vec<u32>> =
+            parent_child_map_data.into_iter().collect();
+        let mut parent_map_ids = HashMap::new();
+        for (parent_map_id, child_map_ids) in &parent_child_map_data {
+            for child_map_id in child_map_ids {
+                parent_map_ids.insert(*child_map_id, *parent_map_id);
+            }
+        }
+
+        Self {
+            data_dir: data_dir.as_ref().to_path_buf(),
+            parent_child_map_data,
+            parent_map_ids,
+            terrain_maps: HashMap::new(),
+        }
+    }
+
+    pub fn root_map_id_like_cpp(&self, map_id: u32) -> u32 {
+        let mut root_map_id = map_id;
+        while let Some(parent_map_id) = self.parent_map_ids.get(&root_map_id).copied() {
+            root_map_id = parent_map_id;
+        }
+        root_map_id
+    }
+
+    pub fn terrain_for_map_like_cpp(
+        &mut self,
+        map_id: u32,
+    ) -> io::Result<&TerrainGridFilesLikeCpp> {
+        let root_map_id = self.root_map_id_like_cpp(map_id);
+        if !self.terrain_maps.contains_key(&root_map_id) {
+            let terrain = TerrainGridFilesLikeCpp::load_root_like_cpp(
+                &self.data_dir,
+                root_map_id,
+                &self.parent_child_map_data,
+            )?;
+            self.terrain_maps.insert(root_map_id, terrain);
+        }
+
+        Ok(self
+            .terrain_maps
+            .get(&root_map_id)
+            .expect("terrain root inserted"))
+    }
+
+    pub fn terrain_map_id_for_phase_shift_like_cpp(
+        &mut self,
+        phase_shift: &PhaseShift,
+        source_map_id: u32,
+        x: f32,
+        y: f32,
+    ) -> u32 {
+        if phase_shift.visible_map_id_count_like_cpp() == 0 {
+            return source_map_id;
+        }
+
+        self.terrain_for_map_like_cpp(source_map_id)
+            .map(|terrain| {
+                terrain.terrain_map_id_for_phase_shift_like_cpp(phase_shift, source_map_id, x, y)
+            })
+            .unwrap_or(source_map_id)
+    }
+}
+
+fn discover_grid_map_files_like_cpp(data_dir: &Path, map_id: u32) -> io::Result<Vec<bool>> {
+    let tile_list_name = data_dir.join("maps").join(format!("{map_id:04}.tilelist"));
+    if let Ok(mut tile_list) = File::open(tile_list_name) {
+        let mut map_magic = [0_u8; 4];
+        let mut version_magic = [0_u8; 4];
+        let mut build = [0_u8; 4];
+        let mut tiles_data = vec![0_u8; TERRAIN_GRID_COUNT_LIKE_CPP];
+        if tile_list.read_exact(&mut map_magic).is_ok()
+            && map_magic == *MAP_MAGIC_LIKE_CPP
+            && tile_list.read_exact(&mut version_magic).is_ok()
+            && u32::from_le_bytes(version_magic) == MAP_VERSION_MAGIC_LIKE_CPP
+            && tile_list.read_exact(&mut build).is_ok()
+            && tile_list.read_exact(&mut tiles_data).is_ok()
+        {
+            return Ok(terrain_grid_bitset_from_cpp_string_like_cpp(&tiles_data));
+        }
+    }
+
+    let mut grid_file_exists = vec![false; TERRAIN_GRID_COUNT_LIKE_CPP];
+    for gx in 0..MAX_NUMBER_OF_GRIDS_LIKE_CPP {
+        for gy in 0..MAX_NUMBER_OF_GRIDS_LIKE_CPP {
+            let idx = terrain_grid_bitset_index_like_cpp(gx, gy).expect("valid terrain grid index");
+            grid_file_exists[idx] = exist_map_like_cpp(data_dir, map_id, gx, gy);
+        }
+    }
+    Ok(grid_file_exists)
+}
+
+fn terrain_grid_bitset_index_like_cpp(gx: i32, gy: i32) -> Option<usize> {
+    if !(0..MAX_NUMBER_OF_GRIDS_LIKE_CPP).contains(&gx)
+        || !(0..MAX_NUMBER_OF_GRIDS_LIKE_CPP).contains(&gy)
+    {
+        return None;
+    }
+
+    Some(gx as usize * MAX_NUMBER_OF_GRIDS_LIKE_CPP as usize + gy as usize)
+}
+
+fn terrain_grid_bitset_from_cpp_string_like_cpp(tiles_data: &[u8]) -> Vec<bool> {
+    let mut grid_file_exists = vec![false; TERRAIN_GRID_COUNT_LIKE_CPP];
+    for (idx, exists) in grid_file_exists.iter_mut().enumerate() {
+        let string_idx = TERRAIN_GRID_COUNT_LIKE_CPP - 1 - idx;
+        *exists = tiles_data.get(string_idx).copied() == Some(b'1');
+    }
+    grid_file_exists
+}
+
+fn exist_map_like_cpp(data_dir: &Path, map_id: u32, gx: i32, gy: i32) -> bool {
+    let file_name = data_dir
+        .join("maps")
+        .join(format!("{map_id:04}_{gx:02}_{gy:02}.map"));
+    let Ok(mut file) = File::open(file_name) else {
+        return false;
+    };
+
+    let mut header = [0_u8; MAP_FILE_HEADER_SIZE_LIKE_CPP];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+
+    header[..4] == MAP_MAGIC_LIKE_CPP[..]
+        && u32::from_le_bytes([header[4], header[5], header[6], header[7]])
+            == MAP_VERSION_MAGIC_LIKE_CPP
+}
+
+fn position_to_i32_tuple(position: Position) -> (i32, i32, i32) {
+    (position.x as i32, position.y as i32, position.z as i32)
+}
+
+fn position_from_detour_point_like_cpp(point: [f32; 3]) -> Position {
+    Position::new(point[0], point[1], point[2], 0.0)
+}
+
+fn position_to_wow_point_like_cpp(position: Position) -> [f32; 3] {
+    [position.x, position.y, position.z]
+}
+
+#[derive(Debug, PartialEq)]
+pub enum WorldDetourPathError {
+    Filter(DetourQueryFilterError),
+    Query(DetourNavMeshQueryError),
+    MMap(String),
+}
+
+impl From<DetourQueryFilterError> for WorldDetourPathError {
+    fn from(value: DetourQueryFilterError) -> Self {
+        Self::Filter(value)
+    }
+}
+
+impl From<DetourNavMeshQueryError> for WorldDetourPathError {
+    fn from(value: DetourNavMeshQueryError) -> Self {
+        Self::Query(value)
+    }
+}
+
+impl From<MMapManagerError> for WorldDetourPathError {
+    fn from(value: MMapManagerError) -> Self {
+        Self::MMap(value.to_string())
+    }
+}
+
+#[derive(Debug)]
+pub struct WorldMMapPathfinderLikeCpp {
+    data_dir: PathBuf,
+    mmap_manager: DetourMMapManager,
+    terrain_grid_file_index: TerrainGridFileIndexLikeCpp,
+}
+
+impl WorldMMapPathfinderLikeCpp {
+    pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        let data_dir = data_dir.as_ref().to_path_buf();
+        Self {
+            terrain_grid_file_index: TerrainGridFileIndexLikeCpp::new(&data_dir, []),
+            data_dir,
+            mmap_manager: DetourMMapManager::new(),
+        }
+    }
+
+    pub fn new_with_parent_map_data_like_cpp(
+        data_dir: impl AsRef<Path>,
+        parent_child_map_data: impl IntoIterator<Item = (u32, Vec<u32>)>,
+    ) -> Self {
+        let data_dir = data_dir.as_ref().to_path_buf();
+        let parent_child_map_data: Vec<(u32, Vec<u32>)> =
+            parent_child_map_data.into_iter().collect();
+        let mut mmap_manager = DetourMMapManager::new();
+        mmap_manager.initialize_thread_unsafe(parent_child_map_data.iter().cloned().map(
+            |(map_id, child_map_ids)| ThreadUnsafeMapData {
+                map_id,
+                child_map_ids,
+            },
+        ));
+        Self {
+            terrain_grid_file_index: TerrainGridFileIndexLikeCpp::new(
+                &data_dir,
+                parent_child_map_data,
+            ),
+            data_dir,
+            mmap_manager,
+        }
+    }
+
+    pub fn calculate_creature_path_like_cpp(
+        &mut self,
+        creature: &WorldCreature,
+        destination: Position,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+        filter_context: PathQueryFilterContext,
+        force_destination: bool,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+        let creature_position = creature.position();
+        self.calculate_path_from_positions_like_cpp(
+            creature_position,
+            destination,
+            mesh_map_id,
+            instance_map_id,
+            instance_id,
+            filter_context,
+            force_destination,
+        )
+    }
+
+    pub fn calculate_path_from_positions_like_cpp(
+        &mut self,
+        start: Position,
+        destination: Position,
+        mesh_map_id: u32,
+        instance_map_id: u32,
+        instance_id: u32,
+        filter_context: PathQueryFilterContext,
+        force_destination: bool,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+        let context = self
+            .mmap_manager
+            .load_pathfinding_context_for_wow_position_like_cpp(
+                &self.data_dir,
+                mesh_map_id,
+                instance_map_id,
+                instance_id,
+                start.x,
+                start.y,
+            )?;
+
+        if !context.map_data_available
+            || !context.instance_query_available
+            || !context.tile_available
+        {
+            return Ok(None);
+        }
+
+        let Some(mmap_data) = self.mmap_manager.get_mmap_data(mesh_map_id) else {
+            return Ok(None);
+        };
+        let filter = create_path_query_filter_like_cpp(filter_context)?;
+        mmap_data
+            .calculate_path_for_instance_like_cpp(
+                instance_map_id,
+                instance_id,
+                &filter,
+                position_to_wow_point_like_cpp(start),
+                position_to_wow_point_like_cpp(destination),
+                DetourPathOptions {
+                    force_destination,
+                    ..DetourPathOptions::default()
+                },
+            )
+            .map_err(WorldDetourPathError::from)
+    }
+
+    pub fn resolve_mesh_map_id_for_path_request_like_cpp(
+        &mut self,
+        request: &WorldMMapPathRequestLikeCpp,
+    ) -> u32 {
+        self.terrain_grid_file_index
+            .terrain_map_id_for_phase_shift_like_cpp(
+                &request.phase_shift,
+                request.mesh_map_id,
+                request.start.x,
+                request.start.y,
+            )
+    }
+
+    pub fn mmap_manager(&self) -> &DetourMMapManager {
+        &self.mmap_manager
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorldMMapPathRequestLikeCpp {
+    pub start: Position,
+    pub destination: Position,
+    pub mesh_map_id: u32,
+    pub instance_map_id: u32,
+    pub instance_id: u32,
+    pub filter_context: PathQueryFilterContext,
+    pub force_destination: bool,
+    pub phase_shift: PhaseShift,
+}
+
+#[derive(Debug)]
+pub struct WorldMMapPathfinderWorkerLikeCpp {
+    request_tx: mpsc::Sender<WorldMMapPathfinderMessageLikeCpp>,
+}
+
+#[derive(Debug)]
+struct WorldMMapPathfinderMessageLikeCpp {
+    request: WorldMMapPathRequestLikeCpp,
+    response_tx: mpsc::Sender<Result<Option<DetourPolyPath>, WorldDetourPathError>>,
+}
+
+impl WorldMMapPathfinderWorkerLikeCpp {
+    pub fn spawn(data_dir: impl AsRef<Path>) -> Self {
+        Self::spawn_with_pathfinder_factory(data_dir, WorldMMapPathfinderLikeCpp::new)
+    }
+
+    pub fn spawn_with_parent_map_data_like_cpp(
+        data_dir: impl AsRef<Path>,
+        parent_child_map_data: Vec<(u32, Vec<u32>)>,
+    ) -> Self {
+        Self::spawn_with_pathfinder_factory(data_dir, move |data_dir| {
+            WorldMMapPathfinderLikeCpp::new_with_parent_map_data_like_cpp(
+                data_dir,
+                parent_child_map_data,
+            )
+        })
+    }
+
+    fn spawn_with_pathfinder_factory(
+        data_dir: impl AsRef<Path>,
+        pathfinder_factory: impl FnOnce(PathBuf) -> WorldMMapPathfinderLikeCpp + Send + 'static,
+    ) -> Self {
+        let (request_tx, request_rx) = mpsc::channel::<WorldMMapPathfinderMessageLikeCpp>();
+        let data_dir = data_dir.as_ref().to_path_buf();
+        thread::Builder::new()
+            .name("world-mmap-pathfinder-like-cpp".to_string())
+            .spawn(move || {
+                let mut pathfinder = pathfinder_factory(data_dir);
+                while let Ok(message) = request_rx.recv() {
+                    let request = message.request;
+                    let mesh_map_id =
+                        pathfinder.resolve_mesh_map_id_for_path_request_like_cpp(&request);
+                    let result = pathfinder.calculate_path_from_positions_like_cpp(
+                        request.start,
+                        request.destination,
+                        mesh_map_id,
+                        request.instance_map_id,
+                        request.instance_id,
+                        request.filter_context,
+                        request.force_destination,
+                    );
+                    let _ = message.response_tx.send(result);
+                }
+            })
+            .expect("spawn mmap pathfinder worker");
+
+        Self { request_tx }
+    }
+
+    pub fn calculate_path_like_cpp(
+        &self,
+        request: WorldMMapPathRequestLikeCpp,
+    ) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+        let (response_tx, response_rx) = mpsc::channel();
+        self.request_tx
+            .send(WorldMMapPathfinderMessageLikeCpp {
+                request,
+                response_tx,
+            })
+            .map_err(|error| WorldDetourPathError::MMap(error.to_string()))?;
+        response_rx
+            .recv()
+            .map_err(|error| WorldDetourPathError::MMap(error.to_string()))?
+    }
+}
+
+pub fn path_type_from_detour_like_cpp(path_type: DetourPathType) -> PathType {
+    PathType::from_bits_retain(path_type.bits())
+}
+
+pub fn path_generator_from_detour_like_cpp(
+    start: Position,
+    destination: Position,
+    detour_path: &DetourPolyPath,
+    force_destination: bool,
+) -> PathGenerator {
+    let mut path = PathGenerator::new();
+    path.apply_detour_path_like_cpp(
+        start,
+        destination,
+        position_from_detour_point_like_cpp(detour_path.point_path.actual_end),
+        detour_path
+            .point_path
+            .points
+            .iter()
+            .copied()
+            .map(position_from_detour_point_like_cpp),
+        &detour_path.poly_refs,
+        path_type_from_detour_like_cpp(detour_path.point_path.path_type),
+        force_destination,
+    );
+    path
+}
+
+pub fn calculate_creature_detour_path_like_cpp(
+    creature: &WorldCreature,
+    destination: Position,
+    mmap_data: Option<&MMapData>,
+    instance_map_id: u32,
+    instance_id: u32,
+    filter_context: PathQueryFilterContext,
+    force_destination: bool,
+) -> Result<Option<DetourPolyPath>, WorldDetourPathError> {
+    let Some(mmap_data) = mmap_data else {
+        return Ok(None);
+    };
+
+    let filter = create_path_query_filter_like_cpp(filter_context)?;
+    mmap_data
+        .calculate_path_for_instance_like_cpp(
+            instance_map_id,
+            instance_id,
+            &filter,
+            position_to_wow_point_like_cpp(creature.position()),
+            position_to_wow_point_like_cpp(destination),
+            DetourPathOptions {
+                force_destination,
+                ..DetourPathOptions::default()
+            },
+        )
+        .map_err(WorldDetourPathError::from)
+}
+
 /// Coordinate of a grid cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GridCoord {
@@ -34,6 +623,10 @@ pub struct GridCoord {
 impl GridCoord {
     pub fn new(x: i16, y: i16) -> Self {
         Self { x, y }
+    }
+
+    pub fn personal_phase_grid_id_like_cpp(&self) -> u16 {
+        (i32::from(self.x) * MAX_NUMBER_OF_GRIDS_LIKE_CPP + i32::from(self.y)) as u16
     }
 
     /// Get surrounding coordinates in a 3x3 area (including self).
@@ -62,6 +655,11 @@ pub struct WorldCreature {
     pub creature: Creature,
     /// Packet-create bridge retained for update-object construction.
     pub create_data: CreatureCreateData,
+    /// Active movement spline for the represented world tick.
+    ///
+    /// This is the first runtime bridge toward C++ `Unit::movespline`; the full
+    /// `MoveSplineInit`/`MotionMaster` port still owns generalized launch/stop.
+    active_move_spline: Option<MoveSpline>,
     clock_started_at: Instant,
 }
 
@@ -149,6 +747,7 @@ impl WorldCreature {
         Self {
             creature,
             create_data,
+            active_move_spline: None,
             clock_started_at: Instant::now(),
         }
     }
@@ -170,6 +769,18 @@ impl WorldCreature {
 
     pub fn position(&self) -> Position {
         self.creature.ai_position()
+    }
+
+    pub fn map_id(&self) -> u32 {
+        self.creature.unit().world().map_id()
+    }
+
+    pub fn instance_id(&self) -> u32 {
+        self.creature.unit().world().instance_id()
+    }
+
+    pub fn phase_shift(&self) -> &PhaseShift {
+        self.creature.unit().world().phase_shift()
     }
 
     pub fn home_position(&self) -> Position {
@@ -312,6 +923,9 @@ impl WorldCreature {
     }
 
     pub fn movement_finished(&self) -> bool {
+        if let Some(spline) = &self.active_move_spline {
+            return spline.finalized();
+        }
         self.creature
             .ai_ownership()
             .move_target
@@ -356,11 +970,464 @@ impl WorldCreature {
         ai.spline_id = ai.spline_id.saturating_add(1);
     }
 
+    fn launch_move_spline_init_like_cpp(
+        &mut self,
+        init: &mut MoveSplineInit,
+        dst: Position,
+    ) -> Option<(Position, MoveSpline)> {
+        let spline_id = init.args.spline_id;
+        let active_spline_position = self
+            .active_move_spline
+            .as_ref()
+            .filter(|spline| !spline.finalized() && !spline.on_transport)
+            .and_then(MoveSpline::compute_position);
+
+        let now_ms = self.now_ms();
+        let mut spline = self
+            .active_move_spline
+            .take()
+            .unwrap_or_else(MoveSpline::new);
+        let launch = init
+            .launch(
+                &mut spline,
+                MoveSplineLaunchInput {
+                    current_position: self.position(),
+                    active_spline_position,
+                    movement_flags: MovementFlag::NONE,
+                    selected_speed: 2.5,
+                    run_speed: 2.5,
+                    assistance_speed_factor: 1.0,
+                    on_transport: false,
+                },
+            )
+            .ok()?;
+        let duration_ms = launch.duration_ms.max(1) as u32;
+        {
+            let ai = self.creature.ai_ownership_mut();
+            ai.move_target = Some(dst);
+            ai.move_start_ms = now_ms;
+            ai.move_duration_ms = duration_ms;
+            ai.spline_id = spline_id;
+        }
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .launch_spline(
+                spline_id,
+                duration_ms,
+                position_to_i32_tuple(dst),
+                false,
+                false,
+                None,
+            );
+        self.creature
+            .unit_mut()
+            .add_unit_state(UnitState::ROAMING_MOVE.bits());
+        self.active_move_spline = Some(spline.clone());
+        Some((launch.real_position, spline))
+    }
+
+    pub fn begin_move_spline_like_cpp(&mut self, dst: Position) -> Option<(Position, MoveSpline)> {
+        let spline_id = self.spline_id().saturating_add(1);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_to(dst);
+
+        self.launch_move_spline_init_like_cpp(&mut init, dst)
+    }
+
+    pub fn begin_move_spline_by_path_like_cpp<I>(
+        &mut self,
+        path: I,
+    ) -> Option<(Position, MoveSpline)>
+    where
+        I: IntoIterator<Item = Position>,
+    {
+        let points = path.into_iter().collect::<Vec<_>>();
+        let dst = points.last().copied()?;
+        let spline_id = self.spline_id().saturating_add(1);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_by_path(points, 0);
+
+        self.launch_move_spline_init_like_cpp(&mut init, dst)
+    }
+
+    pub fn begin_move_spline_with_detour_path_like_cpp(
+        &mut self,
+        dst: Position,
+        detour_path: Option<&DetourPolyPath>,
+        force_destination: bool,
+    ) -> Option<(Position, MoveSpline, Option<PathGenerator>)> {
+        let Some(detour_path) = detour_path else {
+            return self
+                .begin_move_spline_like_cpp(dst)
+                .map(|(from, spline)| (from, spline, None));
+        };
+
+        let path = path_generator_from_detour_like_cpp(
+            self.position(),
+            dst,
+            detour_path,
+            force_destination,
+        );
+        if path.path_type().contains(PathType::NOPATH) {
+            return self
+                .begin_move_spline_like_cpp(dst)
+                .map(|(from, spline)| (from, spline, Some(path)));
+        }
+
+        let points = path.path_points().to_vec();
+        self.begin_move_spline_by_path_like_cpp(points)
+            .map(|(from, spline)| (from, spline, Some(path)))
+    }
+
+    pub fn begin_point_movement_like_cpp(
+        &mut self,
+        movement_id: u32,
+        dst: Position,
+        can_move: bool,
+    ) -> Option<(Position, MoveSpline)> {
+        if movement_id == EVENT_CHARGE_PREPATH {
+            self.creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .move_charge(movement_id);
+        } else {
+            self.creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .move_point(movement_id);
+        }
+
+        let action = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion.active_generators.iter_mut().find(|generator| {
+                generator.kind == MovementGeneratorKind::Point
+                    && generator.movement_id == movement_id
+            })?;
+            generator.initialize_point_like_cpp(can_move)
+        };
+
+        match action {
+            PointMovementAction::LaunchSpline => self.begin_move_spline_like_cpp(dst),
+            PointMovementAction::MarkRoamingMove => {
+                self.creature
+                    .unit_mut()
+                    .add_unit_state(UnitState::ROAMING_MOVE.bits());
+                None
+            }
+            PointMovementAction::StopMoving => {
+                self.creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .motion
+                    .stop_moving();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    pub fn finalize_point_movement_like_cpp(
+        &mut self,
+        active: bool,
+        movement_inform: bool,
+    ) -> Option<PointMovementInform> {
+        let finalize = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Point)?;
+            generator.finalize_point_like_cpp(active, movement_inform)
+        };
+        if finalize.clear_roaming_move {
+            self.creature
+                .unit_mut()
+                .clear_unit_state(UnitState::ROAMING_MOVE.bits());
+        }
+        if let Some(inform) = finalize.inform {
+            self.creature
+                .record_ai_movement_inform(inform.kind.trinity_id(), inform.movement_id);
+        }
+        finalize.inform
+    }
+
+    pub fn begin_facing_spline_like_cpp(
+        &mut self,
+        facing_angle: f32,
+    ) -> Option<(Position, MoveSpline)> {
+        let spline_id = self.spline_id().saturating_add(1);
+        let current = self.position();
+        let active_spline_position = self
+            .active_move_spline
+            .as_ref()
+            .filter(|spline| !spline.finalized() && !spline.on_transport)
+            .and_then(MoveSpline::compute_position);
+        let mut init = MoveSplineInit::new(spline_id);
+        init.set_velocity(2.5);
+        init.move_to(current);
+        init.set_facing_angle(facing_angle);
+
+        let now_ms = self.now_ms();
+        let mut spline = self
+            .active_move_spline
+            .take()
+            .unwrap_or_else(MoveSpline::new);
+        let launch = init
+            .launch(
+                &mut spline,
+                MoveSplineLaunchInput {
+                    current_position: current,
+                    active_spline_position,
+                    movement_flags: MovementFlag::NONE,
+                    selected_speed: 2.5,
+                    run_speed: 2.5,
+                    assistance_speed_factor: 1.0,
+                    on_transport: false,
+                },
+            )
+            .ok()?;
+        let duration_ms = launch.duration_ms.max(1) as u32;
+        {
+            let ai = self.creature.ai_ownership_mut();
+            ai.move_target = Some(current);
+            ai.move_start_ms = now_ms;
+            ai.move_duration_ms = duration_ms;
+            ai.spline_id = spline_id;
+        }
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .launch_spline(
+                spline_id,
+                duration_ms,
+                position_to_i32_tuple(current),
+                false,
+                false,
+                None,
+            );
+        self.active_move_spline = Some(spline.clone());
+        Some((launch.real_position, spline))
+    }
+
+    pub fn begin_distract_movement_like_cpp(
+        &mut self,
+        timer_ms: u32,
+        orientation: f32,
+    ) -> Option<(DistractMovementAction, Position, MoveSpline)> {
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .move_distract_like_cpp(timer_ms);
+
+        let owner_is_standing = self.creature.unit().is_stand_state_like_cpp();
+        let action = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)?;
+            generator.initialize_distract_like_cpp(owner_is_standing)
+        };
+        if action.stand_up {
+            self.creature
+                .unit_mut()
+                .set_stand_state_like_cpp(UnitStandStateType::Stand);
+        }
+        let (from, spline) = self.begin_facing_spline_like_cpp(orientation)?;
+        Some((action, from, spline))
+    }
+
+    pub fn tick_rotate_movement_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> Option<(RotateMovementUpdate, MoveSpline)> {
+        let update = {
+            let current_orientation = self.position().orientation;
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Rotate)?;
+            generator.update_rotate_like_cpp(true, diff_ms, current_orientation)
+        };
+        let (_, spline) = self.begin_facing_spline_like_cpp(update.facing_angle?)?;
+        Some((update, spline))
+    }
+
+    pub fn finalize_distract_movement_like_cpp(&mut self, movement_inform: bool) -> bool {
+        let finalize = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let Some(generator) = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)
+            else {
+                return false;
+            };
+            generator.finalize_distract_like_cpp(movement_inform, true)
+        };
+
+        if finalize.set_home_orientation {
+            let current = self.position();
+            let home = self.home_position();
+            self.creature.set_ai_position(Position::new(
+                current.x,
+                current.y,
+                current.z,
+                home.orientation,
+            ));
+        }
+        finalize.set_home_orientation
+    }
+
+    pub fn finalize_rotate_movement_like_cpp(
+        &mut self,
+        movement_inform: bool,
+    ) -> Option<PointMovementInform> {
+        let inform = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Rotate)?;
+            generator
+                .finalize_rotate_like_cpp(movement_inform, true)
+                .inform
+        };
+        if let Some(inform) = inform {
+            self.creature
+                .record_ai_movement_inform(inform.kind.trinity_id(), inform.movement_id);
+        }
+        inform
+    }
+
+    pub fn finalize_generic_movement_like_cpp(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        movement_inform: bool,
+    ) -> Option<GenericMovementInform> {
+        let inform = {
+            let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == kind && generator.movement_id == movement_id)?;
+            generator.finalize_generic_like_cpp(movement_inform)
+        };
+        if let Some(inform) = inform {
+            self.creature
+                .record_ai_movement_inform(inform.kind.trinity_id(), inform.movement_id);
+        }
+        inform
+    }
+
+    pub fn update_move_spline_like_cpp(&mut self) -> bool {
+        let Some(mut spline) = self.active_move_spline.take() else {
+            return self.movement_finished();
+        };
+
+        if !spline.finalized() {
+            let elapsed_ms = self
+                .now_ms()
+                .saturating_sub(self.creature.ai_ownership().move_start_ms)
+                .min(i32::MAX as u64) as i32;
+            let diff_ms = elapsed_ms.saturating_sub(spline.time_passed_ms());
+            if diff_ms > 0 {
+                spline.update_state(diff_ms);
+            }
+            if let Some(pos) = spline.compute_position() {
+                self.creature.set_ai_position(pos);
+            }
+            let progress_ms = spline.time_passed_ms().max(0) as u32;
+            self.creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .set_spline_progress(progress_ms);
+        }
+
+        let finalized = spline.finalized();
+        if finalized {
+            self.creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .finalize_spline();
+            self.creature
+                .unit_mut()
+                .clear_unit_state(UnitState::ROAMING_MOVE.bits());
+        } else {
+            self.active_move_spline = Some(spline);
+        }
+        finalized
+    }
+
+    pub fn stop_move_spline_like_cpp(&mut self) -> Option<MoveSplineStopResult> {
+        let mut spline = self.active_move_spline.take()?;
+        if spline.finalized() {
+            return None;
+        }
+
+        let elapsed_ms = self
+            .now_ms()
+            .saturating_sub(self.creature.ai_ownership().move_start_ms)
+            .min(i32::MAX as u64) as i32;
+        let diff_ms = elapsed_ms.saturating_sub(spline.time_passed_ms());
+        if diff_ms > 0 {
+            spline.update_state(diff_ms);
+        }
+        if spline.finalized() {
+            return None;
+        }
+
+        let stop_position = spline.compute_position().unwrap_or_else(|| self.position());
+        let mut init = MoveSplineInit::new(self.spline_id().saturating_add(1));
+        let stop = init.stop(
+            &mut spline,
+            MoveSplineStopInput {
+                current_position: self.position(),
+                active_spline_position: Some(stop_position),
+                on_transport: false,
+            },
+        )?;
+
+        self.creature.set_ai_position(stop.position);
+        let ai = self.creature.ai_ownership_mut();
+        ai.move_target = None;
+        ai.move_duration_ms = 0;
+        ai.spline_id = stop.spline_id;
+        let motion = &mut self.creature.unit_mut().subsystems_mut().motion;
+        motion.finalize_spline();
+        motion.spline.spline_id = stop.spline_id;
+        self.creature
+            .unit_mut()
+            .clear_unit_state(UnitState::ROAMING_MOVE.bits());
+        Some(stop)
+    }
+
     pub fn finish_move(&mut self) {
         if let Some(dst) = self.creature.ai_ownership_mut().move_target.take() {
             self.creature.set_ai_position(dst);
         }
         self.creature.ai_ownership_mut().move_duration_ms = 0;
+        self.active_move_spline = None;
+        self.creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .finalize_spline();
+        self.creature
+            .unit_mut()
+            .clear_unit_state(UnitState::ROAMING_MOVE.bits());
     }
 
     pub fn can_swing(&self) -> bool {
@@ -492,6 +1559,8 @@ pub struct MapInstance {
     pub instance_id: u32,
     pub grids: HashMap<GridCoord, Grid>,
     pub grid_unload_timeout: Duration,
+    pub personal_phases: MultiPersonalPhaseTracker,
+    personal_phase_objects_to_remove: HashSet<ObjectGuid>,
 }
 
 impl MapInstance {
@@ -501,6 +1570,8 @@ impl MapInstance {
             instance_id,
             grids: HashMap::new(),
             grid_unload_timeout: DEFAULT_GRID_UNLOAD_TIME,
+            personal_phases: MultiPersonalPhaseTracker::default(),
+            personal_phase_objects_to_remove: HashSet::new(),
         }
     }
 
@@ -526,7 +1597,13 @@ impl MapInstance {
     }
 
     pub fn remove_grid(&mut self, x: i16, y: i16) -> bool {
-        self.grids.remove(&GridCoord::new(x, y)).is_some()
+        let coord = GridCoord::new(x, y);
+        let removed = self.grids.remove(&coord).is_some();
+        if removed {
+            self.personal_phases
+                .unload_grid_like_cpp(coord.personal_phase_grid_id_like_cpp());
+        }
+        removed
     }
 
     pub fn add_creature(&mut self, x: i16, y: i16, creature: WorldCreature) -> bool {
@@ -568,6 +1645,8 @@ impl MapInstance {
                 coord, self.map_id
             );
             self.grids.remove(&coord);
+            self.personal_phases
+                .unload_grid_like_cpp(coord.personal_phase_grid_id_like_cpp());
         }
     }
 
@@ -581,6 +1660,87 @@ impl MapInstance {
 
     pub fn min_height_like_cpp(&self, _x: f32, _y: f32) -> f32 {
         DEFAULT_MIN_HEIGHT_LIKE_CPP
+    }
+
+    pub fn load_personal_phase_grid_like_cpp(
+        &mut self,
+        phase_shift: &PhaseShift,
+        x: i16,
+        y: i16,
+        has_personal_spawns: impl FnMut(u32) -> bool,
+        load_phase: impl FnMut(ObjectGuid, u32),
+    ) -> bool {
+        self.get_or_create_grid(x, y);
+        self.personal_phases.load_grid_like_cpp(
+            phase_shift,
+            GridCoord::new(x, y).personal_phase_grid_id_like_cpp(),
+            has_personal_spawns,
+            load_phase,
+        )
+    }
+
+    pub fn update_personal_phases_for_owner_like_cpp(
+        &mut self,
+        phase_owner: ObjectGuid,
+        phase_shift: &PhaseShift,
+        grid: Option<GridCoord>,
+        has_personal_spawns: impl FnMut(u32) -> bool,
+        load_phase: impl FnMut(ObjectGuid, u32),
+    ) -> bool {
+        self.personal_phases.on_owner_phase_changed_like_cpp(
+            phase_owner,
+            phase_shift,
+            grid.map(|coord| coord.personal_phase_grid_id_like_cpp()),
+            has_personal_spawns,
+            load_phase,
+        )
+    }
+
+    pub fn register_personal_phase_object_like_cpp(
+        &mut self,
+        phase_id: u32,
+        phase_owner: ObjectGuid,
+        object: ObjectGuid,
+    ) {
+        self.personal_phases
+            .register_tracked_object_like_cpp(phase_id, phase_owner, object);
+    }
+
+    pub fn unregister_personal_phase_object_like_cpp(
+        &mut self,
+        phase_owner: ObjectGuid,
+        object: ObjectGuid,
+    ) {
+        self.personal_phases
+            .unregister_tracked_object_like_cpp(phase_owner, object);
+    }
+
+    pub fn mark_personal_phases_for_deletion_like_cpp(&mut self, phase_owner: ObjectGuid) {
+        self.personal_phases
+            .mark_all_phases_for_deletion_like_cpp(phase_owner);
+    }
+
+    pub fn update_personal_phases_like_cpp(&mut self, diff: Duration) {
+        let mut objects_to_remove = Vec::new();
+        self.personal_phases
+            .update_like_cpp(diff, |guid| objects_to_remove.push(guid));
+        self.personal_phase_objects_to_remove
+            .extend(objects_to_remove);
+    }
+
+    pub fn remove_personal_phase_objects_like_cpp(&mut self) -> usize {
+        let objects_to_remove = std::mem::take(&mut self.personal_phase_objects_to_remove);
+        let removed = objects_to_remove.len();
+        for object in objects_to_remove {
+            for grid in self.grids.values_mut() {
+                grid.remove_creature(object);
+            }
+        }
+        removed
+    }
+
+    pub fn queued_personal_phase_remove_count_like_cpp(&self) -> usize {
+        self.personal_phase_objects_to_remove.len()
     }
 }
 
@@ -890,6 +2050,18 @@ impl MapManager {
         y: f32,
         _z: f32,
     ) -> Vec<WorldCreature> {
+        self.get_visible_creatures_in_phase(map_id, instance_id, x, y, _z, None)
+    }
+
+    pub fn get_visible_creatures_in_phase(
+        &self,
+        map_id: u16,
+        instance_id: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+        seer_phase_shift: Option<&PhaseShift>,
+    ) -> Vec<WorldCreature> {
         let center_x = world_to_grid_x(x);
         let center_y = world_to_grid_y(y);
 
@@ -903,9 +2075,15 @@ impl MapManager {
 
                 if let Some(grid) = self.get_grid(map_id, instance_id, grid_x, grid_y) {
                     for creature in grid.creatures.values() {
+                        if let Some(seer_phase_shift) = seer_phase_shift
+                            && !seer_phase_shift.can_see(creature.phase_shift())
+                        {
+                            continue;
+                        }
+
                         // Optional: Check actual distance for precise visibility
                         let dist =
-                            Position::distance(&Position::new(x, y, _z, 0.0), &creature.position());
+                            Position::distance(&Position::new(x, y, z, 0.0), &creature.position());
                         if dist <= VISIBILITY_RADIUS {
                             creatures.push(creature.clone());
                         }
@@ -942,6 +2120,8 @@ impl MapManager {
                     if grid.should_unload(map.grid_unload_timeout) {
                         info!("Unloading distant grid {:?} from map {}", coord, map_id);
                         map.grids.remove(&coord);
+                        map.personal_phases
+                            .unload_grid_like_cpp(coord.personal_phase_grid_id_like_cpp());
                     }
                 }
             }
@@ -1003,7 +2183,309 @@ pub fn grid_corner(grid_x: i16, grid_y: i16) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use wow_constants::PhaseFlags;
     use wow_core::guid::HighGuid;
+
+    fn unique_temp_data_dir(test_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("rustycore-{test_name}-{unique}"));
+        fs::create_dir_all(data_dir.join("maps")).expect("create maps test dir");
+        data_dir
+    }
+
+    fn map_file_header_like_cpp() -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(MAP_MAGIC_LIKE_CPP);
+        header.extend_from_slice(&MAP_VERSION_MAGIC_LIKE_CPP.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(header.len(), MAP_FILE_HEADER_SIZE_LIKE_CPP);
+        header
+    }
+
+    fn test_creature(guid: ObjectGuid) -> WorldCreature {
+        WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            1,
+            5,
+            10,
+            20.0,
+            0,
+            35,
+            0,
+            0,
+        )
+    }
+
+    fn tilelist_like_cpp(grid_indices: impl IntoIterator<Item = usize>) -> Vec<u8> {
+        let mut bitset_string = vec![b'0'; TERRAIN_GRID_COUNT_LIKE_CPP];
+        for grid_idx in grid_indices {
+            bitset_string[TERRAIN_GRID_COUNT_LIKE_CPP - 1 - grid_idx] = b'1';
+        }
+
+        let mut tilelist = Vec::new();
+        tilelist.extend_from_slice(MAP_MAGIC_LIKE_CPP);
+        tilelist.extend_from_slice(&MAP_VERSION_MAGIC_LIKE_CPP.to_le_bytes());
+        tilelist.extend_from_slice(&0_u32.to_le_bytes());
+        tilelist.extend_from_slice(&bitset_string);
+        tilelist
+    }
+
+    #[test]
+    fn terrain_grid_coords_match_cpp_compute_grid_coord_reversal() {
+        assert_eq!(
+            terrain_grid_coords_for_wow_position_like_cpp(0.0, 0.0),
+            (31, 31)
+        );
+        assert_eq!(
+            terrain_grid_coords_for_wow_position_like_cpp(SIZE_OF_GRIDS_LIKE_CPP, 0.0),
+            (30, 31)
+        );
+        assert_eq!(
+            terrain_grid_coords_for_wow_position_like_cpp(-SIZE_OF_GRIDS_LIKE_CPP, 0.0),
+            (32, 31)
+        );
+    }
+
+    #[test]
+    fn terrain_map_id_without_visible_maps_returns_source_map_like_cpp() {
+        let phase_shift = PhaseShift::default();
+        let mut called = false;
+
+        let map_id =
+            terrain_map_id_for_phase_shift_like_cpp(&phase_shift, 571, 0.0, 0.0, |_, _, _| {
+                called = true;
+                true
+            });
+
+        assert_eq!(map_id, 571);
+        assert!(!called);
+    }
+
+    #[test]
+    fn terrain_map_id_single_visible_map_returns_it_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+        let mut called = false;
+
+        let map_id =
+            terrain_map_id_for_phase_shift_like_cpp(&phase_shift, 571, 0.0, 0.0, |_, _, _| {
+                called = true;
+                false
+            });
+
+        assert_eq!(map_id, 609);
+        assert!(!called);
+    }
+
+    #[test]
+    fn terrain_map_id_multiple_visible_maps_uses_child_grid_lookup_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(700, 1);
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+        let mut checked = Vec::new();
+
+        let map_id = terrain_map_id_for_phase_shift_like_cpp(
+            &phase_shift,
+            571,
+            0.0,
+            0.0,
+            |visible_map_id, gx, gy| {
+                checked.push((visible_map_id, gx, gy));
+                visible_map_id == 609
+            },
+        );
+
+        assert_eq!(map_id, 609);
+        assert_eq!(checked, vec![(609, 31, 31)]);
+    }
+
+    #[test]
+    fn terrain_map_id_multiple_visible_maps_falls_back_to_source_map_like_cpp() {
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+        phase_shift.add_visible_map_id_like_cpp(700, 1);
+
+        let map_id =
+            terrain_map_id_for_phase_shift_like_cpp(&phase_shift, 571, 0.0, 0.0, |_, _, _| false);
+
+        assert_eq!(map_id, 571);
+    }
+
+    #[test]
+    fn terrain_grid_files_read_cpp_tilelist_bitset_string_order() {
+        let data_dir = unique_temp_data_dir("terrain-grid-tilelist");
+        let grid_idx = terrain_grid_bitset_index_like_cpp(31, 31).expect("valid grid index");
+        fs::write(
+            data_dir.join("maps").join("0609.tilelist"),
+            tilelist_like_cpp([grid_idx]),
+        )
+        .expect("write tilelist");
+
+        let terrain = TerrainGridFilesLikeCpp::load_root_like_cpp(&data_dir, 609, &HashMap::new())
+            .expect("load terrain grid files");
+
+        assert!(terrain.has_grid_file_like_cpp(31, 31));
+        assert!(!terrain.has_grid_file_like_cpp(31, 30));
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn terrain_grid_files_fallback_validates_map_header_like_cpp() {
+        let data_dir = unique_temp_data_dir("terrain-grid-map-header");
+        fs::write(
+            data_dir.join("maps").join("0609_31_31.map"),
+            map_file_header_like_cpp(),
+        )
+        .expect("write map file");
+        fs::write(
+            data_dir.join("maps").join("0609_31_30.map"),
+            b"not a valid map header",
+        )
+        .expect("write invalid map file");
+
+        let terrain = TerrainGridFilesLikeCpp::load_root_like_cpp(&data_dir, 609, &HashMap::new())
+            .expect("load terrain grid files");
+
+        assert!(terrain.has_grid_file_like_cpp(31, 31));
+        assert!(!terrain.has_grid_file_like_cpp(31, 30));
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn terrain_grid_files_has_child_terrain_grid_file_like_cpp() {
+        let data_dir = unique_temp_data_dir("terrain-grid-child");
+        let grid_idx = terrain_grid_bitset_index_like_cpp(31, 31).expect("valid grid index");
+        fs::write(
+            data_dir.join("maps").join("0571.tilelist"),
+            tilelist_like_cpp([]),
+        )
+        .expect("write parent tilelist");
+        fs::write(
+            data_dir.join("maps").join("0609.tilelist"),
+            tilelist_like_cpp([grid_idx]),
+        )
+        .expect("write child tilelist");
+        let parent_child_map_data = HashMap::from([(571, vec![609]), (609, Vec::new())]);
+
+        let terrain =
+            TerrainGridFilesLikeCpp::load_root_like_cpp(&data_dir, 571, &parent_child_map_data)
+                .expect("load terrain grid files");
+
+        assert!(terrain.has_child_terrain_grid_file_like_cpp(609, 31, 31));
+        assert!(!terrain.has_child_terrain_grid_file_like_cpp(609, 31, 30));
+        assert!(!terrain.has_child_terrain_grid_file_like_cpp(700, 31, 31));
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn terrain_grid_files_resolve_phase_shift_visible_map_like_cpp() {
+        let data_dir = unique_temp_data_dir("terrain-grid-resolver");
+        let grid_idx = terrain_grid_bitset_index_like_cpp(31, 31).expect("valid grid index");
+        fs::write(
+            data_dir.join("maps").join("0571.tilelist"),
+            tilelist_like_cpp([]),
+        )
+        .expect("write parent tilelist");
+        fs::write(
+            data_dir.join("maps").join("0609.tilelist"),
+            tilelist_like_cpp([grid_idx]),
+        )
+        .expect("write child tilelist");
+        let parent_child_map_data = HashMap::from([(571, vec![609]), (609, Vec::new())]);
+        let terrain =
+            TerrainGridFilesLikeCpp::load_root_like_cpp(&data_dir, 571, &parent_child_map_data)
+                .expect("load terrain grid files");
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(700, 1);
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+
+        assert_eq!(
+            terrain.terrain_map_id_for_phase_shift_like_cpp(&phase_shift, 571, 0.0, 0.0),
+            609
+        );
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn terrain_grid_file_index_resolves_root_and_visible_child_map_like_cpp() {
+        let data_dir = unique_temp_data_dir("terrain-grid-index");
+        let grid_idx = terrain_grid_bitset_index_like_cpp(31, 31).expect("valid grid index");
+        fs::write(
+            data_dir.join("maps").join("0571.tilelist"),
+            tilelist_like_cpp([]),
+        )
+        .expect("write parent tilelist");
+        fs::write(
+            data_dir.join("maps").join("0609.tilelist"),
+            tilelist_like_cpp([grid_idx]),
+        )
+        .expect("write child tilelist");
+        let mut index =
+            TerrainGridFileIndexLikeCpp::new(&data_dir, [(571, vec![609]), (609, Vec::new())]);
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+
+        assert_eq!(index.root_map_id_like_cpp(609), 571);
+        assert_eq!(
+            index.terrain_map_id_for_phase_shift_like_cpp(&phase_shift, 571, 0.0, 0.0),
+            609
+        );
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
+
+    #[test]
+    fn world_mmap_pathfinder_resolves_mesh_map_from_phase_shift_like_cpp() {
+        let data_dir = unique_temp_data_dir("mmap-phase-shift-mesh-map");
+        let grid_idx = terrain_grid_bitset_index_like_cpp(31, 31).expect("valid grid index");
+        fs::write(
+            data_dir.join("maps").join("0571.tilelist"),
+            tilelist_like_cpp([]),
+        )
+        .expect("write parent tilelist");
+        fs::write(
+            data_dir.join("maps").join("0609.tilelist"),
+            tilelist_like_cpp([grid_idx]),
+        )
+        .expect("write child tilelist");
+        let mut pathfinder = WorldMMapPathfinderLikeCpp::new_with_parent_map_data_like_cpp(
+            &data_dir,
+            [(571, vec![609]), (609, Vec::new())],
+        );
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_visible_map_id_like_cpp(609, 1);
+        let request = WorldMMapPathRequestLikeCpp {
+            start: Position::new(0.0, 0.0, 0.0, 0.0),
+            destination: Position::new(20.0, 0.0, 0.0, 0.0),
+            mesh_map_id: 571,
+            instance_map_id: 571,
+            instance_id: 42,
+            filter_context: PathQueryFilterContext::creature(true, false, false, false),
+            force_destination: false,
+            phase_shift,
+        };
+
+        assert_eq!(
+            pathfinder.resolve_mesh_map_id_for_path_request_like_cpp(&request),
+            609
+        );
+        fs::remove_dir_all(data_dir).expect("remove test dir");
+    }
 
     #[test]
     fn test_world_to_grid_positive() {
@@ -1119,6 +2601,68 @@ mod tests {
     }
 
     #[test]
+    fn map_instance_load_personal_phase_grid_tracks_cpp_grid_id_once() {
+        let owner = ObjectGuid::create_player(1, 1);
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_phase_like_cpp(10, PhaseFlags::PERSONAL, 1);
+        phase_shift.set_personal_guid_like_cpp(owner);
+        let mut map = MapInstance::new(571, 0);
+        let mut loaded = Vec::new();
+
+        assert!(map.load_personal_phase_grid_like_cpp(
+            &phase_shift,
+            3,
+            5,
+            |phase_id| phase_id == 10,
+            |owner, phase_id| loaded.push((owner, phase_id)),
+        ));
+        assert!(map.is_grid_loaded(3, 5));
+        assert_eq!(loaded, vec![(owner, 10)]);
+
+        assert!(!map.load_personal_phase_grid_like_cpp(
+            &phase_shift,
+            3,
+            5,
+            |phase_id| phase_id == 10,
+            |owner, phase_id| loaded.push((owner, phase_id)),
+        ));
+        assert_eq!(loaded, vec![(owner, 10)]);
+
+        let tracker = map.personal_phases.owner_tracker_like_cpp(owner).unwrap();
+        assert!(tracker.is_grid_loaded_for_phase_like_cpp(3 * 64 + 5, 10));
+    }
+
+    #[test]
+    fn map_instance_unload_grid_purges_personal_phase_grid_tracking_like_cpp() {
+        let owner = ObjectGuid::create_player(1, 1);
+        let mut phase_shift = PhaseShift::default();
+        phase_shift.add_phase_like_cpp(10, PhaseFlags::PERSONAL, 1);
+        phase_shift.set_personal_guid_like_cpp(owner);
+        let mut map = MapInstance::new(571, 0);
+
+        map.load_personal_phase_grid_like_cpp(&phase_shift, 3, 5, |_| true, |_, _| {});
+        assert!(map.remove_grid(3, 5));
+        assert!(map.personal_phases.owner_tracker_like_cpp(owner).is_none());
+    }
+
+    #[test]
+    fn map_instance_update_personal_phases_queues_and_removes_expired_objects_like_cpp() {
+        let owner = ObjectGuid::create_player(1, 1);
+        let object = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, 1, 100);
+        let mut map = MapInstance::new(571, 0);
+        map.add_creature(0, 0, test_creature(object));
+        map.register_personal_phase_object_like_cpp(10, owner, object);
+        map.mark_personal_phases_for_deletion_like_cpp(owner);
+
+        map.update_personal_phases_like_cpp(Duration::from_secs(60));
+        assert_eq!(map.queued_personal_phase_remove_count_like_cpp(), 1);
+        assert!(map.get_creature(0, 0, object).is_some());
+
+        assert_eq!(map.remove_personal_phase_objects_like_cpp(), 1);
+        assert!(map.get_creature(0, 0, object).is_none());
+    }
+
+    #[test]
     fn test_map_manager_create_map() {
         let mut manager = MapManager::new();
         let map = manager.get_or_create_map(0, 0);
@@ -1224,6 +2768,720 @@ mod tests {
     }
 
     #[test]
+    fn world_creature_move_spline_bridge_advances_and_finalizes_like_cpp_unit_tick() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54321);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let dst = Position::new(15.0, 10.0, 0.0, 0.0);
+
+        let (from, spline) = creature
+            .begin_move_spline_like_cpp(dst)
+            .expect("valid two-point spline");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert!(creature.active_move_spline.is_some());
+        assert_eq!(creature.spline_id(), 2);
+        assert!(
+            creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+        assert!(motion_spline.enabled);
+        assert!(!motion_spline.finalized);
+        assert_eq!(motion_spline.spline_id, spline.id());
+        assert_eq!(motion_spline.duration_ms, spline.duration_ms() as u32);
+        assert_eq!(motion_spline.final_destination, Some((15, 10, 0)));
+
+        let duration_ms = spline.duration_ms() as u32;
+        let now_ms = creature.now_ms();
+        creature.creature.ai_ownership_mut().move_start_ms =
+            now_ms.saturating_sub(u64::from(duration_ms / 2));
+        assert!(!creature.update_move_spline_like_cpp());
+        let mid = creature.position();
+        assert!(mid.x > 10.0 && mid.x < 15.0, "mid position was {mid:?}");
+        assert_eq!(
+            creature
+                .creature
+                .unit()
+                .subsystems()
+                .motion
+                .spline
+                .progress_ms,
+            duration_ms / 2
+        );
+
+        let now_ms = creature.now_ms();
+        creature.creature.ai_ownership_mut().move_start_ms =
+            now_ms.saturating_sub(u64::from(duration_ms));
+        assert!(creature.update_move_spline_like_cpp());
+        assert!(creature.active_move_spline.is_none());
+        assert_eq!(creature.position(), dst);
+        let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+        assert!(!motion_spline.enabled);
+        assert!(motion_spline.finalized);
+        assert_eq!(motion_spline.progress_ms, motion_spline.duration_ms);
+        assert!(
+            !creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+    }
+
+    #[test]
+    fn world_creature_move_spline_by_path_uses_cpp_moveby_path_bridge() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54322);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let path = [
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            Position::new(12.0, 11.0, 0.0, 0.0),
+            Position::new(15.0, 12.0, 0.0, 0.0),
+        ];
+
+        let (from, spline) = creature
+            .begin_move_spline_by_path_like_cpp(path)
+            .expect("valid multi-point path spline");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert!(creature.active_move_spline.is_some());
+        assert_eq!(creature.spline_id(), 2);
+        assert_eq!(creature.move_target(), Some(path[2]));
+        assert_eq!(spline.final_destination(), Some(path[2]));
+        assert_eq!(spline.monster_move_path_data().points, vec![path[2]]);
+        assert_eq!(spline.monster_move_path_data().packed_deltas.len(), 1);
+        assert!(
+            creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+        assert!(motion_spline.enabled);
+        assert_eq!(motion_spline.spline_id, spline.id());
+        assert_eq!(motion_spline.final_destination, Some((15, 12, 0)));
+    }
+
+    #[test]
+    fn world_creature_detour_path_bridge_uses_moveby_path_or_direct_fallback_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54324);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let normal_path = DetourPolyPath {
+            poly_refs: vec![11, 22],
+            point_path: wow_recastdetour::DetourPointPath {
+                points: vec![[10.0, 10.0, 0.0], [12.0, 11.0, 0.0], [15.0, 12.0, 0.0]],
+                actual_end: [15.0, 12.0, 0.0],
+                path_type: DetourPathType::NORMAL,
+            },
+            start_far_from_poly: false,
+            end_far_from_poly: false,
+        };
+        let dst = Position::new(15.0, 12.0, 0.0, 0.0);
+
+        let (from, spline, path) = creature
+            .begin_move_spline_with_detour_path_like_cpp(dst, Some(&normal_path), false)
+            .expect("detour path launches");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert_eq!(spline.final_destination(), Some(dst));
+        assert_eq!(spline.monster_move_path_data().points, vec![dst]);
+        let path = path.expect("path generator");
+        assert_eq!(path.path_type(), PathType::NORMAL);
+        assert_eq!(path.poly_length(), 2);
+        assert_eq!(
+            path.path_points(),
+            &[
+                Position::new(10.0, 10.0, 0.0, 0.0),
+                Position::new(12.0, 11.0, 0.0, 0.0),
+                dst
+            ]
+        );
+
+        let nopath = DetourPolyPath {
+            poly_refs: Vec::new(),
+            point_path: wow_recastdetour::DetourPointPath {
+                points: vec![[15.0, 12.0, 0.0], [20.0, 10.0, 0.0]],
+                actual_end: [20.0, 10.0, 0.0],
+                path_type: DetourPathType::NOPATH,
+            },
+            start_far_from_poly: false,
+            end_far_from_poly: false,
+        };
+        let fallback_dst = Position::new(20.0, 10.0, 0.0, 0.0);
+
+        let (_from, fallback_spline, fallback_path) = creature
+            .begin_move_spline_with_detour_path_like_cpp(fallback_dst, Some(&nopath), false)
+            .expect("direct fallback launches");
+
+        assert_eq!(fallback_spline.final_destination(), Some(fallback_dst));
+        assert!(
+            fallback_path
+                .expect("fallback path metadata")
+                .path_type()
+                .contains(PathType::NOPATH)
+        );
+    }
+
+    #[test]
+    fn calculate_creature_detour_path_returns_none_until_runtime_mmap_exists_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54325);
+        let creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let dst = Position::new(20.0, 10.0, 0.0, 0.0);
+        let filter_context = PathQueryFilterContext::creature(true, false, false, false);
+
+        assert_eq!(
+            calculate_creature_detour_path_like_cpp(
+                &creature,
+                dst,
+                None,
+                0,
+                0,
+                filter_context,
+                false
+            ),
+            Ok(None)
+        );
+
+        let mmap_data = MMapData::new(wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 16,
+            max_polys: 16,
+        })
+        .expect("navmesh allocation");
+        assert_eq!(
+            calculate_creature_detour_path_like_cpp(
+                &creature,
+                dst,
+                Some(&mmap_data),
+                0,
+                0,
+                filter_context,
+                false,
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn world_mmap_pathfinder_falls_back_when_runtime_tile_missing_like_cpp() {
+        let root = unique_test_dir("world-mmap-pathfinder-missing-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+        let params = wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 4096,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54326);
+        let creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(0.0, 0.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let mut pathfinder = WorldMMapPathfinderLikeCpp::new(&root);
+        let filter_context = PathQueryFilterContext::creature(true, false, false, false);
+
+        assert_eq!(
+            pathfinder.calculate_creature_path_like_cpp(
+                &creature,
+                Position::new(20.0, 0.0, 0.0, 0.0),
+                1,
+                1,
+                42,
+                filter_context,
+                false,
+            ),
+            Ok(None)
+        );
+        assert!(
+            pathfinder
+                .mmap_manager()
+                .get_nav_mesh_query(1, 1, 42)
+                .is_some()
+        );
+        assert_eq!(pathfinder.mmap_manager().get_loaded_tiles_count(), 0);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn world_mmap_pathfinder_worker_keeps_detour_off_session_thread_like_cpp() {
+        let root = unique_test_dir("world-mmap-pathfinder-worker-missing-tile");
+        std::fs::create_dir_all(root.join("mmaps")).unwrap();
+        let params = wow_recastdetour::DetourNavMeshParams {
+            origin: [0.0, 0.0, 0.0],
+            tile_width: 533.3333,
+            tile_height: 533.3333,
+            max_tiles: 4096,
+            max_polys: 16_384,
+        };
+        std::fs::write(root.join("mmaps/0001.mmap"), params.to_bytes()).unwrap();
+
+        let worker = WorldMMapPathfinderWorkerLikeCpp::spawn(&root);
+        let result = worker.calculate_path_like_cpp(WorldMMapPathRequestLikeCpp {
+            start: Position::new(0.0, 0.0, 0.0, 0.0),
+            destination: Position::new(20.0, 0.0, 0.0, 0.0),
+            mesh_map_id: 1,
+            instance_map_id: 1,
+            instance_id: 42,
+            filter_context: PathQueryFilterContext::creature(true, false, false, false),
+            force_destination: false,
+            phase_shift: PhaseShift::default(),
+        });
+
+        assert_eq!(result, Ok(None));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn world_mmap_pathfinder_initializes_thread_unsafe_parent_map_data_like_cpp() {
+        let root = unique_test_dir("world-mmap-pathfinder-parent-map-data");
+        let pathfinder = WorldMMapPathfinderLikeCpp::new_with_parent_map_data_like_cpp(
+            &root,
+            [(571, vec![609]), (609, Vec::new())],
+        );
+
+        assert!(!pathfinder.mmap_manager().is_thread_safe_environment());
+        assert_eq!(pathfinder.mmap_manager().get_loaded_maps_count(), 2);
+        assert_eq!(pathfinder.mmap_manager().parent_map_id(609), Some(571));
+    }
+
+    #[test]
+    fn world_creature_begin_point_movement_uses_point_lifecycle_and_real_spline() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54323);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let dst = Position::new(14.0, 10.0, 0.0, 0.0);
+
+        let (from, spline) = creature
+            .begin_point_movement_like_cpp(42, dst, true)
+            .expect("point movement starts direct spline");
+
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert!(creature.active_move_spline.is_some());
+        assert_eq!(creature.move_target(), Some(dst));
+        assert!(
+            creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let motion = &creature.creature.unit().subsystems().motion;
+        let generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Point);
+        assert_eq!(generator.movement_id, 42);
+        assert!(generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        assert!(!generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(motion.spline.enabled);
+        assert_eq!(motion.spline.spline_id, spline.id());
+        assert_eq!(motion.spline.final_destination, Some((14, 10, 0)));
+
+        {
+            let motion = &mut creature.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Point)
+                .expect("point generator");
+            assert_eq!(
+                generator.update_point_like_cpp(true, true),
+                PointMovementAction::Finished
+            );
+        }
+        assert_eq!(
+            creature.finalize_point_movement_like_cpp(true, true),
+            Some(PointMovementInform {
+                kind: MovementGeneratorKind::Point,
+                movement_id: 42,
+            })
+        );
+        assert!(
+            !creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().last_movement_inform,
+            Some(wow_entities::CreatureMovementInform {
+                movement_type: MovementGeneratorKind::Point.trinity_id(),
+                movement_id: 42,
+            })
+        );
+    }
+
+    #[test]
+    fn world_creature_begin_point_movement_handles_blocked_and_prepath_branches() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54324);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let dst = Position::new(14.0, 10.0, 0.0, 0.0);
+
+        assert!(
+            creature
+                .begin_point_movement_like_cpp(43, dst, false)
+                .is_none()
+        );
+        assert!(creature.active_move_spline.is_none());
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert!(generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INTERRUPTED));
+        assert!(creature.creature.unit().subsystems().motion.stopped);
+
+        assert!(
+            creature
+                .begin_point_movement_like_cpp(EVENT_CHARGE_PREPATH, dst, true)
+                .is_none()
+        );
+        assert!(creature.active_move_spline.is_none());
+        assert!(
+            creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Point);
+        assert_eq!(generator.movement_id, EVENT_CHARGE_PREPATH);
+        assert_eq!(generator.base_unit_state, UnitState::CHARGING.bits());
+    }
+
+    #[test]
+    fn world_creature_finalize_generic_movement_records_ai_inform_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54326);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        let target = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54327);
+        {
+            let motion = &mut creature.creature.unit_mut().subsystems_mut().motion;
+            motion.launch_generic_movement(
+                MovementGeneratorKind::Effect,
+                77,
+                1_000,
+                Some((1234, target)),
+            );
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Effect)
+                .expect("generic effect generator");
+            generator.initialize_generic_like_cpp();
+            assert!(!generator.update_generic_like_cpp(1_000, false, false));
+        }
+
+        assert_eq!(
+            creature.finalize_generic_movement_like_cpp(MovementGeneratorKind::Effect, 77, true),
+            Some(GenericMovementInform {
+                kind: MovementGeneratorKind::Effect,
+                movement_id: 77,
+                arrival_spell_id: Some(1234),
+                arrival_spell_target_guid: Some(target),
+            })
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().last_movement_inform,
+            Some(wow_entities::CreatureMovementInform {
+                movement_type: MovementGeneratorKind::Effect.trinity_id(),
+                movement_id: 77,
+            })
+        );
+    }
+
+    #[test]
+    fn world_creature_begin_distract_and_rotate_launch_facing_splines_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54325);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        creature
+            .creature
+            .unit_mut()
+            .set_stand_state_like_cpp(UnitStandStateType::Sit);
+
+        let (action, from, spline) = creature
+            .begin_distract_movement_like_cpp(500, 1.25)
+            .expect("distract launches facing spline");
+
+        assert_eq!(
+            action,
+            DistractMovementAction {
+                stand_up: true,
+                launch_facing_spline: true,
+            }
+        );
+        assert_eq!(from, Position::new(10.0, 10.0, 0.0, 0.0));
+        assert_eq!(
+            creature.creature.unit().stand_state_like_cpp(),
+            UnitStandStateType::Stand
+        );
+        assert_eq!(
+            spline.facing().kind,
+            wow_movement::MonsterMoveType::FacingAngle
+        );
+        assert!((spline.facing().angle - 1.25).abs() < 0.0001);
+        assert!(spline.spline_is_facing_only);
+        assert_eq!(creature.spline_id(), spline.id());
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Distract);
+        assert!(generator.has_flag(wow_entities::MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        creature
+            .creature
+            .set_ai_home_position(Position::new(10.0, 10.0, 0.0, 2.5));
+        {
+            let motion = &mut creature.creature.unit_mut().subsystems_mut().motion;
+            let generator = motion
+                .active_generators
+                .iter_mut()
+                .find(|generator| generator.kind == MovementGeneratorKind::Distract)
+                .expect("distract generator");
+            assert!(!generator.update_distract_like_cpp(true, 501));
+        }
+        assert!(creature.finalize_distract_movement_like_cpp(true));
+        assert!((creature.position().orientation - 2.5).abs() < 0.0001);
+
+        creature
+            .creature
+            .unit_mut()
+            .subsystems_mut()
+            .motion
+            .clear_active();
+        assert!(
+            creature
+                .creature
+                .unit_mut()
+                .subsystems_mut()
+                .motion
+                .move_rotate_like_cpp(8, 1_000, wow_entities::RotateDirection::Left)
+        );
+        let (update, spline) = creature
+            .tick_rotate_movement_like_cpp(250)
+            .expect("rotate tick launches facing spline");
+        assert!(update.keep_running);
+        let expected_rotate_angle = 2.5 + std::f32::consts::FRAC_PI_2;
+        assert!(
+            update
+                .facing_angle
+                .is_some_and(|angle| (angle - expected_rotate_angle).abs() < 0.0001)
+        );
+        assert_eq!(
+            spline.facing().kind,
+            wow_movement::MonsterMoveType::FacingAngle
+        );
+        assert!(
+            (spline.facing().angle - expected_rotate_angle).abs() < 0.0001,
+            "facing angle was {}",
+            spline.facing().angle
+        );
+        assert!(spline.spline_is_facing_only);
+        let generator = creature
+            .creature
+            .unit()
+            .subsystems()
+            .motion
+            .current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Rotate);
+        assert_eq!(generator.duration_ms, Some(750));
+        assert_eq!(
+            creature.finalize_rotate_movement_like_cpp(true),
+            Some(PointMovementInform {
+                kind: MovementGeneratorKind::Rotate,
+                movement_id: 8,
+            })
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().last_movement_inform,
+            Some(wow_entities::CreatureMovementInform {
+                movement_type: MovementGeneratorKind::Rotate.trinity_id(),
+                movement_id: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn world_creature_stop_move_spline_emits_cpp_stop_state_before_arrival() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 54322);
+        let mut creature = WorldCreature::new(
+            guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            2,
+            5,
+            10,
+            20.0,
+            100,
+            14,
+            0,
+            0,
+        );
+        creature.clock_started_at = Instant::now() - Duration::from_secs(10);
+        let dst = Position::new(20.0, 10.0, 0.0, 0.0);
+        let (_, spline) = creature
+            .begin_move_spline_like_cpp(dst)
+            .expect("valid two-point spline");
+        let duration_ms = spline.duration_ms() as u32;
+        let now_ms = creature.now_ms();
+        creature.creature.ai_ownership_mut().move_start_ms =
+            now_ms.saturating_sub(u64::from(duration_ms / 2));
+
+        let stop = creature
+            .stop_move_spline_like_cpp()
+            .expect("active spline stops");
+
+        assert_eq!(stop.spline_id, 3);
+        assert_eq!(stop.stop_distance_tolerance, 2);
+        assert!(stop.position.x > 10.0 && stop.position.x < 20.0);
+        assert_eq!(creature.position(), stop.position);
+        assert!(creature.active_move_spline.is_none());
+        assert_eq!(creature.move_target(), None);
+        assert!(
+            !creature
+                .creature
+                .unit()
+                .has_unit_state(UnitState::ROAMING_MOVE.bits())
+        );
+        let motion_spline = &creature.creature.unit().subsystems().motion.spline;
+        assert!(!motion_spline.enabled);
+        assert!(motion_spline.finalized);
+        assert_eq!(motion_spline.spline_id, stop.spline_id);
+        assert!(creature.stop_move_spline_like_cpp().is_none());
+    }
+
+    #[test]
     fn test_visible_creatures() {
         let mut manager = MapManager::new();
         let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 12345);
@@ -1252,5 +3510,80 @@ mod tests {
         // Should not find creature far away
         let visible = manager.get_visible_creatures(0, 0, 1000.0, 1000.0, 0.0);
         assert!(visible.is_empty());
+    }
+
+    #[test]
+    fn visible_creatures_in_phase_filters_like_cpp_grid_searchers() {
+        let mut manager = MapManager::new();
+        let visible_guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 100);
+        let hidden_guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 0, 0, 1, 101);
+
+        let mut seer_phase = PhaseShift::default();
+        seer_phase.add_phase_like_cpp(20, wow_constants::PhaseFlags::empty(), 1);
+
+        let mut visible_creature = WorldCreature::new(
+            visible_guid,
+            1,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            50,
+            1,
+            5,
+            10,
+            20.0,
+            0,
+            35,
+            0,
+            0,
+        );
+        visible_creature
+            .creature
+            .unit_mut()
+            .world_mut()
+            .phase_shift_mut()
+            .add_phase_like_cpp(20, wow_constants::PhaseFlags::empty(), 1);
+
+        let mut hidden_creature = WorldCreature::new(
+            hidden_guid,
+            1,
+            Position::new(11.0, 10.0, 0.0, 0.0),
+            50,
+            1,
+            5,
+            10,
+            20.0,
+            0,
+            35,
+            0,
+            0,
+        );
+        hidden_creature
+            .creature
+            .unit_mut()
+            .world_mut()
+            .phase_shift_mut()
+            .add_phase_like_cpp(30, wow_constants::PhaseFlags::empty(), 1);
+
+        manager.add_creature(0, 0, 0, 0, visible_creature);
+        manager.add_creature(0, 0, 0, 0, hidden_creature);
+
+        let visible =
+            manager.get_visible_creatures_in_phase(0, 0, 10.0, 10.0, 0.0, Some(&seer_phase));
+        let visible_guids: HashSet<ObjectGuid> = visible.iter().map(WorldCreature::guid).collect();
+        assert!(visible_guids.contains(&visible_guid));
+        assert!(!visible_guids.contains(&hidden_guid));
+
+        let unfiltered = manager.get_visible_creatures(0, 0, 10.0, 10.0, 0.0);
+        let unfiltered_guids: HashSet<ObjectGuid> =
+            unfiltered.iter().map(WorldCreature::guid).collect();
+        assert!(unfiltered_guids.contains(&visible_guid));
+        assert!(unfiltered_guids.contains(&hidden_guid));
+    }
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rustycore-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
     }
 }

@@ -1524,6 +1524,13 @@ pub enum MovementGeneratorPriority {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+pub enum RotateDirection {
+    Left = 0,
+    Right = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum MovementSlot {
     Default = 0,
     Active = 1,
@@ -1540,9 +1547,20 @@ pub const MOVEMENTGENERATOR_FLAG_DEACTIVATED: u16 = 0x040;
 pub const MOVEMENTGENERATOR_FLAG_INFORM_ENABLED: u16 = 0x080;
 pub const MOVEMENTGENERATOR_FLAG_FINALIZED: u16 = 0x100;
 pub const MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH: u16 = 0x200;
-pub const MOTIONMASTER_FLAG_INITIALIZATION_PENDING: u8 = 0x4;
-pub const MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING: u8 = 0x2;
+pub const MOVEMENTGENERATOR_FLAG_TRANSITORY: u16 =
+    MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING | MOVEMENTGENERATOR_FLAG_INTERRUPTED;
+pub const MOTIONMASTER_FLAG_NONE: u8 = 0x0;
 pub const MOTIONMASTER_FLAG_UPDATE: u8 = 0x1;
+pub const MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING: u8 = 0x2;
+pub const MOTIONMASTER_FLAG_INITIALIZATION_PENDING: u8 = 0x4;
+pub const MOTIONMASTER_FLAG_INITIALIZING: u8 = 0x8;
+pub const MOTIONMASTER_FLAG_DELAYED: u8 =
+    MOTIONMASTER_FLAG_UPDATE | MOTIONMASTER_FLAG_INITIALIZATION_PENDING;
+pub const EVENT_CHARGE: u32 = 1003;
+pub const EVENT_JUMP: u32 = 1004;
+pub const EVENT_CHARGE_PREPATH: u32 = 1005;
+pub const EVENT_ASSIST_MOVE: u32 = 1009;
+pub const CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP: u32 = 1_500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MovementGeneratorRef {
@@ -1555,6 +1573,11 @@ pub struct MovementGeneratorRef {
     pub target_guid: Option<ObjectGuid>,
     pub movement_id: u32,
     pub duration_ms: Option<u32>,
+    pub max_duration_ms: Option<u32>,
+    pub elapsed_ms: u32,
+    pub arrival_spell_id: u32,
+    pub arrival_spell_target_guid: ObjectGuid,
+    pub rotate_direction: Option<RotateDirection>,
 }
 
 impl MovementGeneratorRef {
@@ -1569,6 +1592,11 @@ impl MovementGeneratorRef {
             target_guid: None,
             movement_id: 0,
             duration_ms: None,
+            max_duration_ms: None,
+            elapsed_ms: 0,
+            arrival_spell_id: 0,
+            arrival_spell_target_guid: ObjectGuid::EMPTY,
+            rotate_direction: None,
         }
     }
 
@@ -1607,9 +1635,508 @@ impl MovementGeneratorRef {
         self
     }
 
+    pub const fn with_max_duration_ms(mut self, max_duration_ms: u32) -> Self {
+        self.max_duration_ms = Some(max_duration_ms);
+        self
+    }
+
+    pub const fn with_rotate_direction(mut self, direction: RotateDirection) -> Self {
+        self.rotate_direction = Some(direction);
+        self
+    }
+
+    pub const fn with_arrival_spell(mut self, spell_id: u32, target_guid: ObjectGuid) -> Self {
+        self.arrival_spell_id = spell_id;
+        self.arrival_spell_target_guid = target_guid;
+        self
+    }
+
     pub const fn has_flag(&self, flag: u16) -> bool {
         (self.flags & flag) != 0
     }
+
+    pub fn initialize_for_motion_master_update_like_cpp(
+        &mut self,
+        context: MotionMasterUpdateContext,
+    ) {
+        match self.kind {
+            MovementGeneratorKind::Idle => {
+                self.initialize_idle_like_cpp();
+            }
+            MovementGeneratorKind::Point => {
+                self.initialize_point_like_cpp(context.can_move);
+            }
+            MovementGeneratorKind::Rotate => {
+                self.initialize_rotate_like_cpp();
+            }
+            MovementGeneratorKind::Distract => {
+                self.initialize_distract_like_cpp(context.owner_is_standing);
+            }
+            MovementGeneratorKind::Effect => self.initialize_generic_like_cpp(),
+            _ => {
+                self.flags &= !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+                    | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+                self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+            }
+        }
+    }
+
+    pub fn reset_for_motion_master_update_like_cpp(&mut self, context: MotionMasterUpdateContext) {
+        match self.kind {
+            MovementGeneratorKind::Point => {
+                self.reset_point_like_cpp(context.can_move);
+            }
+            MovementGeneratorKind::Rotate => {
+                self.reset_rotate_like_cpp();
+            }
+            MovementGeneratorKind::Distract => {
+                self.reset_distract_like_cpp(context.owner_is_standing);
+            }
+            _ => self.initialize_for_motion_master_update_like_cpp(context),
+        }
+    }
+
+    pub fn update_for_motion_master_like_cpp(
+        &mut self,
+        context: MotionMasterUpdateContext,
+    ) -> bool {
+        match self.kind {
+            MovementGeneratorKind::Idle => self.update_idle_like_cpp(),
+            MovementGeneratorKind::Point => {
+                self.update_point_like_cpp(context.can_move, context.spline_finalized)
+                    != PointMovementAction::Finished
+            }
+            MovementGeneratorKind::Rotate => {
+                self.update_rotate_like_cpp(
+                    context.owner_exists,
+                    context.diff_ms,
+                    context.current_orientation,
+                )
+                .keep_running
+            }
+            MovementGeneratorKind::Distract => {
+                self.update_distract_like_cpp(context.owner_exists, context.diff_ms)
+            }
+            MovementGeneratorKind::Effect => self.update_generic_like_cpp(
+                context.diff_ms,
+                context.spline_cyclic,
+                context.spline_finalized,
+            ),
+            _ => true,
+        }
+    }
+
+    pub fn initialize_generic_like_cpp(&mut self) {
+        if self.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED)
+            && !self.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+        {
+            self.flags &= !MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+            self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+            return;
+        }
+
+        self.flags &=
+            !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+        self.elapsed_ms = 0;
+    }
+
+    pub fn update_generic_like_cpp(
+        &mut self,
+        diff_ms: u32,
+        spline_cyclic: bool,
+        spline_finalized: bool,
+    ) -> bool {
+        if self.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED) {
+            return false;
+        }
+
+        if !spline_cyclic {
+            self.elapsed_ms = self.elapsed_ms.saturating_add(diff_ms);
+        }
+
+        if self
+            .duration_ms
+            .is_some_and(|duration_ms| self.elapsed_ms >= duration_ms)
+            || spline_finalized
+        {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            return false;
+        }
+        true
+    }
+
+    pub fn deactivate_generic_like_cpp(&mut self) {
+        self.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+    }
+
+    pub fn finalize_generic_like_cpp(
+        &mut self,
+        movement_inform: bool,
+    ) -> Option<GenericMovementInform> {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        if movement_inform && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED) {
+            return Some(GenericMovementInform {
+                kind: self.kind,
+                movement_id: self.movement_id,
+                arrival_spell_id: (self.arrival_spell_id != 0).then_some(self.arrival_spell_id),
+                arrival_spell_target_guid: (self.arrival_spell_id != 0)
+                    .then_some(self.arrival_spell_target_guid),
+            });
+        }
+        None
+    }
+
+    pub fn initialize_point_like_cpp(&mut self, can_move: bool) -> PointMovementAction {
+        self.flags &= !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+            | MOVEMENTGENERATOR_FLAG_TRANSITORY
+            | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+
+        if self.movement_id == EVENT_CHARGE_PREPATH {
+            return PointMovementAction::MarkRoamingMove;
+        }
+
+        if !can_move {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INTERRUPTED;
+            return PointMovementAction::StopMoving;
+        }
+
+        PointMovementAction::LaunchSpline
+    }
+
+    pub fn reset_point_like_cpp(&mut self, can_move: bool) -> PointMovementAction {
+        self.flags &= !(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.initialize_point_like_cpp(can_move)
+    }
+
+    pub fn update_point_like_cpp(
+        &mut self,
+        can_move: bool,
+        spline_finalized: bool,
+    ) -> PointMovementAction {
+        if self.movement_id == EVENT_CHARGE_PREPATH {
+            if spline_finalized {
+                self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+                return PointMovementAction::Finished;
+            }
+            return PointMovementAction::Continue;
+        }
+
+        if !can_move {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INTERRUPTED;
+            return PointMovementAction::StopMovingAndContinue;
+        }
+
+        if (self.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED) && spline_finalized)
+            || (self.has_flag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING) && !spline_finalized)
+        {
+            self.flags &=
+                !(MOVEMENTGENERATOR_FLAG_INTERRUPTED | MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING);
+            return PointMovementAction::RelaunchSpline;
+        }
+
+        if spline_finalized {
+            self.flags &= !MOVEMENTGENERATOR_FLAG_TRANSITORY;
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            return PointMovementAction::Finished;
+        }
+
+        PointMovementAction::Continue
+    }
+
+    pub fn deactivate_point_like_cpp(&mut self) -> PointMovementAction {
+        self.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        PointMovementAction::ClearRoamingMove
+    }
+
+    pub fn finalize_point_like_cpp(
+        &mut self,
+        active: bool,
+        movement_inform: bool,
+    ) -> PointMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        PointMovementFinalize {
+            clear_roaming_move: active,
+            inform: (movement_inform && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED))
+                .then_some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: if self.movement_id == EVENT_CHARGE_PREPATH {
+                        EVENT_CHARGE
+                    } else {
+                        self.movement_id
+                    },
+                }),
+        }
+    }
+
+    pub fn finalize_assistance_like_cpp(
+        &mut self,
+        active: bool,
+        movement_inform: bool,
+        owner_is_creature: bool,
+        owner_is_alive: bool,
+    ) -> AssistanceMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        let can_inform = movement_inform
+            && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+            && owner_is_creature;
+        AssistanceMovementFinalize {
+            clear_roaming_move: active,
+            set_no_call_assistance: can_inform.then_some(false),
+            call_assistance: can_inform,
+            seek_assistance_distract_ms: (can_inform && owner_is_alive)
+                .then_some(CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP),
+        }
+    }
+
+    pub fn finalize_assistance_distract_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> AssistanceDistractFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        AssistanceDistractFinalize {
+            set_react_aggressive: movement_inform
+                && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+                && owner_is_creature,
+        }
+    }
+
+    pub fn initialize_idle_like_cpp(&self) -> IdleMovementAction {
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn reset_idle_like_cpp(&self) -> IdleMovementAction {
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn update_idle_like_cpp(&self) -> bool {
+        true
+    }
+
+    pub fn finalize_idle_like_cpp(&mut self) {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+    }
+
+    pub fn initialize_rotate_like_cpp(&mut self) -> IdleMovementAction {
+        self.flags &=
+            !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+        IdleMovementAction::StopMoving
+    }
+
+    pub fn reset_rotate_like_cpp(&mut self) -> IdleMovementAction {
+        self.flags &= !MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        self.initialize_rotate_like_cpp()
+    }
+
+    pub fn update_rotate_like_cpp(
+        &mut self,
+        owner_exists: bool,
+        diff_ms: u32,
+        current_orientation: f32,
+    ) -> RotateMovementUpdate {
+        if !owner_exists {
+            return RotateMovementUpdate {
+                keep_running: false,
+                facing_angle: None,
+            };
+        }
+
+        let max_duration_ms = self.max_duration_ms.unwrap_or(0);
+        let direction = self.rotate_direction.unwrap_or(RotateDirection::Left);
+        let facing_angle = if max_duration_ms == 0 {
+            current_orientation
+        } else {
+            let sign = match direction {
+                RotateDirection::Left => 1.0,
+                RotateDirection::Right => -1.0,
+            };
+            (current_orientation
+                + (diff_ms as f32 * std::f32::consts::TAU / max_duration_ms as f32) * sign)
+                .clamp(0.0, std::f32::consts::TAU)
+        };
+
+        let remaining = self.duration_ms.unwrap_or(0);
+        if remaining > diff_ms {
+            self.duration_ms = Some(remaining - diff_ms);
+            RotateMovementUpdate {
+                keep_running: true,
+                facing_angle: Some(facing_angle),
+            }
+        } else {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            RotateMovementUpdate {
+                keep_running: false,
+                facing_angle: Some(facing_angle),
+            }
+        }
+    }
+
+    pub fn deactivate_timed_idle_like_cpp(&mut self) {
+        self.flags |= MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+    }
+
+    pub fn finalize_rotate_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> RotateMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        RotateMovementFinalize {
+            inform: (movement_inform && owner_is_creature).then_some(PointMovementInform {
+                kind: MovementGeneratorKind::Rotate,
+                movement_id: self.movement_id,
+            }),
+        }
+    }
+
+    pub fn initialize_distract_like_cpp(
+        &mut self,
+        owner_is_standing: bool,
+    ) -> DistractMovementAction {
+        self.flags &=
+            !(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        self.flags |= MOVEMENTGENERATOR_FLAG_INITIALIZED;
+        DistractMovementAction {
+            stand_up: !owner_is_standing,
+            launch_facing_spline: true,
+        }
+    }
+
+    pub fn reset_distract_like_cpp(&mut self, owner_is_standing: bool) -> DistractMovementAction {
+        self.flags &= !MOVEMENTGENERATOR_FLAG_DEACTIVATED;
+        self.initialize_distract_like_cpp(owner_is_standing)
+    }
+
+    pub fn update_distract_like_cpp(&mut self, owner_exists: bool, diff_ms: u32) -> bool {
+        if !owner_exists {
+            return false;
+        }
+
+        let remaining = self.duration_ms.unwrap_or(0);
+        if diff_ms > remaining {
+            self.flags |= MOVEMENTGENERATOR_FLAG_INFORM_ENABLED;
+            return false;
+        }
+
+        self.duration_ms = Some(remaining - diff_ms);
+        true
+    }
+
+    pub fn finalize_distract_like_cpp(
+        &mut self,
+        movement_inform: bool,
+        owner_is_creature: bool,
+    ) -> DistractMovementFinalize {
+        self.flags |= MOVEMENTGENERATOR_FLAG_FINALIZED;
+        DistractMovementFinalize {
+            set_home_orientation: movement_inform
+                && self.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED)
+                && owner_is_creature,
+        }
+    }
+}
+
+fn initialize_or_reset_for_motion_master_update_like_cpp(
+    generator: &mut MovementGeneratorRef,
+    context: MotionMasterUpdateContext,
+) {
+    if generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING) {
+        generator.initialize_for_motion_master_update_like_cpp(context);
+    }
+    if generator.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED) {
+        generator.reset_for_motion_master_update_like_cpp(context);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericMovementInform {
+    pub kind: MovementGeneratorKind,
+    pub movement_id: u32,
+    pub arrival_spell_id: Option<u32>,
+    pub arrival_spell_target_guid: Option<ObjectGuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointMovementAction {
+    Continue,
+    MarkRoamingMove,
+    LaunchSpline,
+    RelaunchSpline,
+    StopMoving,
+    StopMovingAndContinue,
+    ClearRoamingMove,
+    Finished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointMovementInform {
+    pub kind: MovementGeneratorKind,
+    pub movement_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointMovementFinalize {
+    pub clear_roaming_move: bool,
+    pub inform: Option<PointMovementInform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssistanceMovementFinalize {
+    pub clear_roaming_move: bool,
+    pub set_no_call_assistance: Option<bool>,
+    pub call_assistance: bool,
+    pub seek_assistance_distract_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssistanceDistractFinalize {
+    pub set_react_aggressive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeekAssistancePlan {
+    pub attack_stop: bool,
+    pub cast_stop: bool,
+    pub do_not_reacquire_spell_focus_target: bool,
+    pub set_react_passive: bool,
+    pub generator_added: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleMovementAction {
+    StopMoving,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RotateMovementUpdate {
+    pub keep_running: bool,
+    pub facing_angle: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotateMovementFinalize {
+    pub inform: Option<PointMovementInform>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistractMovementAction {
+    pub stand_up: bool,
+    pub launch_facing_spline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DistractMovementFinalize {
+    pub set_home_orientation: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveFallPlan {
+    Noop,
+    PlayerFallInfo,
+    SplineStarted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1643,6 +2170,142 @@ impl Default for MoveSplineState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MotionMasterDelayedActionType {
+    Clear = 0,
+    ClearSlot = 1,
+    ClearMode = 2,
+    ClearPriority = 3,
+    Add = 4,
+    Remove = 5,
+    RemoveType = 6,
+    Initialize = 7,
+}
+
+impl MotionMasterDelayedActionType {
+    pub const fn trinity_id(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn from_trinity_id(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Clear),
+            1 => Some(Self::ClearSlot),
+            2 => Some(Self::ClearMode),
+            3 => Some(Self::ClearPriority),
+            4 => Some(Self::Add),
+            5 => Some(Self::Remove),
+            6 => Some(Self::RemoveType),
+            7 => Some(Self::Initialize),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionMasterDelayedActionPayload {
+    Clear,
+    ClearSlot(MovementSlot),
+    ClearMode(MovementGeneratorMode),
+    ClearPriority(MovementGeneratorPriority),
+    Add(MovementGeneratorRef),
+    Remove {
+        kind: MovementGeneratorKind,
+        slot: MovementSlot,
+    },
+    RemoveType {
+        kind: MovementGeneratorKind,
+        slot: MovementSlot,
+    },
+    Initialize,
+}
+
+impl MotionMasterDelayedActionPayload {
+    pub const fn action_type(self) -> MotionMasterDelayedActionType {
+        match self {
+            Self::Clear => MotionMasterDelayedActionType::Clear,
+            Self::ClearSlot(_) => MotionMasterDelayedActionType::ClearSlot,
+            Self::ClearMode(_) => MotionMasterDelayedActionType::ClearMode,
+            Self::ClearPriority(_) => MotionMasterDelayedActionType::ClearPriority,
+            Self::Add(_) => MotionMasterDelayedActionType::Add,
+            Self::Remove { .. } => MotionMasterDelayedActionType::Remove,
+            Self::RemoveType { .. } => MotionMasterDelayedActionType::RemoveType,
+            Self::Initialize => MotionMasterDelayedActionType::Initialize,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotionMasterDelayedAction {
+    pub payload: MotionMasterDelayedActionPayload,
+    pub validator_passed: bool,
+}
+
+impl MotionMasterDelayedAction {
+    pub const fn new(payload: MotionMasterDelayedActionPayload) -> Self {
+        Self {
+            payload,
+            validator_passed: true,
+        }
+    }
+
+    pub const fn with_validator(
+        payload: MotionMasterDelayedActionPayload,
+        validator_passed: bool,
+    ) -> Self {
+        Self {
+            payload,
+            validator_passed,
+        }
+    }
+
+    pub const fn action_type(self) -> MotionMasterDelayedActionType {
+        self.payload.action_type()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MotionMasterResolvedDelayedAction {
+    pub action_type: MotionMasterDelayedActionType,
+    pub executed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionMasterUpdateContext {
+    pub diff_ms: u32,
+    pub can_move: bool,
+    pub owner_exists: bool,
+    pub owner_is_standing: bool,
+    pub spline_finalized: bool,
+    pub spline_cyclic: bool,
+    pub current_orientation: f32,
+}
+
+impl Default for MotionMasterUpdateContext {
+    fn default() -> Self {
+        Self {
+            diff_ms: 0,
+            can_move: true,
+            owner_exists: true,
+            owner_is_standing: true,
+            spline_finalized: false,
+            spline_cyclic: false,
+            current_orientation: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MotionMasterUpdateOutcome {
+    Stalled,
+    Empty,
+    Updated {
+        popped: Option<MovementGeneratorRef>,
+        resolved_delayed_actions: Vec<MotionMasterResolvedDelayedAction>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MotionSubsystem {
     pub default_generator: MovementGeneratorRef,
@@ -1650,7 +2313,7 @@ pub struct MotionSubsystem {
     pub current_generator: MovementGeneratorKind,
     pub base_unit_states: HashMap<u32, usize>,
     pub flags: u8,
-    pub delayed_actions: Vec<u8>,
+    pub delayed_actions: Vec<MotionMasterDelayedAction>,
     pub paused: bool,
     pub stopped: bool,
     pub spline: MoveSplineState,
@@ -1659,7 +2322,9 @@ pub struct MotionSubsystem {
 impl Default for MotionSubsystem {
     fn default() -> Self {
         let default_generator =
-            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZED);
         Self {
             default_generator,
             active_generators: Vec::new(),
@@ -1675,6 +2340,189 @@ impl Default for MotionSubsystem {
 }
 
 impl MotionSubsystem {
+    pub const fn has_motion_master_flag(&self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
+
+    pub const fn should_delay_motion_master_action_like_cpp(&self) -> bool {
+        self.has_motion_master_flag(MOTIONMASTER_FLAG_DELAYED)
+    }
+
+    pub fn push_delayed_action_like_cpp(&mut self, action_type: MotionMasterDelayedActionType) {
+        let payload = match action_type {
+            MotionMasterDelayedActionType::Clear => MotionMasterDelayedActionPayload::Clear,
+            MotionMasterDelayedActionType::ClearSlot => {
+                MotionMasterDelayedActionPayload::ClearSlot(MovementSlot::Active)
+            }
+            MotionMasterDelayedActionType::ClearMode => {
+                MotionMasterDelayedActionPayload::ClearMode(MovementGeneratorMode::Default)
+            }
+            MotionMasterDelayedActionType::ClearPriority => {
+                MotionMasterDelayedActionPayload::ClearPriority(MovementGeneratorPriority::Normal)
+            }
+            MotionMasterDelayedActionType::Add => MotionMasterDelayedActionPayload::Add(
+                MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Active),
+            ),
+            MotionMasterDelayedActionType::Remove => MotionMasterDelayedActionPayload::Remove {
+                kind: MovementGeneratorKind::Idle,
+                slot: MovementSlot::Active,
+            },
+            MotionMasterDelayedActionType::RemoveType => {
+                MotionMasterDelayedActionPayload::RemoveType {
+                    kind: MovementGeneratorKind::Idle,
+                    slot: MovementSlot::Active,
+                }
+            }
+            MotionMasterDelayedActionType::Initialize => {
+                MotionMasterDelayedActionPayload::Initialize
+            }
+        };
+        self.push_delayed_payload_like_cpp(payload);
+    }
+
+    pub fn push_delayed_action_with_validator_like_cpp(
+        &mut self,
+        action_type: MotionMasterDelayedActionType,
+        validator_passed: bool,
+    ) {
+        self.delayed_actions
+            .push(MotionMasterDelayedAction::with_validator(
+                match action_type {
+                    MotionMasterDelayedActionType::Clear => MotionMasterDelayedActionPayload::Clear,
+                    MotionMasterDelayedActionType::ClearSlot => {
+                        MotionMasterDelayedActionPayload::ClearSlot(MovementSlot::Active)
+                    }
+                    MotionMasterDelayedActionType::ClearMode => {
+                        MotionMasterDelayedActionPayload::ClearMode(MovementGeneratorMode::Default)
+                    }
+                    MotionMasterDelayedActionType::ClearPriority => {
+                        MotionMasterDelayedActionPayload::ClearPriority(
+                            MovementGeneratorPriority::Normal,
+                        )
+                    }
+                    MotionMasterDelayedActionType::Add => {
+                        MotionMasterDelayedActionPayload::Add(MovementGeneratorRef::new(
+                            MovementGeneratorKind::Idle,
+                            MovementSlot::Active,
+                        ))
+                    }
+                    MotionMasterDelayedActionType::Remove => {
+                        MotionMasterDelayedActionPayload::Remove {
+                            kind: MovementGeneratorKind::Idle,
+                            slot: MovementSlot::Active,
+                        }
+                    }
+                    MotionMasterDelayedActionType::RemoveType => {
+                        MotionMasterDelayedActionPayload::RemoveType {
+                            kind: MovementGeneratorKind::Idle,
+                            slot: MovementSlot::Active,
+                        }
+                    }
+                    MotionMasterDelayedActionType::Initialize => {
+                        MotionMasterDelayedActionPayload::Initialize
+                    }
+                },
+                validator_passed,
+            ));
+    }
+
+    pub fn push_delayed_payload_like_cpp(&mut self, payload: MotionMasterDelayedActionPayload) {
+        self.delayed_actions
+            .push(MotionMasterDelayedAction::new(payload));
+    }
+
+    pub fn push_delayed_payload_with_validator_like_cpp(
+        &mut self,
+        payload: MotionMasterDelayedActionPayload,
+        validator_passed: bool,
+    ) {
+        self.delayed_actions
+            .push(MotionMasterDelayedAction::with_validator(
+                payload,
+                validator_passed,
+            ));
+    }
+
+    pub fn resolve_delayed_actions_like_cpp(&mut self) -> Vec<MotionMasterResolvedDelayedAction> {
+        self.delayed_actions
+            .drain(..)
+            .map(|action| MotionMasterResolvedDelayedAction {
+                action_type: action.action_type(),
+                executed: action.validator_passed,
+            })
+            .collect()
+    }
+
+    pub fn resolve_delayed_action_payloads_like_cpp(
+        &mut self,
+    ) -> Vec<MotionMasterResolvedDelayedAction> {
+        let mut resolved = Vec::new();
+        while !self.delayed_actions.is_empty() {
+            let action = self.delayed_actions.remove(0);
+            if action.validator_passed {
+                self.apply_delayed_action_payload_like_cpp(action.payload);
+            }
+            resolved.push(MotionMasterResolvedDelayedAction {
+                action_type: action.action_type(),
+                executed: action.validator_passed,
+            });
+        }
+        resolved
+    }
+
+    pub fn update_motion_master_like_cpp(
+        &mut self,
+        context: MotionMasterUpdateContext,
+    ) -> MotionMasterUpdateOutcome {
+        if self.has_motion_master_flag(
+            MOTIONMASTER_FLAG_INITIALIZATION_PENDING | MOTIONMASTER_FLAG_INITIALIZING,
+        ) {
+            return MotionMasterUpdateOutcome::Stalled;
+        }
+
+        if self.is_empty() {
+            return MotionMasterUpdateOutcome::Empty;
+        }
+
+        self.flags |= MOTIONMASTER_FLAG_UPDATE;
+
+        if self.has_motion_master_flag(MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING)
+            && self.current_slot() == MovementSlot::Default
+        {
+            self.flags &= !MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
+            self.default_generator
+                .initialize_for_motion_master_update_like_cpp(context);
+        }
+
+        let keep_running = if self.active_generators.is_empty() {
+            initialize_or_reset_for_motion_master_update_like_cpp(
+                &mut self.default_generator,
+                context,
+            );
+            self.default_generator
+                .update_for_motion_master_like_cpp(context)
+        } else {
+            let top = &mut self.active_generators[0];
+            initialize_or_reset_for_motion_master_update_like_cpp(top, context);
+            top.update_for_motion_master_like_cpp(context)
+        };
+
+        let popped = if !keep_running && !self.active_generators.is_empty() {
+            Some(self.remove_generator_at(0))
+        } else {
+            None
+        };
+        self.current_generator = self.current_movement_generator().kind;
+
+        self.flags &= !MOTIONMASTER_FLAG_UPDATE;
+        let resolved_delayed_actions = self.resolve_delayed_action_payloads_like_cpp();
+
+        MotionMasterUpdateOutcome::Updated {
+            popped,
+            resolved_delayed_actions,
+        }
+    }
+
     pub fn set_current_generator(&mut self, generator: MovementGeneratorKind) {
         self.add_generator(MovementGeneratorRef::new(generator, MovementSlot::Active));
     }
@@ -1801,9 +2649,57 @@ impl MotionSubsystem {
         removed
     }
 
+    pub fn clear_by_mode(&mut self, mode: MovementGeneratorMode) -> Vec<MovementGeneratorRef> {
+        let mut removed = Vec::new();
+        let mut index = 0;
+        while index < self.active_generators.len() {
+            if self.active_generators[index].mode == mode {
+                removed.push(self.remove_generator_at(index));
+            } else {
+                index += 1;
+            }
+        }
+        self.current_generator = self.current_movement_generator().kind;
+        removed
+    }
+
+    pub fn direct_initialize_like_cpp(&mut self) {
+        self.clear_active();
+        self.move_idle();
+    }
+
+    fn apply_delayed_action_payload_like_cpp(&mut self, payload: MotionMasterDelayedActionPayload) {
+        match payload {
+            MotionMasterDelayedActionPayload::Clear => {
+                self.clear_active();
+            }
+            MotionMasterDelayedActionPayload::ClearSlot(slot) => {
+                self.clear_slot(slot);
+            }
+            MotionMasterDelayedActionPayload::ClearMode(mode) => {
+                self.clear_by_mode(mode);
+            }
+            MotionMasterDelayedActionPayload::ClearPriority(priority) => {
+                self.clear_by_priority(priority);
+            }
+            MotionMasterDelayedActionPayload::Add(generator) => {
+                self.add_generator(generator);
+            }
+            MotionMasterDelayedActionPayload::Remove { kind, slot }
+            | MotionMasterDelayedActionPayload::RemoveType { kind, slot } => {
+                self.remove_generator_kind(kind, slot);
+            }
+            MotionMasterDelayedActionPayload::Initialize => {
+                self.direct_initialize_like_cpp();
+            }
+        }
+    }
+
     pub fn move_idle(&mut self) {
         self.default_generator =
-            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default);
+            MovementGeneratorRef::new(MovementGeneratorKind::Idle, MovementSlot::Default)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZED);
         self.flags |= MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
         if self.active_generators.is_empty() {
             self.current_generator = MovementGeneratorKind::Idle;
@@ -1814,14 +2710,80 @@ impl MotionSubsystem {
         self.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
                 .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::ROAMING.bits())
                 .with_movement_id(movement_id),
         );
+    }
+
+    pub fn move_seek_assistance_like_cpp(&mut self) -> SeekAssistancePlan {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Assistance, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::ROAMING.bits())
+                .with_movement_id(EVENT_ASSIST_MOVE),
+        );
+        SeekAssistancePlan {
+            attack_stop: true,
+            cast_stop: true,
+            do_not_reacquire_spell_focus_target: true,
+            set_react_passive: true,
+            generator_added: true,
+        }
+    }
+
+    pub fn move_seek_assistance_distract_like_cpp(&mut self, timer_ms: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(
+                MovementGeneratorKind::AssistanceDistract,
+                MovementSlot::Active,
+            )
+            .with_priority(MovementGeneratorPriority::Normal)
+            .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+            .with_base_unit_state(UnitState::DISTRACTED.bits())
+            .with_duration_ms(timer_ms),
+        );
+    }
+
+    pub fn move_distract_like_cpp(&mut self, timer_ms: u32) {
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Distract, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::DISTRACTED.bits())
+                .with_duration_ms(timer_ms),
+        );
+    }
+
+    pub fn move_rotate_like_cpp(
+        &mut self,
+        movement_id: u32,
+        time_ms: u32,
+        direction: RotateDirection,
+    ) -> bool {
+        if time_ms == 0 {
+            return false;
+        }
+
+        self.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Rotate, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::ROTATING.bits())
+                .with_movement_id(movement_id)
+                .with_duration_ms(time_ms)
+                .with_max_duration_ms(time_ms)
+                .with_rotate_direction(direction),
+        );
+        true
     }
 
     pub fn move_charge(&mut self, movement_id: u32) {
         self.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
                 .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
                 .with_base_unit_state(UnitState::CHARGING.bits())
                 .with_movement_id(movement_id),
         );
@@ -1834,6 +2796,167 @@ impl MotionSubsystem {
                 .with_target_guid(target_guid);
         if let Some(duration_ms) = duration_ms {
             generator = generator.with_duration_ms(duration_ms);
+        }
+        self.add_generator(generator);
+    }
+
+    pub fn launch_generic_movement(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        duration_ms: u32,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) {
+        self.add_generic_movement(
+            kind,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Normal,
+            UnitState::ROAMING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            arrival_spell,
+        );
+    }
+
+    pub fn launch_move_spline_like_cpp(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        priority: MovementGeneratorPriority,
+        duration_ms: u32,
+    ) -> bool {
+        let trinity_type = kind.trinity_id();
+        if trinity_type == 3 || trinity_type >= 19 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            kind,
+            movement_id,
+            duration_ms,
+            priority,
+            UnitState::ROAMING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            None,
+        );
+        true
+    }
+
+    pub fn move_jump_like_cpp(
+        &mut self,
+        movement_id: u32,
+        duration_ms: u32,
+        speed_xy: f32,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) -> bool {
+        if speed_xy < 0.01 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            UnitState::JUMPING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            arrival_spell,
+        );
+        true
+    }
+
+    pub fn move_jump_with_gravity_like_cpp(
+        &mut self,
+        movement_id: u32,
+        duration_ms: u32,
+        speed_xy: f32,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) -> bool {
+        if speed_xy < 0.01 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            UnitState::JUMPING.bits(),
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH,
+            arrival_spell,
+        );
+        true
+    }
+
+    pub fn move_knockback_from_like_cpp(
+        &mut self,
+        is_player: bool,
+        duration_ms: u32,
+        speed_xy: f32,
+    ) -> bool {
+        if is_player || speed_xy < 0.01 {
+            return false;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            0,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            0,
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH,
+            None,
+        );
+        true
+    }
+
+    pub fn move_fall_like_cpp(
+        &mut self,
+        movement_id: u32,
+        duration_ms: u32,
+        has_valid_ground_height: bool,
+        vertical_delta: f32,
+        has_root_or_stun_state: bool,
+        is_player: bool,
+    ) -> MoveFallPlan {
+        if !has_valid_ground_height || vertical_delta.abs() < 0.1 || has_root_or_stun_state {
+            return MoveFallPlan::Noop;
+        }
+
+        if is_player {
+            return MoveFallPlan::PlayerFallInfo;
+        }
+
+        self.add_generic_movement(
+            MovementGeneratorKind::Effect,
+            movement_id,
+            duration_ms,
+            MovementGeneratorPriority::Highest,
+            0,
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING,
+            None,
+        );
+        MoveFallPlan::SplineStarted
+    }
+
+    fn add_generic_movement(
+        &mut self,
+        kind: MovementGeneratorKind,
+        movement_id: u32,
+        duration_ms: u32,
+        priority: MovementGeneratorPriority,
+        base_unit_state: u32,
+        flags: u16,
+        arrival_spell: Option<(u32, ObjectGuid)>,
+    ) {
+        let mut generator = MovementGeneratorRef::new(kind, MovementSlot::Active)
+            .with_priority(priority)
+            .with_flags(flags)
+            .with_base_unit_state(base_unit_state)
+            .with_movement_id(movement_id)
+            .with_duration_ms(duration_ms);
+        if let Some((spell_id, target_guid)) = arrival_spell {
+            generator = generator.with_arrival_spell(spell_id, target_guid);
         }
         self.add_generator(generator);
     }
@@ -2833,6 +3956,15 @@ mod unit_subsystems_tests {
             motion.current_movement_generator().kind,
             MovementGeneratorKind::Idle
         );
+        assert_eq!(
+            motion.current_movement_generator().priority,
+            MovementGeneratorPriority::Normal
+        );
+        assert!(
+            motion
+                .current_movement_generator()
+                .has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED)
+        );
 
         motion.add_generator(
             MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
@@ -2850,6 +3982,7 @@ mod unit_subsystems_tests {
         assert_eq!(current.kind, MovementGeneratorKind::Point);
         assert_eq!(current.priority, MovementGeneratorPriority::Highest);
         assert_eq!(current.base_unit_state, UnitState::CHARGING.bits());
+        assert!(current.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
         assert_eq!(
             motion.base_unit_states.get(&UnitState::CHARGING.bits()),
             Some(&1)
@@ -2872,6 +4005,692 @@ mod unit_subsystems_tests {
             motion.current_movement_generator().kind,
             MovementGeneratorKind::Follow
         );
+    }
+
+    #[test]
+    fn motion_master_flags_and_delayed_actions_match_cpp_shape() {
+        assert_eq!(MOTIONMASTER_FLAG_NONE, 0x0);
+        assert_eq!(MOTIONMASTER_FLAG_UPDATE, 0x1);
+        assert_eq!(MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING, 0x2);
+        assert_eq!(MOTIONMASTER_FLAG_INITIALIZATION_PENDING, 0x4);
+        assert_eq!(MOTIONMASTER_FLAG_INITIALIZING, 0x8);
+        assert_eq!(
+            MOTIONMASTER_FLAG_DELAYED,
+            MOTIONMASTER_FLAG_UPDATE | MOTIONMASTER_FLAG_INITIALIZATION_PENDING
+        );
+
+        assert_eq!(MotionMasterDelayedActionType::Clear.trinity_id(), 0);
+        assert_eq!(MotionMasterDelayedActionType::ClearSlot.trinity_id(), 1);
+        assert_eq!(MotionMasterDelayedActionType::ClearMode.trinity_id(), 2);
+        assert_eq!(MotionMasterDelayedActionType::ClearPriority.trinity_id(), 3);
+        assert_eq!(MotionMasterDelayedActionType::Add.trinity_id(), 4);
+        assert_eq!(MotionMasterDelayedActionType::Remove.trinity_id(), 5);
+        assert_eq!(MotionMasterDelayedActionType::RemoveType.trinity_id(), 6);
+        assert_eq!(MotionMasterDelayedActionType::Initialize.trinity_id(), 7);
+        assert_eq!(
+            MotionMasterDelayedActionType::from_trinity_id(6),
+            Some(MotionMasterDelayedActionType::RemoveType)
+        );
+        assert_eq!(MotionMasterDelayedActionType::from_trinity_id(8), None);
+
+        let mut motion = MotionSubsystem::default();
+        assert!(motion.should_delay_motion_master_action_like_cpp());
+        motion.flags = MOTIONMASTER_FLAG_UPDATE;
+        assert!(motion.should_delay_motion_master_action_like_cpp());
+        motion.flags = MOTIONMASTER_FLAG_STATIC_INITIALIZATION_PENDING;
+        assert!(!motion.should_delay_motion_master_action_like_cpp());
+        motion.flags = MOTIONMASTER_FLAG_INITIALIZING;
+        assert!(!motion.should_delay_motion_master_action_like_cpp());
+
+        motion.push_delayed_action_like_cpp(MotionMasterDelayedActionType::Add);
+        motion.push_delayed_action_with_validator_like_cpp(
+            MotionMasterDelayedActionType::RemoveType,
+            false,
+        );
+        motion.push_delayed_action_like_cpp(MotionMasterDelayedActionType::Initialize);
+
+        let resolved = motion.resolve_delayed_actions_like_cpp();
+        assert_eq!(
+            resolved,
+            vec![
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::Add,
+                    executed: true,
+                },
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::RemoveType,
+                    executed: false,
+                },
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::Initialize,
+                    executed: true,
+                },
+            ]
+        );
+        assert!(motion.delayed_actions.is_empty());
+    }
+
+    #[test]
+    fn motion_master_delayed_action_payloads_apply_fifo_like_cpp() {
+        let mut motion = MotionSubsystem::default();
+        motion.add_to_world();
+        motion.add_generator(
+            MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_base_unit_state(UnitState::FOLLOW.bits()),
+        );
+        motion.push_delayed_payload_like_cpp(MotionMasterDelayedActionPayload::Add(
+            MovementGeneratorRef::new(MovementGeneratorKind::Effect, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_base_unit_state(UnitState::JUMPING.bits())
+                .with_movement_id(7),
+        ));
+        motion.push_delayed_payload_with_validator_like_cpp(
+            MotionMasterDelayedActionPayload::RemoveType {
+                kind: MovementGeneratorKind::Effect,
+                slot: MovementSlot::Active,
+            },
+            false,
+        );
+        motion.push_delayed_payload_like_cpp(MotionMasterDelayedActionPayload::ClearPriority(
+            MovementGeneratorPriority::Highest,
+        ));
+
+        let resolved = motion.resolve_delayed_action_payloads_like_cpp();
+        assert_eq!(
+            resolved,
+            vec![
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::Add,
+                    executed: true,
+                },
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::RemoveType,
+                    executed: false,
+                },
+                MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::ClearPriority,
+                    executed: true,
+                },
+            ]
+        );
+        assert!(motion.delayed_actions.is_empty());
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Follow
+        );
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::JUMPING.bits()),
+            None
+        );
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::FOLLOW.bits()),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn motion_master_update_initializes_updates_pops_and_resolves_like_cpp() {
+        let mut motion = MotionSubsystem::default();
+        assert_eq!(
+            motion.update_motion_master_like_cpp(MotionMasterUpdateContext {
+                diff_ms: 10,
+                spline_finalized: true,
+                ..MotionMasterUpdateContext::default()
+            }),
+            MotionMasterUpdateOutcome::Stalled
+        );
+        motion.add_to_world();
+        motion.launch_generic_movement(MovementGeneratorKind::Effect, 11, 10, None);
+        motion.push_delayed_payload_like_cpp(MotionMasterDelayedActionPayload::Add(
+            MovementGeneratorRef::new(MovementGeneratorKind::Follow, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_base_unit_state(UnitState::FOLLOW.bits()),
+        ));
+
+        let outcome = motion.update_motion_master_like_cpp(MotionMasterUpdateContext {
+            diff_ms: 10,
+            ..MotionMasterUpdateContext::default()
+        });
+
+        let mut expected_popped =
+            MovementGeneratorRef::new(MovementGeneratorKind::Effect, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(
+                    MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED,
+                )
+                .with_base_unit_state(UnitState::ROAMING.bits())
+                .with_movement_id(11)
+                .with_duration_ms(10);
+        expected_popped.elapsed_ms = 10;
+        assert_eq!(
+            outcome,
+            MotionMasterUpdateOutcome::Updated {
+                popped: Some(expected_popped),
+                resolved_delayed_actions: vec![MotionMasterResolvedDelayedAction {
+                    action_type: MotionMasterDelayedActionType::Add,
+                    executed: true,
+                }],
+            }
+        );
+        assert!(!motion.has_motion_master_flag(MOTIONMASTER_FLAG_UPDATE));
+        assert_eq!(
+            motion.current_movement_generator().kind,
+            MovementGeneratorKind::Follow
+        );
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::ROAMING.bits()),
+            None
+        );
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::FOLLOW.bits()),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn idle_rotate_and_distract_generators_match_cpp_lifecycle_shape() {
+        let mut idle = MotionSubsystem::default().default_generator;
+        assert_eq!(
+            idle.initialize_idle_like_cpp(),
+            IdleMovementAction::StopMoving
+        );
+        assert_eq!(idle.reset_idle_like_cpp(), IdleMovementAction::StopMoving);
+        assert!(idle.update_idle_like_cpp());
+        idle.finalize_idle_like_cpp();
+        assert!(idle.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut motion = MotionSubsystem::default();
+        assert!(!motion.move_rotate_like_cpp(7, 0, RotateDirection::Left));
+        assert!(motion.move_rotate_like_cpp(7, 1_000, RotateDirection::Left));
+        let mut rotate = motion.current_movement_generator();
+        assert_eq!(rotate.kind, MovementGeneratorKind::Rotate);
+        assert_eq!(rotate.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(rotate.base_unit_state, UnitState::ROTATING.bits());
+        assert_eq!(rotate.movement_id, 7);
+        assert_eq!(rotate.duration_ms, Some(1_000));
+        assert_eq!(rotate.max_duration_ms, Some(1_000));
+        assert_eq!(rotate.rotate_direction, Some(RotateDirection::Left));
+
+        assert_eq!(
+            rotate.initialize_rotate_like_cpp(),
+            IdleMovementAction::StopMoving
+        );
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        let update = rotate.update_rotate_like_cpp(true, 250, 0.0);
+        assert!(update.keep_running);
+        assert_eq!(rotate.duration_ms, Some(750));
+        assert!(
+            update
+                .facing_angle
+                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+        );
+
+        let finished = rotate.update_rotate_like_cpp(true, 750, std::f32::consts::FRAC_PI_2);
+        assert!(!finished.keep_running);
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert_eq!(
+            rotate.finalize_rotate_like_cpp(true, true),
+            RotateMovementFinalize {
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Rotate,
+                    movement_id: 7,
+                }),
+            }
+        );
+        assert!(rotate.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut right =
+            MovementGeneratorRef::new(MovementGeneratorKind::Rotate, MovementSlot::Active)
+                .with_duration_ms(1_000)
+                .with_max_duration_ms(1_000)
+                .with_rotate_direction(RotateDirection::Right);
+        let right_update = right.update_rotate_like_cpp(true, 250, std::f32::consts::PI);
+        assert!(
+            right_update
+                .facing_angle
+                .is_some_and(|angle| (angle - std::f32::consts::FRAC_PI_2).abs() < 0.0001)
+        );
+
+        let mut distract_motion = MotionSubsystem::default();
+        distract_motion.move_distract_like_cpp(500);
+        let mut distract = distract_motion.current_movement_generator();
+        assert_eq!(distract.kind, MovementGeneratorKind::Distract);
+        assert_eq!(distract.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(distract.base_unit_state, UnitState::DISTRACTED.bits());
+        assert_eq!(distract.duration_ms, Some(500));
+        assert_eq!(
+            distract.initialize_distract_like_cpp(false),
+            DistractMovementAction {
+                stand_up: true,
+                launch_facing_spline: true,
+            }
+        );
+        assert!(distract.update_distract_like_cpp(true, 500));
+        assert_eq!(distract.duration_ms, Some(0));
+        assert!(!distract.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert!(!distract.update_distract_like_cpp(true, 1));
+        assert!(distract.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        assert_eq!(
+            distract.finalize_distract_like_cpp(true, true),
+            DistractMovementFinalize {
+                set_home_orientation: true,
+            }
+        );
+
+        let mut deactivated =
+            MovementGeneratorRef::new(MovementGeneratorKind::Distract, MovementSlot::Active);
+        deactivated.deactivate_timed_idle_like_cpp();
+        assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+    }
+
+    #[test]
+    fn motion_move_point_tracks_cpp_point_generator_base_state() {
+        let mut motion = MotionSubsystem::default();
+
+        motion.move_point(9);
+
+        let current = motion.current_movement_generator();
+        assert_eq!(current.kind, MovementGeneratorKind::Point);
+        assert_eq!(current.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(current.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(current.movement_id, 9);
+        assert!(current.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::ROAMING.bits()),
+            Some(&1)
+        );
+
+        let removed = motion.clear_by_priority(MovementGeneratorPriority::Normal);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::ROAMING.bits()),
+            None
+        );
+    }
+
+    #[test]
+    fn point_movement_generator_lifecycle_matches_cpp_shape() {
+        let mut generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Normal)
+                .with_flags(
+                    MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+                        | MOVEMENTGENERATOR_FLAG_DEACTIVATED,
+                )
+                .with_base_unit_state(UnitState::ROAMING.bits())
+                .with_movement_id(9);
+
+        assert_eq!(
+            generator.initialize_point_like_cpp(true),
+            PointMovementAction::LaunchSpline
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+
+        assert_eq!(
+            generator.update_point_like_cpp(true, false),
+            PointMovementAction::Continue
+        );
+        assert_eq!(
+            generator.update_point_like_cpp(true, true),
+            PointMovementAction::Finished
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        let finalized = generator.finalize_point_like_cpp(true, true);
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+        assert_eq!(
+            finalized,
+            PointMovementFinalize {
+                clear_roaming_move: true,
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: 9,
+                }),
+            }
+        );
+
+        let mut blocked =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
+        assert_eq!(
+            blocked.initialize_point_like_cpp(false),
+            PointMovementAction::StopMoving
+        );
+        assert!(blocked.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED));
+        assert_eq!(
+            blocked.update_point_like_cpp(false, false),
+            PointMovementAction::StopMovingAndContinue
+        );
+
+        let mut speed_update =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING);
+        assert_eq!(
+            speed_update.update_point_like_cpp(true, false),
+            PointMovementAction::RelaunchSpline
+        );
+        assert!(!speed_update.has_flag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING));
+
+        let mut interrupted =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INTERRUPTED);
+        assert_eq!(
+            interrupted.update_point_like_cpp(true, true),
+            PointMovementAction::RelaunchSpline
+        );
+        assert!(!interrupted.has_flag(MOVEMENTGENERATOR_FLAG_INTERRUPTED));
+    }
+
+    #[test]
+    fn point_movement_charge_prepath_informs_as_event_charge_like_cpp() {
+        let mut generator =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active)
+                .with_priority(MovementGeneratorPriority::Highest)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING)
+                .with_base_unit_state(UnitState::CHARGING.bits())
+                .with_movement_id(EVENT_CHARGE_PREPATH);
+
+        assert_eq!(
+            generator.initialize_point_like_cpp(true),
+            PointMovementAction::MarkRoamingMove
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+
+        assert_eq!(
+            generator.update_point_like_cpp(true, false),
+            PointMovementAction::Continue
+        );
+        assert_eq!(
+            generator.update_point_like_cpp(true, true),
+            PointMovementAction::Finished
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        assert_eq!(
+            generator.finalize_point_like_cpp(true, true),
+            PointMovementFinalize {
+                clear_roaming_move: true,
+                inform: Some(PointMovementInform {
+                    kind: MovementGeneratorKind::Point,
+                    movement_id: EVENT_CHARGE,
+                }),
+            }
+        );
+
+        let mut deactivated =
+            MovementGeneratorRef::new(MovementGeneratorKind::Point, MovementSlot::Active);
+        assert_eq!(
+            deactivated.deactivate_point_like_cpp(),
+            PointMovementAction::ClearRoamingMove
+        );
+        assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+    }
+
+    #[test]
+    fn assistance_movement_generators_match_cpp_constructor_and_finalize_shape() {
+        let mut motion = MotionSubsystem::default();
+
+        assert_eq!(
+            motion.move_seek_assistance_like_cpp(),
+            SeekAssistancePlan {
+                attack_stop: true,
+                cast_stop: true,
+                do_not_reacquire_spell_focus_target: true,
+                set_react_passive: true,
+                generator_added: true,
+            }
+        );
+
+        let assist = motion.current_movement_generator();
+        assert_eq!(assist.kind, MovementGeneratorKind::Assistance);
+        assert_eq!(assist.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(assist.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(assist.movement_id, EVENT_ASSIST_MOVE);
+        assert!(assist.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+
+        let mut finalized = assist.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            finalized.finalize_assistance_like_cpp(true, true, true, true),
+            AssistanceMovementFinalize {
+                clear_roaming_move: true,
+                set_no_call_assistance: Some(false),
+                call_assistance: true,
+                seek_assistance_distract_ms: Some(CREATURE_FAMILY_ASSISTANCE_DELAY_MS_LIKE_CPP),
+            }
+        );
+        assert!(finalized.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut non_creature = assist.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            non_creature.finalize_assistance_like_cpp(true, true, false, true),
+            AssistanceMovementFinalize {
+                clear_roaming_move: true,
+                set_no_call_assistance: None,
+                call_assistance: false,
+                seek_assistance_distract_ms: None,
+            }
+        );
+
+        motion.move_seek_assistance_distract_like_cpp(777);
+        let distract = motion.current_movement_generator();
+        assert_eq!(distract.kind, MovementGeneratorKind::AssistanceDistract);
+        assert_eq!(distract.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(distract.base_unit_state, UnitState::DISTRACTED.bits());
+        assert_eq!(distract.duration_ms, Some(777));
+        assert!(distract.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+
+        let mut distract_finalized = distract.with_flags(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        assert_eq!(
+            distract_finalized.finalize_assistance_distract_like_cpp(true, true),
+            AssistanceDistractFinalize {
+                set_react_aggressive: true,
+            }
+        );
+        assert!(distract_finalized.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+    }
+
+    #[test]
+    fn generic_movement_generator_lifecycle_matches_cpp_shape() {
+        let mut motion = MotionSubsystem::default();
+        let target = guid(88);
+
+        motion.launch_generic_movement(
+            MovementGeneratorKind::Effect,
+            42,
+            1_000,
+            Some((1234, target)),
+        );
+
+        let mut generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Effect);
+        assert_eq!(generator.priority, MovementGeneratorPriority::Normal);
+        assert_eq!(
+            generator.flags,
+            MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING
+        );
+        assert_eq!(generator.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(generator.movement_id, 42);
+        assert_eq!(generator.duration_ms, Some(1_000));
+        assert_eq!(generator.arrival_spell_id, 1234);
+        assert_eq!(generator.arrival_spell_target_guid, target);
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::ROAMING.bits()),
+            Some(&1)
+        );
+
+        generator.initialize_generic_like_cpp();
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZED));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+
+        assert!(generator.update_generic_like_cpp(999, false, false));
+        assert_eq!(generator.elapsed_ms, 999);
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        assert!(!generator.update_generic_like_cpp(1, false, false));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+        let inform = generator
+            .finalize_generic_like_cpp(true)
+            .expect("inform enabled");
+        assert_eq!(
+            inform,
+            GenericMovementInform {
+                kind: MovementGeneratorKind::Effect,
+                movement_id: 42,
+                arrival_spell_id: Some(1234),
+                arrival_spell_target_guid: Some(target),
+            }
+        );
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+
+        let mut cyclic =
+            MovementGeneratorRef::new(MovementGeneratorKind::Effect, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_INITIALIZED)
+                .with_duration_ms(10);
+        assert!(cyclic.update_generic_like_cpp(100, true, false));
+        assert_eq!(cyclic.elapsed_ms, 0);
+        assert!(!cyclic.update_generic_like_cpp(0, true, true));
+        assert!(cyclic.has_flag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED));
+
+        let mut deactivated =
+            MovementGeneratorRef::new(MovementGeneratorKind::Effect, MovementSlot::Active)
+                .with_flags(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+        deactivated.initialize_generic_like_cpp();
+        assert!(deactivated.has_flag(MOVEMENTGENERATOR_FLAG_FINALIZED));
+        assert!(!deactivated.has_flag(MOVEMENTGENERATOR_FLAG_DEACTIVATED));
+    }
+
+    #[test]
+    fn launch_move_spline_like_cpp_rejects_invalid_generator_types() {
+        let mut motion = MotionSubsystem::default();
+
+        assert!(!motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Custom(3),
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(!motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Custom(19),
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(motion.launch_move_spline_like_cpp(
+            MovementGeneratorKind::Point,
+            7,
+            MovementGeneratorPriority::Highest,
+            250
+        ));
+        let generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Point);
+        assert_eq!(generator.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(generator.base_unit_state, UnitState::ROAMING.bits());
+        assert_eq!(generator.movement_id, 7);
+        assert_eq!(generator.duration_ms, Some(250));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+    }
+
+    #[test]
+    fn move_jump_generators_match_cpp_priority_state_and_persist_flags() {
+        let mut motion = MotionSubsystem::default();
+        let target = guid(99);
+
+        assert!(!motion.move_jump_like_cpp(1, 500, 0.009, Some((777, target))));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(motion.move_jump_like_cpp(1, 500, 0.01, Some((777, target))));
+        let jump = motion.current_movement_generator();
+        assert_eq!(jump.kind, MovementGeneratorKind::Effect);
+        assert_eq!(jump.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(jump.base_unit_state, UnitState::JUMPING.bits());
+        assert_eq!(jump.movement_id, 1);
+        assert_eq!(jump.duration_ms, Some(500));
+        assert_eq!(jump.arrival_spell_id, 777);
+        assert_eq!(jump.arrival_spell_target_guid, target);
+        assert!(jump.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(!jump.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
+        assert_eq!(
+            motion.base_unit_states.get(&UnitState::JUMPING.bits()),
+            Some(&1)
+        );
+
+        assert!(motion.move_jump_with_gravity_like_cpp(2, 600, 1.0, None));
+        let gravity_jump = motion.current_movement_generator();
+        assert_eq!(gravity_jump.kind, MovementGeneratorKind::Effect);
+        assert_eq!(gravity_jump.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(gravity_jump.base_unit_state, UnitState::JUMPING.bits());
+        assert_eq!(gravity_jump.movement_id, 2);
+        assert_eq!(gravity_jump.duration_ms, Some(600));
+        assert_eq!(gravity_jump.arrival_spell_id, 0);
+        assert_eq!(gravity_jump.arrival_spell_target_guid, ObjectGuid::EMPTY);
+        assert!(gravity_jump.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(gravity_jump.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
+    }
+
+    #[test]
+    fn knockback_generator_matches_cpp_player_guard_and_persist_flag() {
+        let mut motion = MotionSubsystem::default();
+
+        assert!(!motion.move_knockback_from_like_cpp(true, 300, 1.0));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(!motion.move_knockback_from_like_cpp(false, 300, 0.009));
+        assert!(motion.active_generators.is_empty());
+
+        assert!(motion.move_knockback_from_like_cpp(false, 300, 0.01));
+        let generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Effect);
+        assert_eq!(generator.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(generator.base_unit_state, 0);
+        assert_eq!(generator.movement_id, 0);
+        assert_eq!(generator.duration_ms, Some(300));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
+    }
+
+    #[test]
+    fn move_fall_like_cpp_guards_player_and_creature_spline_paths() {
+        let mut motion = MotionSubsystem::default();
+
+        assert_eq!(
+            motion.move_fall_like_cpp(3, 400, false, 10.0, false, false),
+            MoveFallPlan::Noop
+        );
+        assert_eq!(
+            motion.move_fall_like_cpp(3, 400, true, 0.099, false, false),
+            MoveFallPlan::Noop
+        );
+        assert_eq!(
+            motion.move_fall_like_cpp(3, 400, true, 10.0, true, false),
+            MoveFallPlan::Noop
+        );
+        assert!(motion.active_generators.is_empty());
+
+        assert_eq!(
+            motion.move_fall_like_cpp(3, 400, true, 10.0, false, true),
+            MoveFallPlan::PlayerFallInfo
+        );
+        assert!(motion.active_generators.is_empty());
+
+        assert_eq!(
+            motion.move_fall_like_cpp(3, 400, true, 10.0, false, false),
+            MoveFallPlan::SplineStarted
+        );
+        let generator = motion.current_movement_generator();
+        assert_eq!(generator.kind, MovementGeneratorKind::Effect);
+        assert_eq!(generator.priority, MovementGeneratorPriority::Highest);
+        assert_eq!(generator.base_unit_state, 0);
+        assert_eq!(generator.movement_id, 3);
+        assert_eq!(generator.duration_ms, Some(400));
+        assert!(generator.has_flag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING));
+        assert!(!generator.has_flag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH));
     }
 
     #[test]
