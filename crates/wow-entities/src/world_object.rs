@@ -333,6 +333,10 @@ impl PhaseShift {
         self.phases.values()
     }
 
+    pub fn phase_snapshot_like_cpp(&self) -> Vec<PhaseRef> {
+        self.phases.values().copied().collect()
+    }
+
     pub const fn flags_like_cpp(&self) -> PhaseShiftFlags {
         self.flags
     }

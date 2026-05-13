@@ -9,7 +9,7 @@ use std::{collections::HashSet, error::Error, fmt};
 
 use wow_constants::{PhaseFlags, TypeId};
 use wow_core::ObjectGuid;
-use wow_data::{PhaseGroupStore, PhaseStore, TerrainSwapStore};
+use wow_data::{AreaTableStore, PhaseGroupStore, PhaseInfoStore, PhaseStore, TerrainSwapStore};
 use wow_entities::{PhaseShift, Unit, WorldObject};
 use wow_packet::packets::misc::{PhaseShiftChange, PhaseShiftDataPhase};
 
@@ -380,6 +380,91 @@ pub fn on_map_change_like_cpp(
     PhaseVisibilityUpdate::new(false, true)
 }
 
+/// C++ `PhasingHandler::OnAreaChange` core area-phase pass.
+///
+/// `phase_area_conditions_pass` represents
+/// `sConditionMgr->IsObjectMeetToConditions(srcInfo, phaseArea.Conditions)`.
+/// `aura_phase_ids` and `aura_phase_group_ids` represent active
+/// `SPELL_AURA_PHASE` / `SPELL_AURA_PHASE_GROUP` effects already filtered by the caller.
+pub fn on_area_change_like_cpp(
+    object: &mut WorldObject,
+    area_store: &AreaTableStore,
+    phase_store: &PhaseStore,
+    phase_group_store: &PhaseGroupStore,
+    phase_info_store: &PhaseInfoStore,
+    mut phase_area_conditions_pass: impl FnMut(u32, &WorldObject) -> bool,
+    aura_phase_ids: impl IntoIterator<Item = u32>,
+    aura_phase_group_ids: impl IntoIterator<Item = u32>,
+) -> PhaseVisibilityUpdate {
+    let old_phases = object.phase_shift().phase_snapshot_like_cpp();
+
+    object.phase_shift_mut().clear_phases_like_cpp();
+    object.suppressed_phase_shift_mut().clear_phases_like_cpp();
+
+    let original_area_id = object.area_id();
+    let mut area_id = original_area_id;
+    while let Some(area_entry) = area_store.get(area_id) {
+        if let Some(area_phases) = phase_info_store.phases_for_area(area_entry.id) {
+            for phase_area in area_phases {
+                if phase_area.sub_area_exclusions.contains(&original_area_id) {
+                    continue;
+                }
+
+                let phase_id = phase_area.phase_id;
+                let phase_flags = phase_flags_for_id_like_cpp(phase_store, phase_id);
+                if phase_area_conditions_pass(phase_id, object) {
+                    object
+                        .phase_shift_mut()
+                        .add_phase_like_cpp(phase_id, phase_flags, 1);
+                } else {
+                    object.suppressed_phase_shift_mut().add_phase_like_cpp(
+                        phase_id,
+                        phase_flags,
+                        1,
+                    );
+                }
+            }
+        }
+
+        area_id = u32::from(area_entry.parent_area_id);
+        if area_id == 0 {
+            break;
+        }
+    }
+
+    let mut changed = object.phase_shift().phase_snapshot_like_cpp() != old_phases;
+
+    for phase_id in aura_phase_ids {
+        let flags = phase_flags_for_id_like_cpp(phase_store, phase_id);
+        changed = object
+            .phase_shift_mut()
+            .add_phase_like_cpp(phase_id, flags, 1)
+            || changed;
+    }
+
+    for phase_group_id in aura_phase_group_ids {
+        let Some(phases) = phase_group_store.phases_for_group(phase_group_id) else {
+            continue;
+        };
+        for phase_id in phases {
+            let flags = phase_flags_for_id_like_cpp(phase_store, *phase_id);
+            changed = object
+                .phase_shift_mut()
+                .add_phase_like_cpp(*phase_id, flags, 1)
+                || changed;
+        }
+    }
+
+    if object.phase_shift().has_personal_phase_like_cpp() {
+        let personal_guid = object.guid();
+        object
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(personal_guid);
+    }
+
+    PhaseVisibilityUpdate::new(true, changed)
+}
+
 /// C++ `PhasingHandler::SendToPlayer(Player const*, PhaseShift const&)` packet build step.
 pub fn phase_shift_change_for_player_like_cpp(
     player_guid: ObjectGuid,
@@ -429,7 +514,7 @@ mod tests {
     use wow_constants::{PhaseFlags, PhaseShiftFlags, TypeId, TypeMask};
     use wow_core::{ObjectGuid, guid::HighGuid};
     use wow_data::{
-        MapEntry, MapStore, PhaseEntry, PhaseXPhaseGroupEntry,
+        AreaTableEntry, MapEntry, MapStore, PhaseEntry, PhaseXPhaseGroupEntry,
         phase::{PHASE_ENTRY_FLAG_COSMETIC, PHASE_ENTRY_FLAG_PERSONAL},
     };
 
@@ -488,6 +573,33 @@ mod tests {
                 },
             ],
         )
+    }
+
+    fn area_store() -> AreaTableStore {
+        AreaTableStore::from_entries([
+            AreaTableEntry {
+                id: 100,
+                parent_area_id: 0,
+            },
+            AreaTableEntry {
+                id: 101,
+                parent_area_id: 100,
+            },
+            AreaTableEntry {
+                id: 102,
+                parent_area_id: 100,
+            },
+        ])
+    }
+
+    fn phase_info_store(area_store: &AreaTableStore, phase_store: &PhaseStore) -> PhaseInfoStore {
+        let mut store = PhaseInfoStore::from_phase_store_like_cpp(phase_store);
+        store.load_area_phases_from_rows_like_cpp(
+            area_store,
+            phase_store,
+            [(100, 10), (101, 10), (100, 20), (102, 30)],
+        );
+        store
     }
 
     fn map(id: u32, parent_map_id: i16) -> MapEntry {
@@ -730,6 +842,74 @@ mod tests {
         assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(43));
         assert!(!object.phase_shift().has_visible_map_id_like_cpp(700));
         assert!(object.phase_shift().has_ui_map_phase_id_like_cpp(70));
+    }
+
+    #[test]
+    fn on_area_change_walks_parent_suppresses_and_reapplies_aura_phases_like_cpp() {
+        let area_store = area_store();
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let phase_info_store = phase_info_store(&area_store, &phase_store);
+        let mut object = world_object();
+        let personal_guid = object.guid();
+        object.set_zone_and_area(100, 101);
+        object
+            .phase_shift_mut()
+            .add_phase_like_cpp(99, PhaseFlags::NONE, 1);
+        object
+            .suppressed_phase_shift_mut()
+            .add_phase_like_cpp(98, PhaseFlags::NONE, 1);
+
+        let update = on_area_change_like_cpp(
+            &mut object,
+            &area_store,
+            &phase_store,
+            &phase_group_store,
+            &phase_info_store,
+            |phase_id, _| phase_id != 20,
+            [30],
+            [7],
+        );
+
+        assert_eq!(update, PhaseVisibilityUpdate::new(true, true));
+        assert!(!object.phase_shift().has_phase_like_cpp(99));
+        assert!(!object.suppressed_phase_shift().has_phase_like_cpp(98));
+        assert!(object.phase_shift().has_phase_like_cpp(10));
+        assert!(object.suppressed_phase_shift().has_phase_like_cpp(20));
+        assert!(object.phase_shift().has_phase_like_cpp(30));
+        assert_eq!(
+            object
+                .phase_shift()
+                .phase_ref_like_cpp(30)
+                .map(|phase| phase.flags()),
+            Some(PhaseFlags::COSMETIC)
+        );
+        assert_eq!(object.phase_shift().personal_guid_like_cpp(), personal_guid);
+    }
+
+    #[test]
+    fn on_area_change_honors_parent_sub_area_exclusions_like_cpp() {
+        let area_store = area_store();
+        let phase_store = phase_store();
+        let phase_group_store = phase_group_store(&phase_store);
+        let phase_info_store = phase_info_store(&area_store, &phase_store);
+        let mut object = world_object();
+        object.set_zone_and_area(100, 101);
+
+        on_area_change_like_cpp(
+            &mut object,
+            &area_store,
+            &phase_store,
+            &phase_group_store,
+            &phase_info_store,
+            |_, _| true,
+            [],
+            [],
+        );
+
+        assert!(object.phase_shift().has_phase_like_cpp(10));
+        assert!(object.phase_shift().has_phase_like_cpp(20));
+        assert!(!object.phase_shift().has_phase_like_cpp(30));
     }
 
     #[test]
