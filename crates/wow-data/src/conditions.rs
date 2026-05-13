@@ -547,9 +547,11 @@ pub const RACEMASK_ALL_PLAYABLE_LIKE_CPP: u64 = (1 << (1 - 1))
 
 pub const UNIT_STATE_ALL_STATE_SUPPORTED_LIKE_CPP: u32 = 0x3ff7_ffff;
 pub const MAX_QUEST_STATUS_LIKE_CPP: u32 = 7;
+pub const MAX_SPELL_EFFECTS_LIKE_CPP: u32 = 32;
 pub const DRUNKEN_SMASHED_LIKE_CPP: u32 = 3;
 pub const CREATURE_TYPE_GAS_CLOUD_LIKE_CPP: u32 = 13;
 pub const MAX_PET_TYPE_LIKE_CPP: u32 = 4;
+pub const DEFAULT_MAX_BATTLE_PETS_PER_SPECIES_LIKE_CPP: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConditionTypeValidationErrorLikeCpp {
@@ -559,6 +561,8 @@ pub enum ConditionTypeValidationErrorLikeCpp {
     InvalidRaceMask(u64),
     InvalidGender(u32),
     InvalidSkillValue(u32),
+    InvalidSpellEffectIndex(u32),
+    ZeroItemCount,
     InvalidComparisonType { field: u8, value: u32 },
     InvalidDrunkenState(u32),
     InvalidObjectTypeId(u32),
@@ -572,6 +576,7 @@ pub enum ConditionTypeValidationErrorLikeCpp {
     InvalidCreatureType(u32),
     InvalidStandState { value1: u32, value2: u32 },
     InvalidPetTypeMask(u32),
+    InvalidBattlePetCount(u32),
     UnsupportedInstanceInfoGuidData,
 }
 
@@ -595,6 +600,16 @@ pub fn validate_condition_type_static_like_cpp(
     use ConditionTypeValidationErrorLikeCpp as Error;
 
     match condition.condition_type {
+        ConditionType::Aura => {
+            if condition.condition_value2 >= MAX_SPELL_EFFECTS_LIKE_CPP {
+                return Err(Error::InvalidSpellEffectIndex(condition.condition_value2));
+            }
+        }
+        ConditionType::Item => {
+            if condition.condition_value2 == 0 {
+                return Err(Error::ZeroItemCount);
+            }
+        }
         ConditionType::Team => {
             if condition.condition_value1 != Team::Alliance as u32
                 && condition.condition_value1 != Team::Horde as u32
@@ -737,6 +752,9 @@ pub fn validate_condition_type_static_like_cpp(
             }
         }
         ConditionType::BattlePetCount => {
+            if condition.condition_value2 > DEFAULT_MAX_BATTLE_PETS_PER_SPECIES_LIKE_CPP {
+                return Err(Error::InvalidBattlePetCount(condition.condition_value2));
+            }
             if condition.condition_value3 >= ComparisonType::Max as u32 {
                 return Err(Error::InvalidComparisonType {
                     field: 3,
@@ -754,8 +772,6 @@ pub fn validate_condition_type_static_like_cpp(
         | ConditionType::PrivateObject
         | ConditionType::None
         | ConditionType::StringId
-        | ConditionType::Aura
-        | ConditionType::Item
         | ConditionType::ItemEquipped
         | ConditionType::ZoneId
         | ConditionType::ReputationRank
@@ -1541,6 +1557,29 @@ mod tests {
 
     #[test]
     fn condition_type_static_validation_matches_cpp_pure_rejections() {
+        let mut invalid_aura = Condition {
+            condition_type: ConditionType::Aura,
+            condition_value2: MAX_SPELL_EFFECTS_LIKE_CPP,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_aura).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidSpellEffectIndex(
+                MAX_SPELL_EFFECTS_LIKE_CPP,
+            )
+        );
+
+        let mut zero_item_count = Condition {
+            condition_type: ConditionType::Item,
+            condition_value1: 25,
+            condition_value2: 0,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut zero_item_count).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::ZeroItemCount
+        );
+
         let mut invalid_team = Condition {
             condition_type: ConditionType::Team,
             condition_value1: 123,
@@ -1576,6 +1615,19 @@ mod tests {
                 value1: 0,
                 value2: UnitStandStateType::Max as u32,
             }
+        );
+
+        let mut invalid_battle_pet_count = Condition {
+            condition_type: ConditionType::BattlePetCount,
+            condition_value2: DEFAULT_MAX_BATTLE_PETS_PER_SPECIES_LIKE_CPP + 1,
+            condition_value3: ComparisonType::Eq as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_battle_pet_count).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidBattlePetCount(
+                DEFAULT_MAX_BATTLE_PETS_PER_SPECIES_LIKE_CPP + 1,
+            )
         );
     }
 
