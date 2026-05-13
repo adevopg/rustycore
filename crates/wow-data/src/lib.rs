@@ -11,6 +11,7 @@ pub mod chr_specialization;
 pub mod conditions;
 pub mod currency;
 pub mod dungeon_encounter;
+pub mod gossip;
 pub mod graveyard;
 pub mod hotfix_cache;
 pub mod import_price;
@@ -53,6 +54,7 @@ pub use conditions::{
 };
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
+pub use gossip::{GossipConditionAttachmentReport, GossipMenu, GossipMenuItem, GossipStore};
 pub use graveyard::{
     GraveyardConditionAttachmentReport, GraveyardData, GraveyardLoadReport, GraveyardStore,
     GraveyardZoneRow,
