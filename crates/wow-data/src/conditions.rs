@@ -13,7 +13,10 @@ use std::{
 use anyhow::Result;
 use num_traits::FromPrimitive;
 use tracing::info;
-use wow_constants::{ConditionSourceType, ConditionType, TypeId, TypeMask};
+use wow_constants::{
+    ComparisonType, ConditionInstanceInfo, ConditionSourceType, ConditionType, Gender,
+    RelationType, Team, TypeId, TypeMask, UnitStandStateType,
+};
 use wow_database::{WorldDatabase, WorldStatements};
 
 pub const GRID_MAP_TYPE_MASK_CORPSE: u32 = 0x01;
@@ -500,6 +503,359 @@ pub fn useless_condition_value_fields_like_cpp(condition: &Condition) -> Vec<u8>
     fields
 }
 
+pub const CLASSMASK_ALL_PLAYABLE_LIKE_CPP: u32 = (1 << (1 - 1))
+    | (1 << (2 - 1))
+    | (1 << (3 - 1))
+    | (1 << (4 - 1))
+    | (1 << (5 - 1))
+    | (1 << (6 - 1))
+    | (1 << (7 - 1))
+    | (1 << (8 - 1))
+    | (1 << (9 - 1))
+    | (1 << (10 - 1))
+    | (1 << (11 - 1))
+    | (1 << (12 - 1))
+    | (1 << (13 - 1));
+
+pub const RACEMASK_ALL_PLAYABLE_LIKE_CPP: u64 = (1 << (1 - 1))
+    | (1 << (2 - 1))
+    | (1 << (3 - 1))
+    | (1 << (4 - 1))
+    | (1 << (5 - 1))
+    | (1 << (6 - 1))
+    | (1 << (7 - 1))
+    | (1 << (8 - 1))
+    | (1 << (9 - 1))
+    | (1 << (10 - 1))
+    | (1 << (11 - 1))
+    | (1 << (22 - 1))
+    | (1 << (24 - 1))
+    | (1 << (25 - 1))
+    | (1 << (26 - 1))
+    | (1 << (27 - 1))
+    | (1 << (28 - 1))
+    | (1 << (29 - 1))
+    | (1 << (30 - 1))
+    | (1 << (31 - 1))
+    | (1 << (32 - 1))
+    | (1 << 11)
+    | (1 << 12)
+    | (1 << 13)
+    | (1 << 14)
+    | (1 << 16)
+    | (1 << 15);
+
+pub const UNIT_STATE_ALL_STATE_SUPPORTED_LIKE_CPP: u32 = 0x3ff7_ffff;
+pub const MAX_QUEST_STATUS_LIKE_CPP: u32 = 7;
+pub const DRUNKEN_SMASHED_LIKE_CPP: u32 = 3;
+pub const CREATURE_TYPE_GAS_CLOUD_LIKE_CPP: u32 = 13;
+pub const MAX_PET_TYPE_LIKE_CPP: u32 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConditionTypeValidationErrorLikeCpp {
+    InvalidTeam(u32),
+    InvalidQuestStateMask(u32),
+    InvalidClassMask(u32),
+    InvalidRaceMask(u64),
+    InvalidGender(u32),
+    InvalidSkillValue(u32),
+    InvalidComparisonType { field: u8, value: u32 },
+    InvalidDrunkenState(u32),
+    InvalidObjectTypeId(u32),
+    InvalidTypeMask(u32),
+    InvalidTargetSelector { field: u8, value: u32, max: u32 },
+    SelfTargetSelector { field: u8, value: u32 },
+    InvalidRelationType(u32),
+    InvalidReactionRankMask(u32),
+    DeprecatedSpawnMask,
+    InvalidUnitState(u32),
+    InvalidCreatureType(u32),
+    InvalidStandState { value1: u32, value2: u32 },
+    InvalidPetTypeMask(u32),
+    UnsupportedInstanceInfoGuidData,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConditionTypeValidationReportLikeCpp {
+    pub useless_value_fields: Vec<u8>,
+}
+
+pub fn validate_condition_type_static_like_cpp(
+    condition: &mut Condition,
+) -> Result<ConditionTypeValidationReportLikeCpp, ConditionTypeValidationErrorLikeCpp> {
+    use ConditionTypeValidationErrorLikeCpp as Error;
+
+    match condition.condition_type {
+        ConditionType::Team => {
+            if condition.condition_value1 != Team::Alliance as u32
+                && condition.condition_value1 != Team::Horde as u32
+            {
+                return Err(Error::InvalidTeam(condition.condition_value1));
+            }
+        }
+        ConditionType::Skill => {
+            if condition.condition_value2 < 1 {
+                return Err(Error::InvalidSkillValue(condition.condition_value2));
+            }
+        }
+        ConditionType::QuestState => {
+            if condition.condition_value2 >= (1 << MAX_QUEST_STATUS_LIKE_CPP) {
+                return Err(Error::InvalidQuestStateMask(condition.condition_value2));
+            }
+        }
+        ConditionType::Class => {
+            let invalid_mask = condition.condition_value1 & !CLASSMASK_ALL_PLAYABLE_LIKE_CPP;
+            if invalid_mask != 0 {
+                return Err(Error::InvalidClassMask(invalid_mask));
+            }
+        }
+        ConditionType::Race => {
+            let invalid_mask =
+                u64::from(condition.condition_value1) & !RACEMASK_ALL_PLAYABLE_LIKE_CPP;
+            if invalid_mask != 0 {
+                return Err(Error::InvalidRaceMask(invalid_mask));
+            }
+        }
+        ConditionType::Gender => {
+            if condition.condition_value1 > Gender::Female as u32 {
+                return Err(Error::InvalidGender(condition.condition_value1));
+            }
+        }
+        ConditionType::Level => {
+            if condition.condition_value2 >= ComparisonType::Max as u32 {
+                return Err(Error::InvalidComparisonType {
+                    field: 2,
+                    value: condition.condition_value2,
+                });
+            }
+        }
+        ConditionType::DrunkenState => {
+            if condition.condition_value1 > DRUNKEN_SMASHED_LIKE_CPP {
+                return Err(Error::InvalidDrunkenState(condition.condition_value1));
+            }
+        }
+        ConditionType::ObjectEntryGuidLegacy => {
+            condition.condition_type = ConditionType::ObjectEntryGuid;
+            condition.condition_value1 =
+                convert_legacy_type_id_like_cpp(condition.condition_value1);
+            validate_object_entry_guid_type_like_cpp(condition)?;
+        }
+        ConditionType::ObjectEntryGuid => validate_object_entry_guid_type_like_cpp(condition)?,
+        ConditionType::TypeMaskLegacy => {
+            condition.condition_type = ConditionType::TypeMask;
+            condition.condition_value1 =
+                convert_legacy_type_mask_like_cpp(condition.condition_value1);
+            validate_type_mask_like_cpp(condition)?;
+        }
+        ConditionType::TypeMask => validate_type_mask_like_cpp(condition)?,
+        ConditionType::RelationTo => {
+            validate_target_selector_like_cpp(condition, 1)?;
+            if condition.condition_value2 >= RelationType::Max as u32 {
+                return Err(Error::InvalidRelationType(condition.condition_value2));
+            }
+        }
+        ConditionType::ReactionTo => {
+            validate_target_selector_like_cpp(condition, 1)?;
+            if condition.condition_value2 == 0 {
+                return Err(Error::InvalidReactionRankMask(condition.condition_value2));
+            }
+        }
+        ConditionType::DistanceTo => {
+            validate_target_selector_like_cpp(condition, 1)?;
+            if condition.condition_value3 >= ComparisonType::Max as u32 {
+                return Err(Error::InvalidComparisonType {
+                    field: 3,
+                    value: condition.condition_value3,
+                });
+            }
+        }
+        ConditionType::HpVal => {
+            if condition.condition_value2 >= ComparisonType::Max as u32 {
+                return Err(Error::InvalidComparisonType {
+                    field: 2,
+                    value: condition.condition_value2,
+                });
+            }
+        }
+        ConditionType::HpPct => {
+            if condition.condition_value1 > 100 {
+                return Err(Error::InvalidComparisonType {
+                    field: 1,
+                    value: condition.condition_value1,
+                });
+            }
+            if condition.condition_value2 >= ComparisonType::Max as u32 {
+                return Err(Error::InvalidComparisonType {
+                    field: 2,
+                    value: condition.condition_value2,
+                });
+            }
+        }
+        ConditionType::SpawnMaskDeprecated => return Err(Error::DeprecatedSpawnMask),
+        ConditionType::UnitState => {
+            if condition.condition_value1 & UNIT_STATE_ALL_STATE_SUPPORTED_LIKE_CPP == 0 {
+                return Err(Error::InvalidUnitState(condition.condition_value1));
+            }
+        }
+        ConditionType::CreatureType => {
+            if condition.condition_value1 == 0
+                || condition.condition_value1 > CREATURE_TYPE_GAS_CLOUD_LIKE_CPP
+            {
+                return Err(Error::InvalidCreatureType(condition.condition_value1));
+            }
+        }
+        ConditionType::StandState => {
+            let valid = match condition.condition_value1 {
+                0 => condition.condition_value2 <= UnitStandStateType::Submerged as u32,
+                1 => condition.condition_value2 <= 1,
+                _ => false,
+            };
+            if !valid {
+                return Err(Error::InvalidStandState {
+                    value1: condition.condition_value1,
+                    value2: condition.condition_value2,
+                });
+            }
+        }
+        ConditionType::PetType => {
+            if condition.condition_value1 >= (1 << MAX_PET_TYPE_LIKE_CPP) {
+                return Err(Error::InvalidPetTypeMask(condition.condition_value1));
+            }
+        }
+        ConditionType::InstanceInfo => {
+            if condition.condition_value3 == ConditionInstanceInfo::GuidData as u32 {
+                return Err(Error::UnsupportedInstanceInfoGuidData);
+            }
+        }
+        ConditionType::BattlePetCount => {
+            if condition.condition_value3 >= ComparisonType::Max as u32 {
+                return Err(Error::InvalidComparisonType {
+                    field: 3,
+                    value: condition.condition_value3,
+                });
+            }
+        }
+        ConditionType::AreaId
+        | ConditionType::Alive
+        | ConditionType::InWater
+        | ConditionType::TerrainSwap
+        | ConditionType::Charmed
+        | ConditionType::Taxi
+        | ConditionType::GameMaster
+        | ConditionType::PrivateObject
+        | ConditionType::None
+        | ConditionType::StringId
+        | ConditionType::Aura
+        | ConditionType::Item
+        | ConditionType::ItemEquipped
+        | ConditionType::ZoneId
+        | ConditionType::ReputationRank
+        | ConditionType::WorldState
+        | ConditionType::ActiveEvent
+        | ConditionType::QuestRewarded
+        | ConditionType::QuestTaken
+        | ConditionType::QuestNone
+        | ConditionType::Achievement
+        | ConditionType::Title
+        | ConditionType::MapId
+        | ConditionType::Spell
+        | ConditionType::PhaseId
+        | ConditionType::QuestComplete
+        | ConditionType::NearCreature
+        | ConditionType::NearGameObject
+        | ConditionType::RealmAchievement
+        | ConditionType::DailyQuestDone
+        | ConditionType::QuestObjectiveProgress
+        | ConditionType::DifficultyId
+        | ConditionType::ScenarioStep
+        | ConditionType::SceneInProgress
+        | ConditionType::PlayerCondition
+        | ConditionType::Max => {}
+    }
+
+    Ok(ConditionTypeValidationReportLikeCpp {
+        useless_value_fields: useless_condition_value_fields_like_cpp(condition),
+    })
+}
+
+const fn convert_legacy_type_id_like_cpp(legacy_type_id: u32) -> u32 {
+    match legacy_type_id {
+        0 => TypeId::Object as u32,
+        1 => TypeId::Item as u32,
+        2 => TypeId::Container as u32,
+        3 => TypeId::Unit as u32,
+        4 => TypeId::Player as u32,
+        5 => TypeId::GameObject as u32,
+        6 => TypeId::DynamicObject as u32,
+        7 => TypeId::Corpse as u32,
+        8 => TypeId::AreaTrigger as u32,
+        9 => TypeId::SceneObject as u32,
+        10 => TypeId::Conversation as u32,
+        _ => TypeId::Object as u32,
+    }
+}
+
+fn convert_legacy_type_mask_like_cpp(legacy_type_mask: u32) -> u32 {
+    let mut type_mask = 0;
+    for legacy_type_id in 0..11 {
+        if legacy_type_mask & (1 << legacy_type_id) != 0 {
+            type_mask |= 1 << convert_legacy_type_id_like_cpp(legacy_type_id);
+        }
+    }
+
+    type_mask
+}
+
+fn validate_object_entry_guid_type_like_cpp(
+    condition: &Condition,
+) -> Result<(), ConditionTypeValidationErrorLikeCpp> {
+    match TypeId::from_u32(condition.condition_value1) {
+        Some(TypeId::Unit | TypeId::GameObject | TypeId::Player | TypeId::Corpse) => Ok(()),
+        _ => Err(ConditionTypeValidationErrorLikeCpp::InvalidObjectTypeId(
+            condition.condition_value1,
+        )),
+    }
+}
+
+fn validate_type_mask_like_cpp(
+    condition: &Condition,
+) -> Result<(), ConditionTypeValidationErrorLikeCpp> {
+    let allowed_mask =
+        (TypeMask::UNIT | TypeMask::PLAYER | TypeMask::GAME_OBJECT | TypeMask::CORPSE).bits();
+    if condition.condition_value1 == 0 || condition.condition_value1 & !allowed_mask != 0 {
+        return Err(ConditionTypeValidationErrorLikeCpp::InvalidTypeMask(
+            condition.condition_value1,
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_target_selector_like_cpp(
+    condition: &Condition,
+    field: u8,
+) -> Result<(), ConditionTypeValidationErrorLikeCpp> {
+    let value = match field {
+        1 => condition.condition_value1,
+        _ => unreachable!("unsupported condition target selector field"),
+    };
+    let max = condition.max_available_condition_targets_like_cpp();
+
+    if value >= max {
+        return Err(ConditionTypeValidationErrorLikeCpp::InvalidTargetSelector {
+            field,
+            value,
+            max,
+        });
+    }
+
+    if value == u32::from(condition.condition_target) {
+        return Err(ConditionTypeValidationErrorLikeCpp::SelfTargetSelector { field, value });
+    }
+
+    Ok(())
+}
+
 pub type ConditionContainer = Vec<Condition>;
 pub type ConditionsByEntryMap = HashMap<ConditionId, Arc<ConditionContainer>>;
 
@@ -667,6 +1023,7 @@ pub enum ConditionRowSkipReason {
         condition_target: u8,
         max_available_targets: u32,
     },
+    ConditionTypeValidationFailed(ConditionTypeValidationErrorLikeCpp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -753,6 +1110,20 @@ pub fn parse_condition_row_like_cpp(
 pub fn normalize_loaded_condition_shape_like_cpp(
     condition: &mut Condition,
 ) -> Result<(), ConditionRowSkipReason> {
+    if condition.reference_id == 0 {
+        validate_condition_type_static_like_cpp(condition)
+            .map_err(ConditionRowSkipReason::ConditionTypeValidationFailed)?;
+
+        let max_available_targets = condition.max_available_condition_targets_like_cpp();
+        if u32::from(condition.condition_target) >= max_available_targets {
+            return Err(ConditionRowSkipReason::ConditionTargetOutOfRange {
+                source_type: condition.source_type,
+                condition_target: condition.condition_target,
+                max_available_targets,
+            });
+        }
+    }
+
     if condition.source_group != 0
         && !condition_source_can_have_group_set_like_cpp(condition.source_type)
     {
@@ -776,17 +1147,6 @@ pub fn normalize_loaded_condition_shape_like_cpp(
 
     if condition.error_text_id != 0 && condition.error_type == 0 {
         condition.error_text_id = 0;
-    }
-
-    if condition.reference_id == 0 {
-        let max_available_targets = condition.max_available_condition_targets_like_cpp();
-        if u32::from(condition.condition_target) >= max_available_targets {
-            return Err(ConditionRowSkipReason::ConditionTargetOutOfRange {
-                source_type: condition.source_type,
-                condition_target: condition.condition_target,
-                max_available_targets,
-            });
-        }
     }
 
     Ok(())
@@ -1073,6 +1433,150 @@ mod tests {
             ..Condition::default()
         };
         assert_eq!(useless_condition_value_fields_like_cpp(&aura), vec![4]);
+    }
+
+    #[test]
+    fn condition_type_static_validation_matches_cpp_pure_rejections() {
+        let mut invalid_team = Condition {
+            condition_type: ConditionType::Team,
+            condition_value1: 123,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_team).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidTeam(123)
+        );
+
+        let mut invalid_level = Condition {
+            condition_type: ConditionType::Level,
+            condition_value2: ComparisonType::Max as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_level).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidComparisonType {
+                field: 2,
+                value: ComparisonType::Max as u32,
+            }
+        );
+
+        let mut invalid_stand_state = Condition {
+            condition_type: ConditionType::StandState,
+            condition_value1: 0,
+            condition_value2: UnitStandStateType::Max as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_stand_state).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidStandState {
+                value1: 0,
+                value2: UnitStandStateType::Max as u32,
+            }
+        );
+    }
+
+    #[test]
+    fn condition_type_static_validation_matches_cpp_target_selector_rules() {
+        let mut self_relation = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            condition_target: 1,
+            condition_type: ConditionType::RelationTo,
+            condition_value1: 1,
+            condition_value2: RelationType::InParty as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut self_relation).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::SelfTargetSelector { field: 1, value: 1 }
+        );
+
+        let mut invalid_distance = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            condition_target: 0,
+            condition_type: ConditionType::DistanceTo,
+            condition_value1: 2,
+            condition_value3: ComparisonType::Eq as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            validate_condition_type_static_like_cpp(&mut invalid_distance).unwrap_err(),
+            ConditionTypeValidationErrorLikeCpp::InvalidTargetSelector {
+                field: 1,
+                value: 2,
+                max: 2,
+            }
+        );
+
+        let mut valid_reaction = Condition {
+            source_type: ConditionSourceType::SpellClickEvent,
+            condition_target: 0,
+            condition_type: ConditionType::ReactionTo,
+            condition_value1: 1,
+            condition_value2: 1,
+            ..Condition::default()
+        };
+        assert!(validate_condition_type_static_like_cpp(&mut valid_reaction).is_ok());
+    }
+
+    #[test]
+    fn condition_type_static_validation_normalizes_legacy_object_types_like_cpp() {
+        let mut legacy_object_entry = Condition {
+            condition_type: ConditionType::ObjectEntryGuidLegacy,
+            condition_value1: 3,
+            ..Condition::default()
+        };
+
+        validate_condition_type_static_like_cpp(&mut legacy_object_entry).unwrap();
+
+        assert_eq!(
+            legacy_object_entry.condition_type,
+            ConditionType::ObjectEntryGuid
+        );
+        assert_eq!(legacy_object_entry.condition_value1, TypeId::Unit as u32);
+
+        let mut legacy_type_mask = Condition {
+            condition_type: ConditionType::TypeMaskLegacy,
+            condition_value1: (1 << 3) | (1 << 5),
+            ..Condition::default()
+        };
+
+        validate_condition_type_static_like_cpp(&mut legacy_type_mask).unwrap();
+
+        assert_eq!(legacy_type_mask.condition_type, ConditionType::TypeMask);
+        assert_eq!(
+            legacy_type_mask.condition_value1,
+            (TypeMask::UNIT | TypeMask::GAME_OBJECT).bits()
+        );
+    }
+
+    #[test]
+    fn parse_condition_rows_applies_static_condition_type_validation_like_cpp() {
+        let mut deprecated = condition_row(
+            ConditionSourceType::SpellClickEvent,
+            ConditionType::SpawnMaskDeprecated,
+        );
+        deprecated.condition_target = 1;
+        let mut legacy = condition_row(
+            ConditionSourceType::SpellClickEvent,
+            ConditionType::TypeMaskLegacy,
+        );
+        legacy.condition_target = 1;
+        legacy.condition_value1 = 1 << 4;
+
+        let report = parse_condition_rows_like_cpp([deprecated, legacy], |_| 0);
+
+        assert_eq!(report.conditions.len(), 1);
+        assert_eq!(report.conditions[0].condition_type, ConditionType::TypeMask);
+        assert_eq!(
+            report.conditions[0].condition_value1,
+            TypeMask::PLAYER.bits()
+        );
+        assert_eq!(
+            report.skipped[0].reason,
+            ConditionRowSkipReason::ConditionTypeValidationFailed(
+                ConditionTypeValidationErrorLikeCpp::DeprecatedSpawnMask
+            )
+        );
     }
 
     #[test]
