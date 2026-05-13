@@ -29,14 +29,14 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
-    AreaTriggerStore, ChrSpecializationStore, CurrencyTypesEntry, CurrencyTypesStore,
-    DungeonEncounterStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore,
-    ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
-    ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
-    ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PhaseGroupStore,
-    PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore,
-    SpellStore,
+    AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore, CurrencyTypesEntry,
+    CurrencyTypesStore, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
+    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
+    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
+    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
+    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore,
+    PhaseGroupStore, PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
+    SpellItemEnchantmentStore, SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -667,6 +667,9 @@ pub struct WorldSession {
     // C++ LootTemplates_* store foundation.
     loot_stores: Option<Arc<LootStores>>,
 
+    // C++ ConditionMgr condition store loaded from world.conditions.
+    condition_store: Option<Arc<ConditionEntriesByTypeStore>>,
+
     // Lock store (Lock.db2 data)
     lock_store: Option<Arc<LockStore>>,
 
@@ -1293,6 +1296,7 @@ impl WorldSession {
             item_random_enchantment_template_store: None,
             item_disenchant_loot_store: None,
             loot_stores: None,
+            condition_store: None,
             lock_store: None,
             spell_item_enchantment_store: None,
             hotfix_blob_cache: None,
@@ -3167,6 +3171,16 @@ impl WorldSession {
     /// Get the C++ LootTemplates_* foundation stores.
     pub fn loot_stores(&self) -> Option<&Arc<LootStores>> {
         self.loot_stores.as_ref()
+    }
+
+    /// Set the C++ ConditionMgr store loaded from the `conditions` table.
+    pub fn set_condition_store(&mut self, store: Arc<ConditionEntriesByTypeStore>) {
+        self.condition_store = Some(store);
+    }
+
+    /// Get the loaded ConditionMgr store reference.
+    pub fn condition_store(&self) -> Option<&Arc<ConditionEntriesByTypeStore>> {
+        self.condition_store.as_ref()
     }
 
     /// Set the lock store for this session.

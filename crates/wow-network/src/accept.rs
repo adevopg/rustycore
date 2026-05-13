@@ -82,6 +82,7 @@ pub struct SessionResources {
         Option<Arc<wow_data::ItemRandomEnchantmentTemplateStore>>,
     pub item_disenchant_loot_store: Option<Arc<wow_data::ItemDisenchantLootStore>>,
     pub loot_stores: Option<Arc<wow_loot::LootStores>>,
+    pub condition_store: Option<Arc<wow_data::ConditionEntriesByTypeStore>>,
     pub lock_store: Option<Arc<wow_data::LockStore>>,
     pub spell_item_enchantment_store: Option<Arc<wow_data::SpellItemEnchantmentStore>>,
     pub hotfix_blob_cache: Option<Arc<wow_data::HotfixBlobCache>>,

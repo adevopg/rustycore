@@ -766,6 +766,29 @@ async fn main() -> Result<()> {
     let player_registry = Arc::new(PlayerRegistry::new());
     let object_accessor = wow_world::new_shared_object_accessor();
 
+    let condition_load_report =
+        wow_data::conditions::load_condition_rows_like_cpp(world_db.as_ref(), |_| 0)
+            .await
+            .context("Failed to load C++ conditions table")?;
+    for skipped in &condition_load_report.skipped {
+        warn!(
+            "Condition row skipped during C++ load-shape parsing: {:?}: {:?}",
+            skipped.row, skipped.reason
+        );
+    }
+    for warning in &condition_load_report.warnings {
+        warn!("Condition load warning: {warning:?}");
+    }
+    let condition_store = Arc::new(condition_load_report.into_store_like_cpp());
+    let condition_attachment_report =
+        wow_data::attach_loaded_conditions_like_cpp(condition_store.as_ref(), None, None, None);
+    info!(
+        "Loaded C++ ConditionMgr store: {} buckets, {} spell-click aura spell ids, {} deferred spell implicit target conditions",
+        condition_store.bucket_count(),
+        condition_attachment_report.spell_click_aura_spell_ids.len(),
+        condition_attachment_report.deferred_spell_implicit_target_condition_count
+    );
+
     // Shared group registry and pending invites
     let group_registry = Arc::new(GroupRegistry::new());
     let pending_invites = Arc::new(PendingInvites::new());
@@ -826,6 +849,7 @@ async fn main() -> Result<()> {
         )),
         item_disenchant_loot_store: Some(Arc::clone(&item_disenchant_loot_store)),
         loot_stores: Some(Arc::clone(&loot_stores)),
+        condition_store: Some(Arc::clone(&condition_store)),
         lock_store: Some(Arc::clone(&lock_store)),
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
@@ -1662,6 +1686,9 @@ async fn create_session(
     }
     if let Some(ref stores) = resources.loot_stores {
         session.set_loot_stores(Arc::clone(stores));
+    }
+    if let Some(ref store) = resources.condition_store {
+        session.set_condition_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.lock_store {
         session.set_lock_store(Arc::clone(store));

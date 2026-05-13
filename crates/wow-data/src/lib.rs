@@ -53,8 +53,8 @@ pub use condition_attachments::{
     ConditionAttachmentReportLikeCpp, attach_loaded_conditions_like_cpp,
 };
 pub use conditions::{
-    Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionsByEntryMap,
-    ConditionsReference,
+    Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionLoadReport,
+    ConditionsByEntryMap, ConditionsReference, load_condition_rows_like_cpp,
 };
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
