@@ -9,22 +9,31 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tracing::info;
+use wow_constants::ConditionSourceType;
 use wow_database::{WorldDatabase, WorldStatements};
 
-use crate::{AreaTableStore, PhaseStore};
+use crate::{AreaTableStore, Condition, ConditionEntriesByTypeStore, ConditionId, PhaseStore};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PhaseConditionContainer {
-    represented_rows: usize,
+    conditions: Vec<Condition>,
 }
 
 impl PhaseConditionContainer {
-    pub const fn represented_rows(&self) -> usize {
-        self.represented_rows
+    pub fn conditions(&self) -> &[Condition] {
+        &self.conditions
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.represented_rows == 0
+        self.conditions.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.conditions.len()
+    }
+
+    pub fn append_like_cpp(&mut self, conditions: &[Condition]) {
+        self.conditions.extend_from_slice(conditions);
     }
 }
 
@@ -60,6 +69,12 @@ pub struct PhaseInfoStore {
     phase_info_by_area: HashMap<u32, Vec<PhaseAreaInfo>>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhaseConditionAttachmentReport {
+    pub attached_condition_count: usize,
+    pub missing_phase_areas: Vec<ConditionId>,
+}
+
 impl PhaseInfoStore {
     /// C++ `ObjectMgr::LoadPhases` seeds `_phaseInfoById` from `sPhaseStore`.
     pub fn from_phase_store_like_cpp(phase_store: &PhaseStore) -> Self {
@@ -88,6 +103,12 @@ impl PhaseInfoStore {
 
     pub fn phases_for_area(&self, area_id: u32) -> Option<&[PhaseAreaInfo]> {
         self.phase_info_by_area.get(&area_id).map(Vec::as_slice)
+    }
+
+    pub fn phases_for_area_mut(&mut self, area_id: u32) -> Option<&mut [PhaseAreaInfo]> {
+        self.phase_info_by_area
+            .get_mut(&area_id)
+            .map(Vec::as_mut_slice)
     }
 
     pub fn phase_info_count(&self) -> usize {
@@ -158,6 +179,63 @@ impl PhaseInfoStore {
         Ok(count)
     }
 
+    /// C++ `ConditionMgr::addToPhases`.
+    ///
+    /// `SourceGroup` is the phase id. `SourceEntry == 0` attaches the bucket to
+    /// every area listed on the phase; a non-zero `SourceEntry` attaches only to
+    /// that concrete area if it has the requested phase.
+    pub fn attach_phase_conditions_like_cpp(
+        &mut self,
+        conditions: &ConditionEntriesByTypeStore,
+    ) -> PhaseConditionAttachmentReport {
+        let mut report = PhaseConditionAttachmentReport::default();
+        let Some(phase_conditions) =
+            conditions.entries_for_source_type_like_cpp(ConditionSourceType::Phase)
+        else {
+            return report;
+        };
+
+        for (id, condition_bucket) in phase_conditions {
+            let mut found = false;
+
+            if id.source_entry == 0 {
+                let area_ids: Vec<u32> = self
+                    .phase_info(id.source_group)
+                    .map(|phase_info| phase_info.areas.iter().copied().collect())
+                    .unwrap_or_default();
+
+                for area_id in area_ids {
+                    if let Some(phases) = self.phases_for_area_mut(area_id) {
+                        for phase in phases {
+                            if phase.phase_id == id.source_group {
+                                phase.conditions.append_like_cpp(condition_bucket);
+                                report.attached_condition_count += condition_bucket.len();
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            } else if let Ok(area_id) = u32::try_from(id.source_entry) {
+                if let Some(phases) = self.phases_for_area_mut(area_id) {
+                    for phase in phases {
+                        if phase.phase_id == id.source_group {
+                            phase.conditions.append_like_cpp(condition_bucket);
+                            report.attached_condition_count += condition_bucket.len();
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                report.missing_phase_areas.push(*id);
+            }
+        }
+
+        report
+    }
+
     fn populate_sub_area_exclusions_like_cpp(&mut self, area_store: &AreaTableStore) {
         let area_phase_pairs: Vec<_> = self
             .phase_info_by_area
@@ -201,6 +279,18 @@ impl PhaseInfoStore {
 mod tests {
     use super::*;
     use crate::{AreaTableEntry, PhaseEntry};
+    use wow_constants::{ConditionSourceType, ConditionType};
+
+    fn phase_condition(phase_id: u32, area_id: i32, else_group: u32) -> Condition {
+        Condition {
+            source_type: ConditionSourceType::Phase,
+            source_group: phase_id,
+            source_entry: area_id,
+            else_group,
+            condition_type: ConditionType::Alive,
+            ..Condition::default()
+        }
+    }
 
     #[test]
     fn phase_info_store_seeds_from_phase_store_like_cpp_load_phases() {
@@ -281,5 +371,96 @@ mod tests {
             .and_then(|phases| phases.iter().find(|phase| phase.phase_id == 10))
             .expect("parent area phase missing");
         assert!(parent_phase.sub_area_exclusions.contains(&101));
+    }
+
+    #[test]
+    fn phase_conditions_source_entry_zero_attach_to_all_phase_areas_like_cpp() {
+        let area_store = AreaTableStore::from_entries([
+            AreaTableEntry {
+                id: 100,
+                parent_area_id: 0,
+            },
+            AreaTableEntry {
+                id: 200,
+                parent_area_id: 0,
+            },
+        ]);
+        let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
+        let mut store = PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
+        store.load_area_phases_from_rows_like_cpp(
+            &area_store,
+            &phase_store,
+            [(100, 10), (200, 10)],
+        );
+        let conditions =
+            ConditionEntriesByTypeStore::from_conditions_like_cpp([phase_condition(10, 0, 7)]);
+
+        let report = store.attach_phase_conditions_like_cpp(&conditions);
+
+        assert_eq!(report.attached_condition_count, 2);
+        assert!(report.missing_phase_areas.is_empty());
+        assert_eq!(
+            store.phases_for_area(100).unwrap()[0]
+                .conditions
+                .conditions()[0]
+                .else_group,
+            7
+        );
+        assert_eq!(
+            store.phases_for_area(200).unwrap()[0]
+                .conditions
+                .conditions()[0]
+                .else_group,
+            7
+        );
+    }
+
+    #[test]
+    fn phase_conditions_specific_area_attach_only_matching_phase_like_cpp() {
+        let area_store = AreaTableStore::from_entries([
+            AreaTableEntry {
+                id: 100,
+                parent_area_id: 0,
+            },
+            AreaTableEntry {
+                id: 200,
+                parent_area_id: 0,
+            },
+        ]);
+        let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
+        let mut store = PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
+        store.load_area_phases_from_rows_like_cpp(
+            &area_store,
+            &phase_store,
+            [(100, 10), (200, 10)],
+        );
+        let conditions =
+            ConditionEntriesByTypeStore::from_conditions_like_cpp([phase_condition(10, 200, 3)]);
+
+        let report = store.attach_phase_conditions_like_cpp(&conditions);
+
+        assert_eq!(report.attached_condition_count, 1);
+        assert!(report.missing_phase_areas.is_empty());
+        assert!(store.phases_for_area(100).unwrap()[0].conditions.is_empty());
+        assert_eq!(store.phases_for_area(200).unwrap()[0].conditions.len(), 1);
+    }
+
+    #[test]
+    fn phase_conditions_report_missing_phase_area_like_cpp() {
+        let area_store = AreaTableStore::from_entries([AreaTableEntry {
+            id: 100,
+            parent_area_id: 0,
+        }]);
+        let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
+        let mut store = PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
+        store.load_area_phases_from_rows_like_cpp(&area_store, &phase_store, [(100, 10)]);
+        let missing_id = ConditionId::new(10, 200, 0);
+        let conditions =
+            ConditionEntriesByTypeStore::from_conditions_like_cpp([phase_condition(10, 200, 3)]);
+
+        let report = store.attach_phase_conditions_like_cpp(&conditions);
+
+        assert_eq!(report.attached_condition_count, 0);
+        assert_eq!(report.missing_phase_areas, vec![missing_id]);
     }
 }

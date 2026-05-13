@@ -83,7 +83,10 @@ pub use item_stats::{
 pub use lock::{LockEntry, LockStore};
 pub use map::{MapDifficultyEntry, MapDifficultyStore, MapEntry, MapStore};
 pub use phase::{PhaseEntry, PhaseGroupStore, PhaseStore, PhaseXPhaseGroupEntry};
-pub use phasing::{PhaseAreaInfo, PhaseConditionContainer, PhaseInfoStore, PhaseInfoStruct};
+pub use phasing::{
+    PhaseAreaInfo, PhaseConditionAttachmentReport, PhaseConditionContainer, PhaseInfoStore,
+    PhaseInfoStruct,
+};
 pub use player_power::{
     ClassPowerIndexRecord, Db2PlayerPowerIndexResolver, PlayerClassPowerIndexStore,
 };

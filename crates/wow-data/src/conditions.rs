@@ -1017,6 +1017,13 @@ impl ConditionEntriesByTypeStore {
             .and_then(|by_id| by_id.get(&id))
     }
 
+    pub fn entries_for_source_type_like_cpp(
+        &self,
+        source_type: ConditionSourceType,
+    ) -> Option<&ConditionsByEntryMap> {
+        self.entries.get(&source_type)
+    }
+
     pub fn reference_for_like_cpp(
         &self,
         source_type: ConditionSourceType,
