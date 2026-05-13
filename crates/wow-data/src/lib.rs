@@ -11,6 +11,7 @@ pub mod chr_specialization;
 pub mod conditions;
 pub mod currency;
 pub mod dungeon_encounter;
+pub mod graveyard;
 pub mod hotfix_cache;
 pub mod import_price;
 pub mod item;
@@ -52,6 +53,10 @@ pub use conditions::{
 };
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
+pub use graveyard::{
+    GraveyardConditionAttachmentReport, GraveyardData, GraveyardLoadReport, GraveyardStore,
+    GraveyardZoneRow,
+};
 pub use hotfix_cache::{
     HotfixBlobCache, HotfixId, HotfixRecord, HotfixRecordStatus, build_hotfix_blob_cache,
     hotfix_locale_mask,

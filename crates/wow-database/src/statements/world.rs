@@ -15,6 +15,7 @@ pub enum WorldStatements {
     SEL_SMART_SCRIPTS,
     DEL_GAMEOBJECT,
     DEL_EVENT_GAMEOBJECT,
+    SEL_GRAVEYARD_ZONE,
     INS_GRAVEYARD_ZONE,
     DEL_GRAVEYARD_ZONE,
     INS_GAME_TELE,
@@ -244,6 +245,7 @@ impl StatementDef for WorldStatements {
             ),
             Self::DEL_GAMEOBJECT => "DELETE FROM gameobject WHERE guid = ?",
             Self::DEL_EVENT_GAMEOBJECT => "DELETE FROM game_event_gameobject WHERE guid = ?",
+            Self::SEL_GRAVEYARD_ZONE => "SELECT ID, GhostZone FROM graveyard_zone",
             Self::INS_GRAVEYARD_ZONE => "INSERT INTO graveyard_zone (ID, GhostZone) VALUES (?, ?)",
             Self::DEL_GRAVEYARD_ZONE => "DELETE FROM graveyard_zone WHERE ID = ? AND GhostZone = ?",
             Self::INS_GAME_TELE => {
