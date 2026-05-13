@@ -580,6 +580,15 @@ pub struct ConditionTypeValidationReportLikeCpp {
     pub useless_value_fields: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConditionSourceValidationErrorLikeCpp {
+    InvalidSourceType(ConditionSourceType),
+    InvalidSpellImplicitTargetEffectMask(u32),
+    InvalidAreaTriggerSourceEntry(i32),
+    InvalidObjectIdVisibilityObjectType(u32),
+    UncheckedObjectIdVisibilityObjectType(u32),
+}
+
 pub fn validate_condition_type_static_like_cpp(
     condition: &mut Condition,
 ) -> Result<ConditionTypeValidationReportLikeCpp, ConditionTypeValidationErrorLikeCpp> {
@@ -776,6 +785,79 @@ pub fn validate_condition_type_static_like_cpp(
     Ok(ConditionTypeValidationReportLikeCpp {
         useless_value_fields: useless_condition_value_fields_like_cpp(condition),
     })
+}
+
+pub fn validate_condition_source_static_like_cpp(
+    condition: &Condition,
+) -> Result<(), ConditionSourceValidationErrorLikeCpp> {
+    use ConditionSourceValidationErrorLikeCpp as Error;
+
+    match condition.source_type {
+        ConditionSourceType::None | ConditionSourceType::Max => {
+            return Err(Error::InvalidSourceType(condition.source_type));
+        }
+        ConditionSourceType::SpellImplicitTarget => {
+            if condition.source_group == 0 {
+                return Err(Error::InvalidSpellImplicitTargetEffectMask(
+                    condition.source_group,
+                ));
+            }
+        }
+        ConditionSourceType::AreaTrigger => {
+            if condition.source_entry != 0 && condition.source_entry != 1 {
+                return Err(Error::InvalidAreaTriggerSourceEntry(condition.source_entry));
+            }
+        }
+        ConditionSourceType::ObjectIdVisibility => {
+            if condition.source_group == 0 || condition.source_group >= TypeId::Max as u32 {
+                return Err(Error::InvalidObjectIdVisibilityObjectType(
+                    condition.source_group,
+                ));
+            }
+
+            if condition.source_group != TypeId::Unit as u32
+                && condition.source_group != TypeId::GameObject as u32
+            {
+                return Err(Error::UncheckedObjectIdVisibilityObjectType(
+                    condition.source_group,
+                ));
+            }
+        }
+        ConditionSourceType::ReferenceCondition => {
+            return Err(Error::InvalidSourceType(condition.source_type));
+        }
+        ConditionSourceType::CreatureLootTemplate
+        | ConditionSourceType::DisenchantLootTemplate
+        | ConditionSourceType::FishingLootTemplate
+        | ConditionSourceType::GameObjectLootTemplate
+        | ConditionSourceType::ItemLootTemplate
+        | ConditionSourceType::MailLootTemplate
+        | ConditionSourceType::MillingLootTemplate
+        | ConditionSourceType::PickpocketingLootTemplate
+        | ConditionSourceType::ProspectingLootTemplate
+        | ConditionSourceType::ReferenceLootTemplate
+        | ConditionSourceType::SkinningLootTemplate
+        | ConditionSourceType::SpellLootTemplate
+        | ConditionSourceType::GossipMenu
+        | ConditionSourceType::GossipMenuOption
+        | ConditionSourceType::CreatureTemplateVehicle
+        | ConditionSourceType::Spell
+        | ConditionSourceType::SpellClickEvent
+        | ConditionSourceType::QuestAvailable
+        | ConditionSourceType::VehicleSpell
+        | ConditionSourceType::SmartEvent
+        | ConditionSourceType::NpcVendor
+        | ConditionSourceType::SpellProc
+        | ConditionSourceType::TerrainSwap
+        | ConditionSourceType::Phase
+        | ConditionSourceType::Graveyard
+        | ConditionSourceType::ConversationLine
+        | ConditionSourceType::AreaTriggerClientTriggered
+        | ConditionSourceType::TrainerSpell
+        | ConditionSourceType::SpawnGroup => {}
+    }
+
+    Ok(())
 }
 
 const fn convert_legacy_type_id_like_cpp(legacy_type_id: u32) -> u32 {
@@ -1024,6 +1106,7 @@ pub enum ConditionRowSkipReason {
         max_available_targets: u32,
     },
     ConditionTypeValidationFailed(ConditionTypeValidationErrorLikeCpp),
+    ConditionSourceValidationFailed(ConditionSourceValidationErrorLikeCpp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1110,6 +1193,20 @@ pub fn parse_condition_row_like_cpp(
 pub fn normalize_loaded_condition_shape_like_cpp(
     condition: &mut Condition,
 ) -> Result<(), ConditionRowSkipReason> {
+    normalize_loaded_condition_shape_inner_like_cpp(condition, false)
+}
+
+fn normalize_loaded_condition_shape_for_row_like_cpp(
+    condition: &mut Condition,
+    row: &ConditionDbRowLikeCpp,
+) -> Result<(), ConditionRowSkipReason> {
+    normalize_loaded_condition_shape_inner_like_cpp(condition, row.source_type_or_reference_id < 0)
+}
+
+fn normalize_loaded_condition_shape_inner_like_cpp(
+    condition: &mut Condition,
+    is_reference_template: bool,
+) -> Result<(), ConditionRowSkipReason> {
     if condition.reference_id == 0 {
         validate_condition_type_static_like_cpp(condition)
             .map_err(ConditionRowSkipReason::ConditionTypeValidationFailed)?;
@@ -1122,6 +1219,11 @@ pub fn normalize_loaded_condition_shape_like_cpp(
                 max_available_targets,
             });
         }
+    }
+
+    if !is_reference_template {
+        validate_condition_source_static_like_cpp(condition)
+            .map_err(ConditionRowSkipReason::ConditionSourceValidationFailed)?;
     }
 
     if condition.source_group != 0
@@ -1159,10 +1261,12 @@ pub fn parse_condition_rows_like_cpp(
     let mut report = ConditionLoadReport::default();
     for row in rows {
         match parse_condition_row_like_cpp(row.clone(), &mut script_id_for_name) {
-            Ok(mut condition) => match normalize_loaded_condition_shape_like_cpp(&mut condition) {
-                Ok(()) => report.conditions.push(condition),
-                Err(reason) => report.skipped.push(SkippedConditionRow { row, reason }),
-            },
+            Ok(mut condition) => {
+                match normalize_loaded_condition_shape_for_row_like_cpp(&mut condition, &row) {
+                    Ok(()) => report.conditions.push(condition),
+                    Err(reason) => report.skipped.push(SkippedConditionRow { row, reason }),
+                }
+            }
             Err(skipped) => report.skipped.push(skipped),
         }
     }
@@ -1575,6 +1679,73 @@ mod tests {
             report.skipped[0].reason,
             ConditionRowSkipReason::ConditionTypeValidationFailed(
                 ConditionTypeValidationErrorLikeCpp::DeprecatedSpawnMask
+            )
+        );
+    }
+
+    #[test]
+    fn condition_source_static_validation_matches_cpp_pure_rejections() {
+        let mut spell_implicit = condition_row(
+            ConditionSourceType::SpellImplicitTarget,
+            ConditionType::Aura,
+        );
+        spell_implicit.source_group = 0;
+        let mut area_trigger = condition_row(ConditionSourceType::AreaTrigger, ConditionType::Aura);
+        area_trigger.source_group = 77;
+        area_trigger.source_entry = 2;
+        let mut object_visibility =
+            condition_row(ConditionSourceType::ObjectIdVisibility, ConditionType::Aura);
+        object_visibility.source_group = TypeId::Player as u32;
+
+        let report =
+            parse_condition_rows_like_cpp([spell_implicit, area_trigger, object_visibility], |_| 0);
+
+        assert_eq!(report.conditions.len(), 0);
+        assert_eq!(
+            report.skipped[0].reason,
+            ConditionRowSkipReason::ConditionSourceValidationFailed(
+                ConditionSourceValidationErrorLikeCpp::InvalidSpellImplicitTargetEffectMask(0)
+            )
+        );
+        assert_eq!(
+            report.skipped[1].reason,
+            ConditionRowSkipReason::ConditionSourceValidationFailed(
+                ConditionSourceValidationErrorLikeCpp::InvalidAreaTriggerSourceEntry(2)
+            )
+        );
+        assert_eq!(
+            report.skipped[2].reason,
+            ConditionRowSkipReason::ConditionSourceValidationFailed(
+                ConditionSourceValidationErrorLikeCpp::UncheckedObjectIdVisibilityObjectType(
+                    TypeId::Player as u32,
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn condition_source_static_validation_keeps_reference_templates_internal_like_cpp() {
+        let mut positive_internal =
+            condition_row(ConditionSourceType::ReferenceCondition, ConditionType::Aura);
+        positive_internal.source_group = 7;
+        let mut negative_template = condition_row(ConditionSourceType::Phase, ConditionType::Aura);
+        negative_template.source_type_or_reference_id = -7;
+        negative_template.source_group = 0;
+
+        let report = parse_condition_rows_like_cpp([positive_internal, negative_template], |_| 0);
+
+        assert_eq!(report.conditions.len(), 1);
+        assert_eq!(
+            report.conditions[0].source_type,
+            ConditionSourceType::ReferenceCondition
+        );
+        assert_eq!(report.conditions[0].source_group, 7);
+        assert_eq!(
+            report.skipped[0].reason,
+            ConditionRowSkipReason::ConditionSourceValidationFailed(
+                ConditionSourceValidationErrorLikeCpp::InvalidSourceType(
+                    ConditionSourceType::ReferenceCondition,
+                )
             )
         );
     }
