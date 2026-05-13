@@ -15,7 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
 use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
-use crate::phasing::init_db_visible_map_id_like_cpp;
+use crate::phasing::{init_db_phase_shift_like_cpp, init_db_visible_map_id_like_cpp};
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{Team, UnitFlags, UnitStandStateType};
@@ -31,8 +31,9 @@ use wow_data::{
     ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
     ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
     ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PlayerStatsStore,
-    RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PhaseGroupStore,
+    PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore,
+    SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -688,6 +689,8 @@ pub struct WorldSession {
     map_store: Option<Arc<MapStore>>,
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
     terrain_swap_store: Option<Arc<wow_data::TerrainSwapStore>>,
+    phase_store: Option<Arc<PhaseStore>>,
+    phase_group_store: Option<Arc<PhaseGroupStore>>,
 
     // Shared player registry for broadcasting to nearby sessions
     player_registry: Option<Arc<PlayerRegistry>>,
@@ -1216,6 +1219,9 @@ pub struct PendingRespawn {
     pub gold_max: u32,
     pub boss_id: Option<u32>,
     pub dungeon_encounter_id: u32,
+    pub phase_use_flags: u8,
+    pub phase_id: u16,
+    pub phase_group_id: u32,
     pub terrain_swap_map: i32,
 }
 
@@ -1287,6 +1293,8 @@ impl WorldSession {
             map_store: None,
             map_difficulty_store: None,
             terrain_swap_store: None,
+            phase_store: None,
+            phase_group_store: None,
             player_registry: None,
             object_accessor: None,
             group_registry: None,
@@ -1477,6 +1485,9 @@ impl WorldSession {
         gold_max: u32,
         boss_id: Option<u32>,
         dungeon_encounter_id: u32,
+        phase_use_flags: u8,
+        phase_id: u16,
+        phase_group_id: u32,
         terrain_swap_map: i32,
     ) {
         let guid = create_data.guid;
@@ -1505,6 +1516,18 @@ impl WorldSession {
                             .set_entry(entry);
                         let _ = creature.unit_mut().world_mut().set_map(map_id as u32, 0);
                         creature.unit_mut().world_mut().relocate(position);
+                        if let (Some(phase_store), Some(phase_group_store)) =
+                            (&self.phase_store, &self.phase_group_store)
+                        {
+                            init_db_phase_shift_like_cpp(
+                                creature.unit_mut().world_mut().phase_shift_mut(),
+                                phase_store,
+                                phase_group_store,
+                                phase_use_flags,
+                                phase_id,
+                                phase_group_id,
+                            );
+                        }
                         let validated_terrain_swap_map =
                             if let (Some(map_store), Some(terrain_swap_store)) =
                                 (&self.map_store, &self.terrain_swap_store)
@@ -1541,6 +1564,9 @@ impl WorldSession {
                         creature.ai_ownership_mut().gold_max = gold_max;
                         creature.ai_ownership_mut().boss_id = boss_id;
                         creature.ai_ownership_mut().dungeon_encounter_id = dungeon_encounter_id;
+                        creature.ai_ownership_mut().phase_use_flags = phase_use_flags;
+                        creature.ai_ownership_mut().phase_id = phase_id;
+                        creature.ai_ownership_mut().phase_group_id = phase_group_id;
                         creature.ai_ownership_mut().terrain_swap_map = validated_terrain_swap_map;
                         creature
                     },
@@ -3314,6 +3340,14 @@ impl WorldSession {
 
     pub fn set_terrain_swap_store(&mut self, store: Arc<wow_data::TerrainSwapStore>) {
         self.terrain_swap_store = Some(store);
+    }
+
+    pub fn set_phase_store(&mut self, store: Arc<PhaseStore>) {
+        self.phase_store = Some(store);
+    }
+
+    pub fn set_phase_group_store(&mut self, store: Arc<PhaseGroupStore>) {
+        self.phase_group_store = Some(store);
     }
 
     pub(crate) fn map_difficulty_store(&self) -> Option<&Arc<MapDifficultyStore>> {
@@ -7376,6 +7410,9 @@ impl WorldSession {
                         gold_max: c.gold_max(),
                         boss_id: c.boss_id(),
                         dungeon_encounter_id: c.dungeon_encounter_id(),
+                        phase_use_flags: c.creature.ai_ownership().phase_use_flags,
+                        phase_id: c.creature.ai_ownership().phase_id,
+                        phase_group_id: c.creature.ai_ownership().phase_group_id,
                         terrain_swap_map: c.creature.ai_ownership().terrain_swap_map,
                     });
                     tracing::info!(
@@ -7441,6 +7478,9 @@ impl WorldSession {
                 r.gold_max,
                 r.boss_id,
                 r.dungeon_encounter_id,
+                r.phase_use_flags,
+                r.phase_id,
+                r.phase_group_id,
                 r.terrain_swap_map,
             );
             self.visible_creatures.insert(guid);
@@ -8316,8 +8356,8 @@ mod tests {
     use super::*;
     use wow_constants::{
         BagFamilyMask, EnchantmentSlot, InventoryResult, InventoryType, ItemBondingType, ItemClass,
-        ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ServerOpcodes,
-        SpellItemEnchantmentFlags,
+        ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, PhaseShiftFlags,
+        ServerOpcodes, SpellItemEnchantmentFlags,
     };
     use wow_core::{Position, guid::HighGuid};
     use wow_data::{
@@ -8578,6 +8618,9 @@ mod tests {
             0,
             None,
             0,
+            0,
+            0,
+            0,
             -1,
         );
     }
@@ -8625,6 +8668,9 @@ mod tests {
             0,
             None,
             0,
+            0,
+            0,
+            0,
             609,
         );
 
@@ -8634,6 +8680,62 @@ mod tests {
         let creature = guard.find_creature(571, 0, guid).unwrap();
         assert!(creature.phase_shift().has_visible_map_id_like_cpp(609));
         assert_eq!(creature.creature.ai_ownership().terrain_swap_map, 609);
+    }
+
+    #[test]
+    fn register_world_creature_applies_db_phase_shift_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(710);
+        let phase_store = Arc::new(wow_data::PhaseStore::from_entries([
+            wow_data::PhaseEntry { id: 10, flags: 0 },
+            wow_data::PhaseEntry { id: 20, flags: 0 },
+        ]));
+        let phase_group_store = Arc::new(wow_data::PhaseGroupStore::from_entries(
+            &phase_store,
+            [wow_data::PhaseXPhaseGroupEntry {
+                id: 1,
+                phase_id: 20,
+                phase_group_id: 7,
+            }],
+        ));
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_phase_store(phase_store);
+        session.set_phase_group_store(phase_group_store);
+        session.register_world_creature(
+            571,
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            test_creature_create_data(guid, 9001, 25),
+            3,
+            5,
+            20.0,
+            0,
+            0,
+            0,
+            None,
+            0,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE,
+            0,
+            7,
+            -1,
+        );
+
+        let guard = manager
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let creature = guard.find_creature(571, 0, guid).unwrap();
+        assert!(creature.phase_shift().is_db_phase_shift_like_cpp());
+        assert!(creature.phase_shift().has_phase_like_cpp(20));
+        assert_eq!(
+            creature.phase_shift().flags_like_cpp(),
+            PhaseShiftFlags::INVERSE
+        );
+        assert_eq!(
+            creature.creature.ai_ownership().phase_use_flags,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE
+        );
+        assert_eq!(creature.creature.ai_ownership().phase_group_id, 7);
     }
 
     #[test]

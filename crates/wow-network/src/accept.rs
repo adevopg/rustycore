@@ -93,6 +93,8 @@ pub struct SessionResources {
     pub map_store: Option<Arc<wow_data::MapStore>>,
     pub map_difficulty_store: Option<Arc<wow_data::MapDifficultyStore>>,
     pub terrain_swap_store: Option<Arc<wow_data::TerrainSwapStore>>,
+    pub phase_store: Option<Arc<wow_data::PhaseStore>>,
+    pub phase_group_store: Option<Arc<wow_data::PhaseGroupStore>>,
     pub quest_store: Option<Arc<wow_data::quest::QuestStore>>,
     pub quest_xp_store: Option<Arc<wow_data::quest_xp::QuestXpStore>>,
     /// XP required per level: index = level (1-based), value = xp_needed.

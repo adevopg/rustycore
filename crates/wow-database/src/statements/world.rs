@@ -410,7 +410,7 @@ impl StatementDef for WorldStatements {
                 "ct.BaseAttackTime, ct.RangeAttackTime, ",
                 "ctm.CreatureDisplayID, ",
                 "ctdiff.LootID, ctdiff.GoldMin, ctdiff.GoldMax, ",
-                "c.terrainSwapMap ",
+                "c.phaseUseFlags, c.phaseid, c.phasegroup, c.terrainSwapMap ",
                 "FROM creature c ",
                 "JOIN creature_template ct ON c.id = ct.entry ",
                 "LEFT JOIN creature_template_difficulty ctdiff ON ct.entry = ctdiff.Entry AND ctdiff.DifficultyID = 0 ",

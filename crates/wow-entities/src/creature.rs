@@ -80,6 +80,9 @@ pub struct CreatureAiOwnershipState {
     pub gold_max: u32,
     pub boss_id: Option<u32>,
     pub dungeon_encounter_id: u32,
+    pub phase_use_flags: u8,
+    pub phase_id: u16,
+    pub phase_group_id: u32,
     pub terrain_swap_map: i32,
     pub last_movement_inform: Option<CreatureMovementInform>,
 }
@@ -113,6 +116,9 @@ impl Default for CreatureAiOwnershipState {
             gold_max: 0,
             boss_id: None,
             dungeon_encounter_id: 0,
+            phase_use_flags: 0,
+            phase_id: 0,
+            phase_group_id: 0,
             terrain_swap_map: -1,
             last_movement_inform: None,
         }

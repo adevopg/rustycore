@@ -837,6 +837,8 @@ async fn main() -> Result<()> {
         map_store: Some(Arc::clone(&map_store)),
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
         terrain_swap_store: Some(Arc::clone(&terrain_swap_store)),
+        phase_store: Some(Arc::clone(&phase_store)),
+        phase_group_store: Some(Arc::clone(&phase_group_store)),
         quest_store: Some(Arc::clone(&quest_store)),
         quest_xp_store: Some(Arc::clone(&quest_xp_store)),
         player_xp_table: Some(Arc::clone(&player_xp_table)),
@@ -1693,6 +1695,12 @@ async fn create_session(
     }
     if let Some(ref store) = resources.terrain_swap_store {
         session.set_terrain_swap_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.phase_store {
+        session.set_phase_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.phase_group_store {
+        session.set_phase_group_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.quest_store {
         session.set_quest_store(Arc::clone(store));
