@@ -200,6 +200,7 @@ pub struct ConditionPlayerProgressionSnapshot<'a> {
     pub reputations: &'a [ConditionReputationSnapshot],
     pub title_ids: &'a [u32],
     pub battle_pet_counts: &'a [ConditionBattlePetCountSnapshot],
+    pub active_scene_ids: &'a [u32],
 }
 
 impl ConditionPlayerProgressionSnapshot<'_> {
@@ -254,6 +255,10 @@ impl ConditionPlayerProgressionSnapshot<'_> {
             .map(|pet| pet.count)
             .unwrap_or(0)
     }
+
+    fn has_active_scene_like_cpp(self, scene_id: u32) -> bool {
+        self.active_scene_ids.contains(&scene_id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +281,7 @@ pub struct ConditionMapStateSnapshot<'a> {
     pub instance_data: &'a [ConditionMapDataSnapshot],
     pub instance_data64: &'a [ConditionMapDataSnapshot],
     pub boss_states: &'a [ConditionMapDataSnapshot],
+    pub scenario_step_id: Option<u32>,
 }
 
 impl ConditionMapStateSnapshot<'_> {
@@ -601,7 +607,11 @@ pub fn condition_meets_basic_like_cpp<'a>(
                     .is_some_and(|value| value == u64::from(condition.condition_value2))
             });
         }
-        ConditionType::ScenarioStep => return ConditionMeetResult::Unsupported,
+        ConditionType::ScenarioStep => {
+            cond_meets = source_info.map_state.is_some_and(|map_state| {
+                map_state.scenario_step_id == Some(condition.condition_value1)
+            });
+        }
         _ => needs_object = true,
     }
 
@@ -967,6 +977,11 @@ pub fn condition_meets_basic_like_cpp<'a>(
                     );
                 }
             }
+            ConditionType::SceneInProgress => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_active_scene_like_cpp(condition.condition_value1);
+                }
+            }
             ConditionType::DailyQuestDone => {
                 if let Some(quests) = player_quests {
                     cond_meets = quests.is_daily_quest_done_like_cpp(condition.condition_value1);
@@ -1023,7 +1038,8 @@ pub fn condition_meets_basic_like_cpp<'a>(
             ConditionType::ActiveEvent
             | ConditionType::InstanceInfo
             | ConditionType::WorldState
-            | ConditionType::DifficultyId => {}
+            | ConditionType::DifficultyId
+            | ConditionType::ScenarioStep => {}
             _ => return ConditionMeetResult::Unsupported,
         }
     }
@@ -1417,6 +1433,7 @@ mod tests {
             instance_data: &instance_data,
             instance_data64: &instance_data64,
             boss_states: &boss_states,
+            scenario_step_id: Some(99),
         });
 
         let map_condition = Condition {
@@ -1503,6 +1520,16 @@ mod tests {
         };
         assert_eq!(
             condition_meets_basic_like_cpp(&boss_state_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let scenario_step_condition = Condition {
+            condition_type: ConditionType::ScenarioStep,
+            condition_value1: 99,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&scenario_step_condition, &mut info, |_, _| false),
             ConditionMeetResult::Evaluated(true)
         );
 
@@ -1947,6 +1974,7 @@ mod tests {
             species_id: 700,
             count: 4,
         }];
+        let active_scene_ids = [900];
         let realm_achievement_ids = [800];
         let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
         info.set_player_progression_target_snapshot(
@@ -1960,6 +1988,7 @@ mod tests {
                 reputations: &reputations,
                 title_ids: &title_ids,
                 battle_pet_counts: &battle_pet_counts,
+                active_scene_ids: &active_scene_ids,
             },
         );
         info.set_realm_achievement_ids(&realm_achievement_ids);
@@ -2014,6 +2043,11 @@ mod tests {
             Condition {
                 condition_type: ConditionType::RealmAchievement,
                 condition_value1: 800,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::SceneInProgress,
+                condition_value1: 900,
                 ..Condition::default()
             },
         ];
@@ -2270,7 +2304,7 @@ mod tests {
         );
 
         let unrepresented_condition = Condition {
-            condition_type: ConditionType::SceneInProgress,
+            condition_type: ConditionType::PlayerCondition,
             ..Condition::default()
         };
         assert_eq!(
