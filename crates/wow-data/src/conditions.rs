@@ -1157,6 +1157,14 @@ pub enum ConditionLoadWarningLikeCpp {
         source_type_or_reference_id: i32,
         source_id: u32,
     },
+    ErrorTypeResetForNonSpell {
+        source_type: ConditionSourceType,
+        error_type: u32,
+    },
+    ErrorTextIdResetWithoutErrorType {
+        source_type: ConditionSourceType,
+        error_text_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1309,6 +1317,32 @@ pub fn condition_load_warnings_like_cpp(
     warnings
 }
 
+fn condition_normalization_warnings_like_cpp(
+    condition: &Condition,
+) -> Vec<ConditionLoadWarningLikeCpp> {
+    let mut warnings = Vec::new();
+
+    if condition.error_type != 0 && condition.source_type != ConditionSourceType::Spell {
+        warnings.push(ConditionLoadWarningLikeCpp::ErrorTypeResetForNonSpell {
+            source_type: condition.source_type,
+            error_type: condition.error_type,
+        });
+    }
+
+    if condition.error_text_id != 0
+        && (condition.error_type == 0 || condition.source_type != ConditionSourceType::Spell)
+    {
+        warnings.push(
+            ConditionLoadWarningLikeCpp::ErrorTextIdResetWithoutErrorType {
+                source_type: condition.source_type,
+                error_text_id: condition.error_text_id,
+            },
+        );
+    }
+
+    warnings
+}
+
 pub fn normalize_loaded_condition_shape_like_cpp(
     condition: &mut Condition,
 ) -> Result<(), ConditionRowSkipReason> {
@@ -1384,6 +1418,9 @@ pub fn parse_condition_rows_like_cpp(
             .extend(condition_load_warnings_like_cpp(&row));
         match parse_condition_row_like_cpp(row.clone(), &mut script_id_for_name) {
             Ok(mut condition) => {
+                report
+                    .warnings
+                    .extend(condition_normalization_warnings_like_cpp(&condition));
                 match normalize_loaded_condition_shape_for_row_like_cpp(&mut condition, &row) {
                     Ok(()) => report.conditions.push(condition),
                     Err(reason) => report.skipped.push(SkippedConditionRow { row, reason }),
@@ -2328,6 +2365,23 @@ mod tests {
         assert_eq!(report.conditions[1].error_text_id, 8);
         assert_eq!(report.conditions[2].error_type, 0);
         assert_eq!(report.conditions[2].error_text_id, 0);
+        assert_eq!(
+            report.warnings,
+            vec![
+                ConditionLoadWarningLikeCpp::ErrorTypeResetForNonSpell {
+                    source_type: ConditionSourceType::Phase,
+                    error_type: 7,
+                },
+                ConditionLoadWarningLikeCpp::ErrorTextIdResetWithoutErrorType {
+                    source_type: ConditionSourceType::Phase,
+                    error_text_id: 8,
+                },
+                ConditionLoadWarningLikeCpp::ErrorTextIdResetWithoutErrorType {
+                    source_type: ConditionSourceType::Spell,
+                    error_text_id: 8,
+                },
+            ]
+        );
     }
 
     #[test]
