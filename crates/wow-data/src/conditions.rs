@@ -389,6 +389,117 @@ pub const fn condition_type_name_like_cpp(condition_type: ConditionType) -> &'st
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionTypeInfoLikeCpp {
+    pub name: &'static str,
+    pub has_condition_value1: bool,
+    pub has_condition_value2: bool,
+    pub has_condition_value3: bool,
+    pub has_condition_string_value1: bool,
+}
+
+/// C++ `ConditionMgr::StaticConditionTypeData`.
+pub const fn condition_type_info_like_cpp(
+    condition_type: ConditionType,
+) -> ConditionTypeInfoLikeCpp {
+    let name = condition_type_name_like_cpp(condition_type);
+    let (
+        has_condition_value1,
+        has_condition_value2,
+        has_condition_value3,
+        has_condition_string_value1,
+    ) = match condition_type {
+        ConditionType::None
+        | ConditionType::Alive
+        | ConditionType::InWater
+        | ConditionType::Charmed
+        | ConditionType::Taxi
+        | ConditionType::PrivateObject => (false, false, false, false),
+        ConditionType::Aura
+        | ConditionType::Item
+        | ConditionType::InstanceInfo
+        | ConditionType::NearCreature
+        | ConditionType::ObjectEntryGuidLegacy
+        | ConditionType::DistanceTo
+        | ConditionType::ObjectEntryGuid
+        | ConditionType::BattlePetCount => (true, true, true, false),
+        ConditionType::ReputationRank
+        | ConditionType::Skill
+        | ConditionType::WorldState
+        | ConditionType::Level
+        | ConditionType::NearGameObject
+        | ConditionType::RelationTo
+        | ConditionType::ReactionTo
+        | ConditionType::HpVal
+        | ConditionType::HpPct
+        | ConditionType::StandState
+        | ConditionType::QuestState => (true, true, false, false),
+        ConditionType::QuestObjectiveProgress => (true, false, true, false),
+        ConditionType::StringId => (false, false, false, true),
+        ConditionType::ItemEquipped
+        | ConditionType::ZoneId
+        | ConditionType::Team
+        | ConditionType::QuestRewarded
+        | ConditionType::QuestTaken
+        | ConditionType::DrunkenState
+        | ConditionType::ActiveEvent
+        | ConditionType::QuestNone
+        | ConditionType::Class
+        | ConditionType::Race
+        | ConditionType::Achievement
+        | ConditionType::Title
+        | ConditionType::SpawnMaskDeprecated
+        | ConditionType::Gender
+        | ConditionType::UnitState
+        | ConditionType::MapId
+        | ConditionType::AreaId
+        | ConditionType::CreatureType
+        | ConditionType::Spell
+        | ConditionType::PhaseId
+        | ConditionType::QuestComplete
+        | ConditionType::TypeMaskLegacy
+        | ConditionType::RealmAchievement
+        | ConditionType::TerrainSwap
+        | ConditionType::DailyQuestDone
+        | ConditionType::PetType
+        | ConditionType::DifficultyId
+        | ConditionType::GameMaster
+        | ConditionType::TypeMask
+        | ConditionType::ScenarioStep
+        | ConditionType::SceneInProgress
+        | ConditionType::PlayerCondition => (true, false, false, false),
+        ConditionType::Max => (false, false, false, false),
+    };
+
+    ConditionTypeInfoLikeCpp {
+        name,
+        has_condition_value1,
+        has_condition_value2,
+        has_condition_value3,
+        has_condition_string_value1,
+    }
+}
+
+pub fn useless_condition_value_fields_like_cpp(condition: &Condition) -> Vec<u8> {
+    let info = condition_type_info_like_cpp(condition.condition_type);
+    let mut fields = Vec::new();
+
+    if condition.condition_value1 != 0 && !info.has_condition_value1 {
+        fields.push(1);
+    }
+    if condition.condition_value2 != 0 && !info.has_condition_value2 {
+        fields.push(2);
+    }
+    if condition.condition_value3 != 0 && !info.has_condition_value3 {
+        fields.push(3);
+    }
+    if !condition.condition_string_value1.is_empty() && !info.has_condition_string_value1 {
+        fields.push(4);
+    }
+
+    fields
+}
+
 pub type ConditionContainer = Vec<Condition>;
 pub type ConditionsByEntryMap = HashMap<ConditionId, Arc<ConditionContainer>>;
 
@@ -894,6 +1005,74 @@ mod tests {
             condition.to_string_like_cpp(true),
             "[Condition SourceType: 34 (Reference), SourceGroup: 55, SourceEntry: 0, ConditionType: 57 (Private Object)]"
         );
+    }
+
+    #[test]
+    fn condition_type_info_matches_cpp_value_slot_metadata() {
+        let aura = condition_type_info_like_cpp(ConditionType::Aura);
+        assert_eq!(aura.name, "Aura");
+        assert!(aura.has_condition_value1);
+        assert!(aura.has_condition_value2);
+        assert!(aura.has_condition_value3);
+        assert!(!aura.has_condition_string_value1);
+
+        let alive = condition_type_info_like_cpp(ConditionType::Alive);
+        assert_eq!(alive.name, "Alive");
+        assert!(!alive.has_condition_value1);
+        assert!(!alive.has_condition_value2);
+        assert!(!alive.has_condition_value3);
+        assert!(!alive.has_condition_string_value1);
+
+        let objective = condition_type_info_like_cpp(ConditionType::QuestObjectiveProgress);
+        assert_eq!(objective.name, "Quest objective progress");
+        assert!(objective.has_condition_value1);
+        assert!(!objective.has_condition_value2);
+        assert!(objective.has_condition_value3);
+        assert!(!objective.has_condition_string_value1);
+
+        let string_id = condition_type_info_like_cpp(ConditionType::StringId);
+        assert_eq!(string_id.name, "String ID");
+        assert!(!string_id.has_condition_value1);
+        assert!(!string_id.has_condition_value2);
+        assert!(!string_id.has_condition_value3);
+        assert!(string_id.has_condition_string_value1);
+    }
+
+    #[test]
+    fn condition_type_info_keeps_private_object_slot_explicit() {
+        let private_object = condition_type_info_like_cpp(ConditionType::PrivateObject);
+
+        assert_eq!(private_object.name, "Private Object");
+        assert!(!private_object.has_condition_value1);
+        assert!(!private_object.has_condition_value2);
+        assert!(!private_object.has_condition_value3);
+        assert!(!private_object.has_condition_string_value1);
+    }
+
+    #[test]
+    fn useless_condition_value_fields_match_cpp_static_metadata() {
+        let alive = Condition {
+            condition_type: ConditionType::Alive,
+            condition_value1: 1,
+            condition_value2: 2,
+            condition_value3: 3,
+            condition_string_value1: String::from("unused"),
+            ..Condition::default()
+        };
+        assert_eq!(
+            useless_condition_value_fields_like_cpp(&alive),
+            vec![1, 2, 3, 4]
+        );
+
+        let aura = Condition {
+            condition_type: ConditionType::Aura,
+            condition_value1: 1,
+            condition_value2: 2,
+            condition_value3: 3,
+            condition_string_value1: String::from("unused"),
+            ..Condition::default()
+        };
+        assert_eq!(useless_condition_value_fields_like_cpp(&aura), vec![4]);
     }
 
     #[test]
