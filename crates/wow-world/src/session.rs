@@ -45,7 +45,7 @@ use wow_entities::{
     BUYBACK_SLOT_START, CanStoreItemArgs, CanUnequipItemArgs, INVENTORY_DEFAULT_SIZE,
     INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo,
     ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG,
-    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, Player, PlayerEnchantTimeUpdate,
+    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
     PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
     SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, VisibleItemValues, WorldObject,
     is_bag_pos, is_equipment_packed_pos, make_item_pos,
@@ -1025,6 +1025,10 @@ pub struct WorldSession {
     pub(crate) visible_creatures: std::collections::HashSet<wow_core::ObjectGuid>,
     /// GUIDs of all game objects currently visible to this client.
     pub(crate) visible_gameobjects: std::collections::HashSet<wow_core::ObjectGuid>,
+    /// Represented C++ `GameObject::GetPhaseShift()` for visible DB-spawned
+    /// gameobjects until canonical gameobject map ownership lands.
+    pub(crate) represented_gameobject_phase_shifts:
+        std::collections::HashMap<wow_core::ObjectGuid, PhaseShift>,
     /// Position at which visibility was last fully recalculated.
     pub(crate) last_visibility_pos: Option<wow_core::Position>,
 
@@ -1432,6 +1436,7 @@ impl WorldSession {
             represented_personal_loot_owners: std::collections::HashSet::new(),
             visible_creatures: std::collections::HashSet::new(),
             visible_gameobjects: std::collections::HashSet::new(),
+            represented_gameobject_phase_shifts: std::collections::HashMap::new(),
             last_visibility_pos: None,
             gossip_options: Vec::new(),
             gossip_source_guid: None,
@@ -3348,6 +3353,48 @@ impl WorldSession {
 
     pub fn set_phase_group_store(&mut self, store: Arc<PhaseGroupStore>) {
         self.phase_group_store = Some(store);
+    }
+
+    pub(crate) fn record_represented_gameobject_db_phase_shift_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        map_id: u16,
+        phase_use_flags: u8,
+        phase_id: u16,
+        phase_group_id: u32,
+        terrain_swap_map: i32,
+    ) {
+        let mut phase_shift = PhaseShift::default();
+        if let (Some(phase_store), Some(phase_group_store)) =
+            (&self.phase_store, &self.phase_group_store)
+        {
+            init_db_phase_shift_like_cpp(
+                &mut phase_shift,
+                phase_store,
+                phase_group_store,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+            );
+        }
+
+        if let (Some(map_store), Some(terrain_swap_store)) =
+            (&self.map_store, &self.terrain_swap_store)
+            && let Some(terrain_swap_map) = terrain_swap_store.validate_spawn_terrain_swap_like_cpp(
+                map_store,
+                u32::from(map_id),
+                terrain_swap_map,
+            )
+        {
+            init_db_visible_map_id_like_cpp(
+                &mut phase_shift,
+                terrain_swap_store,
+                i32::try_from(terrain_swap_map).unwrap_or(-1),
+            );
+        }
+
+        self.represented_gameobject_phase_shifts
+            .insert(guid, phase_shift);
     }
 
     pub(crate) fn map_difficulty_store(&self) -> Option<&Arc<MapDifficultyStore>> {
@@ -8736,6 +8783,68 @@ mod tests {
             crate::phasing::PHASE_USE_FLAGS_INVERSE
         );
         assert_eq!(creature.creature.ai_ownership().phase_group_id, 7);
+    }
+
+    #[test]
+    fn represented_gameobject_phase_shift_applies_db_phase_and_visible_map_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let guid = ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 1, 900);
+        let phase_store = Arc::new(wow_data::PhaseStore::from_entries([wow_data::PhaseEntry {
+            id: 20,
+            flags: 0,
+        }]));
+        let phase_group_store = Arc::new(wow_data::PhaseGroupStore::from_entries(
+            &phase_store,
+            [wow_data::PhaseXPhaseGroupEntry {
+                id: 1,
+                phase_id: 20,
+                phase_group_id: 7,
+            }],
+        ));
+        let map_store = Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: 0,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+            wow_data::MapEntry {
+                id: 609,
+                instance_type: 0,
+                parent_map_id: 571,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ]));
+        let terrain_swap_store = Arc::new(wow_data::TerrainSwapStore::from_rows_like_cpp(
+            &map_store,
+            [],
+            [],
+            |_| true,
+        ));
+
+        session.set_phase_store(phase_store);
+        session.set_phase_group_store(phase_group_store);
+        session.set_map_store(map_store);
+        session.set_terrain_swap_store(terrain_swap_store);
+        session.record_represented_gameobject_db_phase_shift_like_cpp(
+            guid,
+            571,
+            crate::phasing::PHASE_USE_FLAGS_INVERSE,
+            0,
+            7,
+            609,
+        );
+
+        let phase_shift = session
+            .represented_gameobject_phase_shifts
+            .get(&guid)
+            .unwrap();
+        assert!(phase_shift.is_db_phase_shift_like_cpp());
+        assert!(phase_shift.has_phase_like_cpp(20));
+        assert!(phase_shift.has_visible_map_id_like_cpp(609));
+        assert_eq!(phase_shift.flags_like_cpp(), PhaseShiftFlags::INVERSE);
     }
 
     #[test]

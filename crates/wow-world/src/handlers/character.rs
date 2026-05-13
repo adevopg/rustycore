@@ -3390,8 +3390,33 @@ impl WorldSession {
                 let go_type: u8 = go_result.try_read(12).unwrap_or(0);
                 let display_id: u32 = go_result.try_read(13).unwrap_or(0);
                 let scale: f32 = go_result.try_read(15).unwrap_or(1.0);
-                let data0: u32 = go_result.try_read(16).unwrap_or(0);
-                let data1: u32 = go_result.try_read(17).unwrap_or(0);
+                let _data0: u32 = go_result.try_read(16).unwrap_or(0);
+                let _data1: u32 = go_result.try_read(17).unwrap_or(0);
+                let phase_use_flags: u8 = go_result
+                    .try_read::<u8>(18)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i16>(18)
+                            .map(|value| value.max(0) as u8)
+                    })
+                    .unwrap_or(0);
+                let phase_id: u16 = go_result
+                    .try_read::<u16>(19)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i32>(19)
+                            .map(|value| value.max(0) as u16)
+                    })
+                    .unwrap_or(0);
+                let phase_group_id: u32 = go_result
+                    .try_read::<u32>(20)
+                    .or_else(|| {
+                        go_result
+                            .try_read::<i32>(20)
+                            .map(|value| value.max(0) as u32)
+                    })
+                    .unwrap_or(0);
+                let terrain_swap_map: i32 = go_result.try_read(21).unwrap_or(-1);
 
                 if display_id == 0 {
                     if !go_result.next_row() {
@@ -3410,6 +3435,14 @@ impl WorldSession {
                     spawn_guid as i64,
                 );
                 new_visible_gos.insert(guid);
+                self.record_represented_gameobject_db_phase_shift_like_cpp(
+                    guid,
+                    map_id,
+                    phase_use_flags,
+                    phase_id,
+                    phase_group_id,
+                    terrain_swap_map,
+                );
 
                 if !self.visible_gameobjects.contains(&guid) {
                     let go_pos = Position::new(pos_x, pos_y, pos_z, orientation);
@@ -3440,6 +3473,9 @@ impl WorldSession {
             .filter(|g| !new_visible_gos.contains(g))
             .cloned()
             .collect();
+        for guid in &removed_gos {
+            self.represented_gameobject_phase_shifts.remove(guid);
+        }
 
         if !new_go_blocks.is_empty() {
             debug!(
@@ -3810,6 +3846,19 @@ impl WorldSession {
             let display_id: u32 = result.try_read(13).unwrap_or(0);
             let _name: String = result.read_string(14);
             let scale: f32 = result.try_read(15).unwrap_or(1.0);
+            let phase_use_flags: u8 = result
+                .try_read::<u8>(18)
+                .or_else(|| result.try_read::<i16>(18).map(|value| value.max(0) as u8))
+                .unwrap_or(0);
+            let phase_id: u16 = result
+                .try_read::<u16>(19)
+                .or_else(|| result.try_read::<i32>(19).map(|value| value.max(0) as u16))
+                .unwrap_or(0);
+            let phase_group_id: u32 = result
+                .try_read::<u32>(20)
+                .or_else(|| result.try_read::<i32>(20).map(|value| value.max(0) as u32))
+                .unwrap_or(0);
+            let terrain_swap_map: i32 = result.try_read(21).unwrap_or(-1);
 
             // Skip gameobjects with no display
             if display_id == 0 {
@@ -3845,6 +3894,14 @@ impl WorldSession {
 
             blocks.push(UpdateObject::create_gameobject_block(create_data));
             go_guids.push(guid);
+            self.record_represented_gameobject_db_phase_shift_like_cpp(
+                guid,
+                map_id,
+                phase_use_flags,
+                phase_id,
+                phase_group_id,
+                terrain_swap_map,
+            );
 
             if !result.next_row() {
                 break;
