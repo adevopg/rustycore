@@ -9,7 +9,7 @@ use std::{collections::HashSet, error::Error, fmt};
 
 use wow_constants::{PhaseFlags, TypeId};
 use wow_core::ObjectGuid;
-use wow_data::{PhaseGroupStore, PhaseStore};
+use wow_data::{PhaseGroupStore, PhaseStore, TerrainSwapStore};
 use wow_entities::{PhaseShift, Unit, WorldObject};
 use wow_packet::packets::misc::{PhaseShiftChange, PhaseShiftDataPhase};
 
@@ -292,6 +292,48 @@ pub fn remove_phase_group_like_cpp(
     Some(PhaseVisibilityUpdate::new(update_visibility, changed))
 }
 
+/// C++ `PhasingHandler::AddVisibleMapId` core mutation, excluding runtime controlled-unit traversal.
+pub fn add_visible_map_id_like_cpp(
+    object: &mut WorldObject,
+    terrain_swap_store: &TerrainSwapStore,
+    visible_map_id: u32,
+) -> Option<PhaseVisibilityUpdate> {
+    let terrain_swap_info = terrain_swap_store.terrain_swap_info(visible_map_id)?;
+    let mut changed = object
+        .phase_shift_mut()
+        .add_visible_map_id_like_cpp(visible_map_id, 1);
+
+    for ui_map_phase_id in &terrain_swap_info.ui_map_phase_ids {
+        changed = object
+            .phase_shift_mut()
+            .add_ui_map_phase_id_like_cpp(*ui_map_phase_id, 1)
+            || changed;
+    }
+
+    Some(PhaseVisibilityUpdate::new(false, changed))
+}
+
+/// C++ `PhasingHandler::RemoveVisibleMapId` core mutation, excluding runtime controlled-unit traversal.
+pub fn remove_visible_map_id_like_cpp(
+    object: &mut WorldObject,
+    terrain_swap_store: &TerrainSwapStore,
+    visible_map_id: u32,
+) -> Option<PhaseVisibilityUpdate> {
+    let terrain_swap_info = terrain_swap_store.terrain_swap_info(visible_map_id)?;
+    let mut changed = object
+        .phase_shift_mut()
+        .remove_visible_map_id_like_cpp(visible_map_id);
+
+    for ui_map_phase_id in &terrain_swap_info.ui_map_phase_ids {
+        changed = object
+            .phase_shift_mut()
+            .remove_ui_map_phase_id_like_cpp(*ui_map_phase_id)
+            || changed;
+    }
+
+    Some(PhaseVisibilityUpdate::new(false, changed))
+}
+
 /// C++ `PhasingHandler::SendToPlayer(Player const*, PhaseShift const&)` packet build step.
 pub fn phase_shift_change_for_player_like_cpp(
     player_guid: ObjectGuid,
@@ -341,7 +383,7 @@ mod tests {
     use wow_constants::{PhaseFlags, PhaseShiftFlags, TypeId, TypeMask};
     use wow_core::{ObjectGuid, guid::HighGuid};
     use wow_data::{
-        PhaseEntry, PhaseXPhaseGroupEntry,
+        MapEntry, MapStore, PhaseEntry, PhaseXPhaseGroupEntry,
         phase::{PHASE_ENTRY_FLAG_COSMETIC, PHASE_ENTRY_FLAG_PERSONAL},
     };
 
@@ -400,6 +442,21 @@ mod tests {
                 },
             ],
         )
+    }
+
+    fn map(id: u32, parent_map_id: i16) -> MapEntry {
+        MapEntry {
+            id,
+            instance_type: 0,
+            parent_map_id,
+            cosmetic_parent_map_id: -1,
+            flags1: 0,
+        }
+    }
+
+    fn terrain_swap_store() -> TerrainSwapStore {
+        let map_store = MapStore::from_entries([map(571, -1), map(609, 571)]);
+        TerrainSwapStore::from_rows_like_cpp(&map_store, [(609, 42), (609, 43)], [], |_| true)
     }
 
     #[test]
@@ -547,6 +604,45 @@ mod tests {
         assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, true)));
         assert!(!object.phase_shift().has_phase_like_cpp(10));
         assert!(!object.phase_shift().has_phase_like_cpp(20));
+    }
+
+    #[test]
+    fn visible_map_id_core_updates_ui_map_phase_ids_like_cpp() {
+        let terrain_swap_store = terrain_swap_store();
+        let mut object = world_object();
+
+        let update = add_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 609);
+
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, true)));
+        assert!(object.phase_shift().has_visible_map_id_like_cpp(609));
+        assert!(object.phase_shift().has_ui_map_phase_id_like_cpp(42));
+        assert!(object.phase_shift().has_ui_map_phase_id_like_cpp(43));
+
+        let update = add_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 609);
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, false)));
+
+        let update = remove_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 609);
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, false)));
+        assert!(object.phase_shift().has_visible_map_id_like_cpp(609));
+        assert!(object.phase_shift().has_ui_map_phase_id_like_cpp(42));
+
+        let update = remove_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 609);
+        assert_eq!(update, Some(PhaseVisibilityUpdate::new(false, true)));
+        assert!(!object.phase_shift().has_visible_map_id_like_cpp(609));
+        assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(42));
+        assert!(!object.phase_shift().has_ui_map_phase_id_like_cpp(43));
+    }
+
+    #[test]
+    fn visible_map_id_core_ignores_missing_terrain_swap_info() {
+        let terrain_swap_store = terrain_swap_store();
+        let mut object = world_object();
+
+        assert_eq!(
+            add_visible_map_id_like_cpp(&mut object, &terrain_swap_store, 700),
+            None
+        );
+        assert!(!object.phase_shift().has_visible_map_id_like_cpp(700));
     }
 
     #[test]
