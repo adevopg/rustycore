@@ -87,6 +87,180 @@ impl Condition {
     pub const fn id_like_cpp(&self) -> ConditionId {
         ConditionId::new(self.source_group, self.source_entry, self.source_id)
     }
+
+    /// C++ `Condition::ToString`.
+    pub fn to_string_like_cpp(&self, ext: bool) -> String {
+        let mut text = format!(
+            "[Condition SourceType: {} ({})",
+            self.source_type as u32,
+            condition_source_type_name_like_cpp(self.source_type)
+        );
+
+        if condition_source_can_have_group_set_like_cpp(self.source_type) {
+            text.push_str(&format!(", SourceGroup: {}", self.source_group));
+        }
+
+        text.push_str(&format!(", SourceEntry: {}", self.source_entry));
+
+        if condition_source_can_have_id_set_like_cpp(self.source_type) {
+            text.push_str(&format!(", SourceId: {}", self.source_id));
+        }
+
+        if ext {
+            text.push_str(&format!(
+                ", ConditionType: {} ({})",
+                self.condition_type as u32,
+                condition_type_name_like_cpp(self.condition_type)
+            ));
+        }
+
+        text.push(']');
+        text
+    }
+}
+
+/// C++ `ConditionMgr::CanHaveSourceGroupSet`.
+pub const fn condition_source_can_have_group_set_like_cpp(
+    source_type: ConditionSourceType,
+) -> bool {
+    matches!(
+        source_type,
+        ConditionSourceType::CreatureLootTemplate
+            | ConditionSourceType::DisenchantLootTemplate
+            | ConditionSourceType::FishingLootTemplate
+            | ConditionSourceType::GameObjectLootTemplate
+            | ConditionSourceType::ItemLootTemplate
+            | ConditionSourceType::MailLootTemplate
+            | ConditionSourceType::MillingLootTemplate
+            | ConditionSourceType::PickpocketingLootTemplate
+            | ConditionSourceType::ProspectingLootTemplate
+            | ConditionSourceType::ReferenceLootTemplate
+            | ConditionSourceType::SkinningLootTemplate
+            | ConditionSourceType::SpellLootTemplate
+            | ConditionSourceType::GossipMenu
+            | ConditionSourceType::GossipMenuOption
+            | ConditionSourceType::VehicleSpell
+            | ConditionSourceType::SpellImplicitTarget
+            | ConditionSourceType::SpellClickEvent
+            | ConditionSourceType::SmartEvent
+            | ConditionSourceType::NpcVendor
+            | ConditionSourceType::Phase
+            | ConditionSourceType::Graveyard
+            | ConditionSourceType::AreaTrigger
+            | ConditionSourceType::TrainerSpell
+            | ConditionSourceType::ObjectIdVisibility
+            | ConditionSourceType::ReferenceCondition
+    )
+}
+
+/// C++ `ConditionMgr::CanHaveSourceIdSet`.
+pub const fn condition_source_can_have_id_set_like_cpp(source_type: ConditionSourceType) -> bool {
+    matches!(source_type, ConditionSourceType::SmartEvent)
+}
+
+pub const fn condition_source_type_name_like_cpp(source_type: ConditionSourceType) -> &'static str {
+    match source_type {
+        ConditionSourceType::None => "None",
+        ConditionSourceType::CreatureLootTemplate => "Creature Loot",
+        ConditionSourceType::DisenchantLootTemplate => "Disenchant Loot",
+        ConditionSourceType::FishingLootTemplate => "Fishing Loot",
+        ConditionSourceType::GameObjectLootTemplate => "GameObject Loot",
+        ConditionSourceType::ItemLootTemplate => "Item Loot",
+        ConditionSourceType::MailLootTemplate => "Mail Loot",
+        ConditionSourceType::MillingLootTemplate => "Milling Loot",
+        ConditionSourceType::PickpocketingLootTemplate => "Pickpocketing Loot",
+        ConditionSourceType::ProspectingLootTemplate => "Prospecting Loot",
+        ConditionSourceType::ReferenceLootTemplate => "Reference Loot",
+        ConditionSourceType::SkinningLootTemplate => "Skinning Loot",
+        ConditionSourceType::SpellLootTemplate => "Spell Loot",
+        ConditionSourceType::SpellImplicitTarget => "Spell Impl. Target",
+        ConditionSourceType::GossipMenu => "Gossip Menu",
+        ConditionSourceType::GossipMenuOption => "Gossip Menu Option",
+        ConditionSourceType::CreatureTemplateVehicle => "Creature Vehicle",
+        ConditionSourceType::Spell => "Spell Expl. Target",
+        ConditionSourceType::SpellClickEvent => "Spell Click Event",
+        ConditionSourceType::QuestAvailable => "Quest Available",
+        ConditionSourceType::VehicleSpell => "Vehicle Spell",
+        ConditionSourceType::SmartEvent => "SmartScript",
+        ConditionSourceType::NpcVendor => "Npc Vendor",
+        ConditionSourceType::SpellProc => "Spell Proc",
+        ConditionSourceType::TerrainSwap => "Terrain Swap",
+        ConditionSourceType::Phase => "Phase",
+        ConditionSourceType::Graveyard => "Graveyard",
+        ConditionSourceType::AreaTrigger => "AreaTrigger",
+        ConditionSourceType::ConversationLine => "ConversationLine",
+        ConditionSourceType::AreaTriggerClientTriggered => "AreaTrigger Client Triggered",
+        ConditionSourceType::TrainerSpell => "Trainer Spell",
+        ConditionSourceType::ObjectIdVisibility => "Object Visibility (by ID)",
+        ConditionSourceType::SpawnGroup => "Spawn Group",
+        ConditionSourceType::ReferenceCondition => "Reference",
+        ConditionSourceType::Max => "Unknown",
+    }
+}
+
+pub const fn condition_type_name_like_cpp(condition_type: ConditionType) -> &'static str {
+    match condition_type {
+        ConditionType::None => "None",
+        ConditionType::Aura => "Aura",
+        ConditionType::Item => "Item Stored",
+        ConditionType::ItemEquipped => "Item Equipped",
+        ConditionType::ZoneId => "Zone",
+        ConditionType::ReputationRank => "Reputation",
+        ConditionType::Team => "Team",
+        ConditionType::Skill => "Skill",
+        ConditionType::QuestRewarded => "Quest Rewarded",
+        ConditionType::QuestTaken => "Quest Taken",
+        ConditionType::DrunkenState => "Drunken",
+        ConditionType::WorldState => "WorldState",
+        ConditionType::ActiveEvent => "Active Event",
+        ConditionType::InstanceInfo => "Instance Info",
+        ConditionType::QuestNone => "Quest None",
+        ConditionType::Class => "Class",
+        ConditionType::Race => "Race",
+        ConditionType::Achievement => "Achievement",
+        ConditionType::Title => "Title",
+        ConditionType::SpawnMaskDeprecated => "SpawnMask",
+        ConditionType::Gender => "Gender",
+        ConditionType::UnitState => "Unit State",
+        ConditionType::MapId => "Map",
+        ConditionType::AreaId => "Area",
+        ConditionType::CreatureType => "CreatureType",
+        ConditionType::Spell => "Spell Known",
+        ConditionType::PhaseId => "Phase",
+        ConditionType::Level => "Level",
+        ConditionType::QuestComplete => "Quest Completed",
+        ConditionType::NearCreature => "Near Creature",
+        ConditionType::NearGameObject => "Near GameObject",
+        ConditionType::ObjectEntryGuidLegacy | ConditionType::ObjectEntryGuid => {
+            "Object Entry or Guid"
+        }
+        ConditionType::TypeMaskLegacy | ConditionType::TypeMask => "Object TypeMask",
+        ConditionType::RelationTo => "Relation",
+        ConditionType::ReactionTo => "Reaction",
+        ConditionType::DistanceTo => "Distance",
+        ConditionType::Alive => "Alive",
+        ConditionType::HpVal => "Health Value",
+        ConditionType::HpPct => "Health Pct",
+        ConditionType::RealmAchievement => "Realm Achievement",
+        ConditionType::InWater => "In Water",
+        ConditionType::TerrainSwap => "Terrain Swap",
+        ConditionType::StandState => "Sit/stand state",
+        ConditionType::DailyQuestDone => "Daily Quest Completed",
+        ConditionType::Charmed => "Charmed",
+        ConditionType::PetType => "Pet type",
+        ConditionType::Taxi => "On Taxi",
+        ConditionType::QuestState => "Quest state mask",
+        ConditionType::QuestObjectiveProgress => "Quest objective progress",
+        ConditionType::DifficultyId => "Map Difficulty",
+        ConditionType::GameMaster => "Is Gamemaster",
+        ConditionType::BattlePetCount => "BattlePet Species Learned",
+        ConditionType::ScenarioStep => "On Scenario Step",
+        ConditionType::SceneInProgress => "Scene In Progress",
+        ConditionType::PlayerCondition => "Player Condition",
+        ConditionType::PrivateObject => "Private Object",
+        ConditionType::StringId => "String ID",
+        ConditionType::Max => "Unknown",
+    }
 }
 
 pub type ConditionContainer = Vec<Condition>;
@@ -381,6 +555,65 @@ mod tests {
         condition.reference_id = 0;
         condition.script_id = 7;
         assert!(condition.is_loaded_like_cpp());
+    }
+
+    #[test]
+    fn source_group_and_id_flags_match_cpp() {
+        assert!(condition_source_can_have_group_set_like_cpp(
+            ConditionSourceType::CreatureLootTemplate,
+        ));
+        assert!(condition_source_can_have_group_set_like_cpp(
+            ConditionSourceType::SpellClickEvent,
+        ));
+        assert!(condition_source_can_have_group_set_like_cpp(
+            ConditionSourceType::ReferenceCondition,
+        ));
+        assert!(!condition_source_can_have_group_set_like_cpp(
+            ConditionSourceType::QuestAvailable,
+        ));
+
+        assert!(condition_source_can_have_id_set_like_cpp(
+            ConditionSourceType::SmartEvent,
+        ));
+        assert!(!condition_source_can_have_id_set_like_cpp(
+            ConditionSourceType::SpellClickEvent,
+        ));
+    }
+
+    #[test]
+    fn condition_to_string_matches_cpp_shape() {
+        let condition = Condition {
+            source_type: ConditionSourceType::SmartEvent,
+            source_group: 8,
+            source_entry: -7,
+            source_id: 9,
+            condition_type: ConditionType::ObjectEntryGuid,
+            ..Condition::default()
+        };
+
+        assert_eq!(
+            condition.to_string_like_cpp(false),
+            "[Condition SourceType: 22 (SmartScript), SourceGroup: 8, SourceEntry: -7, SourceId: 9]"
+        );
+        assert_eq!(
+            condition.to_string_like_cpp(true),
+            "[Condition SourceType: 22 (SmartScript), SourceGroup: 8, SourceEntry: -7, SourceId: 9, ConditionType: 51 (Object Entry or Guid)]"
+        );
+    }
+
+    #[test]
+    fn condition_to_string_handles_reference_and_private_object_name() {
+        let condition = Condition {
+            source_type: ConditionSourceType::ReferenceCondition,
+            source_group: 55,
+            condition_type: ConditionType::PrivateObject,
+            ..Condition::default()
+        };
+
+        assert_eq!(
+            condition.to_string_like_cpp(true),
+            "[Condition SourceType: 34 (Reference), SourceGroup: 55, SourceEntry: 0, ConditionType: 57 (Private Object)]"
+        );
     }
 
     #[test]

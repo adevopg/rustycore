@@ -204,6 +204,7 @@ ConditionMgr is server-internal — it emits no packets directly. Indirectly, wh
 **What's implemented:**
 - `crates/wow-constants/src/conditions.rs` defines C++-value-compatible `ConditionType`, `ConditionSourceType`, `RelationType`, `ConditionInstanceInfo`, `MAX_CONDITION_TARGETS`, and `ComparisonType` constants/enums from `ConditionMgr.h` / `Util.h`.
 - `crates/wow-data/src/conditions.rs` defines the owned `Condition`, `ConditionId`, and `ConditionContainer` data shapes with C++ constructor defaults and `Condition::isLoaded` parity.
+- `crates/wow-data/src/conditions.rs` implements C++ `Condition::ToString`, `CanHaveSourceGroupSet`, and `CanHaveSourceIdSet` formatting helpers for SQL/debug logs. Rust intentionally names `CONDITION_PRIVATE_OBJECT` as `Private Object`; the inspected C++ static name table appears to omit that slot.
 - `crates/wow-world/src/conditions.rs` defines runtime `ConditionSourceInfo` with 3 target slots, derived map context, and last-failed-condition tracking.
 - `crates/wow-world/src/conditions.rs` implements C++ `IsObjectMeetToConditions` OR-of-AND `ElseGroup` aggregation and `IsObjectMeetingNotGroupedConditions` lookup with injected per-condition evaluator.
 - `crates/wow-world/src/conditions.rs` implements C++ specialized condition lookups for spell-click, vehicle spell, smart event, vendor item, area trigger, trainer spell, and object-id visibility keys.
@@ -288,7 +289,7 @@ Complejidad: **L** (low, <1h), **M** (med, 1-4h), **H** (high, 4-12h), **XL** (>
 - [ ] **#COND.24** Implement `IsMeetingWorldStateExpression(map, &WorldStateExpressionEntry)` — RPN-style byte-coded evaluator (operators, immediate values, world-state lookups, function calls). (H)
 - [ ] **#COND.25** Implement `IsUnitMeetingCondition(a, b, &UnitConditionEntry)` (M)
 - [ ] **#COND.26** Implement `Condition::get_searcher_type_mask_for_condition` — for early-exit during grid searches (M)
-- [ ] **#COND.27** Implement `Condition::to_string(ext)` — the debug formatter used in `tc_log_error` (L)
+- [x] **#COND.27** Implement `Condition::to_string(ext)` — the debug formatter used in `tc_log_error` (L)
 - [ ] **#COND.28** Implement `ConditionMgr::clean` and reload semantics — drop and rebuild all index buckets, invalidate `weak_ptr`s in downstream `ConditionsReference` holders (M)
 - [x] **#COND.29** Implement `ConditionsReference` weak-pointer wrapper for downstream modules (Phasing, Loot, Gossip) so they can hold a non-owning handle that survives reload safely (M; downstream wiring remains tracked by each source-type index builder task)
 - [ ] **#COND.30** Implement `DisableMgr` with all 8 `DisableType` variants, `LoadDisables`, `IsDisabledFor` per type, and the convenience helpers `IsPathfindingEnabled`, `IsVMAPDisabledFor`, `IsMMAPDisabledFor` (H)
