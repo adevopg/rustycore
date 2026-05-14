@@ -156,13 +156,13 @@ DBC stores:
 
 **Files in `/home/server/rustycore`:**
 - `crates/wow-entities/src/vehicle.rs` — represented `Vehicle` state, seat map, passenger helpers, pending join markers, transport offset/global transforms, and accessory POD.
-- `crates/wow-data/src/vehicle.rs` — `Vehicle.db2`/`VehicleSeat.db2` stores with hotfix overlays, C++ `vehicle_template` despawn-delay lookup, and C++ `vehicle_accessory`/`vehicle_template_accessory` lookup.
+- `crates/wow-data/src/vehicle.rs` — `Vehicle.db2`/`VehicleSeat.db2` stores with hotfix overlays, C++ `VehicleSeatEntry` helper flags used by handlers, C++ `vehicle_template` despawn-delay lookup, and C++ `vehicle_accessory`/`vehicle_template_accessory` lookup.
 - `crates/wow-world/src/session.rs` — represented mount VehicleKit create/remove path, owner vehicle-rec packets, movement ack validation, mount accessory row selection, collision-height and pet-mode side effects.
 - `crates/wow-packet/src/packets/movement.rs` / `crates/wow-packet/src/packets/vehicle.rs` — movement vehicle id and represented vehicle-rec packets.
 - `crates/wow-constants/src/vehicle.rs` / `crates/wow-constants/src/opcodes.rs` — C++ `VehicleDefines.h` power/flag/spell/exit constants and vehicle opcodes enumerated.
 - `crates/wow-packet/src/packets/vehicle.rs` / `crates/wow-world/src/handlers/vehicle.rs` — vehicle packet layouts and dispatch metadata registered with C++ status/processing; handlers currently preserve C++ early-return behavior until live passenger/charm runtime exists.
 
-**What's implemented:** represented VehicleKit state and mount integration, C++ `VehicleDefines.h` constants, DB2 seat construction, C++ vehicle template despawn-delay lookup, C++ vehicle accessory row lookup, movement/vehicle-rec packet coverage for the mount path, and focused unit tests for the represented state.
+**What's implemented:** represented VehicleKit state and mount integration, C++ `VehicleDefines.h` constants, DB2 seat construction and handler helper flags, C++ vehicle template despawn-delay lookup, C++ vehicle accessory row lookup, movement/vehicle-rec packet coverage for the mount path, and focused unit tests for the represented state.
 
 **What's missing vs C++:** full live passenger runtime, accessory TempSummon/HandleSpellClick installation, transport-frame xform, immunities, despawn timer, and join event scheduling. `wow_entities::Vehicle` now represents install/uninstall status, seat maps, usable-seat counts, passenger insert/remove helpers, and vehicle accessory row selection is loaded in `wow-data` with C++ GUID-first/template fallback semantics.
 
@@ -209,7 +209,7 @@ DBC stores:
 - [ ] **#VEH.6** Implement `AddVehiclePassenger`/`RemovePassenger`/`HasEmptySeat`/`GetNextEmptySeat` (M) — partial: pure seat-map helpers represented; aura/script side effects pending.
 - [ ] **#VEH.7** Implement `InstallAllAccessories` + `InstallAccessory` (depends on TempSummon) (M) — partial: C++ accessory row load/selection covered; TempSummon/HandleSpellClick pending.
 - [ ] **#VEH.8** Implement delayed join (`VehicleJoinEvent` analog) on session/map tick (M)
-- [ ] **#VEH.9** Wire vehicle opcodes (Exit/SwitchSeat/Eject/Dismiss) into `wow-handler` (M) — partial: packet parsers and dispatch metadata registered with C++ status/processing; live `ExitVehicle`/`ChangeSeat`/`HandleSpellClick` behavior pending.
+- [ ] **#VEH.9** Wire vehicle opcodes (Exit/SwitchSeat/Eject/Dismiss) into `wow-handler` (M) — partial: packet parsers, C++ `CanSwitchFromSeat`/`IsEjectable` helper flags, and dispatch metadata registered with C++ status/processing; live `ExitVehicle`/`ChangeSeat`/`HandleSpellClick` behavior pending.
 - [ ] **#VEH.10** Apply immunities (`ApplyAllImmunities` from VehicleEntry flags) (L)
 - [ ] **#VEH.11** Hook `RelocatePassengers` into MapManager tick (M)
 

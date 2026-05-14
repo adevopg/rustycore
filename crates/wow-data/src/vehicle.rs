@@ -16,7 +16,9 @@ pub const VEHICLE_SEAT_FLAG_CAN_CONTROL: i32 = 0x0000_0800;
 pub const VEHICLE_SEAT_FLAG_UNCONTROLLED: i32 = 0x0000_2000;
 pub const VEHICLE_SEAT_FLAG_UNK18: i32 = 0x0002_0000;
 pub const VEHICLE_SEAT_FLAG_CAN_ENTER_OR_EXIT: i32 = 0x0200_0000;
+pub const VEHICLE_SEAT_FLAG_CAN_SWITCH: i32 = 0x0400_0000;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED: i32 = 0x0000_0002;
+pub const VEHICLE_SEAT_FLAG_B_EJECTABLE: i32 = 0x0000_0020;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_2: i32 = 0x0000_0040;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_3: i32 = 0x0000_0100;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_4: i32 = 0x0200_0000;
@@ -62,6 +64,14 @@ impl VehicleSeatEntry {
                     | VEHICLE_SEAT_FLAG_B_USABLE_FORCED_3
                     | VEHICLE_SEAT_FLAG_B_USABLE_FORCED_4,
             )
+    }
+
+    pub fn can_switch_from_seat_like_cpp(&self) -> bool {
+        self.has_flag(VEHICLE_SEAT_FLAG_CAN_SWITCH)
+    }
+
+    pub fn is_ejectable_like_cpp(&self) -> bool {
+        self.has_flag_b(VEHICLE_SEAT_FLAG_B_EJECTABLE)
     }
 
     pub fn to_vehicle_seat_info_like_cpp(&self) -> VehicleSeatInfo {
@@ -475,6 +485,27 @@ mod tests {
         };
         assert!(!forced.can_enter_or_exit_like_cpp());
         assert!(forced.usable_by_override_like_cpp());
+    }
+
+    #[test]
+    fn vehicle_seat_handler_flags_match_cpp_helpers() {
+        let switchable = VehicleSeatEntry {
+            id: 1,
+            flags: VEHICLE_SEAT_FLAG_CAN_SWITCH,
+            flags_b: 0,
+            flags_c: 0,
+        };
+        let ejectable = VehicleSeatEntry {
+            id: 2,
+            flags: 0,
+            flags_b: VEHICLE_SEAT_FLAG_B_EJECTABLE,
+            flags_c: 0,
+        };
+
+        assert!(switchable.can_switch_from_seat_like_cpp());
+        assert!(!switchable.is_ejectable_like_cpp());
+        assert!(!ejectable.can_switch_from_seat_like_cpp());
+        assert!(ejectable.is_ejectable_like_cpp());
     }
 
     #[test]
