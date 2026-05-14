@@ -6535,6 +6535,44 @@ impl WorldSession {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn represented_taxi_usable_mount_displays_like_cpp(
+        &self,
+        flying_mount_id: u32,
+    ) -> Vec<i32> {
+        let Some(mount) = self
+            .mount_store
+            .as_ref()
+            .and_then(|store| store.get_by_id(flying_mount_id))
+        else {
+            return Vec::new();
+        };
+
+        if !self
+            .known_spells_like_cpp()
+            .contains(&mount.source_spell_id)
+        {
+            return Vec::new();
+        }
+
+        let Some(displays) = self
+            .mount_x_display_store
+            .as_ref()
+            .and_then(|store| store.displays_for_mount_like_cpp(mount.id))
+        else {
+            return Vec::new();
+        };
+
+        displays
+            .iter()
+            .filter(|display| {
+                display.player_condition_id == 0
+                    || self.represented_mount_x_display_usable_like_cpp(display.player_condition_id)
+            })
+            .map(|display| display.creature_display_info_id)
+            .collect()
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn represented_mount_source_spell_usable_like_cpp(&self, spell_id: u32) -> bool {
         let Some(mount) = self
             .mount_store
@@ -9255,6 +9293,84 @@ mod tests {
         assert!(session.represented_mount_x_display_usable_like_cpp(42));
         assert!(!session.represented_mount_x_display_usable_like_cpp(43));
         assert!(session.represented_mount_x_display_usable_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_taxi_usable_mount_displays_match_cpp_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_known_spells_like_cpp(vec![100]);
+        session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
+            wow_data::MountEntry {
+                id: 7,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 100,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+            wow_data::MountEntry {
+                id: 8,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 101,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+        ])));
+        session.set_mount_x_display_store(Arc::new(wow_data::MountXDisplayStore::from_entries([
+            wow_data::MountXDisplayEntry {
+                id: 1,
+                creature_display_info_id: 1000,
+                player_condition_id: 42,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 2,
+                creature_display_info_id: 1001,
+                player_condition_id: 43,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 3,
+                creature_display_info_id: 1002,
+                player_condition_id: 0,
+                mount_id: 7,
+            },
+        ])));
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert_eq!(
+            session.represented_taxi_usable_mount_displays_like_cpp(7),
+            vec![1000, 1002]
+        );
+        assert!(
+            session
+                .represented_taxi_usable_mount_displays_like_cpp(8)
+                .is_empty()
+        );
+        assert!(
+            session
+                .represented_taxi_usable_mount_displays_like_cpp(99)
+                .is_empty()
+        );
     }
 
     #[test]
