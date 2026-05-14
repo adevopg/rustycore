@@ -18,6 +18,10 @@ pub enum HotfixStatements {
     SEL_MOUNT_TYPE_X_CAPABILITY,
     /// C++ `HOTFIX_SEL_MOUNT_X_DISPLAY`.
     SEL_MOUNT_X_DISPLAY,
+    /// C++ `HOTFIX_SEL_CREATURE_DISPLAY_INFO`.
+    SEL_CREATURE_DISPLAY_INFO,
+    /// C++ `HOTFIX_SEL_CREATURE_MODEL_DATA`.
+    SEL_CREATURE_MODEL_DATA,
     /// `DB2Manager::LoadHotfixData`.
     SEL_HOTFIX_DATA,
     /// `DB2Manager::LoadHotfixBlob`.
@@ -55,6 +59,24 @@ impl StatementDef for HotfixStatements {
             Self::SEL_MOUNT_X_DISPLAY => {
                 "SELECT ID, CreatureDisplayInfoID, PlayerConditionID, MountID FROM mount_x_display WHERE VerifiedBuild > 0"
             }
+            Self::SEL_CREATURE_DISPLAY_INFO => concat!(
+                "SELECT ID, ModelID, SoundID, SizeClass, CreatureModelScale, CreatureModelAlpha, BloodID, ",
+                "ExtendedDisplayInfoID, NPCSoundID, ParticleColorID, PortraitCreatureDisplayInfoID, ",
+                "PortraitTextureFileDataID, ObjectEffectPackageID, AnimReplacementSetID, Flags, ",
+                "StateSpellVisualKitID, PlayerOverrideScale, PetInstanceScale, UnarmedWeaponType, ",
+                "MountPoofSpellVisualKitID, DissolveEffectID, Gender, DissolveOutEffectID, CreatureModelMinLod, ",
+                "TextureVariationFileDataID1, TextureVariationFileDataID2, TextureVariationFileDataID3, ",
+                "TextureVariationFileDataID4 FROM creature_display_info WHERE VerifiedBuild > 0"
+            ),
+            Self::SEL_CREATURE_MODEL_DATA => concat!(
+                "SELECT ID, GeoBox1, GeoBox2, GeoBox3, GeoBox4, GeoBox5, GeoBox6, Flags, FileDataID, ",
+                "BloodID, FootprintTextureID, FootprintTextureLength, FootprintTextureWidth, FootprintParticleScale, ",
+                "FoleyMaterialID, FootstepCameraEffectID, DeathThudCameraEffectID, SoundID, SizeClass, ",
+                "CollisionWidth, CollisionHeight, WorldEffectScale, CreatureGeosetDataID, HoverHeight, ",
+                "AttachedEffectScale, ModelScale, MissileCollisionRadius, MissileCollisionPush, MissileCollisionRaise, ",
+                "MountHeight, OverrideLootEffectScale, OverrideNameScale, OverrideSelectionRadius, TamedPetBaseScale ",
+                "FROM creature_model_data WHERE VerifiedBuild > 0"
+            ),
             Self::SEL_HOTFIX_DATA => {
                 "SELECT Id, UniqueId, TableHash, RecordId, Status FROM hotfix_data ORDER BY Id"
             }

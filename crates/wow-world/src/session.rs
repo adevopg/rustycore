@@ -31,13 +31,14 @@ use wow_constants::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTableStore, AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore,
-    CreatureTemplateMountStoreLikeCpp, CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP,
-    DisableMgrLikeCpp, DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache,
-    ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
-    ItemDisenchantLootStore, ItemExtendedCostStore, ItemModifiedAppearanceStore,
-    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
-    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore,
-    MapDifficultyStore, MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
+    CreatureDisplayInfoStore, CreatureModelDataStore, CreatureTemplateMountStoreLikeCpp,
+    CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp,
+    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
+    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
+    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
+    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
+    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore,
+    MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
     MountTypeXCapabilityStore, MountXDisplayStore, PhaseGroupStore, PhaseStore,
     PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
     PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
@@ -729,6 +730,8 @@ pub struct WorldSession {
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
     map_difficulty_x_condition_store: Option<Arc<MapDifficultyXConditionStore>>,
     creature_template_mount_store: Option<Arc<CreatureTemplateMountStoreLikeCpp>>,
+    creature_display_info_store: Option<Arc<CreatureDisplayInfoStore>>,
+    creature_model_data_store: Option<Arc<CreatureModelDataStore>>,
     mount_store: Option<Arc<MountStore>>,
     mount_capability_store: Option<Arc<MountCapabilityStore>>,
     mount_type_x_capability_store: Option<Arc<MountTypeXCapabilityStore>>,
@@ -1472,6 +1475,8 @@ impl WorldSession {
             map_difficulty_store: None,
             map_difficulty_x_condition_store: None,
             creature_template_mount_store: None,
+            creature_display_info_store: None,
+            creature_model_data_store: None,
             mount_store: None,
             mount_capability_store: None,
             mount_type_x_capability_store: None,
@@ -3567,6 +3572,14 @@ impl WorldSession {
         self.creature_template_mount_store = Some(store);
     }
 
+    pub fn set_creature_display_info_store(&mut self, store: Arc<CreatureDisplayInfoStore>) {
+        self.creature_display_info_store = Some(store);
+    }
+
+    pub fn set_creature_model_data_store(&mut self, store: Arc<CreatureModelDataStore>) {
+        self.creature_model_data_store = Some(store);
+    }
+
     pub fn set_mount_store(&mut self, store: Arc<MountStore>) {
         self.mount_store = Some(store);
     }
@@ -4603,6 +4616,7 @@ impl WorldSession {
         self.mount_collision_height_update_requests_like_cpp = self
             .mount_collision_height_update_requests_like_cpp
             .saturating_add(1);
+        self.update_player_collision_height_like_cpp();
         self.send_movement_set_collision_height_like_cpp(
             wow_packet::packets::movement::UPDATE_COLLISION_HEIGHT_REASON_MOUNT_LIKE_CPP,
         );
@@ -4632,6 +4646,32 @@ impl WorldSession {
             vehicle_guid: player_guid,
             vehicle_rec_id,
         });
+    }
+
+    fn update_player_collision_height_like_cpp(&mut self) {
+        let (Some(display_store), Some(model_store)) = (
+            self.creature_display_info_store.as_ref(),
+            self.creature_model_data_store.as_ref(),
+        ) else {
+            return;
+        };
+
+        let native_display_id = crate::handlers::character::default_display_id(
+            self.player_race_like_cpp(),
+            self.player_gender_like_cpp(),
+        );
+        let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp)
+            .ok()
+            .filter(|id| *id != 0);
+        if let Some(height) = wow_data::unit_collision_height_like_cpp(
+            self.player_object_scale_like_cpp,
+            native_display_id,
+            mount_display_id,
+            display_store,
+            model_store,
+        ) {
+            self.player_collision_height_like_cpp = height;
+        }
     }
 
     fn send_movement_set_collision_height_like_cpp(&mut self, reason: u8) {
@@ -4728,6 +4768,7 @@ impl WorldSession {
                 self.mount_collision_height_update_requests_like_cpp = self
                     .mount_collision_height_update_requests_like_cpp
                     .saturating_add(1);
+                self.update_player_collision_height_like_cpp();
                 self.send_movement_set_collision_height_like_cpp(
                     wow_packet::packets::movement::UPDATE_COLLISION_HEIGHT_REASON_MOUNT_LIKE_CPP,
                 );
@@ -9784,6 +9825,8 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.set_player_registry(Arc::clone(&registry));
         session.set_player_position_like_cpp(Position::new(1.0, 2.0, 3.0, 0.5));
+        session.player_race = 1;
+        session.player_gender = 0;
         registry.insert(
             player_guid,
             broadcast_info(player_guid, flume::bounded(1).0),
@@ -9799,6 +9842,40 @@ mod tests {
                         display_scale: 1.0,
                         probability: 0.0,
                     }],
+                },
+            ]),
+        ));
+        let native_display_id = crate::handlers::character::default_display_id(
+            session.player_race_like_cpp(),
+            session.player_gender_like_cpp(),
+        );
+        session.set_creature_display_info_store(Arc::new(
+            wow_data::CreatureDisplayInfoStore::from_entries([
+                wow_data::CreatureDisplayInfoEntry {
+                    id: native_display_id,
+                    model_id: 100,
+                    creature_model_scale: 1.2,
+                },
+                wow_data::CreatureDisplayInfoEntry {
+                    id: 4321,
+                    model_id: 200,
+                    creature_model_scale: 1.5,
+                },
+            ]),
+        ));
+        session.set_creature_model_data_store(Arc::new(
+            wow_data::CreatureModelDataStore::from_entries([
+                wow_data::CreatureModelDataEntry {
+                    id: 100,
+                    collision_height: 2.0,
+                    model_scale: 1.1,
+                    mount_height: 0.0,
+                },
+                wow_data::CreatureModelDataEntry {
+                    id: 200,
+                    collision_height: 0.0,
+                    model_scale: 1.0,
+                    mount_height: 4.0,
                 },
             ]),
         ));
@@ -9823,6 +9900,7 @@ mod tests {
         assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 0);
         assert_eq!(session.mount_pet_resummon_requests_like_cpp, 0);
         assert_eq!(session.mount_collision_height_update_requests_like_cpp, 1);
+        assert!((session.player_collision_height_like_cpp - 7.32).abs() < 0.0001);
         let opcodes = drain_server_opcodes(&send_rx);
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
@@ -9854,6 +9932,7 @@ mod tests {
         assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 1);
         assert_eq!(session.mount_pet_resummon_requests_like_cpp, 1);
         assert_eq!(session.mount_collision_height_update_requests_like_cpp, 2);
+        assert!((session.player_collision_height_like_cpp - 2.64).abs() < 0.0001);
         let opcodes = drain_server_opcodes(&send_rx);
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));

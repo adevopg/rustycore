@@ -11,6 +11,7 @@ pub mod area_trigger_template;
 pub mod chr_specialization;
 pub mod condition_attachments;
 pub mod conditions;
+pub mod creature_display;
 pub mod creature_template;
 pub mod currency;
 pub mod db2_id_store;
@@ -68,6 +69,10 @@ pub use condition_attachments::{
 pub use conditions::{
     Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionLoadReport,
     ConditionsByEntryMap, ConditionsReference, load_condition_rows_like_cpp,
+};
+pub use creature_display::{
+    CreatureDisplayInfoEntry, CreatureDisplayInfoStore, CreatureModelDataEntry,
+    CreatureModelDataStore, DEFAULT_COLLISION_HEIGHT_LIKE_CPP, unit_collision_height_like_cpp,
 };
 pub use creature_template::{
     CreatureTemplateMountEntryLikeCpp, CreatureTemplateMountModelLikeCpp,

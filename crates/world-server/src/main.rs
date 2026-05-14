@@ -566,6 +566,24 @@ async fn main() -> Result<()> {
         "Loaded {} creature template mount fallback rows",
         creature_template_mount_store.len()
     );
+    let creature_display_info_store = Arc::new(
+        wow_data::CreatureDisplayInfoStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load CreatureDisplayInfo.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} creature display info rows",
+        creature_display_info_store.len()
+    );
+    let creature_model_data_store = Arc::new(
+        wow_data::CreatureModelDataStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load CreatureModelData.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} creature model data rows",
+        creature_model_data_store.len()
+    );
     let creature_spawn_store = Arc::new(
         wow_data::WorldSpawnIdStore::load_like_cpp(
             world_db.as_ref(),
@@ -1246,6 +1264,8 @@ async fn main() -> Result<()> {
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
         map_difficulty_x_condition_store: Some(Arc::clone(&map_difficulty_x_condition_store)),
         creature_template_mount_store: Some(Arc::clone(&creature_template_mount_store)),
+        creature_display_info_store: Some(Arc::clone(&creature_display_info_store)),
+        creature_model_data_store: Some(Arc::clone(&creature_model_data_store)),
         mount_store: Some(Arc::clone(&mount_store)),
         mount_capability_store: Some(Arc::clone(&mount_capability_store)),
         mount_type_x_capability_store: Some(Arc::clone(&mount_type_x_capability_store)),
@@ -2125,6 +2145,12 @@ async fn create_session(
     }
     if let Some(ref store) = resources.creature_template_mount_store {
         session.set_creature_template_mount_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_display_info_store {
+        session.set_creature_display_info_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_model_data_store {
+        session.set_creature_model_data_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.mount_store {
         session.set_mount_store(Arc::clone(store));
