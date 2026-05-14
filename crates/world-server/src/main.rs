@@ -870,16 +870,19 @@ async fn main() -> Result<()> {
             .await
             .context("Failed to load quest store")?,
     );
-    let mmap_disabled_map_ids = load_mmap_disabled_map_ids_like_cpp(
-        world_db.as_ref(),
-        &map_store,
-        &map_difficulty_store,
-        &spell_store,
-        quest_store.as_ref(),
-        criteria_store.as_ref(),
-        battlemaster_list_store.as_ref(),
-    )
-    .await?;
+    let disable_mgr = Arc::new(
+        load_disable_mgr_like_cpp(
+            world_db.as_ref(),
+            &map_store,
+            &map_difficulty_store,
+            &spell_store,
+            quest_store.as_ref(),
+            criteria_store.as_ref(),
+            battlemaster_list_store.as_ref(),
+        )
+        .await?,
+    );
+    let mmap_disabled_map_ids = disable_mgr.disabled_mmap_map_ids_like_cpp();
     info!(
         "Loaded {} C++ mmap disable rows",
         mmap_disabled_map_ids.len()
@@ -1171,6 +1174,7 @@ async fn main() -> Result<()> {
         item_disenchant_loot_store: Some(Arc::clone(&item_disenchant_loot_store)),
         loot_stores: Some(Arc::clone(&loot_stores)),
         condition_store: Some(Arc::clone(&condition_store)),
+        disable_mgr: Some(Arc::clone(&disable_mgr)),
         lock_store: Some(Arc::clone(&lock_store)),
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
@@ -1435,7 +1439,7 @@ fn mmap_runtime_config_like_cpp(
     }
 }
 
-async fn load_mmap_disabled_map_ids_like_cpp(
+async fn load_disable_mgr_like_cpp(
     world_db: &WorldDatabase,
     map_store: &wow_data::MapStore,
     map_difficulty_store: &wow_data::MapDifficultyStore,
@@ -1443,7 +1447,7 @@ async fn load_mmap_disabled_map_ids_like_cpp(
     quest_store: &wow_data::quest::QuestStore,
     criteria_store: &wow_data::Db2IdStore,
     battlemaster_list_store: &wow_data::Db2IdStore,
-) -> Result<HashSet<u32>> {
+) -> Result<wow_data::DisableMgrLikeCpp> {
     let (disable_mgr, _) = wow_data::DisableMgrLikeCpp::load_like_cpp(
         world_db,
         wow_data::DisableMgrRefsLikeCpp {
@@ -1459,7 +1463,7 @@ async fn load_mmap_disabled_map_ids_like_cpp(
     .await
     .context("Failed to query C++ disables")?;
 
-    Ok(disable_mgr.disabled_mmap_map_ids_like_cpp())
+    Ok(disable_mgr)
 }
 
 fn loot_drop_rates_like_cpp(configs: &WorldConfigSet) -> LootDropRatesLikeCpp {
@@ -2010,6 +2014,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.condition_store {
         session.set_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.disable_mgr {
+        session.set_disable_mgr(Arc::clone(store));
     }
     if let Some(ref store) = resources.lock_store {
         session.set_lock_store(Arc::clone(store));

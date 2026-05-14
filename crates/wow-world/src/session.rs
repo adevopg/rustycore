@@ -30,13 +30,13 @@ use wow_constants::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore, CurrencyTypesEntry,
-    CurrencyTypesStore, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
-    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
-    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
-    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
-    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore,
-    PhaseGroupStore, PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
-    SpellItemEnchantmentStore, SpellStore,
+    CurrencyTypesStore, DisableMgrLikeCpp, DungeonEncounterStore, HotfixBlobCache,
+    ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
+    ItemDisenchantLootStore, ItemExtendedCostStore, ItemModifiedAppearanceStore,
+    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
+    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore,
+    MapDifficultyStore, MapStore, PhaseGroupStore, PhaseStore, PlayerStatsStore,
+    RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -670,6 +670,9 @@ pub struct WorldSession {
     // C++ ConditionMgr condition store loaded from world.conditions.
     condition_store: Option<Arc<ConditionEntriesByTypeStore>>,
 
+    // C++ DisableMgr store loaded from world.disables.
+    disable_mgr: Option<Arc<DisableMgrLikeCpp>>,
+
     // Lock store (Lock.db2 data)
     lock_store: Option<Arc<LockStore>>,
 
@@ -1297,6 +1300,7 @@ impl WorldSession {
             item_disenchant_loot_store: None,
             loot_stores: None,
             condition_store: None,
+            disable_mgr: None,
             lock_store: None,
             spell_item_enchantment_store: None,
             hotfix_blob_cache: None,
@@ -3181,6 +3185,16 @@ impl WorldSession {
     /// Get the loaded ConditionMgr store reference.
     pub fn condition_store(&self) -> Option<&Arc<ConditionEntriesByTypeStore>> {
         self.condition_store.as_ref()
+    }
+
+    /// Set the C++ DisableMgr store loaded from the `disables` table.
+    pub fn set_disable_mgr(&mut self, store: Arc<DisableMgrLikeCpp>) {
+        self.disable_mgr = Some(store);
+    }
+
+    /// Get the loaded DisableMgr store reference.
+    pub fn disable_mgr(&self) -> Option<&Arc<DisableMgrLikeCpp>> {
+        self.disable_mgr.as_ref()
     }
 
     /// Set the lock store for this session.
