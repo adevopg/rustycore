@@ -2432,6 +2432,24 @@ mod tests {
     }
 
     #[test]
+    fn transfer_aborted_matches_cpp_layout() {
+        let bytes = TransferAborted {
+            map_id: 571,
+            arg: 0,
+            map_difficulty_x_condition_id: 0,
+            transfer_abort: 16,
+        }
+        .to_bytes();
+
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x2703);
+        assert_eq!(&bytes[2..6], &571u32.to_le_bytes());
+        assert_eq!(bytes[6], 0);
+        assert_eq!(&bytes[7..11], &0i32.to_le_bytes());
+        assert_eq!(bytes[11], 0x40);
+    }
+
+    #[test]
     fn client_cache_version_serializes() {
         let pkt = ClientCacheVersion { cache_version: 42 };
         let bytes = pkt.to_bytes();
