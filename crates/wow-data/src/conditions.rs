@@ -3402,6 +3402,30 @@ mod tests {
             ),
             Ok(())
         );
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::GossipMenu,
+                    source_group: 800,
+                    source_entry: 900,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::GossipMenuOption,
+                    source_group: 800,
+                    source_entry: 1,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
         let mut spell_implicit = Condition {
             source_type: ConditionSourceType::SpellImplicitTarget,
             source_group: 0b11,
