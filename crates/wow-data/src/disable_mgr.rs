@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use wow_constants::TypeId;
 use wow_database::WorldDatabase;
 
-use crate::{MapDifficultyStore, MapStore, SpellStore, quest::QuestStore};
+use crate::{Db2IdStore, MapDifficultyStore, MapStore, SpellStore, quest::QuestStore};
 
 pub const DISABLE_TYPE_SPELL: u32 = 0;
 pub const DISABLE_TYPE_QUEST: u32 = 1;
@@ -99,8 +99,8 @@ pub struct DisableMgrRefsLikeCpp<'a> {
     pub map_difficulty_store: Option<&'a MapDifficultyStore>,
     pub spell_store: Option<&'a SpellStore>,
     pub quest_store: Option<&'a QuestStore>,
-    pub criteria_exists: Option<fn(u32) -> bool>,
-    pub battlemaster_exists: Option<fn(u32) -> bool>,
+    pub criteria_store: Option<&'a Db2IdStore>,
+    pub battlemaster_list_store: Option<&'a Db2IdStore>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,8 +303,8 @@ fn parse_row_like_cpp(
         }
         DISABLE_TYPE_BATTLEGROUND => {
             if refs
-                .battlemaster_exists
-                .is_some_and(|exists| !exists(row.entry))
+                .battlemaster_list_store
+                .is_some_and(|store| !store.contains(row.entry))
             {
                 return Err(format!(
                     "Battleground entry {} doesn't exist in dbc",
@@ -328,8 +328,8 @@ fn parse_row_like_cpp(
         }
         DISABLE_TYPE_CRITERIA => {
             if refs
-                .criteria_exists
-                .is_some_and(|exists| !exists(row.entry))
+                .criteria_store
+                .is_some_and(|store| !store.contains(row.entry))
             {
                 return Err(format!("Criteria entry {} doesn't exist in dbc", row.entry));
             }

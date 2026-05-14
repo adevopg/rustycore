@@ -634,13 +634,6 @@ async fn main() -> Result<()> {
         "Loaded {} map difficulties from MapDifficulty.db2",
         map_difficulty_store.len()
     );
-    let mmap_disabled_map_ids =
-        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store, &map_difficulty_store)
-            .await?;
-    info!(
-        "Loaded {} C++ mmap disable rows",
-        mmap_disabled_map_ids.len()
-    );
     let difficulty_store = Arc::new(
         wow_data::DifficultyStore::load(&data_dir, &locale)
             .context("Failed to load Difficulty.db2 — check DataDir and DBC.Locale config")?,
@@ -656,6 +649,14 @@ async fn main() -> Result<()> {
     let achievement_store = Arc::new(
         wow_data::Db2IdStore::load(&data_dir, &locale, "Achievement.db2")
             .context("Failed to load Achievement.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let criteria_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "Criteria.db2")
+            .context("Failed to load Criteria.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let battlemaster_list_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "BattlemasterList.db2")
+            .context("Failed to load BattlemasterList.db2 — check DataDir and DBC.Locale config")?,
     );
     let char_titles_store = Arc::new(
         wow_data::Db2IdStore::load(&data_dir, &locale, "CharTitles.db2")
@@ -693,9 +694,11 @@ async fn main() -> Result<()> {
         .context("Failed to load conversation_line_template ids for C++ ConditionMgr validation")?,
     );
     info!(
-        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} conversation lines",
+        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} criteria, {} battlemaster lists, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} conversation lines",
         faction_store.len(),
         achievement_store.len(),
+        criteria_store.len(),
+        battlemaster_list_store.len(),
         char_titles_store.len(),
         battle_pet_species_store.len(),
         scenario_step_store.len(),
@@ -866,6 +869,20 @@ async fn main() -> Result<()> {
         wow_data::quest::load_quests(&world_db)
             .await
             .context("Failed to load quest store")?,
+    );
+    let mmap_disabled_map_ids = load_mmap_disabled_map_ids_like_cpp(
+        world_db.as_ref(),
+        &map_store,
+        &map_difficulty_store,
+        &spell_store,
+        quest_store.as_ref(),
+        criteria_store.as_ref(),
+        battlemaster_list_store.as_ref(),
+    )
+    .await?;
+    info!(
+        "Loaded {} C++ mmap disable rows",
+        mmap_disabled_map_ids.len()
     );
 
     let loaded_loot_stores = load_loot_stores_like_cpp(&world_db, &item_store)
@@ -1422,12 +1439,20 @@ async fn load_mmap_disabled_map_ids_like_cpp(
     world_db: &WorldDatabase,
     map_store: &wow_data::MapStore,
     map_difficulty_store: &wow_data::MapDifficultyStore,
+    spell_store: &wow_data::SpellStore,
+    quest_store: &wow_data::quest::QuestStore,
+    criteria_store: &wow_data::Db2IdStore,
+    battlemaster_list_store: &wow_data::Db2IdStore,
 ) -> Result<HashSet<u32>> {
     let (disable_mgr, _) = wow_data::DisableMgrLikeCpp::load_like_cpp(
         world_db,
         wow_data::DisableMgrRefsLikeCpp {
             map_store: Some(map_store),
             map_difficulty_store: Some(map_difficulty_store),
+            spell_store: Some(spell_store),
+            quest_store: Some(quest_store),
+            criteria_store: Some(criteria_store),
+            battlemaster_list_store: Some(battlemaster_list_store),
             ..Default::default()
         },
     )
