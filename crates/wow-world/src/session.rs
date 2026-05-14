@@ -4740,12 +4740,13 @@ impl WorldSession {
             .and_then(|store| store.accessories_for_vehicle_like_cpp(None, creature_entry))
             .map(<[VehicleAccessory]>::to_vec)
             .unwrap_or_default();
+        let accessory_plan = vehicle_kit.install_all_accessories_plan_like_cpp(false, &accessories);
         self.player_mount_vehicle_id_like_cpp = vehicle_id;
         self.player_mount_vehicle_seat_count_like_cpp =
             vehicle_kit.seats().len().min(u8::MAX as usize) as u8;
         self.player_mount_vehicle_usable_seat_count_like_cpp =
             vehicle_kit.usable_seat_num().min(u32::from(u8::MAX)) as u8;
-        self.player_mount_vehicle_accessories_like_cpp = accessories;
+        self.player_mount_vehicle_accessories_like_cpp = accessory_plan.accessories;
         self.player_mount_vehicle_kit_like_cpp = Some(vehicle_kit);
         true
     }

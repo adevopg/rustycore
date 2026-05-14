@@ -98,9 +98,30 @@ pub struct VehicleAccessory {
     pub summoned_type: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleAccessoryInstallPlan {
+    pub remove_all_passengers: bool,
+    pub accessories: Vec<VehicleAccessory>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VehicleTemplate {
     pub despawn_delay_ms: i32,
+}
+
+pub fn vehicle_accessory_install_plan_like_cpp(
+    base_type_id: TypeId,
+    evading: bool,
+    accessories: &[VehicleAccessory],
+) -> VehicleAccessoryInstallPlan {
+    VehicleAccessoryInstallPlan {
+        remove_all_passengers: base_type_id == TypeId::Player || !evading,
+        accessories: accessories
+            .iter()
+            .copied()
+            .filter(|accessory| !evading || accessory.is_minion)
+            .collect(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,6 +211,18 @@ impl Vehicle {
     pub fn uninstall(&mut self) {
         self.status = VehicleStatus::Uninstalling;
         self.remove_all_passengers();
+    }
+
+    pub fn install_all_accessories_plan_like_cpp(
+        &mut self,
+        evading: bool,
+        accessories: &[VehicleAccessory],
+    ) -> VehicleAccessoryInstallPlan {
+        let plan = vehicle_accessory_install_plan_like_cpp(self.base_type_id, evading, accessories);
+        if plan.remove_all_passengers {
+            self.remove_all_passengers();
+        }
+        plan
     }
 
     pub fn has_empty_seat(&self, seat_id: i8) -> bool {
@@ -435,6 +468,38 @@ mod tests {
         assert_eq!(vehicle.status(), VehicleStatus::Uninstalling);
         assert!(!vehicle.is_vehicle_in_use());
         assert!(!vehicle.has_pending_event_for_seat(2));
+    }
+
+    #[test]
+    fn install_all_accessories_plan_filters_like_cpp() {
+        let all = [
+            VehicleAccessory {
+                accessory_entry: 10,
+                is_minion: true,
+                summon_time_ms: 100,
+                seat_id: 0,
+                summoned_type: 8,
+            },
+            VehicleAccessory {
+                accessory_entry: 20,
+                is_minion: false,
+                summon_time_ms: 200,
+                seat_id: 1,
+                summoned_type: 6,
+            },
+        ];
+
+        let player_plan = vehicle_accessory_install_plan_like_cpp(TypeId::Player, true, &all);
+        assert!(player_plan.remove_all_passengers);
+        assert_eq!(player_plan.accessories, vec![all[0]]);
+
+        let creature_normal = vehicle_accessory_install_plan_like_cpp(TypeId::Unit, false, &all);
+        assert!(creature_normal.remove_all_passengers);
+        assert_eq!(creature_normal.accessories, all);
+
+        let creature_evading = vehicle_accessory_install_plan_like_cpp(TypeId::Unit, true, &all);
+        assert!(!creature_evading.remove_all_passengers);
+        assert_eq!(creature_evading.accessories, vec![all[0]]);
     }
 
     #[test]

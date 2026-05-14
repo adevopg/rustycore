@@ -276,9 +276,10 @@ pub use update_fields::{
     extra_allowed_mask_for_visibility, filter_disallowed_fields,
 };
 pub use vehicle::{
-    MAX_VEHICLE_SEATS, PassengerInfo, Vehicle, VehicleAccessory, VehicleExitParameter, VehicleFlag,
-    VehicleSeat, VehicleSeatAddon, VehicleSeatInfo, VehicleStatus, VehicleTemplate,
-    calculate_passenger_offset, calculate_passenger_position,
+    MAX_VEHICLE_SEATS, PassengerInfo, Vehicle, VehicleAccessory, VehicleAccessoryInstallPlan,
+    VehicleExitParameter, VehicleFlag, VehicleSeat, VehicleSeatAddon, VehicleSeatInfo,
+    VehicleStatus, VehicleTemplate, calculate_passenger_offset, calculate_passenger_position,
+    vehicle_accessory_install_plan_like_cpp,
 };
 pub use world_object::{
     DEFAULT_HEIGHT_SEARCH, DEFAULT_VISIBILITY_DISTANCE, DEFAULT_VISIBILITY_INSTANCE,
