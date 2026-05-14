@@ -999,6 +999,29 @@ impl Vehicle {
             .collect()
     }
 
+    pub fn debug_info_like_cpp(&self) -> String {
+        let mut output = String::from("Vehicle seats:\n");
+        for (seat_id, seat) in &self.seats {
+            let passenger = if seat.is_empty() {
+                "empty".to_string()
+            } else {
+                seat.passenger.guid.to_string()
+            };
+            output.push_str(&format!("seat {seat_id}: {passenger}\n"));
+        }
+
+        output.push_str("Vehicle pending events:");
+        if self.pending_join_events.is_empty() {
+            output.push_str(" none");
+        } else {
+            output.push('\n');
+            for (passenger, seat_id) in &self.pending_join_events {
+                output.push_str(&format!("seat {seat_id}: {passenger}\n"));
+            }
+        }
+        output
+    }
+
     pub fn calculate_passenger_position(&self, offset: Position) -> Position {
         calculate_passenger_position(offset, self.base_position)
     }
@@ -1772,6 +1795,29 @@ mod tests {
                 position: vehicle.calculate_passenger_position(first_offset),
                 set_home_position: false,
             }]
+        );
+    }
+
+    #[test]
+    fn debug_info_matches_cpp_shape() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        let pending = passenger_guid(2);
+        assert!(vehicle.add_vehicle_passenger(passenger, 0));
+        vehicle.add_pending_event(pending, 2);
+
+        let debug = vehicle.debug_info_like_cpp();
+
+        assert!(debug.starts_with("Vehicle seats:\n"));
+        assert!(debug.contains(&format!("seat 0: {passenger}\n")));
+        assert!(debug.contains("seat 1: empty\n"));
+        assert!(debug.contains(&format!("Vehicle pending events:\nseat 2: {pending}\n")));
+
+        vehicle.remove_pending_events_for_passenger(pending);
+        assert!(
+            vehicle
+                .debug_info_like_cpp()
+                .ends_with("Vehicle pending events: none")
         );
     }
 
