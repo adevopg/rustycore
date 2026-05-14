@@ -457,12 +457,6 @@ async fn main() -> Result<()> {
         world_safe_loc_report.missing_maps.len(),
         world_safe_loc_report.invalid_positions.len()
     );
-    let mmap_disabled_map_ids =
-        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store).await?;
-    info!(
-        "Loaded {} C++ mmap disable rows",
-        mmap_disabled_map_ids.len()
-    );
     let ui_map_x_map_art_store = Arc::new(
         wow_data::UiMapXMapArtStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
             .await
@@ -639,6 +633,13 @@ async fn main() -> Result<()> {
     info!(
         "Loaded {} map difficulties from MapDifficulty.db2",
         map_difficulty_store.len()
+    );
+    let mmap_disabled_map_ids =
+        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store, &map_difficulty_store)
+            .await?;
+    info!(
+        "Loaded {} C++ mmap disable rows",
+        mmap_disabled_map_ids.len()
     );
     let difficulty_store = Arc::new(
         wow_data::DifficultyStore::load(&data_dir, &locale)
@@ -1420,11 +1421,13 @@ fn mmap_runtime_config_like_cpp(
 async fn load_mmap_disabled_map_ids_like_cpp(
     world_db: &WorldDatabase,
     map_store: &wow_data::MapStore,
+    map_difficulty_store: &wow_data::MapDifficultyStore,
 ) -> Result<HashSet<u32>> {
     let (disable_mgr, _) = wow_data::DisableMgrLikeCpp::load_like_cpp(
         world_db,
         wow_data::DisableMgrRefsLikeCpp {
             map_store: Some(map_store),
+            map_difficulty_store: Some(map_difficulty_store),
             ..Default::default()
         },
     )
