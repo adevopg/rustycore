@@ -780,7 +780,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub battle_pet_species_store: Option<&'a crate::Db2IdStore>,
     pub scenario_step_store: Option<&'a crate::Db2IdStore>,
     pub scene_script_package_store: Option<&'a crate::Db2IdStore>,
-    pub player_condition_store: Option<&'a crate::Db2IdStore>,
+    pub player_condition_store: Option<&'a crate::PlayerConditionStore>,
     pub max_skill_value: Option<u32>,
     pub loot_template_exists: Option<&'a dyn Fn(ConditionSourceType, u32) -> bool>,
     pub loot_source_entry_exists: Option<&'a dyn Fn(ConditionSourceType, u32, i32) -> bool>,
@@ -2857,7 +2857,11 @@ mod tests {
         let scenario_step_store = crate::Db2IdStore::from_ids("ScenarioStep.db2", [950]);
         let scene_script_package_store =
             crate::Db2IdStore::from_ids("SceneScriptPackage.db2", [960]);
-        let player_condition_store = crate::Db2IdStore::from_ids("PlayerCondition.db2", [970]);
+        let player_condition_store =
+            crate::PlayerConditionStore::from_entries([crate::PlayerConditionEntry {
+                id: 970,
+                ..crate::PlayerConditionEntry::default()
+            }]);
         let creature_template_store =
             crate::WorldIdStore::from_ids("creature_template", [980, 981]);
         let gameobject_template_store =

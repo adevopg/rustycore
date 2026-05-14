@@ -676,7 +676,7 @@ async fn main() -> Result<()> {
         )?,
     );
     let player_condition_store = Arc::new(
-        wow_data::Db2IdStore::load(&data_dir, &locale, "PlayerCondition.db2")
+        wow_data::PlayerConditionStore::load(&data_dir, &locale)
             .context("Failed to load PlayerCondition.db2 — check DataDir and DBC.Locale config")?,
     );
     let world_state_expression_store = Arc::new(
