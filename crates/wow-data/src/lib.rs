@@ -36,6 +36,7 @@ pub mod lock;
 pub mod map;
 pub mod phase;
 pub mod phasing;
+pub mod player_condition;
 pub mod player_power;
 pub mod player_stats;
 pub mod quest;
@@ -115,6 +116,13 @@ pub use phase::{PhaseEntry, PhaseGroupStore, PhaseStore, PhaseXPhaseGroupEntry};
 pub use phasing::{
     PhaseAreaInfo, PhaseConditionAttachmentReport, PhaseConditionContainer, PhaseInfoStore,
     PhaseInfoStruct,
+};
+pub use player_condition::{
+    PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
+    PlayerConditionEntry, PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
+    PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp, PlayerConditionStore,
+    is_player_meeting_condition_like_cpp, player_condition_compare_like_cpp,
+    player_condition_logic_like_cpp,
 };
 pub use player_power::{
     ClassPowerIndexRecord, Db2PlayerPowerIndexResolver, PlayerClassPowerIndexStore,
