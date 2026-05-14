@@ -111,6 +111,11 @@ pub struct VehiclePendingJoinAbort {
     pub target_vehicle_available: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VehiclePendingEventRemovalPlan {
+    pub scheduled_aborts: Vec<VehiclePendingJoinAbort>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VehicleRemoveAllPassengersPlan {
     pub pending_join_aborts: Vec<VehiclePendingJoinAbort>,
@@ -587,13 +592,50 @@ impl Vehicle {
         self.pending_join_events.insert(passenger, seat_id);
     }
 
+    pub fn remove_pending_events_for_passenger_plan_like_cpp(
+        &mut self,
+        passenger: ObjectGuid,
+    ) -> VehiclePendingEventRemovalPlan {
+        let Some(seat_id) = self.pending_join_events.remove(&passenger) else {
+            return VehiclePendingEventRemovalPlan::default();
+        };
+
+        VehiclePendingEventRemovalPlan {
+            scheduled_aborts: vec![VehiclePendingJoinAbort {
+                passenger,
+                seat_id,
+                target_vehicle_available: true,
+            }],
+        }
+    }
+
     pub fn remove_pending_events_for_passenger(&mut self, passenger: ObjectGuid) {
-        self.pending_join_events.remove(&passenger);
+        let _ = self.remove_pending_events_for_passenger_plan_like_cpp(passenger);
+    }
+
+    pub fn remove_pending_events_for_seat_plan_like_cpp(
+        &mut self,
+        seat_id: i8,
+    ) -> VehiclePendingEventRemovalPlan {
+        let scheduled_aborts = self
+            .pending_join_events
+            .iter()
+            .filter_map(|(passenger, pending_seat)| {
+                (*pending_seat == seat_id).then_some(VehiclePendingJoinAbort {
+                    passenger: *passenger,
+                    seat_id: *pending_seat,
+                    target_vehicle_available: true,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.pending_join_events
+            .retain(|_, pending_seat| *pending_seat != seat_id);
+
+        VehiclePendingEventRemovalPlan { scheduled_aborts }
     }
 
     pub fn remove_pending_events_for_seat(&mut self, seat_id: i8) {
-        self.pending_join_events
-            .retain(|_, pending_seat| *pending_seat != seat_id);
+        let _ = self.remove_pending_events_for_seat_plan_like_cpp(seat_id);
     }
 
     pub fn has_pending_event_for_seat(&self, seat_id: i8) -> bool {
@@ -1042,6 +1084,55 @@ mod tests {
         );
         assert!(vehicle.passenger(0).is_none());
         assert!(vehicle.has_pending_event_for_seat(0));
+    }
+
+    #[test]
+    fn remove_pending_events_for_seat_schedules_abort_like_cpp() {
+        let mut vehicle = vehicle();
+        let first = passenger_guid(1);
+        let second = passenger_guid(2);
+        vehicle.add_pending_event(first, 0);
+        vehicle.add_pending_event(second, 1);
+
+        let plan = vehicle.remove_pending_events_for_seat_plan_like_cpp(0);
+
+        assert_eq!(
+            plan,
+            VehiclePendingEventRemovalPlan {
+                scheduled_aborts: vec![VehiclePendingJoinAbort {
+                    passenger: first,
+                    seat_id: 0,
+                    target_vehicle_available: true,
+                }],
+            }
+        );
+        assert!(!vehicle.has_pending_event_for_seat(0));
+        assert!(vehicle.has_pending_event_for_seat(1));
+    }
+
+    #[test]
+    fn remove_pending_events_for_passenger_schedules_abort_like_cpp() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        vehicle.add_pending_event(passenger, 2);
+
+        let plan = vehicle.remove_pending_events_for_passenger_plan_like_cpp(passenger);
+
+        assert_eq!(
+            plan,
+            VehiclePendingEventRemovalPlan {
+                scheduled_aborts: vec![VehiclePendingJoinAbort {
+                    passenger,
+                    seat_id: 2,
+                    target_vehicle_available: true,
+                }],
+            }
+        );
+        assert!(!vehicle.has_pending_event_for_seat(2));
+        assert_eq!(
+            vehicle.remove_pending_events_for_passenger_plan_like_cpp(passenger),
+            VehiclePendingEventRemovalPlan::default()
+        );
     }
 
     #[test]
