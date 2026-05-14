@@ -224,6 +224,8 @@ pub enum WorldStatements {
     SEL_TRAINER_INFO,
     /// Load trainer IDs for C++ ConditionMgr source validation.
     SEL_TRAINER_IDS,
+    /// Load conversation line template IDs for C++ ConditionMgr source validation.
+    SEL_CONVERSATION_LINE_TEMPLATE_IDS,
 }
 
 impl StatementDef for WorldStatements {
@@ -693,6 +695,7 @@ impl StatementDef for WorldStatements {
             }
             Self::SEL_TRAINER_INFO => "SELECT Id, Type, Greeting FROM trainer WHERE Id = ?",
             Self::SEL_TRAINER_IDS => "SELECT Id FROM trainer",
+            Self::SEL_CONVERSATION_LINE_TEMPLATE_IDS => "SELECT Id FROM conversation_line_template",
             Self::SEL_QUEST_TEMPLATE => concat!(
                 "SELECT qt.ID, qt.QuestType, qt.QuestLevel, qt.QuestMaxScalingLevel, qt.MinLevel, qt.QuestSortID, ",
                 "qt.QuestInfoID, qt.SuggestedGroupNum, qt.RewardNextQuest, qt.RewardXPDifficulty, qt.RewardXPMultiplier, ",

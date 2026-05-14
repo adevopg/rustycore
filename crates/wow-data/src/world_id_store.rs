@@ -29,6 +29,15 @@ impl WorldIdStore {
         name: &'static str,
         statement: WorldStatements,
     ) -> Result<Self> {
+        Self::load_filtering_like_cpp(db, name, statement, |_| true).await
+    }
+
+    pub async fn load_filtering_like_cpp(
+        db: &WorldDatabase,
+        name: &'static str,
+        statement: WorldStatements,
+        mut keep_id: impl FnMut(u32) -> bool,
+    ) -> Result<Self> {
         let stmt = db.prepare(statement);
         let mut result = db.query(&stmt).await?;
         if result.is_empty() {
@@ -37,7 +46,10 @@ impl WorldIdStore {
 
         let mut ids = HashSet::new();
         loop {
-            ids.insert(result.read(0));
+            let id = result.read(0);
+            if keep_id(id) {
+                ids.insert(id);
+            }
             if !result.next_row() {
                 break;
             }
@@ -61,6 +73,14 @@ impl WorldIdStore {
     pub const fn name(&self) -> &'static str {
         self.name
     }
+
+    #[cfg(test)]
+    fn filtering_for_test(self, mut keep_id: impl FnMut(u32) -> bool) -> Self {
+        Self {
+            name: self.name,
+            ids: self.ids.into_iter().filter(|id| keep_id(*id)).collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +95,15 @@ mod tests {
         assert!(store.contains(42));
         assert!(!store.contains(43));
         assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn world_id_store_can_filter_invalid_backing_rows_like_cpp_loaders() {
+        let store = WorldIdStore::from_ids("conversation_line_template", [1, 2, 3])
+            .filtering_for_test(|id| id != 2);
+
+        assert!(store.contains(1));
+        assert!(!store.contains(2));
+        assert!(store.contains(3));
     }
 }

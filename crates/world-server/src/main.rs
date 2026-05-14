@@ -615,15 +615,34 @@ async fn main() -> Result<()> {
         wow_data::Db2IdStore::load(&data_dir, &locale, "PlayerCondition.db2")
             .context("Failed to load PlayerCondition.db2 — check DataDir and DBC.Locale config")?,
     );
+    let conversation_line_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "ConversationLine.db2")
+            .context("Failed to load ConversationLine.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let conversation_line_template_store = Arc::new(
+        wow_data::WorldIdStore::load_filtering_like_cpp(
+            world_db.as_ref(),
+            "conversation_line_template",
+            WorldStatements::SEL_CONVERSATION_LINE_TEMPLATE_IDS,
+            |line_id| conversation_line_store.contains(line_id),
+        )
+        .await
+        .context("Failed to load conversation_line_template ids for C++ ConditionMgr validation")?,
+    );
     info!(
-        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions",
+        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} conversation lines",
         faction_store.len(),
         achievement_store.len(),
         char_titles_store.len(),
         battle_pet_species_store.len(),
         scenario_step_store.len(),
         scene_script_package_store.len(),
-        player_condition_store.len()
+        player_condition_store.len(),
+        conversation_line_store.len()
+    );
+    info!(
+        "Loaded condition validation conversation line template store: {} templates",
+        conversation_line_template_store.len()
     );
 
     // Load ItemAppearance.db2 for item display-info resolution.
@@ -930,6 +949,7 @@ async fn main() -> Result<()> {
                 creature_template_store: Some(creature_template_store.as_ref()),
                 gameobject_template_store: Some(gameobject_template_store.as_ref()),
                 trainer_store: Some(trainer_store.as_ref()),
+                conversation_line_template_store: Some(conversation_line_template_store.as_ref()),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 faction_store: Some(faction_store.as_ref()),
                 achievement_store: Some(achievement_store.as_ref()),

@@ -711,6 +711,7 @@ pub enum ConditionSourceValidationErrorLikeCpp {
         entry: i32,
     },
     NonExistingTrainer(i32),
+    NonExistingConversationLineTemplate(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -734,6 +735,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub creature_template_store: Option<&'a crate::WorldIdStore>,
     pub gameobject_template_store: Option<&'a crate::WorldIdStore>,
     pub trainer_store: Option<&'a crate::WorldIdStore>,
+    pub conversation_line_template_store: Option<&'a crate::WorldIdStore>,
     pub difficulty_store: Option<&'a crate::DifficultyStore>,
     pub faction_store: Option<&'a crate::Db2IdStore>,
     pub achievement_store: Option<&'a crate::Db2IdStore>,
@@ -1377,6 +1379,17 @@ pub fn validate_condition_source_external_like_cpp(
                     source_type: condition.source_type,
                     spell_id: condition.source_entry,
                 });
+            }
+        }
+        ConditionSourceType::ConversationLine => {
+            if let Some(store) = stores.conversation_line_template_store
+                && u32::try_from(condition.source_entry)
+                    .ok()
+                    .is_none_or(|entry| !store.contains(entry))
+            {
+                return Err(Error::NonExistingConversationLineTemplate(
+                    condition.source_entry,
+                ));
             }
         }
         ConditionSourceType::AreaTriggerClientTriggered => {
@@ -3053,6 +3066,8 @@ mod tests {
         let creature_template_store = crate::WorldIdStore::from_ids("creature_template", [600]);
         let gameobject_template_store = crate::WorldIdStore::from_ids("gameobject_template", [601]);
         let trainer_store = crate::WorldIdStore::from_ids("trainer", [700]);
+        let conversation_line_template_store =
+            crate::WorldIdStore::from_ids("conversation_line_template", [800]);
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -3074,6 +3089,7 @@ mod tests {
             creature_template_store: Some(&creature_template_store),
             gameobject_template_store: Some(&gameobject_template_store),
             trainer_store: Some(&trainer_store),
+            conversation_line_template_store: Some(&conversation_line_template_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -3224,6 +3240,28 @@ mod tests {
                     entry: 999
                 }
             )
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::ConversationLine,
+                    source_entry: 800,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::ConversationLine,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingConversationLineTemplate(999))
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(
