@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use wow_constants::TypeId;
 use wow_database::WorldDatabase;
 
-use crate::MapStore;
+use crate::{MapDifficultyStore, MapStore, SpellStore, quest::QuestStore};
 
 pub const DISABLE_TYPE_SPELL: u32 = 0;
 pub const DISABLE_TYPE_QUEST: u32 = 1;
@@ -48,6 +48,22 @@ pub const MAX_SPELL_DISABLE_TYPE: u16 = SPELL_DISABLE_PLAYER
 
 pub const MMAP_DISABLE_PATHFINDING: u8 = 0x0;
 
+const MAP_COMMON: i8 = 0;
+const MAP_INSTANCE: i8 = 1;
+const MAP_RAID: i8 = 2;
+const MAP_BATTLEGROUND: i8 = 3;
+const MAP_ARENA: i8 = 4;
+
+const DIFFICULTY_NORMAL: u8 = 1;
+const DIFFICULTY_HEROIC: u8 = 2;
+const DIFFICULTY_10_HC: u8 = 5;
+const DIFFICULTY_25_HC: u8 = 6;
+
+const DUNGEON_STATUSFLAG_NORMAL: u16 = 0x01;
+const DUNGEON_STATUSFLAG_HEROIC: u16 = 0x02;
+const RAID_STATUSFLAG_10MAN_HEROIC: u16 = 0x04;
+const RAID_STATUSFLAG_25MAN_HEROIC: u16 = 0x08;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisableDbRowLikeCpp {
     pub source_type: u32,
@@ -80,8 +96,9 @@ pub struct DisableSkippedRowLikeCpp {
 #[derive(Clone, Copy, Default)]
 pub struct DisableMgrRefsLikeCpp<'a> {
     pub map_store: Option<&'a MapStore>,
-    pub spell_exists: Option<fn(u32) -> bool>,
-    pub quest_exists: Option<fn(u32) -> bool>,
+    pub map_difficulty_store: Option<&'a MapDifficultyStore>,
+    pub spell_store: Option<&'a SpellStore>,
+    pub quest_store: Option<&'a QuestStore>,
     pub criteria_exists: Option<fn(u32) -> bool>,
     pub battlemaster_exists: Option<fn(u32) -> bool>,
 }
@@ -240,7 +257,9 @@ fn parse_row_like_cpp(
 
     match row.source_type {
         DISABLE_TYPE_SPELL => {
-            if refs.spell_exists.is_some_and(|exists| !exists(row.entry))
+            if refs
+                .spell_store
+                .is_some_and(|store| store.get(row.entry as i32).is_none())
                 && row.flags & SPELL_DISABLE_DEPRECATED_SPELL == 0
             {
                 return Err(format!("Spell entry {} doesn't exist in dbc", row.entry));
@@ -257,13 +276,29 @@ fn parse_row_like_cpp(
                     parse_u32_set_like_cpp(&row.params_1, "area", row.entry, &mut warnings);
             }
         }
-        DISABLE_TYPE_QUEST => {}
+        DISABLE_TYPE_QUEST => {
+            if refs
+                .quest_store
+                .is_some_and(|store| store.get(row.entry).is_none())
+            {
+                return Err(format!("Quest entry {} doesn't exist", row.entry));
+            }
+            if row.flags != 0 {
+                warnings.push(format!(
+                    "Disable flags specified for quest {}, useless data",
+                    row.entry
+                ));
+            }
+        }
         DISABLE_TYPE_MAP | DISABLE_TYPE_LFG_MAP | DISABLE_TYPE_VMAP | DISABLE_TYPE_MMAP => {
             if refs
                 .map_store
                 .is_some_and(|store| store.get(row.entry).is_none())
             {
                 return Err(format!("Map entry {} doesn't exist in dbc", row.entry));
+            }
+            if matches!(row.source_type, DISABLE_TYPE_MAP | DISABLE_TYPE_LFG_MAP) {
+                validate_map_disable_flags_like_cpp(row, refs, &mut data)?;
             }
         }
         DISABLE_TYPE_BATTLEGROUND => {
@@ -329,6 +364,61 @@ fn parse_u32_set_like_cpp(
         }
     }
     values
+}
+
+fn validate_map_disable_flags_like_cpp(
+    row: &DisableDbRowLikeCpp,
+    refs: DisableMgrRefsLikeCpp<'_>,
+    data: &mut DisableDataLikeCpp,
+) -> std::result::Result<(), String> {
+    let Some(map_entry) = refs.map_store.and_then(|store| store.get(row.entry)) else {
+        return Ok(());
+    };
+
+    match map_entry.instance_type {
+        MAP_COMMON => {
+            if data.flags != 0 {
+                return Err(format!("Disable flags for map {} are invalid", row.entry));
+            }
+        }
+        MAP_INSTANCE | MAP_RAID => {
+            if let Some(map_difficulty_store) = refs.map_difficulty_store {
+                if data.flags & DUNGEON_STATUSFLAG_HEROIC != 0
+                    && map_difficulty_store
+                        .get(row.entry, DIFFICULTY_HEROIC)
+                        .is_none()
+                {
+                    data.flags -= DUNGEON_STATUSFLAG_HEROIC;
+                }
+                if data.flags & RAID_STATUSFLAG_10MAN_HEROIC != 0
+                    && map_difficulty_store
+                        .get(row.entry, DIFFICULTY_10_HC)
+                        .is_none()
+                {
+                    data.flags -= RAID_STATUSFLAG_10MAN_HEROIC;
+                }
+                if data.flags & RAID_STATUSFLAG_25MAN_HEROIC != 0
+                    && map_difficulty_store
+                        .get(row.entry, DIFFICULTY_25_HC)
+                        .is_none()
+                {
+                    data.flags -= RAID_STATUSFLAG_25MAN_HEROIC;
+                }
+            }
+            if data.flags == 0 {
+                return Err(format!("Disable flags for map {} are invalid", row.entry));
+            }
+        }
+        MAP_BATTLEGROUND | MAP_ARENA => {
+            return Err(format!(
+                "Battleground map {} specified to be disabled in map case",
+                row.entry
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 fn is_spell_disabled_like_cpp(
@@ -401,8 +491,8 @@ fn is_map_disabled_like_cpp(
         return false;
     };
     match map_entry.instance_type {
-        0 => true,
-        1 | 2 => object_ref.player_map_difficulty.is_some_and(|difficulty| {
+        MAP_COMMON => true,
+        MAP_INSTANCE | MAP_RAID => object_ref.player_map_difficulty.is_some_and(|difficulty| {
             map_disable_flags_match_difficulty_like_cpp(data.flags, difficulty)
         }),
         _ => false,
@@ -410,16 +500,11 @@ fn is_map_disabled_like_cpp(
 }
 
 fn map_disable_flags_match_difficulty_like_cpp(flags: u16, difficulty: u8) -> bool {
-    const DUNGEON_STATUSFLAG_NORMAL: u16 = 0x01;
-    const DUNGEON_STATUSFLAG_HEROIC: u16 = 0x02;
-    const RAID_STATUSFLAG_10MAN_HEROIC: u16 = 0x04;
-    const RAID_STATUSFLAG_25MAN_HEROIC: u16 = 0x08;
-
     match difficulty {
-        1 => flags & DUNGEON_STATUSFLAG_NORMAL != 0,
-        2 => flags & DUNGEON_STATUSFLAG_HEROIC != 0,
-        5 => flags & RAID_STATUSFLAG_10MAN_HEROIC != 0,
-        6 => flags & RAID_STATUSFLAG_25MAN_HEROIC != 0,
+        DIFFICULTY_NORMAL => flags & DUNGEON_STATUSFLAG_NORMAL != 0,
+        DIFFICULTY_HEROIC => flags & DUNGEON_STATUSFLAG_HEROIC != 0,
+        DIFFICULTY_10_HC => flags & RAID_STATUSFLAG_10MAN_HEROIC != 0,
+        DIFFICULTY_25_HC => flags & RAID_STATUSFLAG_25MAN_HEROIC != 0,
         _ => false,
     }
 }
@@ -427,7 +512,7 @@ fn map_disable_flags_match_difficulty_like_cpp(flags: u16, difficulty: u8) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MapEntry;
+    use crate::{MapDifficultyEntry, MapEntry};
 
     fn row(source_type: u32, entry: u32, flags: u16) -> DisableDbRowLikeCpp {
         DisableDbRowLikeCpp {
@@ -456,6 +541,17 @@ mod tests {
                 flags1: 0,
             },
         ])
+    }
+
+    fn map_difficulty_store() -> MapDifficultyStore {
+        MapDifficultyStore::from_entries([MapDifficultyEntry {
+            id: 1,
+            map_id: 571,
+            difficulty_id: DIFFICULTY_HEROIC,
+            lock_id: 0,
+            reset_interval: 0,
+            flags: 0,
+        }])
     }
 
     #[test]
@@ -546,10 +642,12 @@ mod tests {
     #[test]
     fn map_disable_without_ref_returns_true_like_cpp() {
         let maps = map_store();
+        let map_difficulties = map_difficulty_store();
         let (mgr, _) = DisableMgrLikeCpp::from_rows_like_cpp(
             [row(DISABLE_TYPE_MAP, 571, 0x02)],
             DisableMgrRefsLikeCpp {
                 map_store: Some(&maps),
+                map_difficulty_store: Some(&map_difficulties),
                 ..Default::default()
             },
         );
@@ -565,6 +663,56 @@ mod tests {
             player_map_difficulty: Some(2),
         };
         assert!(mgr.is_disabled_for_like_cpp(DISABLE_TYPE_MAP, 571, Some(player), 0, Some(&maps)));
+    }
+
+    #[test]
+    fn map_disable_validation_matches_cpp_map_type_rules() {
+        let maps = map_store();
+        let map_difficulties = map_difficulty_store();
+
+        let (_, report) = DisableMgrLikeCpp::from_rows_like_cpp(
+            [row(DISABLE_TYPE_MAP, 0, DUNGEON_STATUSFLAG_NORMAL)],
+            DisableMgrRefsLikeCpp {
+                map_store: Some(&maps),
+                ..Default::default()
+            },
+        );
+        assert_eq!(report.skipped_rows.len(), 1);
+
+        let (mgr, report) = DisableMgrLikeCpp::from_rows_like_cpp(
+            [row(
+                DISABLE_TYPE_MAP,
+                571,
+                DUNGEON_STATUSFLAG_HEROIC | RAID_STATUSFLAG_10MAN_HEROIC,
+            )],
+            DisableMgrRefsLikeCpp {
+                map_store: Some(&maps),
+                map_difficulty_store: Some(&map_difficulties),
+                ..Default::default()
+            },
+        );
+        assert_eq!(report.loaded_count, 1);
+        let player = DisableWorldObjectRefLikeCpp {
+            type_id: TypeId::Player,
+            map_id: 0,
+            area_id: 0,
+            is_pet: false,
+            is_battle_arena: false,
+            is_battleground: false,
+            player_map_difficulty: Some(DIFFICULTY_HEROIC),
+        };
+        assert!(mgr.is_disabled_for_like_cpp(DISABLE_TYPE_MAP, 571, Some(player), 0, Some(&maps)));
+        let ten_heroic_player = DisableWorldObjectRefLikeCpp {
+            player_map_difficulty: Some(DIFFICULTY_10_HC),
+            ..player
+        };
+        assert!(!mgr.is_disabled_for_like_cpp(
+            DISABLE_TYPE_MAP,
+            571,
+            Some(ten_heroic_player),
+            0,
+            Some(&maps)
+        ));
     }
 
     #[test]
