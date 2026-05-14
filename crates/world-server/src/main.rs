@@ -493,7 +493,6 @@ async fn main() -> Result<()> {
         .load_area_phases_like_cpp(world_db.as_ref(), &area_table_store, &phase_store)
         .await
         .context("Failed to load phase_area rows")?;
-    let phase_info_store = Arc::new(phase_info_store);
     info!(
         "Seeded {} phase info records and {} phase area rows",
         phase_info_store.phase_info_count(),
@@ -1042,15 +1041,16 @@ async fn main() -> Result<()> {
     let condition_attachment_report = wow_data::attach_loaded_conditions_like_cpp(
         condition_store.as_ref(),
         None,
-        None,
+        Some(&mut phase_info_store),
         Some(&mut graveyard_store),
     );
     info!(
-        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} deferred spell implicit target conditions, {} graveyard condition rows attached",
+        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} deferred spell implicit target conditions, {} phase condition rows attached, {} graveyard condition rows attached",
         condition_store.bucket_count(),
         externally_skipped_conditions.len(),
         condition_attachment_report.spell_click_aura_spell_ids.len(),
         condition_attachment_report.deferred_spell_implicit_target_condition_count,
+        condition_attachment_report.phases.attached_condition_count,
         condition_attachment_report
             .graveyards
             .attached_condition_count
