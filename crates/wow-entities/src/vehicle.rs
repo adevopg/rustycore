@@ -119,6 +119,14 @@ pub struct VehicleRemoveAllPassengersPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehiclePassengerAddPlan {
+    pub accepted: bool,
+    pub seat_id: Option<i8>,
+    pub scheduled_abort: bool,
+    pub displaced_passenger: Option<ObjectGuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VehicleSpellImmunityKind {
     Effect,
     State,
@@ -473,9 +481,10 @@ impl Vehicle {
 
     pub fn available_seat_count(&self) -> u8 {
         self.seats
-            .values()
-            .filter(|seat| {
+            .iter()
+            .filter(|(seat_id, seat)| {
                 seat.is_empty()
+                    && !self.has_pending_event_for_seat(**seat_id)
                     && (seat.seat_info.can_enter_or_exit || seat.seat_info.usable_by_override)
             })
             .count()
@@ -495,6 +504,61 @@ impl Vehicle {
 
         seat.passenger.guid = passenger;
         true
+    }
+
+    pub fn add_vehicle_passenger_plan_like_cpp(
+        &mut self,
+        passenger: ObjectGuid,
+        seat_id: i8,
+    ) -> VehiclePassengerAddPlan {
+        if self.status == VehicleStatus::Uninstalling {
+            return VehiclePassengerAddPlan {
+                accepted: false,
+                seat_id: None,
+                scheduled_abort: false,
+                displaced_passenger: None,
+            };
+        }
+
+        let selected_seat_id = if seat_id < 0 {
+            self.seats
+                .iter()
+                .find(|(candidate_id, seat)| {
+                    seat.is_empty()
+                        && !self.has_pending_event_for_seat(**candidate_id)
+                        && (seat.seat_info.can_enter_or_exit || seat.seat_info.usable_by_override)
+                })
+                .map(|(candidate_id, _)| *candidate_id)
+        } else {
+            self.seats.contains_key(&seat_id).then_some(seat_id)
+        };
+
+        let Some(selected_seat_id) = selected_seat_id else {
+            return VehiclePassengerAddPlan {
+                accepted: false,
+                seat_id: None,
+                scheduled_abort: true,
+                displaced_passenger: None,
+            };
+        };
+
+        let displaced_passenger = if seat_id >= 0 {
+            self.seats.get_mut(&selected_seat_id).and_then(|seat| {
+                let passenger = (!seat.passenger.guid.is_empty()).then_some(seat.passenger.guid)?;
+                seat.passenger.reset();
+                Some(passenger)
+            })
+        } else {
+            None
+        };
+
+        self.add_pending_event(passenger, selected_seat_id);
+        VehiclePassengerAddPlan {
+            accepted: true,
+            seat_id: Some(selected_seat_id),
+            scheduled_abort: false,
+            displaced_passenger,
+        }
     }
 
     pub fn remove_passenger(&mut self, passenger: ObjectGuid) -> Option<i8> {
@@ -898,6 +962,86 @@ mod tests {
                 target_vehicle_available: false,
             }]
         );
+    }
+
+    #[test]
+    fn add_vehicle_passenger_plan_selects_empty_seat_and_blocks_pending_like_cpp() {
+        let mut vehicle = vehicle();
+        vehicle.add_pending_event(passenger_guid(1), 0);
+
+        assert_eq!(vehicle.available_seat_count(), 1);
+        let plan = vehicle.add_vehicle_passenger_plan_like_cpp(passenger_guid(2), -1);
+
+        assert_eq!(
+            plan,
+            VehiclePassengerAddPlan {
+                accepted: true,
+                seat_id: Some(2),
+                scheduled_abort: false,
+                displaced_passenger: None,
+            }
+        );
+        assert!(vehicle.has_pending_event_for_seat(2));
+        assert!(vehicle.passenger(2).is_none());
+    }
+
+    #[test]
+    fn add_vehicle_passenger_plan_aborts_when_no_seat_or_uninstalling_like_cpp() {
+        let mut full = vehicle();
+        full.add_pending_event(passenger_guid(1), 0);
+        full.add_pending_event(passenger_guid(2), 2);
+
+        assert_eq!(
+            full.add_vehicle_passenger_plan_like_cpp(passenger_guid(3), -1),
+            VehiclePassengerAddPlan {
+                accepted: false,
+                seat_id: None,
+                scheduled_abort: true,
+                displaced_passenger: None,
+            }
+        );
+        assert_eq!(
+            full.add_vehicle_passenger_plan_like_cpp(passenger_guid(4), 99),
+            VehiclePassengerAddPlan {
+                accepted: false,
+                seat_id: None,
+                scheduled_abort: true,
+                displaced_passenger: None,
+            }
+        );
+
+        full.status = VehicleStatus::Uninstalling;
+        assert_eq!(
+            full.add_vehicle_passenger_plan_like_cpp(passenger_guid(5), 0),
+            VehiclePassengerAddPlan {
+                accepted: false,
+                seat_id: None,
+                scheduled_abort: false,
+                displaced_passenger: None,
+            }
+        );
+    }
+
+    #[test]
+    fn add_vehicle_passenger_plan_displaces_specific_occupied_seat_like_cpp() {
+        let mut vehicle = vehicle();
+        let old_passenger = passenger_guid(1);
+        let new_passenger = passenger_guid(2);
+        assert!(vehicle.add_vehicle_passenger(old_passenger, 0));
+
+        let plan = vehicle.add_vehicle_passenger_plan_like_cpp(new_passenger, 0);
+
+        assert_eq!(
+            plan,
+            VehiclePassengerAddPlan {
+                accepted: true,
+                seat_id: Some(0),
+                scheduled_abort: false,
+                displaced_passenger: Some(old_passenger),
+            }
+        );
+        assert!(vehicle.passenger(0).is_none());
+        assert!(vehicle.has_pending_event_for_seat(0));
     }
 
     #[test]
