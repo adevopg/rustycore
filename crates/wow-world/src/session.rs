@@ -981,6 +981,8 @@ pub struct WorldSession {
     mount_pet_resummon_requests_like_cpp: u32,
     /// Count of C++ mount collision-height updates represented until movement packets are canonical.
     mount_collision_height_update_requests_like_cpp: u32,
+    /// C++ `Unit::m_movementCounter` equivalent for vehicle-rec movement control packets.
+    mount_vehicle_movement_sequence_like_cpp: u32,
     /// Represented `UnitData::Flags` for player deltas not yet backed by canonical Unit.
     player_unit_flags_like_cpp: UnitFlags,
     /// Represented `UNIT_FLAG_MOUNT` state until UnitData owns live player flags.
@@ -1572,6 +1574,7 @@ impl WorldSession {
             mount_pet_control_enable_requests_like_cpp: 0,
             mount_pet_resummon_requests_like_cpp: 0,
             mount_collision_height_update_requests_like_cpp: 0,
+            mount_vehicle_movement_sequence_like_cpp: 0,
             player_unit_flags_like_cpp: UnitFlags::PLAYER_CONTROLLED,
             player_mounted_like_cpp: false,
             player_pvp_hostile_like_cpp: false,
@@ -4583,6 +4586,7 @@ impl WorldSession {
             self.mount_vehicle_create_requests_like_cpp = self
                 .mount_vehicle_create_requests_like_cpp
                 .saturating_add(1);
+            self.send_set_vehicle_rec_id_like_cpp(vehicle_id);
         }
         self.mount_pet_control_disable_requests_like_cpp = self
             .mount_pet_control_disable_requests_like_cpp
@@ -4595,6 +4599,27 @@ impl WorldSession {
         self.send_represented_mount_unit_update_like_cpp(display_id);
 
         Ok(())
+    }
+
+    fn send_set_vehicle_rec_id_like_cpp(&mut self, vehicle_id: u32) {
+        let Some(player_guid) = self.player_guid() else {
+            return;
+        };
+        let vehicle_rec_id = i32::try_from(vehicle_id).unwrap_or(i32::MAX);
+        let sequence_index = self.mount_vehicle_movement_sequence_like_cpp;
+        self.mount_vehicle_movement_sequence_like_cpp = self
+            .mount_vehicle_movement_sequence_like_cpp
+            .wrapping_add(1);
+
+        self.send_packet(&wow_packet::packets::vehicle::MoveSetVehicleRecId {
+            mover_guid: player_guid,
+            sequence_index,
+            vehicle_rec_id,
+        });
+        self.send_packet(&wow_packet::packets::vehicle::SetVehicleRecId {
+            vehicle_guid: player_guid,
+            vehicle_rec_id,
+        });
     }
 
     fn send_represented_mount_unit_update_like_cpp(&mut self, display_id: i32) {
@@ -4634,6 +4659,7 @@ impl WorldSession {
                     self.mount_vehicle_remove_requests_like_cpp = self
                         .mount_vehicle_remove_requests_like_cpp
                         .saturating_add(1);
+                    self.send_set_vehicle_rec_id_like_cpp(0);
                 }
                 self.mount_pet_control_enable_requests_like_cpp = self
                     .mount_pet_control_enable_requests_like_cpp
@@ -9356,6 +9382,14 @@ mod tests {
         (session, pkt_tx, send_rx)
     }
 
+    fn drain_server_opcodes(rx: &flume::Receiver<Vec<u8>>) -> Vec<u16> {
+        rx.try_iter()
+            .filter_map(|bytes| {
+                (bytes.len() >= 2).then(|| u16::from_le_bytes([bytes[0], bytes[1]]))
+            })
+            .collect()
+    }
+
     #[test]
     fn represented_player_condition_context_uses_live_session_state_like_cpp() {
         let (mut session, _, _) = make_session();
@@ -9673,7 +9707,8 @@ mod tests {
 
     #[test]
     fn represented_mounted_aura_toggles_mount_flag_like_cpp() {
-        let (mut session, _, _) = make_session();
+        let (mut session, _, send_rx) = make_session();
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 42)));
         session.set_creature_template_mount_store(Arc::new(
             wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
                 wow_data::CreatureTemplateMountEntryLikeCpp {
@@ -9708,6 +9743,9 @@ mod tests {
         assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 0);
         assert_eq!(session.mount_pet_resummon_requests_like_cpp, 0);
         assert_eq!(session.mount_collision_height_update_requests_like_cpp, 1);
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
         assert!(
             session
                 .player_unit_flags_like_cpp
@@ -9730,6 +9768,9 @@ mod tests {
         assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 1);
         assert_eq!(session.mount_pet_resummon_requests_like_cpp, 1);
         assert_eq!(session.mount_collision_height_update_requests_like_cpp, 2);
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
         assert!(
             session
                 .player_unit_flags_like_cpp

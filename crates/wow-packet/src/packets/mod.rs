@@ -25,3 +25,4 @@ pub mod social;
 pub mod spell;
 pub mod trainer;
 pub mod update;
+pub mod vehicle;
