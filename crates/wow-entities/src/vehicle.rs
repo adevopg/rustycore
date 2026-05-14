@@ -108,6 +108,13 @@ pub struct VehicleAccessoryInstallPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleAccessorySummonPlan {
+    pub accessory: VehicleAccessory,
+    pub add_accessory_unit_mask: bool,
+    pub handle_spell_click_seat_id: i8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VehiclePendingJoinAbort {
     pub passenger: ObjectGuid,
     pub seat_id: i8,
@@ -487,6 +494,21 @@ impl Vehicle {
             remove_control_vehicle_auras: true,
             forced_exit_passengers,
         }
+    }
+
+    pub fn install_accessory_plan_like_cpp(
+        &self,
+        accessory: VehicleAccessory,
+    ) -> Option<VehicleAccessorySummonPlan> {
+        if self.status == VehicleStatus::Uninstalling {
+            return None;
+        }
+
+        Some(VehicleAccessorySummonPlan {
+            accessory,
+            add_accessory_unit_mask: accessory.is_minion,
+            handle_spell_click_seat_id: accessory.seat_id,
+        })
     }
 
     pub fn install_all_accessories_plan_like_cpp(
@@ -1091,6 +1113,30 @@ mod tests {
         let creature_evading = vehicle_accessory_install_plan_like_cpp(TypeId::Unit, true, &all);
         assert!(!creature_evading.remove_all_passengers);
         assert_eq!(creature_evading.accessories, vec![all[0]]);
+    }
+
+    #[test]
+    fn install_accessory_plan_matches_cpp_status_and_minion_paths() {
+        let accessory = VehicleAccessory {
+            accessory_entry: 10,
+            is_minion: true,
+            summon_time_ms: 100,
+            seat_id: 2,
+            summoned_type: 8,
+        };
+        let mut vehicle = vehicle();
+
+        assert_eq!(
+            vehicle.install_accessory_plan_like_cpp(accessory),
+            Some(VehicleAccessorySummonPlan {
+                accessory,
+                add_accessory_unit_mask: true,
+                handle_spell_click_seat_id: 2,
+            })
+        );
+
+        vehicle.status = VehicleStatus::Uninstalling;
+        assert_eq!(vehicle.install_accessory_plan_like_cpp(accessory), None);
     }
 
     #[test]
