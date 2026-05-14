@@ -5,7 +5,7 @@
 
 //! Mount.db2 reader and C++ `DB2Manager::GetMount` lookup helpers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -28,6 +28,48 @@ pub struct MountEntry {
 pub struct MountStore {
     by_id: HashMap<u32, MountEntry>,
     by_source_spell_id: HashMap<u32, u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MountCapabilityEntry {
+    pub id: u32,
+    pub flags: u8,
+    pub req_riding_skill: u16,
+    pub req_area_id: u16,
+    pub req_spell_aura_id: u32,
+    pub req_spell_known_id: i32,
+    pub mod_spell_aura_id: i32,
+    pub req_map_id: i16,
+}
+
+pub struct MountCapabilityStore {
+    by_id: HashMap<u32, MountCapabilityEntry>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MountTypeXCapabilityEntry {
+    pub id: u32,
+    pub mount_type_id: u16,
+    pub mount_capability_id: u16,
+    pub order_index: u8,
+}
+
+pub struct MountTypeXCapabilityStore {
+    by_id: HashMap<u32, MountTypeXCapabilityEntry>,
+    by_mount_type: HashMap<u16, Vec<MountTypeXCapabilityEntry>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MountXDisplayEntry {
+    pub id: u32,
+    pub creature_display_info_id: i32,
+    pub player_condition_id: u32,
+    pub mount_id: u32,
+}
+
+pub struct MountXDisplayStore {
+    by_id: HashMap<u32, MountXDisplayEntry>,
+    by_mount_id: HashMap<u32, Vec<MountXDisplayEntry>>,
 }
 
 impl MountStore {
@@ -99,6 +141,212 @@ impl MountStore {
     }
 }
 
+impl MountCapabilityStore {
+    pub fn from_entries(entries: impl IntoIterator<Item = MountCapabilityEntry>) -> Self {
+        Self {
+            by_id: entries.into_iter().map(|entry| (entry.id, entry)).collect(),
+        }
+    }
+
+    /// Load MountCapability.db2 from `{data_dir}/dbc/{locale}/MountCapability.db2`.
+    ///
+    /// C++ refs:
+    /// - `DB2Structure.h::MountCapabilityEntry`
+    /// - `DB2LoadInfo.h::MountCapabilityLoadInfo`
+    /// - `sMountCapabilityStore.LookupEntry`.
+    pub fn load(data_dir: &str, locale: &str) -> Result<Self> {
+        let path = Path::new(data_dir)
+            .join("dbc")
+            .join(locale)
+            .join("MountCapability.db2");
+        let reader = Wdc4Reader::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+
+        let mut entries = Vec::with_capacity(reader.total_count());
+        for (id, idx) in reader.iter_records() {
+            entries.push(MountCapabilityEntry {
+                id,
+                flags: reader.get_field_u8(idx, 1),
+                req_riding_skill: reader.get_field_u16(idx, 2),
+                req_area_id: reader.get_field_u16(idx, 3),
+                req_spell_aura_id: reader.get_field_u32(idx, 4),
+                req_spell_known_id: reader.get_field_i32(idx, 5),
+                mod_spell_aura_id: reader.get_field_i32(idx, 6),
+                req_map_id: reader.get_field_i16(idx, 7),
+            });
+        }
+
+        let store = Self::from_entries(entries);
+        info!(
+            "Loaded {} mount capabilities from {}",
+            store.len(),
+            path.display()
+        );
+        Ok(store)
+    }
+
+    pub fn get(&self, id: u32) -> Option<&MountCapabilityEntry> {
+        self.by_id.get(&id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+impl MountTypeXCapabilityStore {
+    pub fn from_entries(entries: impl IntoIterator<Item = MountTypeXCapabilityEntry>) -> Self {
+        let mut by_id = HashMap::new();
+        let mut by_mount_type = HashMap::<u16, Vec<MountTypeXCapabilityEntry>>::new();
+        let mut seen_type_order = HashSet::<(u16, u8)>::new();
+
+        for entry in entries {
+            by_id.insert(entry.id, entry);
+            // C++ stores pointers in `std::set` ordered by MountTypeID and OrderIndex.
+            // For the same mount type and order index, the comparator treats rows as
+            // equivalent, so later duplicates are not inserted.
+            if seen_type_order.insert((entry.mount_type_id, entry.order_index)) {
+                by_mount_type
+                    .entry(entry.mount_type_id)
+                    .or_default()
+                    .push(entry);
+            }
+        }
+
+        for entries in by_mount_type.values_mut() {
+            entries.sort_by_key(|entry| entry.order_index);
+        }
+
+        Self {
+            by_id,
+            by_mount_type,
+        }
+    }
+
+    /// Load MountTypeXCapability.db2 from `{data_dir}/dbc/{locale}/MountTypeXCapability.db2`.
+    ///
+    /// C++ refs:
+    /// - `DB2Structure.h::MountTypeXCapabilityEntry`
+    /// - `DB2Stores.cpp` `_mountCapabilitiesByType[MountTypeID].insert(...)`
+    /// - `MountTypeXCapabilityEntryComparator`.
+    pub fn load(data_dir: &str, locale: &str) -> Result<Self> {
+        let path = Path::new(data_dir)
+            .join("dbc")
+            .join(locale)
+            .join("MountTypeXCapability.db2");
+        let reader = Wdc4Reader::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+
+        let mut entries = Vec::with_capacity(reader.total_count());
+        for (id, idx) in reader.iter_records() {
+            entries.push(MountTypeXCapabilityEntry {
+                id,
+                mount_type_id: reader.get_field_u16(idx, 0),
+                mount_capability_id: reader.get_field_u16(idx, 1),
+                order_index: reader.get_field_u8(idx, 2),
+            });
+        }
+
+        let store = Self::from_entries(entries);
+        info!(
+            "Loaded {} mount type capability rows from {}",
+            store.len(),
+            path.display()
+        );
+        Ok(store)
+    }
+
+    pub fn get(&self, id: u32) -> Option<&MountTypeXCapabilityEntry> {
+        self.by_id.get(&id)
+    }
+
+    pub fn capabilities_for_mount_type_like_cpp(
+        &self,
+        mount_type_id: u16,
+    ) -> Option<&[MountTypeXCapabilityEntry]> {
+        self.by_mount_type
+            .get(&mount_type_id)
+            .map(Vec::as_slice)
+            .filter(|entries| !entries.is_empty())
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
+impl MountXDisplayStore {
+    pub fn from_entries(entries: impl IntoIterator<Item = MountXDisplayEntry>) -> Self {
+        let mut by_id = HashMap::new();
+        let mut by_mount_id = HashMap::<u32, Vec<MountXDisplayEntry>>::new();
+        for entry in entries {
+            by_mount_id.entry(entry.mount_id).or_default().push(entry);
+            by_id.insert(entry.id, entry);
+        }
+
+        Self { by_id, by_mount_id }
+    }
+
+    /// Load MountXDisplay.db2 from `{data_dir}/dbc/{locale}/MountXDisplay.db2`.
+    ///
+    /// C++ refs:
+    /// - `DB2Structure.h::MountXDisplayEntry`
+    /// - `DB2Stores.cpp` `_mountDisplays[MountID].push_back(...)`.
+    pub fn load(data_dir: &str, locale: &str) -> Result<Self> {
+        let path = Path::new(data_dir)
+            .join("dbc")
+            .join(locale)
+            .join("MountXDisplay.db2");
+        let reader = Wdc4Reader::open(&path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
+
+        let mut entries = Vec::with_capacity(reader.total_count());
+        for (id, idx) in reader.iter_records() {
+            entries.push(MountXDisplayEntry {
+                id,
+                creature_display_info_id: reader.get_field_i32(idx, 0),
+                player_condition_id: reader.get_field_u32(idx, 1),
+                mount_id: reader.get_field_u32(idx, 2),
+            });
+        }
+
+        let store = Self::from_entries(entries);
+        info!(
+            "Loaded {} mount display rows from {}",
+            store.len(),
+            path.display()
+        );
+        Ok(store)
+    }
+
+    pub fn get(&self, id: u32) -> Option<&MountXDisplayEntry> {
+        self.by_id.get(&id)
+    }
+
+    pub fn displays_for_mount_like_cpp(&self, mount_id: u32) -> Option<&[MountXDisplayEntry]> {
+        self.by_mount_id
+            .get(&mount_id)
+            .map(Vec::as_slice)
+            .filter(|entries| !entries.is_empty())
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +380,62 @@ mod tests {
         assert_eq!(mount.id, 1);
         assert_eq!(mount.player_condition_id, 42);
         assert!(store.get_by_source_spell_id_like_cpp(999).is_none());
+    }
+
+    #[test]
+    fn mount_type_capabilities_are_grouped_and_sorted_like_cpp_set() {
+        let store = MountTypeXCapabilityStore::from_entries([
+            MountTypeXCapabilityEntry {
+                id: 1,
+                mount_type_id: 7,
+                mount_capability_id: 70,
+                order_index: 2,
+            },
+            MountTypeXCapabilityEntry {
+                id: 2,
+                mount_type_id: 7,
+                mount_capability_id: 71,
+                order_index: 1,
+            },
+            MountTypeXCapabilityEntry {
+                id: 3,
+                mount_type_id: 7,
+                mount_capability_id: 72,
+                order_index: 1,
+            },
+        ]);
+
+        let capabilities = store.capabilities_for_mount_type_like_cpp(7).unwrap();
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|entry| entry.mount_capability_id)
+                .collect::<Vec<_>>(),
+            vec![71, 70]
+        );
+        assert!(store.capabilities_for_mount_type_like_cpp(99).is_none());
+    }
+
+    #[test]
+    fn mount_displays_are_grouped_by_mount_like_cpp() {
+        let store = MountXDisplayStore::from_entries([
+            MountXDisplayEntry {
+                id: 1,
+                creature_display_info_id: 1000,
+                player_condition_id: 42,
+                mount_id: 7,
+            },
+            MountXDisplayEntry {
+                id: 2,
+                creature_display_info_id: 1001,
+                player_condition_id: 0,
+                mount_id: 7,
+            },
+        ]);
+
+        let displays = store.displays_for_mount_like_cpp(7).unwrap();
+        assert_eq!(displays.len(), 2);
+        assert_eq!(displays[0].creature_display_info_id, 1000);
+        assert!(store.displays_for_mount_like_cpp(99).is_none());
     }
 }

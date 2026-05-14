@@ -648,6 +648,31 @@ async fn main() -> Result<()> {
             .context("Failed to load Mount.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} mounts from Mount.db2", mount_store.len());
+    let mount_capability_store = Arc::new(
+        wow_data::MountCapabilityStore::load(&data_dir, &locale)
+            .context("Failed to load MountCapability.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} mount capabilities from MountCapability.db2",
+        mount_capability_store.len()
+    );
+    let mount_type_x_capability_store = Arc::new(
+        wow_data::MountTypeXCapabilityStore::load(&data_dir, &locale).context(
+            "Failed to load MountTypeXCapability.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    info!(
+        "Loaded {} mount type capability rows from MountTypeXCapability.db2",
+        mount_type_x_capability_store.len()
+    );
+    let mount_x_display_store = Arc::new(
+        wow_data::MountXDisplayStore::load(&data_dir, &locale)
+            .context("Failed to load MountXDisplay.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} mount display rows from MountXDisplay.db2",
+        mount_x_display_store.len()
+    );
     let difficulty_store = Arc::new(
         wow_data::DifficultyStore::load(&data_dir, &locale)
             .context("Failed to load Difficulty.db2 — check DataDir and DBC.Locale config")?,
@@ -1208,6 +1233,9 @@ async fn main() -> Result<()> {
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
         map_difficulty_x_condition_store: Some(Arc::clone(&map_difficulty_x_condition_store)),
         mount_store: Some(Arc::clone(&mount_store)),
+        mount_capability_store: Some(Arc::clone(&mount_capability_store)),
+        mount_type_x_capability_store: Some(Arc::clone(&mount_type_x_capability_store)),
+        mount_x_display_store: Some(Arc::clone(&mount_x_display_store)),
         terrain_swap_store: Some(Arc::clone(&terrain_swap_store)),
         phase_store: Some(Arc::clone(&phase_store)),
         phase_group_store: Some(Arc::clone(&phase_group_store)),
@@ -2080,6 +2108,15 @@ async fn create_session(
     }
     if let Some(ref store) = resources.mount_store {
         session.set_mount_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_capability_store {
+        session.set_mount_capability_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_type_x_capability_store {
+        session.set_mount_type_x_capability_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_x_display_store {
+        session.set_mount_x_display_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.terrain_swap_store {
         session.set_terrain_swap_store(Arc::clone(store));

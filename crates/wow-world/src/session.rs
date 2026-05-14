@@ -36,8 +36,9 @@ use wow_data::{
     ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
     ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
     ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapDifficultyXConditionStore,
-    MapStore, MountStore, PhaseGroupStore, PhaseStore, PlayerConditionAuraLikeCpp,
-    PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp, PlayerConditionPartyStatusLikeCpp,
+    MapStore, MountCapabilityStore, MountStore, MountTypeXCapabilityStore, MountXDisplayStore,
+    PhaseGroupStore, PhaseStore, PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp,
+    PlayerConditionCountLikeCpp, PlayerConditionPartyStatusLikeCpp,
     PlayerConditionQuestKillLikeCpp, PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp,
     PlayerConditionStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
     SpellItemEnchantmentStore, SpellStore, is_player_meeting_condition_like_cpp,
@@ -710,6 +711,9 @@ pub struct WorldSession {
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
     map_difficulty_x_condition_store: Option<Arc<MapDifficultyXConditionStore>>,
     mount_store: Option<Arc<MountStore>>,
+    mount_capability_store: Option<Arc<MountCapabilityStore>>,
+    mount_type_x_capability_store: Option<Arc<MountTypeXCapabilityStore>>,
+    mount_x_display_store: Option<Arc<MountXDisplayStore>>,
     terrain_swap_store: Option<Arc<wow_data::TerrainSwapStore>>,
     phase_store: Option<Arc<PhaseStore>>,
     phase_group_store: Option<Arc<PhaseGroupStore>>,
@@ -1412,6 +1416,9 @@ impl WorldSession {
             map_difficulty_store: None,
             map_difficulty_x_condition_store: None,
             mount_store: None,
+            mount_capability_store: None,
+            mount_type_x_capability_store: None,
+            mount_x_display_store: None,
             terrain_swap_store: None,
             phase_store: None,
             phase_group_store: None,
@@ -3484,6 +3491,33 @@ impl WorldSession {
 
     pub(crate) fn mount_store(&self) -> Option<&Arc<MountStore>> {
         self.mount_store.as_ref()
+    }
+
+    pub fn set_mount_capability_store(&mut self, store: Arc<MountCapabilityStore>) {
+        self.mount_capability_store = Some(store);
+    }
+
+    pub fn set_mount_type_x_capability_store(&mut self, store: Arc<MountTypeXCapabilityStore>) {
+        self.mount_type_x_capability_store = Some(store);
+    }
+
+    pub fn set_mount_x_display_store(&mut self, store: Arc<MountXDisplayStore>) {
+        self.mount_x_display_store = Some(store);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_capability_store(&self) -> Option<&Arc<MountCapabilityStore>> {
+        self.mount_capability_store.as_ref()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_type_x_capability_store(&self) -> Option<&Arc<MountTypeXCapabilityStore>> {
+        self.mount_type_x_capability_store.as_ref()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_x_display_store(&self) -> Option<&Arc<MountXDisplayStore>> {
+        self.mount_x_display_store.as_ref()
     }
 
     pub fn set_terrain_swap_store(&mut self, store: Arc<wow_data::TerrainSwapStore>) {
