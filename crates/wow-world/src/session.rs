@@ -10142,12 +10142,18 @@ mod tests {
         session.set_vehicle_seat_store(Arc::new(wow_data::VehicleSeatStore::from_entries([
             wow_data::VehicleSeatEntry {
                 id: 1000,
+                attachment_offset_x: 0.0,
+                attachment_offset_y: 0.0,
+                attachment_offset_z: 0.0,
                 flags: wow_data::VEHICLE_SEAT_FLAG_CAN_ENTER_OR_EXIT,
                 flags_b: 0,
                 flags_c: 0,
             },
             wow_data::VehicleSeatEntry {
                 id: 1001,
+                attachment_offset_x: 0.0,
+                attachment_offset_y: 0.0,
+                attachment_offset_z: 0.0,
                 flags: 0,
                 flags_b: wow_data::VEHICLE_SEAT_FLAG_B_USABLE_FORCED,
                 flags_c: 0,
@@ -10311,6 +10317,7 @@ mod tests {
     #[test]
     fn represented_mount_aura_keeps_creature_vehicle_with_mount_display_like_cpp() {
         let (mut session, _, _) = make_session();
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 12345)));
         session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
             wow_data::MountEntry {
                 id: 7,
