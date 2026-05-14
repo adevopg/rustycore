@@ -10455,10 +10455,14 @@ mod tests {
             ChrSpecializationEntry {
                 id: 65,
                 class_id: 2,
+                order_index: 0,
+                role: 0,
             },
             ChrSpecializationEntry {
                 id: 71,
                 class_id: 1,
+                order_index: 0,
+                role: 0,
             },
         ])));
 
@@ -10492,6 +10496,8 @@ mod tests {
             ChrSpecializationEntry {
                 id: 65,
                 class_id: 2,
+                order_index: 0,
+                role: 0,
             },
         ])));
 

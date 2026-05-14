@@ -64,6 +64,14 @@ mod tests {
     }
 
     #[test]
+    fn character_skill_statement_matches_cpp_shape() {
+        let sql = CharStatements::SEL_CHARACTER_SKILLS.sql();
+        assert!(sql.contains("skill, value, max, professionSlot"));
+        assert!(sql.contains("character_skills"));
+        assert_eq!(sql.matches('?').count(), 1);
+    }
+
+    #[test]
     fn world_statements_have_sql() {
         assert!(!WorldStatements::DEL_LINKED_RESPAWN.sql().is_empty());
         assert!(!WorldStatements::SEL_CREATURE_TEMPLATE.sql().is_empty());
@@ -290,6 +298,22 @@ mod tests {
             HotfixStatements::SEL_AREA_TABLE
                 .sql()
                 .contains("area_table")
+        );
+        assert!(HotfixStatements::SEL_MOUNT.sql().contains("mount"));
+        assert!(
+            HotfixStatements::SEL_MOUNT_CAPABILITY
+                .sql()
+                .contains("mount_capability")
+        );
+        assert!(
+            HotfixStatements::SEL_MOUNT_TYPE_X_CAPABILITY
+                .sql()
+                .contains("mount_type_x_capability")
+        );
+        assert!(
+            HotfixStatements::SEL_MOUNT_X_DISPLAY
+                .sql()
+                .contains("mount_x_display")
         );
         assert!(HotfixStatements::SEL_PHASE.sql().contains("phase"));
         assert!(

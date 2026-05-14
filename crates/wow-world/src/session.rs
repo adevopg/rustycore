@@ -11,6 +11,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use parking_lot::RwLock;
+use rand::seq::SliceRandom;
 use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::player_values_update_to_update_object;
@@ -29,14 +30,22 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
-    AreaTriggerStore, ChrSpecializationStore, CurrencyTypesEntry, CurrencyTypesStore,
-    DungeonEncounterStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore,
-    ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
-    ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
-    ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PhaseGroupStore,
-    PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore,
-    SpellStore,
+    AreaTableStore, AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore,
+    CreatureDisplayInfoStore, CreatureModelDataStore, CreatureTemplateMountStoreLikeCpp,
+    CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp,
+    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
+    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
+    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
+    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
+    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore,
+    MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
+    MountTypeXCapabilityStore, MountXDisplayStore, PhaseGroupStore, PhaseStore,
+    PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
+    PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
+    PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp, PlayerConditionStore,
+    PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    VehicleAccessoryStoreLikeCpp, VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
+    is_player_meeting_condition_like_cpp,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -45,13 +54,14 @@ use wow_database::{
 use wow_entities::{
     ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef, ApplyEnchantmentTemplateRef,
     BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_COUNT, BUYBACK_SLOT_END,
-    BUYBACK_SLOT_START, CanStoreItemArgs, CanUnequipItemArgs, INVENTORY_DEFAULT_SIZE,
-    INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo,
-    ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG,
-    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
-    PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
-    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, VisibleItemValues, WorldObject,
-    is_bag_pos, is_equipment_packed_pos, make_item_pos,
+    BUYBACK_SLOT_START, CanStoreItemArgs, CanUnequipItemArgs, EQUIPMENT_SLOT_MAINHAND,
+    INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
+    Item, ItemCreateInfo, ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate,
+    MAX_ITEM_SPELLS, NULL_BAG, NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player,
+    PlayerEnchantTimeUpdate, PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END,
+    REAGENT_BAG_SLOT_START, SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, Vehicle,
+    VehicleAccessory, VisibleItemValues, WorldObject, is_bag_pos, is_equipment_packed_pos,
+    make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::LootStores;
@@ -64,7 +74,7 @@ use wow_packet::packets::item::{
     InventoryChangeFailure, ItemEnchantTimeUpdate, ItemInstance, ItemMod, ItemModList,
     ItemPushResult, ItemPushResultDisplayType, ItemTimeUpdate,
 };
-use wow_packet::packets::misc::{BuyFailed, SellResponse};
+use wow_packet::packets::misc::{AccountMount, AccountMountUpdate, BuyFailed, SellResponse};
 use wow_recastdetour::PathQueryFilterContext;
 
 fn rounded_median_u32(sorted_values: &[u32]) -> u32 {
@@ -84,6 +94,9 @@ use wow_packet::{ClientPacket, WorldPacket};
 
 /// Maximum number of packets processed per `update()` call.
 const MAX_PACKETS_PER_UPDATE: usize = 100;
+const TRANSFER_ABORT_MAP_NOT_ALLOWED_LIKE_CPP: u32 = 16;
+const MAP_BATTLEGROUND_LIKE_CPP: i8 = 3;
+const MAP_ARENA_LIKE_CPP: i8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMapRuntimeConfigLikeCpp {
@@ -329,6 +342,9 @@ pub(crate) enum RepresentedLootRollCriteriaEvent {
 }
 
 pub type SharedObjectAccessor = Arc<RwLock<ObjectAccessor>>;
+pub(crate) const SKILL_RIDING_LIKE_CPP: u16 = 762;
+pub(crate) const LIQUID_MAP_IN_WATER_LIKE_CPP: u32 = 0x0000_0004;
+pub(crate) const LIQUID_MAP_UNDER_WATER_LIKE_CPP: u32 = 0x0000_0008;
 
 pub fn new_shared_object_accessor() -> SharedObjectAccessor {
     Arc::new(RwLock::new(ObjectAccessor::default()))
@@ -349,6 +365,7 @@ pub(crate) struct SessionPlayerController {
     next_level_xp: u32,
     selection_guid: Option<ObjectGuid>,
     known_spells: Vec<i32>,
+    skill_values: HashMap<u16, u16>,
     currencies: HashMap<u32, PlayerCurrency>,
     inventory: SessionPlayerInventoryRuntime,
 }
@@ -401,6 +418,7 @@ impl SessionPlayerController {
             next_level_xp: 400,
             selection_guid: None,
             known_spells: Vec::new(),
+            skill_values: HashMap::new(),
             currencies: HashMap::new(),
             inventory: SessionPlayerInventoryRuntime::default(),
         }
@@ -459,6 +477,10 @@ impl SessionPlayerController {
         &self.known_spells
     }
 
+    pub(crate) fn skill_values(&self) -> &HashMap<u16, u16> {
+        &self.skill_values
+    }
+
     pub(crate) fn currencies(&self) -> &HashMap<u32, PlayerCurrency> {
         &self.currencies
     }
@@ -498,6 +520,10 @@ impl SessionPlayerController {
 
     fn set_known_spells(&mut self, spells: Vec<i32>) {
         self.known_spells = spells;
+    }
+
+    fn set_skill_values(&mut self, skill_values: HashMap<u16, u16>) {
+        self.skill_values = skill_values;
     }
 
     fn learn_spell(&mut self, spell_id: i32) {
@@ -582,6 +608,7 @@ pub struct SpellCastState {
 pub struct WorldSession {
     // Account info
     pub account_id: u32,
+    battlenet_account_id: u32,
     pub account_name: String,
     pub security: u8,
     pub expansion: u8,
@@ -667,6 +694,15 @@ pub struct WorldSession {
     // C++ LootTemplates_* store foundation.
     loot_stores: Option<Arc<LootStores>>,
 
+    // C++ ConditionMgr condition store loaded from world.conditions.
+    condition_store: Option<Arc<ConditionEntriesByTypeStore>>,
+
+    // C++ PlayerCondition.db2 store used by ConditionMgr player-condition checks.
+    player_condition_store: Option<Arc<PlayerConditionStore>>,
+
+    // C++ DisableMgr store loaded from world.disables.
+    disable_mgr: Option<Arc<DisableMgrLikeCpp>>,
+
     // Lock store (Lock.db2 data)
     lock_store: Option<Arc<LockStore>>,
 
@@ -678,6 +714,9 @@ pub struct WorldSession {
 
     // Skill store (auto-learned spells from SkillLineAbility.db2 + SkillRaceClassInfo.db2)
     skill_store: Option<Arc<SkillStore>>,
+
+    // Area table store (area hierarchy + mount flags)
+    area_table_store: Option<Arc<AreaTableStore>>,
 
     // Area trigger store (collision detection + teleportation)
     area_trigger_store: Option<Arc<AreaTriggerStore>>,
@@ -691,6 +730,18 @@ pub struct WorldSession {
     // Map stores (Map.db2 + MapDifficulty.db2)
     map_store: Option<Arc<MapStore>>,
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
+    map_difficulty_x_condition_store: Option<Arc<MapDifficultyXConditionStore>>,
+    creature_template_mount_store: Option<Arc<CreatureTemplateMountStoreLikeCpp>>,
+    creature_display_info_store: Option<Arc<CreatureDisplayInfoStore>>,
+    creature_model_data_store: Option<Arc<CreatureModelDataStore>>,
+    mount_store: Option<Arc<MountStore>>,
+    mount_capability_store: Option<Arc<MountCapabilityStore>>,
+    mount_type_x_capability_store: Option<Arc<MountTypeXCapabilityStore>>,
+    mount_x_display_store: Option<Arc<MountXDisplayStore>>,
+    vehicle_store: Option<Arc<VehicleStore>>,
+    vehicle_seat_store: Option<Arc<VehicleSeatStore>>,
+    vehicle_template_store: Option<Arc<VehicleTemplateStoreLikeCpp>>,
+    vehicle_accessory_store: Option<Arc<VehicleAccessoryStoreLikeCpp>>,
     terrain_swap_store: Option<Arc<wow_data::TerrainSwapStore>>,
     phase_store: Option<Arc<PhaseStore>>,
     phase_group_store: Option<Arc<PhaseGroupStore>>,
@@ -711,6 +762,7 @@ pub struct WorldSession {
     pub(crate) group_guid: Option<u64>,
     pub(crate) pass_on_group_loot: bool,
     pub(crate) represented_enchanting_skill: u16,
+    player_skill_values_like_cpp: HashMap<u16, u16>,
 
     // Realm ID for GUID creation
     realm_id: u16,
@@ -818,6 +870,8 @@ pub struct WorldSession {
     loot_specialization_id: u32,
     /// All known spell IDs for the logged-in character (DB + DBC merged).
     known_spells: Vec<i32>,
+    /// C++ `CollectionMgr::_mounts` represented account mount collection.
+    account_mounts_like_cpp: HashMap<i32, u8>,
 
     // ── Dual-connection (realm + instance) ───────────────────────
     // After ConnectTo completes, the session uses the instance socket for
@@ -832,6 +886,10 @@ pub struct WorldSession {
     // ── Movement & World position ─────────────────────────────────
     /// Server-side position of the player (updated from CMSG_MOVE_*).
     player_position: Option<wow_core::Position>,
+    /// Last accepted player movement flags, mirroring C++ `Unit::m_movementInfo`.
+    player_movement_flags_like_cpp: MovementFlag,
+    /// Last terrain liquid status, mirroring C++ `WorldObject::m_liquidStatus`.
+    player_liquid_status_like_cpp: u32,
 
     /// Cached character name for chat messages.
     player_name: Option<String>,
@@ -916,6 +974,52 @@ pub struct WorldSession {
     taxi_unit_flags_like_cpp: UnitFlags,
     /// Represented mount state touched by `CleanupAfterTaxiFlight`.
     taxi_mounted_like_cpp: bool,
+    /// Represented `Unit::SetMountDisplayId` until UnitData owns live player fields.
+    player_mount_display_id_like_cpp: i32,
+    /// Represented vehicle id selected from mount creature template until VehicleKit exists.
+    player_mount_vehicle_id_like_cpp: u32,
+    /// Represented C++ `Unit::m_vehicleKit` for player mounts until Unit owns live vehicle state.
+    player_mount_vehicle_kit_like_cpp: Option<Vehicle>,
+    /// Vehicle accessory rows selected by C++ `Vehicle::InstallAllAccessories(false)`.
+    player_mount_vehicle_accessories_like_cpp: Vec<VehicleAccessory>,
+    /// Represented number of VehicleSeat rows installed by C++ `Vehicle` constructor.
+    player_mount_vehicle_seat_count_like_cpp: u8,
+    /// Represented C++ `Vehicle::UsableSeatNum`.
+    player_mount_vehicle_usable_seat_count_like_cpp: u8,
+    /// Represented current pet GUID until player-owned pet runtime is canonical.
+    represented_pet_guid_like_cpp: Option<ObjectGuid>,
+    /// Represented current pet react state for C++ mount/dismount PetMode side effects.
+    represented_pet_react_state_like_cpp: u8,
+    /// Represented current pet command state for C++ mount/dismount PetMode side effects.
+    represented_pet_command_state_like_cpp: u8,
+    /// C++ `Player::m_temporaryPetReactState` saved by `DisablePetControlsOnMount`.
+    temporary_mount_pet_react_state_like_cpp: Option<u8>,
+    /// Count of C++ `CreateVehicleKit` mount side effects represented until Vehicle runtime sends packets.
+    mount_vehicle_create_requests_like_cpp: u32,
+    /// Count of C++ `RemoveVehicleKit` mount side effects represented until Vehicle runtime sends packets.
+    mount_vehicle_remove_requests_like_cpp: u32,
+    /// Count of C++ `SendOnCancelExpectedVehicleRideAura` packets emitted after vehicle-kit creation.
+    mount_cancel_expected_vehicle_aura_packets_like_cpp: u32,
+    /// Count of C++ `DisablePetControlsOnMount` side effects represented until pet runtime is canonical.
+    mount_pet_control_disable_requests_like_cpp: u32,
+    /// Count of C++ `EnablePetControlsOnDismount` side effects represented until pet runtime is canonical.
+    mount_pet_control_enable_requests_like_cpp: u32,
+    /// Count of C++ mount/dismount pet resummon calls represented until pet runtime is canonical.
+    mount_pet_resummon_requests_like_cpp: u32,
+    /// Count of C++ mount collision-height updates represented until movement packets are canonical.
+    mount_collision_height_update_requests_like_cpp: u32,
+    /// C++ `Unit::m_movementCounter` equivalent for vehicle-rec movement control packets.
+    mount_vehicle_movement_sequence_like_cpp: u32,
+    /// Represented `Unit::GetCollisionHeight()` until model-display collision data owns it.
+    player_collision_height_like_cpp: f32,
+    /// Represented `Object::GetObjectScale()` for movement collision-height packets.
+    player_object_scale_like_cpp: f32,
+    /// Represented `UnitData::ScaleDuration` for movement collision-height packets.
+    player_scale_duration_like_cpp: i32,
+    /// Represented `UnitData::Flags` for player deltas not yet backed by canonical Unit.
+    player_unit_flags_like_cpp: UnitFlags,
+    /// Represented `UNIT_FLAG_MOUNT` state until UnitData owns live player flags.
+    player_mounted_like_cpp: bool,
     /// Represented `pvpInfo.IsHostile` branch for Honorless Target after taxi landing.
     player_pvp_hostile_like_cpp: bool,
     /// Represented `Player::IsPvP()` branch for friendly-area near teleport handling.
@@ -1105,6 +1209,91 @@ pub(crate) struct PlayerCurrency {
     pub flags: u8,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RepresentedPlayerConditionContextLikeCpp {
+    spells: Vec<u32>,
+    items: Vec<PlayerConditionCountLikeCpp>,
+    currencies: Vec<PlayerConditionCountLikeCpp>,
+    completed_quests: Vec<u32>,
+    current_quests: Vec<u32>,
+    complete_quests: Vec<u32>,
+    auras: Vec<PlayerConditionAuraLikeCpp>,
+    skills: Vec<PlayerConditionSkillLikeCpp>,
+    reputations: Vec<PlayerConditionReputationLikeCpp>,
+    explored_area_ids: Vec<u16>,
+    parent_area_ids: Vec<u32>,
+    achievements: Vec<u16>,
+    lfg_values: Vec<PlayerConditionCountLikeCpp>,
+    modifier_tree_ids: Vec<u32>,
+    quest_kills: Vec<PlayerConditionQuestKillLikeCpp>,
+    avg_item_level: f32,
+    avg_equipped_item_level: f32,
+    mainhand_weapon_subclass: Option<u8>,
+}
+
+impl RepresentedPlayerConditionContextLikeCpp {
+    pub(crate) fn as_context<'a>(
+        &'a self,
+        session: &'a WorldSession,
+    ) -> PlayerConditionContextLikeCpp<'a> {
+        let class = session.player_class_like_cpp();
+        let (_, area_id) = session.player_zone_area_like_cpp();
+        PlayerConditionContextLikeCpp {
+            race: session.player_race_like_cpp(),
+            class_mask: if class == 0 {
+                0
+            } else {
+                1u32 << u32::from(class.saturating_sub(1))
+            },
+            gender: session.player_gender_like_cpp(),
+            native_gender: session.player_gender_like_cpp(),
+            power_type: -1,
+            power: 0,
+            max_power: 0,
+            primary_specialization_id: (session.loot_specialization_id != 0)
+                .then_some(session.loot_specialization_id),
+            skills: &self.skills,
+            language_skill: 0,
+            reputations: &self.reputations,
+            current_pvp_faction: 0,
+            pvp_medals_mask: 0,
+            lifetime_max_pvp_rank: 0,
+            movement_flags: [0, 0],
+            mainhand_weapon_subclass: self.mainhand_weapon_subclass,
+            party_status: if session.group_guid.is_some() {
+                PlayerConditionPartyStatusLikeCpp::InParty
+            } else {
+                PlayerConditionPartyStatusLikeCpp::Solo
+            },
+            completed_quests: &self.completed_quests,
+            current_quests: &self.current_quests,
+            complete_quests: &self.complete_quests,
+            spells: &self.spells,
+            items: &self.items,
+            currencies: &self.currencies,
+            explored_area_ids: &self.explored_area_ids,
+            auras: &self.auras,
+            weather_id: 0,
+            achievements: &self.achievements,
+            lfg_values: &self.lfg_values,
+            area_id,
+            parent_area_ids: &self.parent_area_ids,
+            expansion: session.expansion as i8,
+            server_expansion: session.account_expansion as i8,
+            is_game_master: session.security > 0,
+            phase_satisfied: true,
+            quest_kill_id: 0,
+            quest_kills: &self.quest_kills,
+            avg_item_level: self.avg_item_level,
+            avg_equipped_item_level: self.avg_equipped_item_level,
+            modifier_tree_ids: &self.modifier_tree_ids,
+            chr_specializations: session.chr_specialization_store.as_deref(),
+            world_state_expressions: None,
+            world_state_expression_context: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlayerCurrencyDelta {
     pub currency_id: u32,
@@ -1178,6 +1367,7 @@ pub enum RepresentedAuraEffectLikeCpp {
     SafeFall,
     Fly,
     Ghost,
+    Mounted,
     MountedFlightSpeed,
     ModifyFallDamagePct,
     WaterWalk,
@@ -1259,6 +1449,7 @@ impl WorldSession {
 
         Self {
             account_id,
+            battlenet_account_id: account_id,
             account_name,
             security,
             expansion,
@@ -1293,15 +1484,31 @@ impl WorldSession {
             item_random_enchantment_template_store: None,
             item_disenchant_loot_store: None,
             loot_stores: None,
+            condition_store: None,
+            player_condition_store: None,
+            disable_mgr: None,
             lock_store: None,
             spell_item_enchantment_store: None,
             hotfix_blob_cache: None,
             skill_store: None,
+            area_table_store: None,
             area_trigger_store: None,
             chr_specialization_store: None,
             dungeon_encounter_store: None,
             map_store: None,
             map_difficulty_store: None,
+            map_difficulty_x_condition_store: None,
+            creature_template_mount_store: None,
+            creature_display_info_store: None,
+            creature_model_data_store: None,
+            mount_store: None,
+            mount_capability_store: None,
+            mount_type_x_capability_store: None,
+            mount_x_display_store: None,
+            vehicle_store: None,
+            vehicle_seat_store: None,
+            vehicle_template_store: None,
+            vehicle_accessory_store: None,
             terrain_swap_store: None,
             phase_store: None,
             phase_group_store: None,
@@ -1312,6 +1519,7 @@ impl WorldSession {
             group_guid: None,
             pass_on_group_loot: false,
             represented_enchanting_skill: 0,
+            player_skill_values_like_cpp: HashMap::new(),
             realm_id: 1,
             guid_generator: None,
             legit_characters: Vec::new(),
@@ -1355,9 +1563,12 @@ impl WorldSession {
             player_gender: 0,
             loot_specialization_id: 0,
             known_spells: Vec::new(),
+            account_mounts_like_cpp: HashMap::new(),
             realm_packet_rx: None,
             realm_send_tx: None,
             player_position: None,
+            player_movement_flags_like_cpp: MovementFlag::NONE,
+            player_liquid_status_like_cpp: 0,
             player_name: None,
             registered_addon_prefixes: Vec::new(),
             filter_addon_messages: false,
@@ -1394,6 +1605,31 @@ impl WorldSession {
             taxi_flight_state_like_cpp: None,
             taxi_unit_flags_like_cpp: UnitFlags::empty(),
             taxi_mounted_like_cpp: false,
+            player_mount_display_id_like_cpp: 0,
+            player_mount_vehicle_id_like_cpp: 0,
+            player_mount_vehicle_kit_like_cpp: None,
+            player_mount_vehicle_accessories_like_cpp: Vec::new(),
+            player_mount_vehicle_seat_count_like_cpp: 0,
+            player_mount_vehicle_usable_seat_count_like_cpp: 0,
+            represented_pet_guid_like_cpp: None,
+            represented_pet_react_state_like_cpp:
+                wow_packet::packets::pet::REACT_DEFENSIVE_LIKE_CPP,
+            represented_pet_command_state_like_cpp:
+                wow_packet::packets::pet::COMMAND_FOLLOW_LIKE_CPP,
+            temporary_mount_pet_react_state_like_cpp: None,
+            mount_vehicle_create_requests_like_cpp: 0,
+            mount_vehicle_remove_requests_like_cpp: 0,
+            mount_cancel_expected_vehicle_aura_packets_like_cpp: 0,
+            mount_pet_control_disable_requests_like_cpp: 0,
+            mount_pet_control_enable_requests_like_cpp: 0,
+            mount_pet_resummon_requests_like_cpp: 0,
+            mount_collision_height_update_requests_like_cpp: 0,
+            mount_vehicle_movement_sequence_like_cpp: 0,
+            player_collision_height_like_cpp: 1.0,
+            player_object_scale_like_cpp: 1.0,
+            player_scale_duration_like_cpp: 0,
+            player_unit_flags_like_cpp: UnitFlags::PLAYER_CONTROLLED,
+            player_mounted_like_cpp: false,
             player_pvp_hostile_like_cpp: false,
             player_pvp_enabled_like_cpp: false,
             player_in_pvp_flag_like_cpp: false,
@@ -1782,6 +2018,14 @@ impl WorldSession {
     /// Set the login database for this session.
     pub fn set_login_db(&mut self, db: Arc<LoginDatabase>) {
         self.login_db = Some(db);
+    }
+
+    pub fn set_battlenet_account_id(&mut self, battlenet_account_id: u32) {
+        self.battlenet_account_id = battlenet_account_id;
+    }
+
+    pub fn battlenet_account_id(&self) -> u32 {
+        self.battlenet_account_id
     }
 
     /// Get the character database reference.
@@ -3169,6 +3413,36 @@ impl WorldSession {
         self.loot_stores.as_ref()
     }
 
+    /// Set the C++ ConditionMgr store loaded from the `conditions` table.
+    pub fn set_condition_store(&mut self, store: Arc<ConditionEntriesByTypeStore>) {
+        self.condition_store = Some(store);
+    }
+
+    /// Get the loaded ConditionMgr store reference.
+    pub fn condition_store(&self) -> Option<&Arc<ConditionEntriesByTypeStore>> {
+        self.condition_store.as_ref()
+    }
+
+    /// Set the C++ PlayerCondition.db2 store for this session.
+    pub fn set_player_condition_store(&mut self, store: Arc<PlayerConditionStore>) {
+        self.player_condition_store = Some(store);
+    }
+
+    /// Get the loaded PlayerCondition.db2 store reference.
+    pub fn player_condition_store(&self) -> Option<&Arc<PlayerConditionStore>> {
+        self.player_condition_store.as_ref()
+    }
+
+    /// Set the C++ DisableMgr store loaded from the `disables` table.
+    pub fn set_disable_mgr(&mut self, store: Arc<DisableMgrLikeCpp>) {
+        self.disable_mgr = Some(store);
+    }
+
+    /// Get the loaded DisableMgr store reference.
+    pub fn disable_mgr(&self) -> Option<&Arc<DisableMgrLikeCpp>> {
+        self.disable_mgr.as_ref()
+    }
+
     /// Set the lock store for this session.
     pub fn set_lock_store(&mut self, store: Arc<LockStore>) {
         self.lock_store = Some(store);
@@ -3323,6 +3597,79 @@ impl WorldSession {
         self.map_difficulty_store = Some(store);
     }
 
+    pub fn set_map_difficulty_x_condition_store(
+        &mut self,
+        store: Arc<MapDifficultyXConditionStore>,
+    ) {
+        self.map_difficulty_x_condition_store = Some(store);
+    }
+
+    pub fn set_creature_template_mount_store(
+        &mut self,
+        store: Arc<CreatureTemplateMountStoreLikeCpp>,
+    ) {
+        self.creature_template_mount_store = Some(store);
+    }
+
+    pub fn set_creature_display_info_store(&mut self, store: Arc<CreatureDisplayInfoStore>) {
+        self.creature_display_info_store = Some(store);
+    }
+
+    pub fn set_creature_model_data_store(&mut self, store: Arc<CreatureModelDataStore>) {
+        self.creature_model_data_store = Some(store);
+    }
+
+    pub fn set_mount_store(&mut self, store: Arc<MountStore>) {
+        self.mount_store = Some(store);
+    }
+
+    pub(crate) fn mount_store(&self) -> Option<&Arc<MountStore>> {
+        self.mount_store.as_ref()
+    }
+
+    pub fn set_mount_capability_store(&mut self, store: Arc<MountCapabilityStore>) {
+        self.mount_capability_store = Some(store);
+    }
+
+    pub fn set_mount_type_x_capability_store(&mut self, store: Arc<MountTypeXCapabilityStore>) {
+        self.mount_type_x_capability_store = Some(store);
+    }
+
+    pub fn set_mount_x_display_store(&mut self, store: Arc<MountXDisplayStore>) {
+        self.mount_x_display_store = Some(store);
+    }
+
+    pub fn set_vehicle_store(&mut self, store: Arc<VehicleStore>) {
+        self.vehicle_store = Some(store);
+    }
+
+    pub fn set_vehicle_seat_store(&mut self, store: Arc<VehicleSeatStore>) {
+        self.vehicle_seat_store = Some(store);
+    }
+
+    pub fn set_vehicle_template_store(&mut self, store: Arc<VehicleTemplateStoreLikeCpp>) {
+        self.vehicle_template_store = Some(store);
+    }
+
+    pub fn set_vehicle_accessory_store(&mut self, store: Arc<VehicleAccessoryStoreLikeCpp>) {
+        self.vehicle_accessory_store = Some(store);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_capability_store(&self) -> Option<&Arc<MountCapabilityStore>> {
+        self.mount_capability_store.as_ref()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_type_x_capability_store(&self) -> Option<&Arc<MountTypeXCapabilityStore>> {
+        self.mount_type_x_capability_store.as_ref()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn mount_x_display_store(&self) -> Option<&Arc<MountXDisplayStore>> {
+        self.mount_x_display_store.as_ref()
+    }
+
     pub fn set_terrain_swap_store(&mut self, store: Arc<wow_data::TerrainSwapStore>) {
         self.terrain_swap_store = Some(store);
     }
@@ -3441,6 +3788,10 @@ impl WorldSession {
     /// Get the spell store reference.
     pub fn spell_store(&self) -> Option<&Arc<SpellStore>> {
         self.spell_store.as_ref()
+    }
+
+    pub fn set_area_table_store(&mut self, store: Arc<AreaTableStore>) {
+        self.area_table_store = Some(store);
     }
 
     /// Set the quest store shared reference.
@@ -4254,10 +4605,359 @@ impl WorldSession {
         Ok(())
     }
 
+    fn apply_represented_mounted_aura_like_cpp(
+        &mut self,
+        spell_id: i32,
+        caster_guid: ObjectGuid,
+        effect: &wow_data::SpellEffectInfo,
+    ) -> Result<(), &'static str> {
+        let selected_display_id = u32::try_from(spell_id)
+            .ok()
+            .and_then(|spell_id| self.select_represented_mount_aura_display_like_cpp(spell_id))
+            .unwrap_or(0);
+        let creature_entry = u32::try_from(effect.effect_misc_value_1).unwrap_or(0);
+        let creature_template_mount =
+            self.represented_mount_creature_template_fallback_like_cpp(creature_entry);
+        let display_id = if selected_display_id != 0 {
+            selected_display_id
+        } else {
+            creature_template_mount
+                .map(|(display_id, _)| display_id)
+                .unwrap_or(0)
+        };
+        let vehicle_id = creature_template_mount
+            .map(|(_, vehicle_id)| vehicle_id)
+            .unwrap_or(0);
+
+        let mut slot = 0u8;
+        while self.visible_auras.contains_key(&slot) && slot < 255 {
+            slot += 1;
+        }
+
+        if slot >= 255 {
+            return Err("No free aura slots");
+        }
+
+        let aura = AuraApplication {
+            spell_id,
+            caster_guid,
+            slot,
+            duration_total: 0,
+            duration_remaining: 0,
+            stack_count: 1,
+            aura_flags: 0x0000_0001,
+            aura_interrupt_flags: 0,
+            aura_interrupt_flags2: 0,
+            represented_effect: Some(RepresentedAuraEffectLikeCpp::Mounted),
+            represented_amount: effect.effect_base_points,
+            represented_multiplier: 1.0,
+            applied_at: Instant::now(),
+        };
+
+        self.visible_auras.insert(slot, aura);
+        self.player_mount_display_id_like_cpp = display_id;
+        self.player_mounted_like_cpp = true;
+        self.player_unit_flags_like_cpp.insert(UnitFlags::MOUNT);
+        if self.create_player_mount_vehicle_kit_like_cpp(vehicle_id, creature_entry) {
+            self.mount_vehicle_create_requests_like_cpp = self
+                .mount_vehicle_create_requests_like_cpp
+                .saturating_add(1);
+            self.send_set_vehicle_rec_id_like_cpp(vehicle_id);
+            self.send_on_cancel_expected_vehicle_ride_aura_like_cpp();
+        }
+        self.mount_pet_control_disable_requests_like_cpp = self
+            .mount_pet_control_disable_requests_like_cpp
+            .saturating_add(1);
+        self.disable_pet_controls_on_mount_like_cpp(
+            wow_packet::packets::pet::REACT_PASSIVE_LIKE_CPP,
+            wow_packet::packets::pet::COMMAND_FOLLOW_LIKE_CPP,
+        );
+        self.mount_collision_height_update_requests_like_cpp = self
+            .mount_collision_height_update_requests_like_cpp
+            .saturating_add(1);
+        self.update_player_collision_height_like_cpp();
+        self.send_movement_set_collision_height_like_cpp(
+            wow_packet::packets::movement::UPDATE_COLLISION_HEIGHT_REASON_MOUNT_LIKE_CPP,
+        );
+
+        self.send_aura_update_applied(spell_id, slot, caster_guid, 0, 0x0000_0001);
+        self.send_represented_mount_unit_update_like_cpp(display_id);
+
+        Ok(())
+    }
+
+    fn create_player_mount_vehicle_kit_like_cpp(
+        &mut self,
+        vehicle_id: u32,
+        creature_entry: u32,
+    ) -> bool {
+        if vehicle_id == 0 {
+            return false;
+        }
+        let Some(player_guid) = self.player_guid() else {
+            return false;
+        };
+
+        let Some(vehicle) = self
+            .vehicle_store
+            .as_ref()
+            .and_then(|store| store.get(vehicle_id))
+        else {
+            if self.vehicle_store.is_some() {
+                return false;
+            }
+            self.player_mount_vehicle_id_like_cpp = vehicle_id;
+            self.player_mount_vehicle_kit_like_cpp = None;
+            self.player_mount_vehicle_accessories_like_cpp = self
+                .vehicle_accessory_store
+                .as_ref()
+                .and_then(|store| store.accessories_for_vehicle_like_cpp(None, creature_entry))
+                .map(<[VehicleAccessory]>::to_vec)
+                .unwrap_or_default();
+            self.player_mount_vehicle_seat_count_like_cpp = 0;
+            self.player_mount_vehicle_usable_seat_count_like_cpp = 0;
+            return true;
+        };
+
+        let seat_defs = self
+            .vehicle_seat_store
+            .as_ref()
+            .map(|store| store.seat_defs_for_vehicle_like_cpp(vehicle))
+            .unwrap_or_default();
+        let mut vehicle_kit = Vehicle::new(
+            player_guid,
+            TypeId::Player,
+            self.player_position_like_cpp()
+                .unwrap_or(wow_core::Position::ZERO),
+            vehicle_id,
+            creature_entry,
+            seat_defs,
+        );
+        vehicle_kit.install();
+        let accessories = self
+            .vehicle_accessory_store
+            .as_ref()
+            .and_then(|store| store.accessories_for_vehicle_like_cpp(None, creature_entry))
+            .map(<[VehicleAccessory]>::to_vec)
+            .unwrap_or_default();
+        let accessory_plan = vehicle_kit.install_all_accessories_plan_like_cpp(false, &accessories);
+        self.player_mount_vehicle_id_like_cpp = vehicle_id;
+        self.player_mount_vehicle_seat_count_like_cpp =
+            vehicle_kit.seats().len().min(u8::MAX as usize) as u8;
+        self.player_mount_vehicle_usable_seat_count_like_cpp =
+            vehicle_kit.usable_seat_num().min(u32::from(u8::MAX)) as u8;
+        self.player_mount_vehicle_accessories_like_cpp = accessory_plan.accessories;
+        self.player_mount_vehicle_kit_like_cpp = Some(vehicle_kit);
+        true
+    }
+
+    #[allow(dead_code)]
+    fn player_mount_vehicle_despawn_delay_ms_like_cpp(&self) -> i32 {
+        let Some(vehicle_kit) = self.player_mount_vehicle_kit_like_cpp.as_ref() else {
+            return 1;
+        };
+
+        self.vehicle_template_store
+            .as_ref()
+            .map(|store| store.despawn_delay_ms_like_cpp(vehicle_kit.creature_entry()))
+            .unwrap_or(1)
+    }
+
+    fn send_set_vehicle_rec_id_like_cpp(&mut self, vehicle_id: u32) {
+        let Some(player_guid) = self.player_guid() else {
+            return;
+        };
+        let vehicle_rec_id = i32::try_from(vehicle_id).unwrap_or(i32::MAX);
+        let sequence_index = self.mount_vehicle_movement_sequence_like_cpp;
+        self.mount_vehicle_movement_sequence_like_cpp = self
+            .mount_vehicle_movement_sequence_like_cpp
+            .wrapping_add(1);
+
+        self.send_packet(&wow_packet::packets::vehicle::MoveSetVehicleRecId {
+            mover_guid: player_guid,
+            sequence_index,
+            vehicle_rec_id,
+        });
+        self.send_packet(&wow_packet::packets::vehicle::SetVehicleRecId {
+            vehicle_guid: player_guid,
+            vehicle_rec_id,
+        });
+    }
+
+    fn send_on_cancel_expected_vehicle_ride_aura_like_cpp(&mut self) {
+        self.mount_cancel_expected_vehicle_aura_packets_like_cpp = self
+            .mount_cancel_expected_vehicle_aura_packets_like_cpp
+            .saturating_add(1);
+        self.send_packet(&wow_packet::packets::vehicle::OnCancelExpectedRideVehicleAura);
+    }
+
+    fn disable_pet_controls_on_mount_like_cpp(&mut self, react_state: u8, command_state: u8) {
+        let Some(pet_guid) = self.represented_pet_guid_like_cpp else {
+            return;
+        };
+
+        self.temporary_mount_pet_react_state_like_cpp =
+            Some(self.represented_pet_react_state_like_cpp);
+        self.represented_pet_react_state_like_cpp = react_state;
+        self.represented_pet_command_state_like_cpp = command_state;
+        self.send_packet(&wow_packet::packets::pet::PetMode {
+            pet_guid,
+            react_state,
+            command_state,
+            flag: 0,
+        });
+    }
+
+    fn enable_pet_controls_on_dismount_like_cpp(&mut self) {
+        if let Some(pet_guid) = self.represented_pet_guid_like_cpp {
+            if let Some(react_state) = self.temporary_mount_pet_react_state_like_cpp {
+                self.represented_pet_react_state_like_cpp = react_state;
+            }
+            self.send_packet(&wow_packet::packets::pet::PetMode {
+                pet_guid,
+                react_state: self.represented_pet_react_state_like_cpp,
+                command_state: self.represented_pet_command_state_like_cpp,
+                flag: 0,
+            });
+        }
+
+        self.temporary_mount_pet_react_state_like_cpp = None;
+    }
+
+    fn update_player_collision_height_like_cpp(&mut self) {
+        let (Some(display_store), Some(model_store)) = (
+            self.creature_display_info_store.as_ref(),
+            self.creature_model_data_store.as_ref(),
+        ) else {
+            return;
+        };
+
+        let native_display_id = crate::handlers::character::default_display_id(
+            self.player_race_like_cpp(),
+            self.player_gender_like_cpp(),
+        );
+        let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp)
+            .ok()
+            .filter(|id| *id != 0);
+        if let Some(height) = wow_data::unit_collision_height_like_cpp(
+            self.player_object_scale_like_cpp,
+            native_display_id,
+            mount_display_id,
+            display_store,
+            model_store,
+        ) {
+            self.player_collision_height_like_cpp = height;
+        }
+    }
+
+    fn send_movement_set_collision_height_like_cpp(&mut self, reason: u8) {
+        let Some(player_guid) = self.player_guid() else {
+            return;
+        };
+        let sequence_index = self.mount_vehicle_movement_sequence_like_cpp;
+        self.mount_vehicle_movement_sequence_like_cpp = self
+            .mount_vehicle_movement_sequence_like_cpp
+            .wrapping_add(1);
+
+        self.send_packet(&wow_packet::packets::movement::MoveSetCollisionHeight {
+            mover_guid: player_guid,
+            sequence_index,
+            height: self.player_collision_height_like_cpp,
+            scale: self.player_object_scale_like_cpp,
+            reason,
+            mount_display_id: u32::try_from(self.player_mount_display_id_like_cpp).unwrap_or(0),
+            scale_duration: self.player_scale_duration_like_cpp,
+        });
+
+        use wow_packet::ServerPacket;
+        let mut status = self.current_player_movement_info_like_cpp(player_guid);
+        status.time = self.player_movement_time_like_cpp();
+        self.broadcast_to_movement_set_like_cpp(
+            wow_packet::packets::movement::MoveUpdateCollisionHeight {
+                status,
+                height: self.player_collision_height_like_cpp,
+                scale: self.player_object_scale_like_cpp,
+            }
+            .to_bytes(),
+            false,
+        );
+    }
+
+    fn current_player_movement_info_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+    ) -> wow_packet::packets::movement::MovementInfo {
+        wow_packet::packets::movement::MovementInfo {
+            guid: player_guid,
+            position: self
+                .player_position_like_cpp()
+                .unwrap_or(wow_core::Position::ZERO),
+            time: self.player_movement_time_like_cpp(),
+            ..wow_packet::packets::movement::MovementInfo::default()
+        }
+    }
+
+    fn send_represented_mount_unit_update_like_cpp(&mut self, display_id: i32) {
+        let Some(player_guid) = self.player_guid() else {
+            return;
+        };
+
+        use wow_packet::packets::update::{UnitDataValuesDeltaUpdate, UpdateObject};
+        let mut data = UnitDataValuesDeltaUpdate::default();
+        data.unit_data_mask[1] |= 1 << (41 - 32);
+        data.unit_data_mask[1] |= 1 << (51 - 32);
+        data.flags = self.player_unit_flags_like_cpp.bits();
+        data.mount_display_id = display_id;
+
+        self.send_packet(&UpdateObject::unit_values_update(
+            player_guid,
+            self.player_map_id_like_cpp(),
+            data,
+        ));
+    }
+
     /// Remove an aura by slot and send SMSG_AURA_UPDATE.
     pub fn remove_aura(&mut self, slot: u8) -> Result<(), &'static str> {
-        if self.visible_auras.remove(&slot).is_none() {
+        let Some(aura) = self.visible_auras.remove(&slot) else {
             return Err("Aura slot not found");
+        };
+
+        if aura.represented_effect == Some(RepresentedAuraEffectLikeCpp::Mounted) {
+            let was_mounted = self.player_mounted_like_cpp;
+            let vehicle_id = self.player_mount_vehicle_id_like_cpp;
+            self.player_mount_display_id_like_cpp = 0;
+            self.player_mount_vehicle_id_like_cpp = 0;
+            if let Some(vehicle_kit) = self.player_mount_vehicle_kit_like_cpp.as_mut() {
+                vehicle_kit.uninstall();
+            }
+            self.player_mount_vehicle_kit_like_cpp = None;
+            self.player_mount_vehicle_accessories_like_cpp.clear();
+            self.player_mount_vehicle_seat_count_like_cpp = 0;
+            self.player_mount_vehicle_usable_seat_count_like_cpp = 0;
+            self.player_mounted_like_cpp = false;
+            self.player_unit_flags_like_cpp.remove(UnitFlags::MOUNT);
+            if was_mounted {
+                if vehicle_id != 0 {
+                    self.mount_vehicle_remove_requests_like_cpp = self
+                        .mount_vehicle_remove_requests_like_cpp
+                        .saturating_add(1);
+                    self.send_set_vehicle_rec_id_like_cpp(0);
+                }
+                self.mount_pet_control_enable_requests_like_cpp = self
+                    .mount_pet_control_enable_requests_like_cpp
+                    .saturating_add(1);
+                self.enable_pet_controls_on_dismount_like_cpp();
+                self.mount_pet_resummon_requests_like_cpp =
+                    self.mount_pet_resummon_requests_like_cpp.saturating_add(1);
+                self.mount_collision_height_update_requests_like_cpp = self
+                    .mount_collision_height_update_requests_like_cpp
+                    .saturating_add(1);
+                self.update_player_collision_height_like_cpp();
+                self.send_movement_set_collision_height_like_cpp(
+                    wow_packet::packets::movement::UPDATE_COLLISION_HEIGHT_REASON_MOUNT_LIKE_CPP,
+                );
+            }
+            self.send_represented_mount_unit_update_like_cpp(0);
         }
 
         // Send SMSG_AURA_UPDATE (removal)
@@ -4889,6 +5589,61 @@ impl WorldSession {
                     Err(e) => warn!("Failed to read MoveInitActiveMoverComplete: {e}"),
                 }
             }
+            ClientOpcodes::MoveSetVehicleRecIdAck => {
+                let opcode = pkt.client_opcode().unwrap_or(opcode);
+                match wow_packet::packets::vehicle::MoveSetVehicleRecIdAck::read(&mut pkt) {
+                    Ok(ack) => self.handle_move_set_vehicle_rec_id_ack(opcode, ack).await,
+                    Err(e) => warn!("Failed to read MoveSetVehicleRecIdAck: {e}"),
+                }
+            }
+            ClientOpcodes::MoveDismissVehicle => {
+                match wow_packet::packets::vehicle::MoveDismissVehicle::read(&mut pkt) {
+                    Ok(packet) => self.handle_move_dismiss_vehicle(packet).await,
+                    Err(e) => warn!("Failed to read MoveDismissVehicle: {e}"),
+                }
+            }
+            ClientOpcodes::RequestVehiclePrevSeat => {
+                match wow_packet::packets::vehicle::RequestVehiclePrevSeat::read(&mut pkt) {
+                    Ok(packet) => self.handle_request_vehicle_prev_seat(packet).await,
+                    Err(e) => warn!("Failed to read RequestVehiclePrevSeat: {e}"),
+                }
+            }
+            ClientOpcodes::RequestVehicleNextSeat => {
+                match wow_packet::packets::vehicle::RequestVehicleNextSeat::read(&mut pkt) {
+                    Ok(packet) => self.handle_request_vehicle_next_seat(packet).await,
+                    Err(e) => warn!("Failed to read RequestVehicleNextSeat: {e}"),
+                }
+            }
+            ClientOpcodes::MoveChangeVehicleSeats => {
+                match wow_packet::packets::vehicle::MoveChangeVehicleSeats::read(&mut pkt) {
+                    Ok(packet) => self.handle_move_change_vehicle_seats(packet).await,
+                    Err(e) => warn!("Failed to read MoveChangeVehicleSeats: {e}"),
+                }
+            }
+            ClientOpcodes::RequestVehicleSwitchSeat => {
+                match wow_packet::packets::vehicle::RequestVehicleSwitchSeat::read(&mut pkt) {
+                    Ok(packet) => self.handle_request_vehicle_switch_seat(packet).await,
+                    Err(e) => warn!("Failed to read RequestVehicleSwitchSeat: {e}"),
+                }
+            }
+            ClientOpcodes::RideVehicleInteract => {
+                match wow_packet::packets::vehicle::RideVehicleInteract::read(&mut pkt) {
+                    Ok(packet) => self.handle_ride_vehicle_interact(packet).await,
+                    Err(e) => warn!("Failed to read RideVehicleInteract: {e}"),
+                }
+            }
+            ClientOpcodes::EjectPassenger => {
+                match wow_packet::packets::vehicle::EjectPassenger::read(&mut pkt) {
+                    Ok(packet) => self.handle_eject_passenger(packet).await,
+                    Err(e) => warn!("Failed to read EjectPassenger: {e}"),
+                }
+            }
+            ClientOpcodes::RequestVehicleExit => {
+                match wow_packet::packets::vehicle::RequestVehicleExit::read(&mut pkt) {
+                    Ok(packet) => self.handle_request_vehicle_exit(packet).await,
+                    Err(e) => warn!("Failed to read RequestVehicleExit: {e}"),
+                }
+            }
             ClientOpcodes::MoveCollisionDisableAck
             | ClientOpcodes::MoveCollisionEnableAck
             | ClientOpcodes::MoveEnableDoubleJumpAck
@@ -5360,6 +6115,21 @@ impl WorldSession {
             return;
         }
 
+        if self.is_map_disabled_for_player_like_cpp(new_map) {
+            warn!(
+                account = self.account_id,
+                map_id = new_map,
+                "Teleport blocked by C++ DisableMgr map gate"
+            );
+            self.send_packet(&wow_packet::packets::misc::TransferAborted {
+                map_id: new_map,
+                arg: 0,
+                map_difficulty_x_condition_id: 0,
+                transfer_abort: TRANSFER_ABORT_MAP_NOT_ALLOWED_LIKE_CPP,
+            });
+            return;
+        }
+
         let Some(current_pos) = self.player_position_like_cpp() else {
             warn!(
                 "Cannot teleport account {}: no current position",
@@ -5413,6 +6183,37 @@ impl WorldSession {
             new_pos.y,
             new_pos.z
         );
+    }
+
+    fn is_map_disabled_for_player_like_cpp(&self, map_id: u32) -> bool {
+        let Some(disable_mgr) = self.disable_mgr() else {
+            return false;
+        };
+        let Some(map_store) = self.map_store() else {
+            return false;
+        };
+
+        let current_map_id = u32::from(self.player_map_id_like_cpp());
+        let (_, area_id) = self.player_zone_area_like_cpp();
+        let current_map_instance_type = map_store
+            .get(current_map_id)
+            .map(|entry| entry.instance_type);
+
+        disable_mgr.is_disabled_for_like_cpp(
+            DISABLE_TYPE_MAP,
+            map_id,
+            Some(DisableWorldObjectRefLikeCpp {
+                type_id: TypeId::Player,
+                map_id: current_map_id,
+                area_id,
+                is_pet: false,
+                is_battle_arena: current_map_instance_type == Some(MAP_ARENA_LIKE_CPP),
+                is_battleground: current_map_instance_type == Some(MAP_BATTLEGROUND_LIKE_CPP),
+                player_map_difficulty: None,
+            }),
+            0,
+            Some(map_store.as_ref()),
+        )
     }
 
     /// Send a server packet back to the client via the instance (default) channel.
@@ -5795,6 +6596,15 @@ impl WorldSession {
         self.player_movement_time_like_cpp = time;
     }
 
+    pub(crate) fn set_player_movement_flags_like_cpp(&mut self, flags: MovementFlag) {
+        self.player_movement_flags_like_cpp = flags;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_player_liquid_status_like_cpp(&mut self, status: u32) {
+        self.player_liquid_status_like_cpp = status;
+    }
+
     pub(crate) fn set_player_level_like_cpp(&mut self, level: u8) {
         self.player_level = level;
         if let Some(controller) = &mut self.player_controller {
@@ -5842,6 +6652,71 @@ impl WorldSession {
         self.known_spells = spells.clone();
         if let Some(controller) = &mut self.player_controller {
             controller.set_known_spells(spells);
+        }
+    }
+
+    pub(crate) fn set_account_mounts_like_cpp(&mut self, mounts: Vec<AccountMount>) {
+        self.account_mounts_like_cpp = mounts
+            .into_iter()
+            .map(|mount| (mount.spell_id, mount.flags))
+            .collect();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_represented_pet_mode_state_like_cpp(
+        &mut self,
+        pet_guid: Option<ObjectGuid>,
+        react_state: u8,
+        command_state: u8,
+    ) {
+        self.represented_pet_guid_like_cpp = pet_guid;
+        self.represented_pet_react_state_like_cpp = react_state;
+        self.represented_pet_command_state_like_cpp = command_state;
+        self.temporary_mount_pet_react_state_like_cpp = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn account_mounts_like_cpp(&self) -> &HashMap<i32, u8> {
+        &self.account_mounts_like_cpp
+    }
+
+    pub(crate) fn account_mount_rows_like_cpp(&self) -> Vec<AccountMount> {
+        self.account_mounts_like_cpp
+            .iter()
+            .map(|(&spell_id, &flags)| AccountMount { spell_id, flags })
+            .collect()
+    }
+
+    pub(crate) fn mount_set_favorite_like_cpp(
+        &mut self,
+        mount_spell_id: u32,
+        is_favorite: bool,
+    ) -> bool {
+        let Ok(spell_id) = i32::try_from(mount_spell_id) else {
+            return false;
+        };
+        let Some(flags) = self.account_mounts_like_cpp.get_mut(&spell_id) else {
+            return false;
+        };
+
+        if is_favorite {
+            *flags |= 0x01;
+        } else {
+            *flags &= !0x01;
+        }
+        let updated_flags = *flags;
+
+        self.send_packet(&AccountMountUpdate::partial(vec![AccountMount {
+            spell_id,
+            flags: updated_flags,
+        }]));
+        true
+    }
+
+    pub(crate) fn set_player_skill_values_like_cpp(&mut self, skill_values: HashMap<u16, u16>) {
+        self.player_skill_values_like_cpp = skill_values.clone();
+        if let Some(controller) = &mut self.player_controller {
+            controller.set_skill_values(skill_values);
         }
     }
 
@@ -5947,6 +6822,14 @@ impl WorldSession {
             .unwrap_or(self.current_map_id)
     }
 
+    pub(crate) fn player_movement_flags_like_cpp(&self) -> MovementFlag {
+        self.player_movement_flags_like_cpp
+    }
+
+    pub(crate) fn player_liquid_status_like_cpp(&self) -> u32 {
+        self.player_liquid_status_like_cpp
+    }
+
     pub(crate) fn player_race_like_cpp(&self) -> u8 {
         self.player_controller
             .as_ref()
@@ -6020,11 +6903,375 @@ impl WorldSession {
             .unwrap_or(&self.known_spells)
     }
 
+    pub(crate) fn player_skill_values_like_cpp(&self) -> &HashMap<u16, u16> {
+        self.player_controller
+            .as_ref()
+            .map(SessionPlayerController::skill_values)
+            .unwrap_or(&self.player_skill_values_like_cpp)
+    }
+
+    pub(crate) fn player_skill_value_like_cpp(&self, skill_id: u16) -> u16 {
+        self.player_skill_values_like_cpp()
+            .get(&skill_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn player_currencies_like_cpp(&self) -> &HashMap<u32, PlayerCurrency> {
         self.player_controller
             .as_ref()
             .map(SessionPlayerController::currencies)
             .unwrap_or(&self.player_currencies)
+    }
+
+    pub(crate) fn represented_player_condition_context_like_cpp(
+        &self,
+    ) -> RepresentedPlayerConditionContextLikeCpp {
+        let spells = self
+            .known_spells_like_cpp()
+            .iter()
+            .filter_map(|spell_id| u32::try_from(*spell_id).ok())
+            .collect();
+        let items = self
+            .represented_inventory_item_counts_like_cpp()
+            .into_iter()
+            .map(|(id, count)| PlayerConditionCountLikeCpp { id, count })
+            .collect();
+        let currencies = self
+            .player_currencies_like_cpp()
+            .iter()
+            .map(|(&id, currency)| PlayerConditionCountLikeCpp {
+                id,
+                count: currency.quantity,
+            })
+            .collect();
+        let completed_quests = self.rewarded_quests.iter().copied().collect();
+        let current_quests = self
+            .player_quests
+            .iter()
+            .filter_map(|(&quest_id, status)| {
+                (status.status == 1 || status.status == 2).then_some(quest_id)
+            })
+            .collect();
+        let complete_quests = self
+            .player_quests
+            .iter()
+            .filter_map(|(&quest_id, status)| (status.status == 2).then_some(quest_id))
+            .collect();
+        let auras = self
+            .visible_auras
+            .values()
+            .filter_map(|aura| {
+                Some(PlayerConditionAuraLikeCpp {
+                    spell_id: u32::try_from(aura.spell_id).ok()?,
+                    stacks: aura.stack_count,
+                })
+            })
+            .collect();
+        let skills = self
+            .player_skill_values_like_cpp()
+            .iter()
+            .map(|(&id, &value)| PlayerConditionSkillLikeCpp { id, value })
+            .collect();
+
+        let mut item_level_sum = 0u32;
+        let mut item_level_count = 0u32;
+        let mut equipped_level_sum = 0u32;
+        let mut equipped_level_count = 0u32;
+        let mut mainhand_weapon_subclass = None;
+        for (&slot, inventory_item) in self.inventory_items_like_cpp() {
+            let Some(template) = self
+                .item_stats_store
+                .as_ref()
+                .and_then(|store| store.random_property_template(inventory_item.entry_id))
+            else {
+                continue;
+            };
+            item_level_sum = item_level_sum.saturating_add(u32::from(template.item_level));
+            item_level_count = item_level_count.saturating_add(1);
+            if is_equipment_packed_pos(make_item_pos(INVENTORY_SLOT_BAG_0, slot)) {
+                equipped_level_sum =
+                    equipped_level_sum.saturating_add(u32::from(template.item_level));
+                equipped_level_count = equipped_level_count.saturating_add(1);
+            }
+            if slot == EQUIPMENT_SLOT_MAINHAND {
+                mainhand_weapon_subclass = self
+                    .item_store
+                    .as_ref()
+                    .and_then(|store| store.get(inventory_item.entry_id))
+                    .map(|record| record.subclass_id);
+            }
+        }
+
+        RepresentedPlayerConditionContextLikeCpp {
+            spells,
+            items,
+            currencies,
+            completed_quests,
+            current_quests,
+            complete_quests,
+            auras,
+            skills,
+            avg_item_level: if item_level_count == 0 {
+                0.0
+            } else {
+                item_level_sum as f32 / item_level_count as f32
+            },
+            avg_equipped_item_level: if equipped_level_count == 0 {
+                0.0
+            } else {
+                equipped_level_sum as f32 / equipped_level_count as f32
+            },
+            mainhand_weapon_subclass,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn represented_meets_player_condition_id_like_cpp(
+        &self,
+        player_condition_id: u32,
+    ) -> bool {
+        if player_condition_id == 0 {
+            return true;
+        }
+
+        let Some(store) = self.player_condition_store.as_ref() else {
+            return false;
+        };
+        let Some(condition) = store.get(player_condition_id) else {
+            return true;
+        };
+
+        let context = self.represented_player_condition_context_like_cpp();
+        is_player_meeting_condition_like_cpp(condition, &context.as_context(self))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_taxi_edge_distance_like_cpp(
+        &self,
+        destination_has_required_team_flag: bool,
+        destination_condition_id: u32,
+        distance: u32,
+    ) -> u32 {
+        if !destination_has_required_team_flag {
+            return u16::MAX as u32;
+        }
+
+        if !self.represented_meets_player_condition_id_like_cpp(destination_condition_id) {
+            return u16::MAX as u32;
+        }
+
+        distance
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_x_display_usable_like_cpp(
+        &self,
+        player_condition_id: u32,
+    ) -> bool {
+        self.represented_meets_player_condition_id_like_cpp(player_condition_id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_taxi_usable_mount_displays_like_cpp(
+        &self,
+        flying_mount_id: u32,
+    ) -> Vec<i32> {
+        let Some(mount) = self
+            .mount_store
+            .as_ref()
+            .and_then(|store| store.get_by_id(flying_mount_id))
+        else {
+            return Vec::new();
+        };
+
+        if !self
+            .known_spells_like_cpp()
+            .contains(&mount.source_spell_id)
+        {
+            return Vec::new();
+        }
+
+        let Some(displays) = self
+            .mount_x_display_store
+            .as_ref()
+            .and_then(|store| store.displays_for_mount_like_cpp(mount.id))
+        else {
+            return Vec::new();
+        };
+
+        displays
+            .iter()
+            .filter(|display| {
+                display.player_condition_id == 0
+                    || self.represented_mount_x_display_usable_like_cpp(display.player_condition_id)
+            })
+            .map(|display| display.creature_display_info_id)
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_aura_display_candidates_like_cpp(
+        &self,
+        spell_id: u32,
+    ) -> Vec<i32> {
+        let Some(mount) = self
+            .mount_store
+            .as_ref()
+            .and_then(|store| store.get_by_source_spell_id_like_cpp(spell_id))
+        else {
+            return Vec::new();
+        };
+
+        if mount.flags & wow_data::MOUNT_FLAG_SELF_MOUNT != 0 {
+            return vec![wow_data::DISPLAYID_HIDDEN_MOUNT];
+        }
+
+        let Some(displays) = self
+            .mount_x_display_store
+            .as_ref()
+            .and_then(|store| store.displays_for_mount_like_cpp(mount.id))
+        else {
+            return Vec::new();
+        };
+
+        displays
+            .iter()
+            .filter(|display| {
+                display.player_condition_id == 0
+                    || self.represented_mount_x_display_usable_like_cpp(display.player_condition_id)
+            })
+            .map(|display| display.creature_display_info_id)
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn select_represented_mount_aura_display_like_cpp(
+        &self,
+        spell_id: u32,
+    ) -> Option<i32> {
+        let candidates = self.represented_mount_aura_display_candidates_like_cpp(spell_id);
+        candidates.choose(&mut rand::thread_rng()).copied()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_creature_template_fallback_like_cpp(
+        &self,
+        creature_entry: u32,
+    ) -> Option<(i32, u32)> {
+        let template = self
+            .creature_template_mount_store
+            .as_ref()?
+            .get(creature_entry)?;
+        let display_id = template.choose_display_id_like_cpp(&mut rand::thread_rng())?;
+        Some((i32::try_from(display_id).unwrap_or(0), template.vehicle_id))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_source_spell_usable_like_cpp(&self, spell_id: u32) -> bool {
+        let Some(mount) = self
+            .mount_store
+            .as_ref()
+            .and_then(|store| store.get_by_source_spell_id_like_cpp(spell_id))
+        else {
+            return false;
+        };
+
+        self.represented_meets_player_condition_id_like_cpp(mount.player_condition_id)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_capability_for_type_like_cpp(
+        &self,
+        mount_type_id: u16,
+        riding_skill: u32,
+        mount_restriction_flags: Option<u8>,
+        is_submerged: bool,
+        is_in_water: bool,
+    ) -> Option<wow_data::MountCapabilityEntry> {
+        let capability_store = self.mount_capability_store.as_ref()?;
+        let type_store = self.mount_type_x_capability_store.as_ref()?;
+        let area_store = self.area_table_store.as_ref()?;
+
+        let map_id = u32::from(self.player_map_id_like_cpp());
+        let map = self.map_store.as_ref().and_then(|store| store.get(map_id));
+        let (_, area_id) = self.player_zone_area_like_cpp();
+        let mount_flags = mount_restriction_flags.unwrap_or_else(|| {
+            area_store
+                .get(area_id)
+                .map(|area| area.mount_flags as u8)
+                .unwrap_or(0)
+        });
+        let context = wow_data::MountCapabilityContextLikeCpp {
+            riding_skill,
+            mount_flags,
+            is_submerged,
+            is_in_water,
+            map_id: map_id as i32,
+            cosmetic_parent_map_id: map
+                .map(|entry| i32::from(entry.cosmetic_parent_map_id))
+                .unwrap_or(-1),
+            parent_map_id: map
+                .map(|entry| i32::from(entry.parent_map_id))
+                .unwrap_or(-1),
+        };
+
+        capability_store
+            .select_for_mount_type_like_cpp(
+                type_store,
+                mount_type_id,
+                &context,
+                |required_area_id| {
+                    area_store.is_in_area_like_cpp(area_id, u32::from(required_area_id))
+                },
+                |aura_id| {
+                    self.visible_auras
+                        .values()
+                        .any(|aura| u32::try_from(aura.spell_id).ok() == Some(aura_id))
+                },
+                |spell_id| self.known_spells_like_cpp().contains(&spell_id),
+            )
+            .copied()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_capability_for_type_from_session_like_cpp(
+        &self,
+        mount_type_id: u16,
+        mount_restriction_flags: Option<u8>,
+    ) -> Option<wow_data::MountCapabilityEntry> {
+        let (is_submerged, is_in_water) = self.represented_player_mount_liquid_state_like_cpp();
+        self.represented_mount_capability_for_type_like_cpp(
+            mount_type_id,
+            u32::from(self.player_skill_value_like_cpp(SKILL_RIDING_LIKE_CPP)),
+            mount_restriction_flags,
+            is_submerged,
+            is_in_water,
+        )
+    }
+
+    pub(crate) fn represented_player_mount_liquid_state_like_cpp(&self) -> (bool, bool) {
+        let liquid_status = self.player_liquid_status_like_cpp();
+        let is_submerged = liquid_status & LIQUID_MAP_UNDER_WATER_LIKE_CPP != 0
+            || self
+                .player_movement_flags_like_cpp()
+                .contains(MovementFlag::SWIMMING);
+        let is_in_water =
+            liquid_status & (LIQUID_MAP_IN_WATER_LIKE_CPP | LIQUID_MAP_UNDER_WATER_LIKE_CPP) != 0;
+        (is_submerged, is_in_water)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_failed_map_difficulty_x_condition_like_cpp(
+        &self,
+        map_difficulty_id: u32,
+    ) -> Option<u32> {
+        let store = self.map_difficulty_x_condition_store.as_ref()?;
+        let player_conditions = self.player_condition_store.as_ref()?;
+        let context = self.represented_player_condition_context_like_cpp();
+        store.failed_condition_like_cpp(map_difficulty_id, player_conditions, |condition| {
+            is_player_meeting_condition_like_cpp(condition, &context.as_context(self))
+        })
     }
 
     pub(crate) fn player_inventory_like_cpp(&self) -> Option<&SessionPlayerInventoryRuntime> {
@@ -6562,6 +7809,7 @@ impl WorldSession {
         let mut status = ack.status.clone();
         status.time = self.adjust_client_movement_time_like_cpp(status.time);
         self.player_movement_time_like_cpp = status.time;
+        self.set_player_movement_flags_like_cpp(status.flags);
         self.set_player_position_like_cpp(status.position);
         self.record_movement_ack_event_like_cpp(MovementAckEventLikeCpp {
             opcode,
@@ -7079,7 +8327,6 @@ impl WorldSession {
         self.player_area_id_like_cpp = area_id;
     }
 
-    #[cfg(test)]
     pub(crate) fn player_zone_area_like_cpp(&self) -> (u32, u32) {
         (self.player_zone_id_like_cpp, self.player_area_id_like_cpp)
     }
@@ -8097,12 +9344,19 @@ impl WorldSession {
             .spell_store()
             .and_then(|store| store.get(spell_id))
             .ok_or("Spell not found")?;
+        let mounted_aura_effect = spell_info
+            .effects()
+            .iter()
+            .find(|effect| effect.is_mounted_aura_like_cpp())
+            .cloned();
+        let effect_type = spell_info.effect_type;
+        let effect_base_points = spell_info.effect_base_points;
 
         info!(
             account = self.account_id,
             spell_id = spell_id,
             target = ?target_guid,
-            effect_type = spell_info.effect_type,
+            effect_type = effect_type,
             "Executing spell effect"
         );
 
@@ -8125,26 +9379,27 @@ impl WorldSession {
         self.send_packet(&go_pkt);
 
         // Aplicar efecto según type
-        match spell_info.effect_type {
+        match effect_type {
             6 => {
                 // SPELL_EFFECT_HEAL
-                let heal_amount = spell_info.effect_base_points as u32;
+                let heal_amount = effect_base_points as u32;
                 self.apply_heal(target_guid, heal_amount).await?;
             }
             2 => {
                 // SPELL_EFFECT_SCHOOL_DAMAGE
-                let damage_amount = spell_info.effect_base_points as u32;
+                let damage_amount = effect_base_points as u32;
                 self.apply_damage(target_guid, damage_amount).await?;
             }
             35 => {
                 // SPELL_EFFECT_APPLY_AURA
-                self.apply_aura(spell_id, player_guid, 30000, 0x00000001)?;
+                if let Some(effect) = mounted_aura_effect.as_ref() {
+                    self.apply_represented_mounted_aura_like_cpp(spell_id, player_guid, effect)?;
+                } else {
+                    self.apply_aura(spell_id, player_guid, 30000, 0x00000001)?;
+                }
             }
             _ => {
-                debug!(
-                    "Spell effect type {} not yet implemented",
-                    spell_info.effect_type
-                );
+                debug!("Spell effect type {} not yet implemented", effect_type);
             }
         }
 
@@ -8480,6 +9735,860 @@ mod tests {
         );
 
         (session, pkt_tx, send_rx)
+    }
+
+    fn drain_server_opcodes(rx: &flume::Receiver<Vec<u8>>) -> Vec<u16> {
+        rx.try_iter()
+            .filter_map(|bytes| {
+                (bytes.len() >= 2).then(|| u16::from_le_bytes([bytes[0], bytes[1]]))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn represented_player_condition_context_uses_live_session_state_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.player_race = 1;
+        session.player_class = 2;
+        session.player_gender = 1;
+        session.set_known_spells_like_cpp(vec![635, -1, 19740]);
+        session.set_player_skill_values_like_cpp(HashMap::from([
+            (SKILL_RIDING_LIKE_CPP, 75),
+            (333, 125),
+        ]));
+        session.player_currencies.insert(
+            81,
+            PlayerCurrency {
+                state: PlayerCurrencyState::Unchanged,
+                quantity: 25,
+                weekly_quantity: 0,
+                tracked_quantity: 0,
+                increased_cap_quantity: 0,
+                earned_quantity: 0,
+                flags: 0,
+            },
+        );
+        session.player_quests.insert(
+            100,
+            crate::handlers::quest::PlayerQuestStatus {
+                quest_id: 100,
+                status: 1,
+                explored: false,
+                objective_counts: vec![],
+            },
+        );
+        session.player_quests.insert(
+            101,
+            crate::handlers::quest::PlayerQuestStatus {
+                quest_id: 101,
+                status: 2,
+                explored: false,
+                objective_counts: vec![],
+            },
+        );
+        session.rewarded_quests.insert(200);
+        session.set_player_zone_area_like_cpp(12, 34);
+
+        let owned = session.represented_player_condition_context_like_cpp();
+        let context = owned.as_context(&session);
+
+        assert_eq!(context.race, 1);
+        assert_eq!(context.class_mask, 0b10);
+        assert_eq!(context.gender, 1);
+        assert_eq!(context.area_id, 34);
+        assert_eq!(context.expansion, 2);
+        assert_eq!(context.server_expansion, 9);
+        assert_eq!(context.spells, &[635, 19740]);
+        assert!(context.skills.contains(&PlayerConditionSkillLikeCpp {
+            id: SKILL_RIDING_LIKE_CPP,
+            value: 75,
+        }));
+        assert_eq!(
+            session.player_skill_value_like_cpp(SKILL_RIDING_LIKE_CPP),
+            75
+        );
+        assert_eq!(
+            context.currencies,
+            &[PlayerConditionCountLikeCpp { id: 81, count: 25 }]
+        );
+        assert!(context.current_quests.contains(&100));
+        assert!(context.current_quests.contains(&101));
+        assert_eq!(context.complete_quests, &[101]);
+        assert_eq!(context.completed_quests, &[200]);
+    }
+
+    #[test]
+    fn represented_player_condition_id_matches_cpp_lookup_semantics() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        assert!(!session.represented_meets_player_condition_id_like_cpp(42));
+
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert!(session.represented_meets_player_condition_id_like_cpp(0));
+        assert!(session.represented_meets_player_condition_id_like_cpp(42));
+        assert!(!session.represented_meets_player_condition_id_like_cpp(43));
+        assert!(session.represented_meets_player_condition_id_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_taxi_edge_distance_matches_cpp_condition_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 42, 1234),
+            1234
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 43, 1234),
+            u16::MAX as u32
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(false, 42, 1234),
+            u16::MAX as u32
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 999, 1234),
+            1234
+        );
+    }
+
+    #[test]
+    fn represented_mount_x_display_usable_matches_cpp_condition_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert!(session.represented_mount_x_display_usable_like_cpp(0));
+        assert!(session.represented_mount_x_display_usable_like_cpp(42));
+        assert!(!session.represented_mount_x_display_usable_like_cpp(43));
+        assert!(session.represented_mount_x_display_usable_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_taxi_usable_mount_displays_match_cpp_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_known_spells_like_cpp(vec![100]);
+        session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
+            wow_data::MountEntry {
+                id: 7,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 100,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+            wow_data::MountEntry {
+                id: 8,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 101,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+        ])));
+        session.set_mount_x_display_store(Arc::new(wow_data::MountXDisplayStore::from_entries([
+            wow_data::MountXDisplayEntry {
+                id: 1,
+                creature_display_info_id: 1000,
+                player_condition_id: 42,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 2,
+                creature_display_info_id: 1001,
+                player_condition_id: 43,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 3,
+                creature_display_info_id: 1002,
+                player_condition_id: 0,
+                mount_id: 7,
+            },
+        ])));
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert_eq!(
+            session.represented_taxi_usable_mount_displays_like_cpp(7),
+            vec![1000, 1002]
+        );
+        assert!(
+            session
+                .represented_taxi_usable_mount_displays_like_cpp(8)
+                .is_empty()
+        );
+        assert!(
+            session
+                .represented_taxi_usable_mount_displays_like_cpp(99)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn represented_mount_aura_display_candidates_match_cpp_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
+            wow_data::MountEntry {
+                id: 7,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 100,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+            wow_data::MountEntry {
+                id: 8,
+                mount_type_id: 0,
+                flags: wow_data::MOUNT_FLAG_SELF_MOUNT,
+                source_type_enum: 0,
+                source_spell_id: 101,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+        ])));
+        session.set_mount_x_display_store(Arc::new(wow_data::MountXDisplayStore::from_entries([
+            wow_data::MountXDisplayEntry {
+                id: 1,
+                creature_display_info_id: 1000,
+                player_condition_id: 42,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 2,
+                creature_display_info_id: 1001,
+                player_condition_id: 43,
+                mount_id: 7,
+            },
+            wow_data::MountXDisplayEntry {
+                id: 3,
+                creature_display_info_id: 1002,
+                player_condition_id: 0,
+                mount_id: 7,
+            },
+        ])));
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert_eq!(
+            session.represented_mount_aura_display_candidates_like_cpp(100),
+            vec![1000, 1002]
+        );
+        assert_eq!(
+            session.represented_mount_aura_display_candidates_like_cpp(101),
+            vec![wow_data::DISPLAYID_HIDDEN_MOUNT]
+        );
+        assert!(
+            session
+                .represented_mount_aura_display_candidates_like_cpp(999)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn represented_mounted_aura_toggles_mount_flag_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let other_guid = ObjectGuid::create_player(1, 43);
+        let pet_guid =
+            ObjectGuid::create_world_object(wow_core::guid::HighGuid::Pet, 0, 1, 0, 0, 500, 44);
+        let registry = Arc::new(PlayerRegistry::default());
+        let (other_tx, other_rx) = flume::bounded(8);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_registry(Arc::clone(&registry));
+        session.set_player_position_like_cpp(Position::new(1.0, 2.0, 3.0, 0.5));
+        session.set_represented_pet_mode_state_like_cpp(
+            Some(pet_guid),
+            wow_packet::packets::pet::REACT_DEFENSIVE_LIKE_CPP,
+            wow_packet::packets::pet::COMMAND_STAY_LIKE_CPP,
+        );
+        session.player_race = 1;
+        session.player_gender = 0;
+        registry.insert(
+            player_guid,
+            broadcast_info(player_guid, flume::bounded(1).0),
+        );
+        registry.insert(other_guid, broadcast_info(other_guid, other_tx));
+        session.set_creature_template_mount_store(Arc::new(
+            wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
+                wow_data::CreatureTemplateMountEntryLikeCpp {
+                    entry: 1234,
+                    vehicle_id: 55,
+                    models: vec![wow_data::CreatureTemplateMountModelLikeCpp {
+                        display_id: 4321,
+                        display_scale: 1.0,
+                        probability: 0.0,
+                    }],
+                },
+            ]),
+        ));
+        let native_display_id = crate::handlers::character::default_display_id(
+            session.player_race_like_cpp(),
+            session.player_gender_like_cpp(),
+        );
+        session.set_creature_display_info_store(Arc::new(
+            wow_data::CreatureDisplayInfoStore::from_entries([
+                wow_data::CreatureDisplayInfoEntry {
+                    id: native_display_id,
+                    model_id: 100,
+                    creature_model_scale: 1.2,
+                },
+                wow_data::CreatureDisplayInfoEntry {
+                    id: 4321,
+                    model_id: 200,
+                    creature_model_scale: 1.5,
+                },
+            ]),
+        ));
+        session.set_creature_model_data_store(Arc::new(
+            wow_data::CreatureModelDataStore::from_entries([
+                wow_data::CreatureModelDataEntry {
+                    id: 100,
+                    collision_height: 2.0,
+                    model_scale: 1.1,
+                    mount_height: 0.0,
+                },
+                wow_data::CreatureModelDataEntry {
+                    id: 200,
+                    collision_height: 0.0,
+                    model_scale: 1.0,
+                    mount_height: 4.0,
+                },
+            ]),
+        ));
+        session.set_vehicle_store(Arc::new(wow_data::VehicleStore::from_entries([
+            wow_data::VehicleEntry {
+                id: 55,
+                flags: 0,
+                flags_b: 0,
+                seat_ids: [1000, 1001, 0, 0, 0, 0, 0, 0],
+            },
+        ])));
+        session.set_vehicle_seat_store(Arc::new(wow_data::VehicleSeatStore::from_entries([
+            wow_data::VehicleSeatEntry {
+                id: 1000,
+                attachment_offset_x: 0.0,
+                attachment_offset_y: 0.0,
+                attachment_offset_z: 0.0,
+                flags: wow_data::VEHICLE_SEAT_FLAG_CAN_ENTER_OR_EXIT,
+                flags_b: 0,
+                flags_c: 0,
+            },
+            wow_data::VehicleSeatEntry {
+                id: 1001,
+                attachment_offset_x: 0.0,
+                attachment_offset_y: 0.0,
+                attachment_offset_z: 0.0,
+                flags: 0,
+                flags_b: wow_data::VEHICLE_SEAT_FLAG_B_USABLE_FORCED,
+                flags_c: 0,
+            },
+        ])));
+        session.set_vehicle_template_store(Arc::new(
+            wow_data::VehicleTemplateStoreLikeCpp::from_entries([(
+                1234,
+                wow_entities::VehicleTemplate {
+                    despawn_delay_ms: 2500,
+                },
+            )]),
+        ));
+        session.set_vehicle_accessory_store(Arc::new(
+            wow_data::VehicleAccessoryStoreLikeCpp::from_parts(
+                std::iter::empty::<(u64, Vec<wow_entities::VehicleAccessory>)>(),
+                [(
+                    1234,
+                    vec![
+                        wow_entities::VehicleAccessory {
+                            accessory_entry: 7001,
+                            seat_id: 0,
+                            is_minion: true,
+                            summoned_type: 8,
+                            summon_time_ms: 0,
+                        },
+                        wow_entities::VehicleAccessory {
+                            accessory_entry: 7002,
+                            seat_id: 1,
+                            is_minion: false,
+                            summoned_type: 6,
+                            summon_time_ms: 5000,
+                        },
+                    ],
+                )],
+            ),
+        ));
+        let effect = wow_data::SpellEffectInfo {
+            effect: wow_data::spell::spell_effect_types::SPELL_EFFECT_APPLY_AURA,
+            effect_aura: wow_data::spell::aura_types::SPELL_AURA_MOUNTED,
+            effect_base_points: 77,
+            effect_misc_value_1: 1234,
+            ..Default::default()
+        };
+
+        session
+            .apply_represented_mounted_aura_like_cpp(100, ObjectGuid::EMPTY, &effect)
+            .unwrap();
+
+        assert_eq!(session.player_mount_display_id_like_cpp, 4321);
+        assert_eq!(session.player_mount_vehicle_id_like_cpp, 55);
+        assert_eq!(session.player_mount_vehicle_seat_count_like_cpp, 2);
+        assert_eq!(session.player_mount_vehicle_usable_seat_count_like_cpp, 1);
+        let vehicle_kit = session.player_mount_vehicle_kit_like_cpp.as_ref().unwrap();
+        assert_eq!(vehicle_kit.vehicle_id(), 55);
+        assert_eq!(vehicle_kit.creature_entry(), 1234);
+        assert_eq!(vehicle_kit.status(), wow_entities::VehicleStatus::Installed);
+        assert_eq!(vehicle_kit.seats().len(), 2);
+        assert_eq!(session.player_mount_vehicle_accessories_like_cpp.len(), 2);
+        assert_eq!(
+            session.player_mount_vehicle_accessories_like_cpp[0].accessory_entry,
+            7001
+        );
+        assert_eq!(
+            session.player_mount_vehicle_despawn_delay_ms_like_cpp(),
+            2500
+        );
+        assert!(session.player_mounted_like_cpp);
+        assert_eq!(session.mount_vehicle_create_requests_like_cpp, 1);
+        assert_eq!(session.mount_vehicle_remove_requests_like_cpp, 0);
+        assert_eq!(
+            session.mount_cancel_expected_vehicle_aura_packets_like_cpp,
+            1
+        );
+        assert_eq!(session.mount_pet_control_disable_requests_like_cpp, 1);
+        assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 0);
+        assert_eq!(session.mount_pet_resummon_requests_like_cpp, 0);
+        assert_eq!(session.mount_collision_height_update_requests_like_cpp, 1);
+        assert_eq!(
+            session.represented_pet_react_state_like_cpp,
+            wow_packet::packets::pet::REACT_PASSIVE_LIKE_CPP
+        );
+        assert_eq!(
+            session.represented_pet_command_state_like_cpp,
+            wow_packet::packets::pet::COMMAND_FOLLOW_LIKE_CPP
+        );
+        assert!((session.player_collision_height_like_cpp - 7.32).abs() < 0.0001);
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
+        assert!(
+            opcodes
+                .contains(&(wow_constants::ServerOpcodes::OnCancelExpectedRideVehicleAura as u16))
+        );
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::PetMode as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetCollisionHeight as u16)));
+        let broadcast = wow_packet::WorldPacket::from_bytes(&other_rx.try_recv().unwrap());
+        assert_eq!(
+            broadcast.server_opcode(),
+            Some(wow_constants::ServerOpcodes::MoveUpdateCollisionHeight)
+        );
+        assert!(
+            session
+                .player_unit_flags_like_cpp
+                .contains(UnitFlags::PLAYER_CONTROLLED | UnitFlags::MOUNT)
+        );
+
+        let slot = session
+            .visible_auras
+            .iter()
+            .find_map(|(&slot, aura)| (aura.spell_id == 100).then_some(slot))
+            .unwrap();
+        session.remove_aura(slot).unwrap();
+
+        assert_eq!(session.player_mount_display_id_like_cpp, 0);
+        assert_eq!(session.player_mount_vehicle_id_like_cpp, 0);
+        assert!(session.player_mount_vehicle_kit_like_cpp.is_none());
+        assert!(session.player_mount_vehicle_accessories_like_cpp.is_empty());
+        assert_eq!(session.player_mount_vehicle_despawn_delay_ms_like_cpp(), 1);
+        assert_eq!(session.player_mount_vehicle_seat_count_like_cpp, 0);
+        assert_eq!(session.player_mount_vehicle_usable_seat_count_like_cpp, 0);
+        assert!(!session.player_mounted_like_cpp);
+        assert_eq!(session.mount_vehicle_create_requests_like_cpp, 1);
+        assert_eq!(session.mount_vehicle_remove_requests_like_cpp, 1);
+        assert_eq!(session.mount_pet_control_disable_requests_like_cpp, 1);
+        assert_eq!(session.mount_pet_control_enable_requests_like_cpp, 1);
+        assert_eq!(session.mount_pet_resummon_requests_like_cpp, 1);
+        assert_eq!(session.mount_collision_height_update_requests_like_cpp, 2);
+        assert_eq!(
+            session.represented_pet_react_state_like_cpp,
+            wow_packet::packets::pet::REACT_DEFENSIVE_LIKE_CPP
+        );
+        assert_eq!(
+            session.represented_pet_command_state_like_cpp,
+            wow_packet::packets::pet::COMMAND_FOLLOW_LIKE_CPP
+        );
+        assert_eq!(session.temporary_mount_pet_react_state_like_cpp, None);
+        assert!((session.player_collision_height_like_cpp - 2.64).abs() < 0.0001);
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::PetMode as u16)));
+        assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetCollisionHeight as u16)));
+        let broadcast = wow_packet::WorldPacket::from_bytes(&other_rx.try_recv().unwrap());
+        assert_eq!(
+            broadcast.server_opcode(),
+            Some(wow_constants::ServerOpcodes::MoveUpdateCollisionHeight)
+        );
+        assert!(
+            session
+                .player_unit_flags_like_cpp
+                .contains(UnitFlags::PLAYER_CONTROLLED)
+        );
+        assert!(
+            !session
+                .player_unit_flags_like_cpp
+                .contains(UnitFlags::MOUNT)
+        );
+    }
+
+    #[test]
+    fn represented_mount_aura_keeps_creature_vehicle_with_mount_display_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 12345)));
+        session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
+            wow_data::MountEntry {
+                id: 7,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 100,
+                player_condition_id: 0,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+        ])));
+        session.set_mount_x_display_store(Arc::new(wow_data::MountXDisplayStore::from_entries([
+            wow_data::MountXDisplayEntry {
+                id: 1,
+                creature_display_info_id: 1000,
+                player_condition_id: 0,
+                mount_id: 7,
+            },
+        ])));
+        session.set_creature_template_mount_store(Arc::new(
+            wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
+                wow_data::CreatureTemplateMountEntryLikeCpp {
+                    entry: 1234,
+                    vehicle_id: 55,
+                    models: vec![wow_data::CreatureTemplateMountModelLikeCpp {
+                        display_id: 4321,
+                        display_scale: 1.0,
+                        probability: 0.0,
+                    }],
+                },
+            ]),
+        ));
+        let effect = wow_data::SpellEffectInfo {
+            effect: wow_data::spell::spell_effect_types::SPELL_EFFECT_APPLY_AURA,
+            effect_aura: wow_data::spell::aura_types::SPELL_AURA_MOUNTED,
+            effect_base_points: 77,
+            effect_misc_value_1: 1234,
+            ..Default::default()
+        };
+
+        session
+            .apply_represented_mounted_aura_like_cpp(100, ObjectGuid::EMPTY, &effect)
+            .unwrap();
+
+        assert_eq!(session.player_mount_display_id_like_cpp, 1000);
+        assert_eq!(session.player_mount_vehicle_id_like_cpp, 55);
+        assert!(session.player_mounted_like_cpp);
+        assert!(
+            session
+                .player_unit_flags_like_cpp
+                .contains(UnitFlags::PLAYER_CONTROLLED | UnitFlags::MOUNT)
+        );
+        assert_eq!(session.mount_vehicle_create_requests_like_cpp, 1);
+    }
+
+    #[test]
+    fn represented_mount_source_spell_usable_matches_cpp_mount_condition_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_mount_store(Arc::new(wow_data::MountStore::from_entries([
+            wow_data::MountEntry {
+                id: 1,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 100,
+                player_condition_id: 42,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+            wow_data::MountEntry {
+                id: 2,
+                mount_type_id: 0,
+                flags: 0,
+                source_type_enum: 0,
+                source_spell_id: 101,
+                player_condition_id: 43,
+                mount_fly_ride_height: 0.0,
+                ui_model_scene_id: 0,
+            },
+        ])));
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert!(session.represented_mount_source_spell_usable_like_cpp(100));
+        assert!(!session.represented_mount_source_spell_usable_like_cpp(101));
+        assert!(!session.represented_mount_source_spell_usable_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_mount_capability_for_type_uses_session_state_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.current_map_id = 1;
+        session.set_player_zone_area_like_cpp(10, 77);
+        session.set_known_spells_like_cpp(vec![456]);
+        session.set_player_skill_values_like_cpp(HashMap::from([(SKILL_RIDING_LIKE_CPP, 75)]));
+        session
+            .apply_aura(123, ObjectGuid::EMPTY, 30_000, 0)
+            .unwrap();
+        session.set_area_table_store(Arc::new(wow_data::AreaTableStore::from_entries([
+            wow_data::AreaTableEntry {
+                id: 10,
+                parent_area_id: 0,
+                mount_flags: i32::from(wow_data::AREA_MOUNT_FLAG_ALLOW_GROUND_MOUNTS),
+                flags: 0,
+            },
+            wow_data::AreaTableEntry {
+                id: 77,
+                parent_area_id: 10,
+                mount_flags: i32::from(wow_data::AREA_MOUNT_FLAG_ALLOW_GROUND_MOUNTS),
+                flags: 0,
+            },
+        ])));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: 0,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+            wow_data::MapEntry {
+                id: 1,
+                instance_type: 0,
+                parent_map_id: 0,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.set_mount_capability_store(Arc::new(wow_data::MountCapabilityStore::from_entries(
+            [
+                wow_data::MountCapabilityEntry {
+                    id: 10,
+                    flags: wow_data::MOUNT_CAPABILITY_FLAG_FLYING,
+                    req_riding_skill: 0,
+                    req_area_id: 0,
+                    req_spell_aura_id: 0,
+                    req_spell_known_id: 0,
+                    mod_spell_aura_id: 1000,
+                    req_map_id: -1,
+                },
+                wow_data::MountCapabilityEntry {
+                    id: 11,
+                    flags: wow_data::MOUNT_CAPABILITY_FLAG_GROUND,
+                    req_riding_skill: 75,
+                    req_area_id: 10,
+                    req_spell_aura_id: 123,
+                    req_spell_known_id: 456,
+                    mod_spell_aura_id: 1001,
+                    req_map_id: 0,
+                },
+            ],
+        )));
+        session.set_mount_type_x_capability_store(Arc::new(
+            wow_data::MountTypeXCapabilityStore::from_entries([
+                wow_data::MountTypeXCapabilityEntry {
+                    id: 1,
+                    mount_type_id: 7,
+                    mount_capability_id: 10,
+                    order_index: 0,
+                },
+                wow_data::MountTypeXCapabilityEntry {
+                    id: 2,
+                    mount_type_id: 7,
+                    mount_capability_id: 11,
+                    order_index: 1,
+                },
+            ]),
+        ));
+
+        assert_eq!(
+            session
+                .represented_mount_capability_for_type_from_session_like_cpp(7, None)
+                .map(|capability| capability.id),
+            Some(11)
+        );
+        session.set_player_skill_values_like_cpp(HashMap::from([(SKILL_RIDING_LIKE_CPP, 74)]));
+        assert!(
+            session
+                .represented_mount_capability_for_type_from_session_like_cpp(7, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn represented_mount_liquid_state_uses_cpp_liquid_bits_and_swimming_flag() {
+        let (mut session, _, _) = make_session();
+
+        assert_eq!(
+            session.represented_player_mount_liquid_state_like_cpp(),
+            (false, false)
+        );
+
+        session.set_player_liquid_status_like_cpp(LIQUID_MAP_IN_WATER_LIKE_CPP);
+        assert_eq!(
+            session.represented_player_mount_liquid_state_like_cpp(),
+            (false, true)
+        );
+
+        session.set_player_liquid_status_like_cpp(LIQUID_MAP_UNDER_WATER_LIKE_CPP);
+        assert_eq!(
+            session.represented_player_mount_liquid_state_like_cpp(),
+            (true, true)
+        );
+
+        session.set_player_liquid_status_like_cpp(0);
+        session.set_player_movement_flags_like_cpp(MovementFlag::SWIMMING);
+        assert_eq!(
+            session.represented_player_mount_liquid_state_like_cpp(),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn represented_failed_map_difficulty_x_condition_matches_cpp_first_failed_order() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+        session.set_map_difficulty_x_condition_store(Arc::new(
+            wow_data::MapDifficultyXConditionStore::from_entries([
+                wow_data::MapDifficultyXConditionEntry {
+                    id: 100,
+                    failure_description: String::new(),
+                    player_condition_id: 43,
+                    order_index: 20,
+                    map_difficulty_id: 7,
+                },
+                wow_data::MapDifficultyXConditionEntry {
+                    id: 101,
+                    failure_description: String::new(),
+                    player_condition_id: 42,
+                    order_index: 10,
+                    map_difficulty_id: 7,
+                },
+            ]),
+        ));
+
+        assert_eq!(
+            session.represented_failed_map_difficulty_x_condition_like_cpp(7),
+            Some(100)
+        );
+        assert_eq!(
+            session.represented_failed_map_difficulty_x_condition_like_cpp(8),
+            None
+        );
     }
 
     #[test]
@@ -11580,6 +13689,46 @@ mod tests {
             ),
             (
                 ClientOpcodes::TrainerBuySpell,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::MoveDismissVehicle,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::RequestVehiclePrevSeat,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::RequestVehicleNextSeat,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::MoveChangeVehicleSeats,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadSafe,
+            ),
+            (
+                ClientOpcodes::RequestVehicleSwitchSeat,
+                SessionStatus::LoggedIn,
+                PacketProcessing::Inplace,
+            ),
+            (
+                ClientOpcodes::RideVehicleInteract,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadUnsafe,
+            ),
+            (
+                ClientOpcodes::EjectPassenger,
+                SessionStatus::LoggedIn,
+                PacketProcessing::ThreadUnsafe,
+            ),
+            (
+                ClientOpcodes::RequestVehicleExit,
                 SessionStatus::LoggedIn,
                 PacketProcessing::Inplace,
             ),

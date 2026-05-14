@@ -18,9 +18,12 @@ use crate::wdc4::Wdc4Reader;
 pub struct ChrSpecializationEntry {
     pub id: u32,
     pub class_id: u8,
+    pub order_index: i8,
+    pub role: i8,
 }
 
 /// In-memory store for `ChrSpecialization.db2`.
+#[derive(Debug)]
 pub struct ChrSpecializationStore {
     entries: HashMap<u32, ChrSpecializationEntry>,
 }
@@ -53,6 +56,8 @@ impl ChrSpecializationStore {
                 ChrSpecializationEntry {
                     id,
                     class_id: reader.get_field_u8(idx, 4),
+                    order_index: reader.get_field_i8(idx, 5),
+                    role: reader.get_field_i8(idx, 7),
                 },
             );
         }
@@ -87,9 +92,12 @@ mod tests {
         let store = ChrSpecializationStore::from_entries([ChrSpecializationEntry {
             id: 65,
             class_id: 2,
+            order_index: 0,
+            role: 1,
         }]);
 
         assert_eq!(store.get(65).unwrap().class_id, 2);
+        assert_eq!(store.get(65).unwrap().role, 1);
         assert!(store.get(66).is_none());
     }
 }

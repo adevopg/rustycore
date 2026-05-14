@@ -5,15 +5,53 @@
 
 //! Runtime side of C++ `ConditionMgr` evaluation context.
 
+use std::sync::{Arc, OnceLock};
+
 use num_traits::FromPrimitive;
+use parking_lot::RwLock;
 use wow_constants::MAX_CONDITION_TARGETS;
 use wow_constants::{
-    ComparisonType, ConditionSourceType, ConditionType, RelationType, TypeId, TypeMask,
-    UnitStandStateType,
+    ComparisonType, ConditionInstanceInfo, ConditionSourceType, ConditionType, RelationType,
+    TypeId, TypeMask, UnitStandStateType,
 };
-use wow_data::{Condition, ConditionEntriesByTypeStore, ConditionId};
+use wow_data::{
+    Condition, ConditionEntriesByTypeStore, ConditionId, PlayerConditionContextLikeCpp,
+    PlayerConditionStore, is_player_meeting_condition_like_cpp,
+};
 use wow_entities::WorldObject;
 use wow_loot::{LootStoreItemContext, condition_source_type_for_loot_store_kind_like_cpp};
+
+pub const QUEST_STATUS_NONE_LIKE_CPP: u8 = 0;
+pub const QUEST_STATUS_COMPLETE_LIKE_CPP: u8 = 1;
+pub const QUEST_STATUS_INCOMPLETE_LIKE_CPP: u8 = 3;
+pub const QUEST_STATUS_FAILED_LIKE_CPP: u8 = 5;
+pub const QUEST_STATUS_REWARDED_LIKE_CPP: u8 = 6;
+
+static CONDITION_MGR_STORE_LIKE_CPP: OnceLock<RwLock<Option<Arc<ConditionEntriesByTypeStore>>>> =
+    OnceLock::new();
+
+fn condition_mgr_store_slot_like_cpp() -> &'static RwLock<Option<Arc<ConditionEntriesByTypeStore>>>
+{
+    CONDITION_MGR_STORE_LIKE_CPP.get_or_init(|| RwLock::new(None))
+}
+
+/// Install the process-wide C++ `sConditionMgr` condition store.
+///
+/// This keeps the access pattern close to C++ while storing the actual data in an `Arc`, so a
+/// future reload can atomically replace the active store without changing call sites.
+pub fn set_condition_mgr_store_like_cpp(store: Arc<ConditionEntriesByTypeStore>) {
+    *condition_mgr_store_slot_like_cpp().write() = Some(store);
+}
+
+/// Return the active C++ `sConditionMgr` store, if startup loaded it.
+pub fn condition_mgr_store_like_cpp() -> Option<Arc<ConditionEntriesByTypeStore>> {
+    condition_mgr_store_slot_like_cpp().read().as_ref().cloned()
+}
+
+/// Clear the process-wide condition store. Used by tests and future reload wiring.
+pub fn clear_condition_mgr_store_like_cpp() {
+    *condition_mgr_store_slot_like_cpp().write() = None;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConditionMapRef {
@@ -34,10 +72,24 @@ impl ConditionMapRef {
 pub struct ConditionSourceInfo<'a> {
     pub condition_targets: [Option<&'a WorldObject>; MAX_CONDITION_TARGETS],
     pub unit_targets: [Option<ConditionUnitSnapshot>; MAX_CONDITION_TARGETS],
+    pub unit_aura_targets: [Option<&'a [ConditionAuraEffectSnapshot]>; MAX_CONDITION_TARGETS],
+    pub unit_relation_targets: [Option<&'a [ConditionUnitRelationSnapshot]>; MAX_CONDITION_TARGETS],
+    pub nearby_creature_targets:
+        [Option<&'a [ConditionNearbyCreatureSnapshot]>; MAX_CONDITION_TARGETS],
+    pub nearby_gameobject_targets:
+        [Option<&'a [ConditionNearbyGameObjectSnapshot]>; MAX_CONDITION_TARGETS],
     pub player_targets: [Option<ConditionPlayerSnapshot>; MAX_CONDITION_TARGETS],
+    pub player_quest_targets: [Option<ConditionPlayerQuestSnapshot<'a>>; MAX_CONDITION_TARGETS],
+    pub player_progression_targets:
+        [Option<ConditionPlayerProgressionSnapshot<'a>>; MAX_CONDITION_TARGETS],
+    pub player_condition_contexts:
+        [Option<PlayerConditionContextLikeCpp<'a>>; MAX_CONDITION_TARGETS],
+    pub player_condition_store: Option<&'a PlayerConditionStore>,
     pub spawn_id_targets: [Option<u64>; MAX_CONDITION_TARGETS],
     pub private_object_targets: [bool; MAX_CONDITION_TARGETS],
     pub string_id_targets: [Option<&'a [&'a str]>; MAX_CONDITION_TARGETS],
+    pub realm_achievement_ids: &'a [u32],
+    pub map_state: Option<ConditionMapStateSnapshot<'a>>,
     pub condition_map: Option<ConditionMapRef>,
     pub last_failed_condition: Option<&'a Condition>,
 }
@@ -57,6 +109,36 @@ pub struct ConditionUnitSnapshot {
     pub stand_state: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionAuraEffectSnapshot {
+    pub spell_id: u32,
+    pub effect_index: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionUnitRelationSnapshot {
+    pub to_target_index: usize,
+    pub in_party: bool,
+    pub in_raid_or_party: bool,
+    pub owned_by: bool,
+    pub passenger_of: bool,
+    pub created_by: bool,
+    pub reaction: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConditionNearbyCreatureSnapshot {
+    pub entry: u32,
+    pub distance: f32,
+    pub is_alive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConditionNearbyGameObjectSnapshot {
+    pub entry: u32,
+    pub distance: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConditionPlayerSnapshot {
     pub team: u32,
@@ -66,6 +148,202 @@ pub struct ConditionPlayerSnapshot {
     pub is_game_master: bool,
     pub pet_type: Option<u32>,
     pub is_in_flight: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionQuestStatusSnapshot {
+    pub quest_id: u32,
+    pub status: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionQuestObjectiveProgressSnapshot {
+    pub quest_id: u32,
+    pub objective_id: u32,
+    pub counter: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionPlayerQuestSnapshot<'a> {
+    pub statuses: &'a [ConditionQuestStatusSnapshot],
+    pub objective_progress: &'a [ConditionQuestObjectiveProgressSnapshot],
+    pub rewarded_quest_ids: &'a [u32],
+    pub daily_quest_ids: &'a [u32],
+}
+
+impl ConditionPlayerQuestSnapshot<'_> {
+    fn quest_status_like_cpp(self, quest_id: u32) -> u8 {
+        self.statuses
+            .iter()
+            .find(|status| status.quest_id == quest_id)
+            .map(|status| status.status)
+            .or_else(|| {
+                self.is_quest_rewarded_like_cpp(quest_id)
+                    .then_some(QUEST_STATUS_REWARDED_LIKE_CPP)
+            })
+            .unwrap_or(QUEST_STATUS_NONE_LIKE_CPP)
+    }
+
+    fn is_quest_rewarded_like_cpp(self, quest_id: u32) -> bool {
+        self.rewarded_quest_ids.contains(&quest_id)
+    }
+
+    fn is_daily_quest_done_like_cpp(self, quest_id: u32) -> bool {
+        self.daily_quest_ids.contains(&quest_id)
+    }
+
+    fn quest_is_in_log_like_cpp(self, quest_id: u32) -> bool {
+        !matches!(
+            self.quest_status_like_cpp(quest_id),
+            QUEST_STATUS_NONE_LIKE_CPP | QUEST_STATUS_REWARDED_LIKE_CPP
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionItemCountSnapshot {
+    pub item_id: u32,
+    pub count: u32,
+    pub bank_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionSkillSnapshot {
+    pub skill_id: u32,
+    pub base_value: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionBattlePetCountSnapshot {
+    pub species_id: u32,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionReputationSnapshot {
+    pub faction_id: u32,
+    pub rank: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionPlayerProgressionSnapshot<'a> {
+    pub items: &'a [ConditionItemCountSnapshot],
+    pub equipped_item_or_gem_ids: &'a [u32],
+    pub skills: &'a [ConditionSkillSnapshot],
+    pub spell_ids: &'a [u32],
+    pub achievement_ids: &'a [u32],
+    pub reputations: &'a [ConditionReputationSnapshot],
+    pub title_ids: &'a [u32],
+    pub battle_pet_counts: &'a [ConditionBattlePetCountSnapshot],
+    pub active_scene_ids: &'a [u32],
+}
+
+impl ConditionPlayerProgressionSnapshot<'_> {
+    fn has_item_count_like_cpp(self, item_id: u32, required_count: u32, check_bank: bool) -> bool {
+        self.items
+            .iter()
+            .find(|item| item.item_id == item_id)
+            .is_some_and(|item| {
+                let count = if check_bank {
+                    item.count.saturating_add(item.bank_count)
+                } else {
+                    item.count
+                };
+                count >= required_count
+            })
+    }
+
+    fn has_item_or_gem_equipped_like_cpp(self, item_id: u32) -> bool {
+        self.equipped_item_or_gem_ids.contains(&item_id)
+    }
+
+    fn has_skill_base_value_like_cpp(self, skill_id: u32, required_value: u32) -> bool {
+        self.skills
+            .iter()
+            .find(|skill| skill.skill_id == skill_id)
+            .is_some_and(|skill| skill.base_value >= required_value)
+    }
+
+    fn has_spell_like_cpp(self, spell_id: u32) -> bool {
+        self.spell_ids.contains(&spell_id)
+    }
+
+    fn has_achievement_like_cpp(self, achievement_id: u32) -> bool {
+        self.achievement_ids.contains(&achievement_id)
+    }
+
+    fn has_reputation_rank_like_cpp(self, faction_id: u32, rank_mask: u32) -> bool {
+        self.reputations
+            .iter()
+            .find(|reputation| reputation.faction_id == faction_id)
+            .is_some_and(|reputation| ((1_u32 << reputation.rank) & rank_mask) != 0)
+    }
+
+    fn has_title_like_cpp(self, title_id: u32) -> bool {
+        self.title_ids.contains(&title_id)
+    }
+
+    fn battle_pet_count_like_cpp(self, species_id: u32) -> u32 {
+        self.battle_pet_counts
+            .iter()
+            .find(|pet| pet.species_id == species_id)
+            .map(|pet| pet.count)
+            .unwrap_or(0)
+    }
+
+    fn has_active_scene_like_cpp(self, scene_id: u32) -> bool {
+        self.active_scene_ids.contains(&scene_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionMapDataSnapshot {
+    pub id: u32,
+    pub value: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionWorldStateSnapshot {
+    pub id: u32,
+    pub value: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionMapStateSnapshot<'a> {
+    pub active_event_ids: &'a [u32],
+    pub world_states: &'a [ConditionWorldStateSnapshot],
+    pub difficulty_id: u32,
+    pub instance_data: &'a [ConditionMapDataSnapshot],
+    pub instance_data64: &'a [ConditionMapDataSnapshot],
+    pub boss_states: &'a [ConditionMapDataSnapshot],
+    pub scenario_step_id: Option<u32>,
+}
+
+impl ConditionMapStateSnapshot<'_> {
+    fn world_state_value_like_cpp(self, world_state_id: u32) -> i32 {
+        self.world_states
+            .iter()
+            .find(|world_state| world_state.id == world_state_id)
+            .map(|world_state| world_state.value)
+            .unwrap_or(0)
+    }
+
+    fn instance_data_value_like_cpp(
+        self,
+        instance_info: ConditionInstanceInfo,
+        id: u32,
+    ) -> Option<u64> {
+        let values = match instance_info {
+            ConditionInstanceInfo::Data => self.instance_data,
+            ConditionInstanceInfo::Data64 => self.instance_data64,
+            ConditionInstanceInfo::BossState => self.boss_states,
+            ConditionInstanceInfo::GuidData => return None,
+        };
+        values
+            .iter()
+            .find(|data| data.id == id)
+            .map(|data| data.value)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,10 +378,20 @@ impl<'a> ConditionSourceInfo<'a> {
         Self {
             condition_targets,
             unit_targets: [None; MAX_CONDITION_TARGETS],
+            unit_aura_targets: [None; MAX_CONDITION_TARGETS],
+            unit_relation_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_creature_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_gameobject_targets: [None; MAX_CONDITION_TARGETS],
             player_targets: [None; MAX_CONDITION_TARGETS],
+            player_quest_targets: [None; MAX_CONDITION_TARGETS],
+            player_progression_targets: [None; MAX_CONDITION_TARGETS],
+            player_condition_contexts: [None; MAX_CONDITION_TARGETS],
+            player_condition_store: None,
             spawn_id_targets: [None; MAX_CONDITION_TARGETS],
             private_object_targets: [false; MAX_CONDITION_TARGETS],
             string_id_targets: [None; MAX_CONDITION_TARGETS],
+            realm_achievement_ids: &[],
+            map_state: None,
             condition_map,
             last_failed_condition: None,
         }
@@ -114,10 +402,20 @@ impl<'a> ConditionSourceInfo<'a> {
         Self {
             condition_targets: [None; MAX_CONDITION_TARGETS],
             unit_targets: [None; MAX_CONDITION_TARGETS],
+            unit_aura_targets: [None; MAX_CONDITION_TARGETS],
+            unit_relation_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_creature_targets: [None; MAX_CONDITION_TARGETS],
+            nearby_gameobject_targets: [None; MAX_CONDITION_TARGETS],
             player_targets: [None; MAX_CONDITION_TARGETS],
+            player_quest_targets: [None; MAX_CONDITION_TARGETS],
+            player_progression_targets: [None; MAX_CONDITION_TARGETS],
+            player_condition_contexts: [None; MAX_CONDITION_TARGETS],
+            player_condition_store: None,
             spawn_id_targets: [None; MAX_CONDITION_TARGETS],
             private_object_targets: [false; MAX_CONDITION_TARGETS],
             string_id_targets: [None; MAX_CONDITION_TARGETS],
+            realm_achievement_ids: &[],
+            map_state: None,
             condition_map: Some(condition_map),
             last_failed_condition: None,
         }
@@ -133,6 +431,46 @@ impl<'a> ConditionSourceInfo<'a> {
         }
     }
 
+    pub fn set_unit_aura_target_snapshot(
+        &mut self,
+        target_index: usize,
+        aura_effects: &'a [ConditionAuraEffectSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.unit_aura_targets[target_index] = Some(aura_effects);
+        }
+    }
+
+    pub fn set_unit_relation_target_snapshot(
+        &mut self,
+        target_index: usize,
+        relations: &'a [ConditionUnitRelationSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.unit_relation_targets[target_index] = Some(relations);
+        }
+    }
+
+    pub fn set_nearby_creature_target_snapshot(
+        &mut self,
+        target_index: usize,
+        creatures: &'a [ConditionNearbyCreatureSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.nearby_creature_targets[target_index] = Some(creatures);
+        }
+    }
+
+    pub fn set_nearby_gameobject_target_snapshot(
+        &mut self,
+        target_index: usize,
+        gameobjects: &'a [ConditionNearbyGameObjectSnapshot],
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.nearby_gameobject_targets[target_index] = Some(gameobjects);
+        }
+    }
+
     pub fn set_player_target_snapshot(
         &mut self,
         target_index: usize,
@@ -141,6 +479,48 @@ impl<'a> ConditionSourceInfo<'a> {
         if target_index < MAX_CONDITION_TARGETS {
             self.player_targets[target_index] = Some(snapshot);
         }
+    }
+
+    pub fn set_player_quest_target_snapshot(
+        &mut self,
+        target_index: usize,
+        snapshot: ConditionPlayerQuestSnapshot<'a>,
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.player_quest_targets[target_index] = Some(snapshot);
+        }
+    }
+
+    pub fn set_player_progression_target_snapshot(
+        &mut self,
+        target_index: usize,
+        snapshot: ConditionPlayerProgressionSnapshot<'a>,
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.player_progression_targets[target_index] = Some(snapshot);
+        }
+    }
+
+    pub fn set_player_condition_context(
+        &mut self,
+        target_index: usize,
+        context: PlayerConditionContextLikeCpp<'a>,
+    ) {
+        if target_index < MAX_CONDITION_TARGETS {
+            self.player_condition_contexts[target_index] = Some(context);
+        }
+    }
+
+    pub fn set_player_condition_store(&mut self, store: &'a PlayerConditionStore) {
+        self.player_condition_store = Some(store);
+    }
+
+    pub fn set_realm_achievement_ids(&mut self, achievement_ids: &'a [u32]) {
+        self.realm_achievement_ids = achievement_ids;
+    }
+
+    pub fn set_map_state_snapshot(&mut self, map_state: ConditionMapStateSnapshot<'a>) {
+        self.map_state = Some(map_state);
     }
 
     pub fn set_spawn_id_target_snapshot(&mut self, target_index: usize, spawn_id: u64) {
@@ -246,12 +626,45 @@ pub fn condition_meets_basic_like_cpp<'a>(
                 .condition_map
                 .is_some_and(|map| map.map_id == condition.condition_value1);
         }
-        ConditionType::ActiveEvent
-        | ConditionType::InstanceInfo
-        | ConditionType::WorldState
-        | ConditionType::RealmAchievement
-        | ConditionType::DifficultyId
-        | ConditionType::ScenarioStep => return ConditionMeetResult::Unsupported,
+        ConditionType::RealmAchievement => {
+            cond_meets = source_info
+                .realm_achievement_ids
+                .contains(&condition.condition_value1);
+        }
+        ConditionType::ActiveEvent => {
+            cond_meets = source_info.map_state.is_some_and(|map_state| {
+                map_state
+                    .active_event_ids
+                    .contains(&condition.condition_value1)
+            });
+        }
+        ConditionType::WorldState => {
+            cond_meets = source_info.map_state.is_some_and(|map_state| {
+                map_state.world_state_value_like_cpp(condition.condition_value1)
+                    == condition.condition_value2 as i32
+            });
+        }
+        ConditionType::DifficultyId => {
+            cond_meets = source_info
+                .map_state
+                .is_some_and(|map_state| map_state.difficulty_id == condition.condition_value1);
+        }
+        ConditionType::InstanceInfo => {
+            let Some(instance_info) = ConditionInstanceInfo::from_u32(condition.condition_value3)
+            else {
+                return ConditionMeetResult::Evaluated(false);
+            };
+            cond_meets = source_info.map_state.is_some_and(|map_state| {
+                map_state
+                    .instance_data_value_like_cpp(instance_info, condition.condition_value1)
+                    .is_some_and(|value| value == u64::from(condition.condition_value2))
+            });
+        }
+        ConditionType::ScenarioStep => {
+            cond_meets = source_info.map_state.is_some_and(|map_state| {
+                map_state.scenario_step_id == Some(condition.condition_value1)
+            });
+        }
         _ => needs_object = true,
     }
 
@@ -263,9 +676,26 @@ pub fn condition_meets_basic_like_cpp<'a>(
 
     if let Some(object) = object {
         let unit = source_info.unit_targets[target_index];
-        let player =
-            source_info.player_targets[target_index].filter(|_| is_player_object_like_cpp(object));
+        let unit_auras =
+            source_info.unit_aura_targets[target_index].filter(|_| is_unit_object_like_cpp(object));
+        let unit_relations = source_info.unit_relation_targets[target_index]
+            .filter(|_| is_unit_object_like_cpp(object));
+        let is_player = is_player_object_like_cpp(object);
+        let player = source_info.player_targets[target_index].filter(|_| is_player);
+        let player_quests = source_info.player_quest_targets[target_index].filter(|_| is_player);
+        let player_progression =
+            source_info.player_progression_targets[target_index].filter(|_| is_player);
+        let player_condition_context =
+            source_info.player_condition_contexts[target_index].filter(|_| is_player);
         match condition.condition_type {
+            ConditionType::Aura => {
+                if let Some(aura_effects) = unit_auras {
+                    cond_meets = aura_effects.iter().any(|aura| {
+                        aura.spell_id == condition.condition_value1
+                            && aura.effect_index == condition.condition_value2
+                    });
+                }
+            }
             ConditionType::ZoneId => cond_meets = object.zone_id() == condition.condition_value1,
             ConditionType::AreaId => {
                 cond_meets = is_in_area_like_cpp(object.area_id(), condition.condition_value1);
@@ -289,6 +719,71 @@ pub fn condition_meets_basic_like_cpp<'a>(
             ConditionType::Gender => {
                 if let Some(player) = player {
                     cond_meets = player.native_gender == condition.condition_value1;
+                }
+            }
+            ConditionType::Item => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_item_count_like_cpp(
+                        condition.condition_value1,
+                        condition.condition_value2,
+                        condition.condition_value3 != 0,
+                    );
+                }
+            }
+            ConditionType::ItemEquipped => {
+                if let Some(progression) = player_progression {
+                    cond_meets =
+                        progression.has_item_or_gem_equipped_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::Achievement => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_achievement_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::ReputationRank => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_reputation_rank_like_cpp(
+                        condition.condition_value1,
+                        condition.condition_value2,
+                    );
+                }
+            }
+            ConditionType::Skill => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_skill_base_value_like_cpp(
+                        condition.condition_value1,
+                        condition.condition_value2,
+                    );
+                }
+            }
+            ConditionType::QuestRewarded => {
+                if let Some(quests) = player_quests {
+                    cond_meets = quests.is_quest_rewarded_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::QuestTaken => {
+                if let Some(quests) = player_quests {
+                    cond_meets = quests.quest_status_like_cpp(condition.condition_value1)
+                        == QUEST_STATUS_INCOMPLETE_LIKE_CPP;
+                }
+            }
+            ConditionType::QuestComplete => {
+                if let Some(quests) = player_quests {
+                    cond_meets = quests.quest_status_like_cpp(condition.condition_value1)
+                        == QUEST_STATUS_COMPLETE_LIKE_CPP
+                        && !quests.is_quest_rewarded_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::QuestNone => {
+                if let Some(quests) = player_quests {
+                    cond_meets = quests.quest_status_like_cpp(condition.condition_value1)
+                        == QUEST_STATUS_NONE_LIKE_CPP;
+                }
+            }
+            ConditionType::Spell => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_spell_like_cpp(condition.condition_value1);
                 }
             }
             ConditionType::Level => {
@@ -334,21 +829,96 @@ pub fn condition_meets_basic_like_cpp<'a>(
                     );
                 }
             }
-            ConditionType::RelationTo => {
-                if RelationType::from_u32(condition.condition_value2)
-                    != Some(RelationType::SelfRelation)
-                {
-                    return ConditionMeetResult::Unsupported;
+            ConditionType::NearCreature => {
+                if let Some(creatures) = source_info.nearby_creature_targets[target_index] {
+                    let alive_required = condition.condition_value3 == 0;
+                    cond_meets = creatures.iter().any(|creature| {
+                        creature.entry == condition.condition_value1
+                            && creature.distance <= condition.condition_value2 as f32
+                            && (!alive_required || creature.is_alive)
+                    });
                 }
+            }
+            ConditionType::NearGameObject => {
+                if let Some(gameobjects) = source_info.nearby_gameobject_targets[target_index] {
+                    cond_meets = gameobjects.iter().any(|gameobject| {
+                        gameobject.entry == condition.condition_value1
+                            && gameobject.distance <= condition.condition_value2 as f32
+                    });
+                }
+            }
+            ConditionType::RelationTo => {
+                let Some(relation_type) = RelationType::from_u32(condition.condition_value2) else {
+                    return ConditionMeetResult::Unsupported;
+                };
 
-                if let Some(to_object) = usize::try_from(condition.condition_value1)
+                if let Some(to_target_index) = usize::try_from(condition.condition_value1)
                     .ok()
                     .filter(|target| *target < MAX_CONDITION_TARGETS)
-                    .and_then(|target| source_info.condition_targets[target])
-                    && is_unit_object_like_cpp(object)
-                    && is_unit_object_like_cpp(to_object)
                 {
-                    cond_meets = std::ptr::eq(object, to_object);
+                    if let Some(to_object) = source_info.condition_targets[to_target_index]
+                        && is_unit_object_like_cpp(object)
+                        && is_unit_object_like_cpp(to_object)
+                    {
+                        cond_meets = match relation_type {
+                            RelationType::SelfRelation => std::ptr::eq(object, to_object),
+                            RelationType::InParty => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.in_party),
+                            RelationType::InRaidOrParty => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.in_raid_or_party),
+                            RelationType::OwnedBy => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.owned_by),
+                            RelationType::PassengerOf => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.passenger_of),
+                            RelationType::CreatedBy => unit_relations
+                                .and_then(|relations| {
+                                    relations.iter().find(|relation| {
+                                        relation.to_target_index == to_target_index
+                                    })
+                                })
+                                .is_some_and(|relation| relation.created_by),
+                            RelationType::Max => false,
+                        };
+                    }
+                }
+            }
+            ConditionType::ReactionTo => {
+                if let Some(to_target_index) = usize::try_from(condition.condition_value1)
+                    .ok()
+                    .filter(|target| *target < MAX_CONDITION_TARGETS)
+                {
+                    if let Some(to_object) = source_info.condition_targets[to_target_index]
+                        && is_unit_object_like_cpp(object)
+                        && is_unit_object_like_cpp(to_object)
+                        && let Some(relation) = unit_relations.and_then(|relations| {
+                            relations
+                                .iter()
+                                .find(|relation| relation.to_target_index == to_target_index)
+                        })
+                    {
+                        cond_meets =
+                            ((1_u32 << relation.reaction) & condition.condition_value2) != 0;
+                    }
                 }
             }
             ConditionType::PhaseId => {
@@ -446,6 +1016,73 @@ pub fn condition_meets_basic_like_cpp<'a>(
                     cond_meets = player.is_in_flight;
                 }
             }
+            ConditionType::Title => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_title_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::BattlePetCount => {
+                if let Some(progression) = player_progression {
+                    cond_meets = compare_values_u64_like_cpp(
+                        condition.condition_value3,
+                        u64::from(
+                            progression.battle_pet_count_like_cpp(condition.condition_value1),
+                        ),
+                        u64::from(condition.condition_value2),
+                    );
+                }
+            }
+            ConditionType::SceneInProgress => {
+                if let Some(progression) = player_progression {
+                    cond_meets = progression.has_active_scene_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::PlayerCondition => {
+                let Some(store) = source_info.player_condition_store else {
+                    return ConditionMeetResult::Unsupported;
+                };
+                let Some(context) = player_condition_context else {
+                    return ConditionMeetResult::Unsupported;
+                };
+                if let Some(player_condition) = store.get(condition.condition_value1) {
+                    cond_meets = is_player_meeting_condition_like_cpp(player_condition, &context);
+                }
+            }
+            ConditionType::DailyQuestDone => {
+                if let Some(quests) = player_quests {
+                    cond_meets = quests.is_daily_quest_done_like_cpp(condition.condition_value1);
+                }
+            }
+            ConditionType::QuestState => {
+                if let Some(quests) = player_quests {
+                    let quest_status = quests.quest_status_like_cpp(condition.condition_value1);
+                    cond_meets = ((condition.condition_value2 & (1 << QUEST_STATUS_NONE_LIKE_CPP))
+                        != 0
+                        && quest_status == QUEST_STATUS_NONE_LIKE_CPP)
+                        || ((condition.condition_value2 & (1 << QUEST_STATUS_COMPLETE_LIKE_CPP))
+                            != 0
+                            && quest_status == QUEST_STATUS_COMPLETE_LIKE_CPP)
+                        || ((condition.condition_value2 & (1 << QUEST_STATUS_INCOMPLETE_LIKE_CPP))
+                            != 0
+                            && quest_status == QUEST_STATUS_INCOMPLETE_LIKE_CPP)
+                        || ((condition.condition_value2 & (1 << QUEST_STATUS_FAILED_LIKE_CPP))
+                            != 0
+                            && quest_status == QUEST_STATUS_FAILED_LIKE_CPP)
+                        || ((condition.condition_value2 & (1 << QUEST_STATUS_REWARDED_LIKE_CPP))
+                            != 0
+                            && quests.is_quest_rewarded_like_cpp(condition.condition_value1));
+                }
+            }
+            ConditionType::QuestObjectiveProgress => {
+                if let Some(quests) = player_quests
+                    && let Some(progress) = quests.objective_progress.iter().find(|progress| {
+                        progress.objective_id == condition.condition_value1
+                            && quests.quest_is_in_log_like_cpp(progress.quest_id)
+                    })
+                {
+                    cond_meets = progress.counter == condition.condition_value3 as i32;
+                }
+            }
             ConditionType::Charmed => {
                 if let Some(unit) = unit {
                     cond_meets = unit.is_charmed;
@@ -463,7 +1100,12 @@ pub fn condition_meets_basic_like_cpp<'a>(
                         .any(|string_id| *string_id == condition.condition_string_value1.as_str());
                 }
             }
-            ConditionType::None | ConditionType::MapId => {}
+            ConditionType::None | ConditionType::MapId | ConditionType::RealmAchievement => {}
+            ConditionType::ActiveEvent
+            | ConditionType::InstanceInfo
+            | ConditionType::WorldState
+            | ConditionType::DifficultyId
+            | ConditionType::ScenarioStep => {}
             _ => return ConditionMeetResult::Unsupported,
         }
     }
@@ -788,6 +1430,7 @@ mod tests {
     use super::*;
     use wow_constants::{ConditionType, PhaseFlags, TypeId, TypeMask};
     use wow_core::Position;
+    use wow_data::{PlayerConditionContextLikeCpp, PlayerConditionEntry, PlayerConditionStore};
     use wow_loot::{LootStoreItem, LootStoreItemContext, LootStoreKind};
 
     fn world_object(map_id: u32, instance_id: u32) -> WorldObject {
@@ -841,10 +1484,55 @@ mod tests {
     }
 
     #[test]
+    fn global_condition_mgr_store_can_be_installed_and_replaced_like_cpp_reload_foundation() {
+        clear_condition_mgr_store_like_cpp();
+        assert!(condition_mgr_store_like_cpp().is_none());
+
+        let first = Arc::new(ConditionEntriesByTypeStore::from_conditions_like_cpp([
+            Condition {
+                source_type: ConditionSourceType::Phase,
+                source_entry: 10,
+                condition_type: ConditionType::None,
+                ..Condition::default()
+            },
+        ]));
+        set_condition_mgr_store_like_cpp(Arc::clone(&first));
+        assert_eq!(
+            condition_mgr_store_like_cpp()
+                .as_ref()
+                .map(|store| store.bucket_count()),
+            Some(1)
+        );
+
+        let second = Arc::new(ConditionEntriesByTypeStore::default());
+        set_condition_mgr_store_like_cpp(Arc::clone(&second));
+        assert!(Arc::ptr_eq(
+            &condition_mgr_store_like_cpp().expect("condition store installed"),
+            &second
+        ));
+
+        clear_condition_mgr_store_like_cpp();
+    }
+
+    #[test]
     fn basic_condition_meets_map_zone_area_and_negative_like_cpp() {
         let mut target = world_object(571, 2);
         target.set_zone_and_area(67, 123);
         let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
+        let active_events = [77];
+        let world_states = [ConditionWorldStateSnapshot { id: 88, value: -5 }];
+        let instance_data = [ConditionMapDataSnapshot { id: 1, value: 42 }];
+        let instance_data64 = [ConditionMapDataSnapshot { id: 2, value: 84 }];
+        let boss_states = [ConditionMapDataSnapshot { id: 3, value: 2 }];
+        info.set_map_state_snapshot(ConditionMapStateSnapshot {
+            active_event_ids: &active_events,
+            world_states: &world_states,
+            difficulty_id: 23,
+            instance_data: &instance_data,
+            instance_data64: &instance_data64,
+            boss_states: &boss_states,
+            scenario_step_id: Some(99),
+        });
 
         let map_condition = Condition {
             condition_type: ConditionType::MapId,
@@ -863,6 +1551,83 @@ mod tests {
         };
         assert_eq!(
             condition_meets_basic_like_cpp(&zone_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let active_event_condition = Condition {
+            condition_type: ConditionType::ActiveEvent,
+            condition_value1: 77,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&active_event_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let world_state_condition = Condition {
+            condition_type: ConditionType::WorldState,
+            condition_value1: 88,
+            condition_value2: (-5_i32) as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&world_state_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let difficulty_condition = Condition {
+            condition_type: ConditionType::DifficultyId,
+            condition_value1: 23,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&difficulty_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let instance_data_condition = Condition {
+            condition_type: ConditionType::InstanceInfo,
+            condition_value1: 1,
+            condition_value2: 42,
+            condition_value3: ConditionInstanceInfo::Data as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&instance_data_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let instance_data64_condition = Condition {
+            condition_type: ConditionType::InstanceInfo,
+            condition_value1: 2,
+            condition_value2: 84,
+            condition_value3: ConditionInstanceInfo::Data64 as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&instance_data64_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let boss_state_condition = Condition {
+            condition_type: ConditionType::InstanceInfo,
+            condition_value1: 3,
+            condition_value2: 2,
+            condition_value3: ConditionInstanceInfo::BossState as u32,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&boss_state_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let scenario_step_condition = Condition {
+            condition_type: ConditionType::ScenarioStep,
+            condition_value1: 99,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&scenario_step_condition, &mut info, |_, _| false),
             ConditionMeetResult::Evaluated(true)
         );
 
@@ -1025,13 +1790,113 @@ mod tests {
         };
         assert_eq!(
             condition_meets_basic_like_cpp(&party_condition, &mut other_info, |_, _| false),
-            ConditionMeetResult::Unsupported
+            ConditionMeetResult::Evaluated(false)
         );
+    }
+
+    #[test]
+    fn basic_condition_meets_relation_reaction_and_nearby_snapshots_like_cpp() {
+        let target = world_object(571, 2);
+        let other = world_object(571, 2);
+        let relations = [ConditionUnitRelationSnapshot {
+            to_target_index: 1,
+            in_party: true,
+            in_raid_or_party: true,
+            owned_by: true,
+            passenger_of: true,
+            created_by: true,
+            reaction: 4,
+        }];
+        let nearby_creatures = [
+            ConditionNearbyCreatureSnapshot {
+                entry: 1001,
+                distance: 10.0,
+                is_alive: true,
+            },
+            ConditionNearbyCreatureSnapshot {
+                entry: 1002,
+                distance: 5.0,
+                is_alive: false,
+            },
+        ];
+        let nearby_gameobjects = [ConditionNearbyGameObjectSnapshot {
+            entry: 2001,
+            distance: 12.0,
+        }];
+        let mut info = ConditionSourceInfo::from_targets(Some(&target), Some(&other), None);
+        info.set_unit_relation_target_snapshot(0, &relations);
+        info.set_nearby_creature_target_snapshot(0, &nearby_creatures);
+        info.set_nearby_gameobject_target_snapshot(0, &nearby_gameobjects);
+
+        let conditions = vec![
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::InParty as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::OwnedBy as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::PassengerOf as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RelationTo,
+                condition_value1: 1,
+                condition_value2: RelationType::CreatedBy as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ReactionTo,
+                condition_value1: 1,
+                condition_value2: 1 << 4,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearCreature,
+                condition_value1: 1001,
+                condition_value2: 10,
+                condition_value3: 0,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearCreature,
+                condition_value1: 1002,
+                condition_value2: 5,
+                condition_value3: 1,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearGameObject,
+                condition_value1: 2001,
+                condition_value2: 12,
+                ..Condition::default()
+            },
+        ];
+
+        for condition in &conditions {
+            assert_eq!(
+                condition_meets_basic_like_cpp(condition, &mut info, |_, _| false),
+                ConditionMeetResult::Evaluated(true),
+                "{condition:?}"
+            );
+        }
     }
 
     #[test]
     fn basic_condition_meets_unit_snapshot_class_race_level_and_life_like_cpp() {
         let target = world_object(571, 2);
+        let aura_effects = [ConditionAuraEffectSnapshot {
+            spell_id: 17,
+            effect_index: 1,
+        }];
         let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
         info.set_unit_target_snapshot(
             0,
@@ -1049,8 +1914,15 @@ mod tests {
                 stand_state: 8,
             },
         );
+        info.set_unit_aura_target_snapshot(0, &aura_effects);
 
         let conditions = vec![
+            Condition {
+                condition_type: ConditionType::Aura,
+                condition_value1: 17,
+                condition_value2: 1,
+                ..Condition::default()
+            },
             Condition {
                 condition_type: ConditionType::Class,
                 condition_value1: 1 << (2 - 1),
@@ -1174,6 +2046,229 @@ mod tests {
                 "{condition:?}"
             );
         }
+    }
+
+    #[test]
+    fn basic_condition_meets_player_progression_snapshot_branches_like_cpp() {
+        let target = player_object(571, 2);
+        let items = [ConditionItemCountSnapshot {
+            item_id: 100,
+            count: 2,
+            bank_count: 3,
+        }];
+        let equipped_item_or_gem_ids = [200];
+        let skills = [ConditionSkillSnapshot {
+            skill_id: 300,
+            base_value: 75,
+        }];
+        let spell_ids = [400];
+        let achievement_ids = [500];
+        let reputations = [ConditionReputationSnapshot {
+            faction_id: 550,
+            rank: 5,
+        }];
+        let title_ids = [600];
+        let battle_pet_counts = [ConditionBattlePetCountSnapshot {
+            species_id: 700,
+            count: 4,
+        }];
+        let active_scene_ids = [900];
+        let realm_achievement_ids = [800];
+        let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
+        info.set_player_progression_target_snapshot(
+            0,
+            ConditionPlayerProgressionSnapshot {
+                items: &items,
+                equipped_item_or_gem_ids: &equipped_item_or_gem_ids,
+                skills: &skills,
+                spell_ids: &spell_ids,
+                achievement_ids: &achievement_ids,
+                reputations: &reputations,
+                title_ids: &title_ids,
+                battle_pet_counts: &battle_pet_counts,
+                active_scene_ids: &active_scene_ids,
+            },
+        );
+        info.set_realm_achievement_ids(&realm_achievement_ids);
+
+        let conditions = vec![
+            Condition {
+                condition_type: ConditionType::Item,
+                condition_value1: 100,
+                condition_value2: 5,
+                condition_value3: 1,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ItemEquipped,
+                condition_value1: 200,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Skill,
+                condition_value1: 300,
+                condition_value2: 75,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Spell,
+                condition_value1: 400,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Achievement,
+                condition_value1: 500,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ReputationRank,
+                condition_value1: 550,
+                condition_value2: 1 << 5,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::Title,
+                condition_value1: 600,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::BattlePetCount,
+                condition_value1: 700,
+                condition_value2: 4,
+                condition_value3: ComparisonType::HighEq as u32,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::RealmAchievement,
+                condition_value1: 800,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::SceneInProgress,
+                condition_value1: 900,
+                ..Condition::default()
+            },
+        ];
+
+        for condition in &conditions {
+            assert_eq!(
+                condition_meets_basic_like_cpp(condition, &mut info, |_, _| false),
+                ConditionMeetResult::Evaluated(true),
+                "{condition:?}"
+            );
+        }
+
+        let without_bank = Condition {
+            condition_type: ConditionType::Item,
+            condition_value1: 100,
+            condition_value2: 5,
+            condition_value3: 0,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&without_bank, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(false)
+        );
+    }
+
+    #[test]
+    fn basic_condition_meets_player_quest_snapshot_branches_like_cpp() {
+        let target = player_object(571, 2);
+        let statuses = [
+            ConditionQuestStatusSnapshot {
+                quest_id: 10,
+                status: QUEST_STATUS_INCOMPLETE_LIKE_CPP,
+            },
+            ConditionQuestStatusSnapshot {
+                quest_id: 20,
+                status: QUEST_STATUS_COMPLETE_LIKE_CPP,
+            },
+            ConditionQuestStatusSnapshot {
+                quest_id: 30,
+                status: QUEST_STATUS_FAILED_LIKE_CPP,
+            },
+        ];
+        let objective_progress = [ConditionQuestObjectiveProgressSnapshot {
+            quest_id: 10,
+            objective_id: 900,
+            counter: 4,
+        }];
+        let rewarded_quest_ids = [40];
+        let daily_quest_ids = [50];
+        let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
+        info.set_player_quest_target_snapshot(
+            0,
+            ConditionPlayerQuestSnapshot {
+                statuses: &statuses,
+                objective_progress: &objective_progress,
+                rewarded_quest_ids: &rewarded_quest_ids,
+                daily_quest_ids: &daily_quest_ids,
+            },
+        );
+
+        let conditions = vec![
+            Condition {
+                condition_type: ConditionType::QuestTaken,
+                condition_value1: 10,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestComplete,
+                condition_value1: 20,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestNone,
+                condition_value1: 999,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestRewarded,
+                condition_value1: 40,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestState,
+                condition_value1: 30,
+                condition_value2: 1 << QUEST_STATUS_FAILED_LIKE_CPP,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestState,
+                condition_value1: 40,
+                condition_value2: 1 << QUEST_STATUS_REWARDED_LIKE_CPP,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::QuestObjectiveProgress,
+                condition_value1: 900,
+                condition_value3: 4,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::DailyQuestDone,
+                condition_value1: 50,
+                ..Condition::default()
+            },
+        ];
+
+        for condition in &conditions {
+            assert_eq!(
+                condition_meets_basic_like_cpp(condition, &mut info, |_, _| false),
+                ConditionMeetResult::Evaluated(true),
+                "{condition:?}"
+            );
+        }
+
+        let rewarded_is_not_complete = Condition {
+            condition_type: ConditionType::QuestComplete,
+            condition_value1: 40,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&rewarded_is_not_complete, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(false)
+        );
     }
 
     #[test]
@@ -1307,12 +2402,56 @@ mod tests {
         );
 
         let unrepresented_condition = Condition {
-            condition_type: ConditionType::Aura,
+            condition_type: ConditionType::PlayerCondition,
             ..Condition::default()
         };
         assert_eq!(
             condition_meets_basic_like_cpp(&unrepresented_condition, &mut info, |_, _| false),
             ConditionMeetResult::Unsupported
+        );
+    }
+
+    #[test]
+    fn basic_condition_meets_player_condition_delegates_to_db2_evaluator_like_cpp() {
+        let target = player_object(571, 2);
+        let store = PlayerConditionStore::from_entries([PlayerConditionEntry {
+            id: 970,
+            race_mask: 1 << 0,
+            class_mask: 1 << 1,
+            gender: 1,
+            ..PlayerConditionEntry::default()
+        }]);
+        let mut info = ConditionSourceInfo::from_targets(Some(&target), None, None);
+        info.set_player_condition_store(&store);
+        info.set_player_condition_context(
+            0,
+            PlayerConditionContextLikeCpp {
+                race: 1,
+                class_mask: 1 << 1,
+                gender: 1,
+                native_gender: 0,
+                ..Default::default()
+            },
+        );
+
+        let condition = Condition {
+            condition_type: ConditionType::PlayerCondition,
+            condition_value1: 970,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(true)
+        );
+
+        let missing_condition = Condition {
+            condition_type: ConditionType::PlayerCondition,
+            condition_value1: 971,
+            ..Condition::default()
+        };
+        assert_eq!(
+            condition_meets_basic_like_cpp(&missing_condition, &mut info, |_, _| false),
+            ConditionMeetResult::Evaluated(false)
         );
     }
 

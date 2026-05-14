@@ -162,6 +162,7 @@ impl WorldSession {
         self.apply_movement_side_effects_like_cpp(opcode, &info.info);
         info.info.time = self.adjust_client_movement_time_like_cpp(info.info.time);
         self.set_player_movement_time_like_cpp(info.info.time);
+        self.set_player_movement_flags_like_cpp(info.info.flags);
 
         // Update server-side player position.
         self.set_player_position_like_cpp(info.info.position);
@@ -309,6 +310,21 @@ impl WorldSession {
     ) {
         trace!(account = self.account_id, ?opcode, "MovementAckMessage");
         self.record_validated_movement_ack_like_cpp(opcode, &mut pkt.ack, None);
+    }
+
+    /// Handle C++ `HandleMoveSetVehicleRecAck`.
+    pub async fn handle_move_set_vehicle_rec_id_ack(
+        &mut self,
+        opcode: ClientOpcodes,
+        mut pkt: wow_packet::packets::vehicle::MoveSetVehicleRecIdAck,
+    ) {
+        trace!(
+            account = self.account_id,
+            ?opcode,
+            vehicle_rec_id = pkt.vehicle_rec_id,
+            "MoveSetVehicleRecIdAck"
+        );
+        self.record_validated_movement_ack_like_cpp(opcode, &mut pkt.data, None);
     }
 
     /// Handle C++ `HandleForceSpeedChangeAck` and movement-force magnitude ACKs.

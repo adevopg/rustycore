@@ -10,14 +10,18 @@ use std::sync::Arc;
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
 use wow_constants::{
-    ClientOpcodes, InventoryResult, InventoryType, ItemBondingType, ItemContext,
-    ItemExtendedCostFlags, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, ItemVendorType,
-    Team,
+    ClientOpcodes, ConditionSourceType, InventoryResult, InventoryType, ItemBondingType,
+    ItemContext, ItemExtendedCostFlags, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState,
+    ItemVendorType, Team, TypeId, TypeMask, UnitStandStateType,
 };
 use wow_core::guid::HighGuid;
 use wow_core::{ObjectGuid, Position};
 use wow_crypto::rsa_sign::rsa_sign_connect_to;
-use wow_data::{CurrencyTypesStore, HotfixRecordStatus, ItemExtendedCostStore, hotfix_locale_mask};
+use wow_data::{
+    ConditionEntriesByTypeStore, ConditionId, CurrencyTypesStore, HotfixRecordStatus,
+    ItemExtendedCostStore, PlayerConditionContextLikeCpp, PlayerConditionStore, hotfix_locale_mask,
+    is_player_meeting_condition_like_cpp,
+};
 use wow_database::{
     CharStatements, CharacterDatabase, LoginStatements, SqlTransaction, WorldDatabase,
     WorldStatements,
@@ -26,7 +30,7 @@ use wow_entities::{
     BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_START, INVENTORY_DEFAULT_SIZE,
     INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
     INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, NULL_BAG, NULL_SLOT, REAGENT_BAG_SLOT_END,
-    REAGENT_BAG_SLOT_START, is_equipment_pos, is_inventory_pos,
+    REAGENT_BAG_SLOT_START, WorldObject, is_equipment_pos, is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
@@ -683,12 +687,36 @@ fn vendor_buy_muid_to_cpp_slot(muid: i32) -> Option<u32> {
     if muid > 0 { Some(muid - 1) } else { None }
 }
 
-fn vendor_list_player_condition_failed_id(player_condition_id: u32) -> i32 {
-    player_condition_id as i32
+fn vendor_player_condition_failed_id_like_cpp(
+    player_condition_id: u32,
+    store: Option<&PlayerConditionStore>,
+    context: Option<PlayerConditionContextLikeCpp<'_>>,
+) -> i32 {
+    if player_condition_id == 0 {
+        return 0;
+    }
+
+    let (Some(store), Some(context)) = (store, context) else {
+        return player_condition_id as i32;
+    };
+
+    let Some(condition) = store.get(player_condition_id) else {
+        return 0;
+    };
+
+    if is_player_meeting_condition_like_cpp(condition, &context) {
+        0
+    } else {
+        player_condition_id as i32
+    }
 }
 
-fn vendor_buy_player_condition_block_result(player_condition_id: u32) -> Option<InventoryResult> {
-    if player_condition_id == 0 {
+fn vendor_buy_player_condition_block_result_like_cpp(
+    player_condition_id: u32,
+    store: Option<&PlayerConditionStore>,
+    context: Option<PlayerConditionContextLikeCpp<'_>>,
+) -> Option<InventoryResult> {
+    if vendor_player_condition_failed_id_like_cpp(player_condition_id, store, context) == 0 {
         None
     } else {
         Some(InventoryResult::ItemLocked)
@@ -2069,6 +2097,7 @@ impl WorldSession {
 
         // Trinity clears buyback slots before SaveToDB; persisted buyback items must not survive logout.
         self.clear_buyback_on_logout().await;
+        self.save_account_mounts_like_cpp().await;
 
         if let Some(player_guid) = self.player_guid() {
             self.close_active_loot_windows_like_cpp(player_guid);
@@ -2214,6 +2243,30 @@ impl WorldSession {
         }
         self.clear_buyback_runtime_like_cpp();
         self.sync_object_accessor_player();
+    }
+
+    async fn save_account_mounts_like_cpp(&self) {
+        let Some(login_db) = self.login_db() else {
+            return;
+        };
+
+        for mount in self.account_mount_rows_like_cpp() {
+            let Ok(mount_spell_id) = u32::try_from(mount.spell_id) else {
+                continue;
+            };
+            let mut stmt = login_db.prepare(LoginStatements::REP_ACCOUNT_MOUNTS);
+            stmt.set_u32(0, self.battlenet_account_id());
+            stmt.set_u32(1, mount_spell_id);
+            stmt.set_u8(2, mount.flags);
+            if let Err(error) = login_db.execute(&stmt).await {
+                warn!(
+                    account = self.account_id,
+                    bnet_account = self.battlenet_account_id(),
+                    mount_spell_id,
+                    "Failed to save account mount flags: {error}"
+                );
+            }
+        }
     }
 
     /// Handle ConnectToFailed — client couldn't connect to instance port.
@@ -2607,6 +2660,7 @@ impl WorldSession {
         // racials, worn armor type). This matches C# behavior where
         // LearnSkillRewardedSpells() only runs for skills the character actually has.
         let mut known_skill_ids = std::collections::HashSet::<u16>::new();
+        let mut skill_values = std::collections::HashMap::<u16, u16>::new();
         {
             let mut skill_stmt = char_db.prepare(CharStatements::SEL_CHARACTER_SKILLS);
             skill_stmt.set_u64(0, guid.counter() as u64);
@@ -2615,8 +2669,10 @@ impl WorldSession {
                     if !skill_result.is_empty() {
                         loop {
                             let skill_id: u16 = skill_result.try_read(0).unwrap_or(0);
+                            let skill_value: u16 = skill_result.try_read(1).unwrap_or(0);
                             if skill_id > 0 {
                                 known_skill_ids.insert(skill_id);
+                                skill_values.insert(skill_id, skill_value);
                             }
                             if !skill_result.next_row() {
                                 break;
@@ -2634,6 +2690,7 @@ impl WorldSession {
                 }
             }
         }
+        self.set_player_skill_values_like_cpp(skill_values);
 
         // ── Merge DBC auto-learned spells + build SkillInfo ──
         // Only supplement from DBC if character has NO spells in DB (new character).
@@ -2871,6 +2928,7 @@ impl WorldSession {
 
         // Load active quests from characters DB
         self.load_player_quests().await;
+        let account_mounts = self.load_account_mounts_like_cpp().await;
 
         self.send_login_sequence(
             guid,
@@ -2889,6 +2947,7 @@ impl WorldSession {
             known_spells,
             action_buttons,
             skill_info_tuples,
+            account_mounts,
         );
 
         // Mark online in DB
@@ -4117,9 +4176,6 @@ impl WorldSession {
             hello.unit, self.account_id
         );
 
-        use crate::session::GossipOptionInfo;
-        use wow_packet::packets::gossip::ClientGossipOption;
-
         const GOSSIP_FLAG: u32 = 0x1;
 
         let (npc_flags, entry) = self
@@ -4152,6 +4208,225 @@ impl WorldSession {
         self.handle_npc_direct_interaction(hello).await;
     }
 
+    pub(crate) fn build_condition_player_object_like_cpp(&self) -> Option<WorldObject> {
+        let mut player = WorldObject::new(
+            false,
+            TypeId::Player,
+            TypeMask::OBJECT | TypeMask::UNIT | TypeMask::PLAYER,
+        );
+        player.object_mut().create(self.player_guid()?);
+        let _ = player.set_map(u32::from(self.player_map_id_like_cpp()), 0);
+        if let Some(position) = self.player_position_like_cpp() {
+            player.relocate(position);
+        }
+        Some(player)
+    }
+
+    pub(crate) fn build_condition_creature_object_like_cpp(
+        &mut self,
+        npc_guid: ObjectGuid,
+    ) -> Option<(WorldObject, crate::conditions::ConditionUnitSnapshot)> {
+        self.mutate_world_creature(npc_guid, |creature| {
+            let mut source =
+                WorldObject::new(false, TypeId::Unit, TypeMask::OBJECT | TypeMask::UNIT);
+            source.object_mut().create(creature.guid());
+            source.object_mut().set_entry(creature.entry());
+            let _ = source.set_map(creature.map_id(), creature.instance_id());
+            source.relocate(creature.position());
+            *source.phase_shift_mut() = creature.phase_shift().clone();
+            let snapshot = crate::conditions::ConditionUnitSnapshot {
+                level: u32::from(creature.level()),
+                health: u64::from(creature.current_hp()),
+                max_health: u64::from(creature.max_hp()),
+                class_mask: 0,
+                race: 0,
+                creature_type: None,
+                is_alive: creature.is_alive(),
+                is_charmed: false,
+                in_water: false,
+                unit_state: 0,
+                stand_state: UnitStandStateType::Stand as u32,
+            };
+            (source, snapshot)
+        })
+    }
+
+    pub(crate) fn condition_player_unit_snapshot_like_cpp(
+        &self,
+    ) -> crate::conditions::ConditionUnitSnapshot {
+        crate::conditions::ConditionUnitSnapshot {
+            level: u32::from(self.player_level_like_cpp()),
+            health: 1,
+            max_health: 1,
+            class_mask: player_class_mask(self.player_class_like_cpp()),
+            race: self.player_race_like_cpp(),
+            creature_type: None,
+            is_alive: self.player_is_alive_like_cpp(),
+            is_charmed: false,
+            in_water: false,
+            unit_state: 0,
+            stand_state: UnitStandStateType::Stand as u32,
+        }
+    }
+
+    pub(crate) fn condition_player_snapshot_like_cpp(
+        &self,
+    ) -> crate::conditions::ConditionPlayerSnapshot {
+        crate::conditions::ConditionPlayerSnapshot {
+            team: player_team_for_race_cpp(self.player_race_like_cpp()) as u32,
+            native_gender: u32::from(self.player_gender_like_cpp()),
+            drunken_state: 0,
+            can_be_game_master: false,
+            is_game_master: false,
+            pet_type: None,
+            is_in_flight: false,
+        }
+    }
+
+    fn gossip_conditions_meet_like_cpp(
+        &mut self,
+        condition_store: &ConditionEntriesByTypeStore,
+        source_type: ConditionSourceType,
+        source_group: u32,
+        source_entry: i32,
+        npc_guid: ObjectGuid,
+    ) -> bool {
+        let Some(conditions) = condition_store
+            .conditions_for_like_cpp(source_type, ConditionId::new(source_group, source_entry, 0))
+        else {
+            return true;
+        };
+
+        let Some(player_object) = self.build_condition_player_object_like_cpp() else {
+            warn!(
+                "Gossip condition check failed closed: missing player object for {:?}",
+                source_type
+            );
+            return false;
+        };
+        let Some((source_object, source_unit_snapshot)) =
+            self.build_condition_creature_object_like_cpp(npc_guid)
+        else {
+            warn!(
+                "Gossip condition check failed closed: missing source object for {:?}",
+                source_type
+            );
+            return false;
+        };
+
+        let player_unit_snapshot = self.condition_player_unit_snapshot_like_cpp();
+        let player_snapshot = self.condition_player_snapshot_like_cpp();
+        let player_condition_store = self.player_condition_store().cloned();
+        let player_condition_context = self.represented_player_condition_context_like_cpp();
+
+        let mut source_info = crate::conditions::ConditionSourceInfo::from_targets(
+            Some(&player_object),
+            Some(&source_object),
+            None,
+        );
+        source_info.set_unit_target_snapshot(0, player_unit_snapshot);
+        source_info.set_player_target_snapshot(0, player_snapshot);
+        source_info.set_unit_target_snapshot(1, source_unit_snapshot);
+        if let Some(store) = player_condition_store.as_ref() {
+            source_info.set_player_condition_store(store.as_ref());
+            source_info.set_player_condition_context(0, player_condition_context.as_context(self));
+        }
+
+        crate::conditions::is_object_meet_to_conditions_like_cpp(
+            &mut source_info,
+            conditions.as_slice(),
+            condition_store,
+            |condition, source_info| match crate::conditions::condition_meets_basic_like_cpp(
+                condition,
+                source_info,
+                |current_area, required_area| current_area == required_area,
+            ) {
+                crate::conditions::ConditionMeetResult::Evaluated(value) => value,
+                crate::conditions::ConditionMeetResult::Unsupported => {
+                    warn!(
+                        "Gossip condition check failed closed: unsupported {:?} for {:?} {}:{}",
+                        condition.condition_type, source_type, source_group, source_entry
+                    );
+                    false
+                }
+            },
+        )
+    }
+
+    fn gossip_menu_text_conditions_meet_like_cpp(
+        &mut self,
+        condition_store: &ConditionEntriesByTypeStore,
+        menu_id: u32,
+        text_id: u32,
+        npc_guid: ObjectGuid,
+    ) -> bool {
+        if condition_store
+            .conditions_for_like_cpp(
+                ConditionSourceType::GossipMenu,
+                ConditionId::new(menu_id, text_id as i32, 0),
+            )
+            .is_some()
+        {
+            return self.gossip_conditions_meet_like_cpp(
+                condition_store,
+                ConditionSourceType::GossipMenu,
+                menu_id,
+                text_id as i32,
+                npc_guid,
+            );
+        }
+
+        self.gossip_conditions_meet_like_cpp(
+            condition_store,
+            ConditionSourceType::GossipMenu,
+            menu_id,
+            0,
+            npc_guid,
+        )
+    }
+
+    fn vendor_item_conditions_meet_like_cpp(
+        condition_store: &ConditionEntriesByTypeStore,
+        creature_entry: u32,
+        item_id: u32,
+        player_object: Option<&WorldObject>,
+        vendor_object: Option<&WorldObject>,
+        player_unit_snapshot: crate::conditions::ConditionUnitSnapshot,
+        player_snapshot: crate::conditions::ConditionPlayerSnapshot,
+        vendor_unit_snapshot: Option<crate::conditions::ConditionUnitSnapshot>,
+        player_condition_store: Option<&PlayerConditionStore>,
+        player_condition_context: Option<PlayerConditionContextLikeCpp<'_>>,
+    ) -> bool {
+        crate::conditions::is_object_meeting_vendor_item_conditions_like_cpp(
+            condition_store,
+            creature_entry,
+            item_id,
+            player_object,
+            vendor_object,
+            |condition, source_info| {
+                source_info.set_unit_target_snapshot(0, player_unit_snapshot);
+                source_info.set_player_target_snapshot(0, player_snapshot);
+                if let Some(vendor_unit_snapshot) = vendor_unit_snapshot {
+                    source_info.set_unit_target_snapshot(1, vendor_unit_snapshot);
+                }
+                if let (Some(store), Some(context)) =
+                    (player_condition_store, player_condition_context)
+                {
+                    source_info.set_player_condition_store(store);
+                    source_info.set_player_condition_context(0, context);
+                }
+                match crate::conditions::condition_meets_basic_like_cpp(
+                    condition,
+                    source_info,
+                    |current_area, required_area| current_area == required_area,
+                ) {
+                    crate::conditions::ConditionMeetResult::Evaluated(value) => value,
+                    crate::conditions::ConditionMeetResult::Unsupported => false,
+                }
+            },
+        )
+    }
+
     /// Build a GossipMessage from the database for a creature entry.
     /// Returns None if no gossip menu exists.
     async fn build_gossip_menu(
@@ -4176,10 +4451,14 @@ impl WorldSession {
         }
         let menu_id: u32 = menu_result.try_read(0)?;
 
-        // 2. Get TextID from gossip_menu, then resolve BroadcastTextID from npc_text
-        let mut stmt = world_db.prepare(WorldStatements::SEL_GOSSIP_MENU);
+        let condition_store = self.condition_store().cloned();
+
+        // 2. Get TextID from gossip_menu, then resolve BroadcastTextID from npc_text.
+        // C++ Player::GetGossipTextId iterates every gossip_menu row and keeps the last row whose
+        // attached GossipMenu conditions meet for (player, source).
+        let mut stmt = world_db.prepare(WorldStatements::SEL_GOSSIP_MENU_TEXTS);
         stmt.set_u32(0, menu_id);
-        let text_result: wow_database::SqlResult =
+        let mut text_result: wow_database::SqlResult =
             tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
                 .await
                 .ok()?
@@ -4187,7 +4466,25 @@ impl WorldSession {
         let npc_text_id: u32 = if text_result.is_empty() {
             1
         } else {
-            text_result.try_read::<u32>(0).unwrap_or(1)
+            let mut selected = 1;
+            loop {
+                let text_id = text_result.try_read::<u32>(0).unwrap_or(1);
+                let meets = condition_store.as_ref().is_none_or(|store| {
+                    self.gossip_menu_text_conditions_meet_like_cpp(
+                        store.as_ref(),
+                        menu_id,
+                        text_id,
+                        npc_guid,
+                    )
+                });
+                if meets {
+                    selected = text_id;
+                }
+                if !text_result.next_row() {
+                    break;
+                }
+            }
+            selected
         };
 
         // Resolve BroadcastTextID from npc_text (C# uses BroadcastTextID, NOT TextID)
@@ -4254,7 +4551,7 @@ impl WorldSession {
         }
 
         // Resolve localized text for each option via OptionBroadcastTextID.
-        let locale = &self.locale;
+        let locale = self.locale.clone();
         info!(
             "Gossip locale='{}' for {} options",
             locale,
@@ -4263,12 +4560,24 @@ impl WorldSession {
         let mut gossip_options = Vec::new();
         let mut stored_options = Vec::new();
         for opt in &raw_options {
+            if let Some(store) = condition_store.as_ref()
+                && !self.gossip_conditions_meet_like_cpp(
+                    store.as_ref(),
+                    ConditionSourceType::GossipMenuOption,
+                    menu_id,
+                    opt.option_id as i32,
+                    npc_guid,
+                )
+            {
+                continue;
+            }
+
             let mut text = opt.option_text.clone();
 
             if opt.broadcast_text_id != 0 && locale != "enUS" {
                 let mut stmt = world_db.prepare(WorldStatements::SEL_BROADCAST_TEXT_LOCALE);
                 stmt.set_u32(0, opt.broadcast_text_id);
-                stmt.set_string(1, locale);
+                stmt.set_string(1, &locale);
                 if let Ok(Ok(r)) =
                     tokio::time::timeout(std::time::Duration::from_secs(2), world_db.query(&stmt))
                         .await
@@ -4598,6 +4907,13 @@ impl WorldSession {
         let mut expanded = std::collections::HashSet::<u32>::new();
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(entry);
+        let condition_store = self.condition_store().cloned();
+        let player_condition_store = self.player_condition_store().cloned();
+        let player_condition_context = self.represented_player_condition_context_like_cpp();
+        let player_condition_object = self.build_condition_player_object_like_cpp();
+        let vendor_condition_object = self.build_condition_creature_object_like_cpp(vendor_guid);
+        let player_unit_snapshot = self.condition_player_unit_snapshot_like_cpp();
+        let player_snapshot = self.condition_player_snapshot_like_cpp();
 
         'vendor_expansion: while let Some(vendor_entry) = queue.pop_front() {
             if !expanded.insert(vendor_entry) {
@@ -4672,8 +4988,10 @@ impl WorldSession {
                             durability: 0,
                             stack_count: maxcount,
                             extended_cost,
-                            player_condition_failed: vendor_list_player_condition_failed_id(
+                            player_condition_failed: vendor_player_condition_failed_id_like_cpp(
                                 player_condition_id,
+                                player_condition_store.as_deref(),
+                                Some(player_condition_context.as_context(self)),
                             ),
                             locked: false,
                             do_not_filter,
@@ -4740,10 +5058,37 @@ impl WorldSession {
                         continue;
                     }
                     if has_vendor_conditions {
-                        if !result.next_row() {
-                            break;
+                        let Some(store) = condition_store.as_ref() else {
+                            if !result.next_row() {
+                                break;
+                            }
+                            continue;
+                        };
+                        let (vendor_object, vendor_unit_snapshot) = vendor_condition_object
+                            .as_ref()
+                            .map(|(object, snapshot)| (Some(object), Some(*snapshot)))
+                            .unwrap_or((None, None));
+                        if !Self::vendor_item_conditions_meet_like_cpp(
+                            store.as_ref(),
+                            entry,
+                            item_id as u32,
+                            player_condition_object.as_ref(),
+                            vendor_object,
+                            player_unit_snapshot,
+                            player_snapshot,
+                            vendor_unit_snapshot,
+                            player_condition_store.as_deref(),
+                            Some(player_condition_context.as_context(self)),
+                        ) {
+                            warn!(
+                                "Vendor item condition not met for creature entry {} item {}",
+                                entry, item_id
+                            );
+                            if !result.next_row() {
+                                break;
+                            }
+                            continue;
                         }
-                        continue;
                     }
                     let refundable = vendor_list_item_refundable(
                         template.as_ref().map(|template| template.flags),
@@ -4763,8 +5108,10 @@ impl WorldSession {
                         durability,
                         stack_count: stack_count.max(1),
                         extended_cost,
-                        player_condition_failed: vendor_list_player_condition_failed_id(
+                        player_condition_failed: vendor_player_condition_failed_id_like_cpp(
                             player_condition_id,
+                            player_condition_store.as_deref(),
+                            Some(player_condition_context.as_context(self)),
                         ),
                         locked: false,
                         do_not_filter,
@@ -5026,6 +5373,42 @@ impl WorldSession {
             None => return,
         };
 
+        let condition_store = self.condition_store().cloned();
+        let player_condition_store = self.player_condition_store().cloned();
+        let player_condition_context = self.represented_player_condition_context_like_cpp();
+        if let Some(store) = condition_store.as_ref() {
+            let player_condition_object = self.build_condition_player_object_like_cpp();
+            let vendor_condition_object =
+                self.build_condition_creature_object_like_cpp(buy.vendor_guid);
+            let (vendor_object, vendor_unit_snapshot) = vendor_condition_object
+                .as_ref()
+                .map(|(object, snapshot)| (Some(object), Some(*snapshot)))
+                .unwrap_or((None, None));
+            if !Self::vendor_item_conditions_meet_like_cpp(
+                store.as_ref(),
+                vendor_entry,
+                buy.item_id as u32,
+                player_condition_object.as_ref(),
+                vendor_object,
+                self.condition_player_unit_snapshot_like_cpp(),
+                self.condition_player_snapshot_like_cpp(),
+                vendor_unit_snapshot,
+                player_condition_store.as_deref(),
+                Some(player_condition_context.as_context(self)),
+            ) {
+                warn!(
+                    "BuyItem: conditions not met for creature entry {} item {}",
+                    vendor_entry, buy.item_id
+                );
+                self.send_buy_error(
+                    BuyResult::CantFindItem,
+                    Some(buy.vendor_guid),
+                    buy.item_id as u32,
+                );
+                return;
+            }
+        }
+
         if buy.item_type == ItemVendorType::Currency as i32 {
             if !vendor_currency_type_is_known(
                 self.currency_types_store().map(|store| store.as_ref()),
@@ -5055,6 +5438,15 @@ impl WorldSession {
                     return;
                 }
             };
+
+            if let Some(result) = vendor_buy_player_condition_block_result_like_cpp(
+                vendor_item.player_condition_id,
+                player_condition_store.as_deref(),
+                Some(player_condition_context.as_context(self)),
+            ) {
+                self.send_equip_error(result, None, None, 0, 0);
+                return;
+            }
 
             if let Some(result) =
                 vendor_buy_currency_quantity_block_result(vendor_item.max_count, quantity)
@@ -5261,13 +5653,17 @@ impl WorldSession {
             }
             return;
         }
-        if let Some(result) = vendor_conditions_block_result(vendor_item.has_vendor_conditions) {
+        if condition_store.is_none()
+            && let Some(result) = vendor_conditions_block_result(vendor_item.has_vendor_conditions)
+        {
             self.send_buy_error(result, Some(buy.vendor_guid), buy.item_id as u32);
             return;
         }
-        if let Some(result) =
-            vendor_buy_player_condition_block_result(vendor_item.player_condition_id)
-        {
+        if let Some(result) = vendor_buy_player_condition_block_result_like_cpp(
+            vendor_item.player_condition_id,
+            player_condition_store.as_deref(),
+            Some(player_condition_context.as_context(self)),
+        ) {
             self.send_equip_error(result, None, None, 0, 0);
             return;
         }
@@ -7574,6 +7970,54 @@ impl WorldSession {
         }
     }
 
+    async fn load_account_mounts_like_cpp(&mut self) -> Vec<AccountMount> {
+        self.set_account_mounts_like_cpp(Vec::new());
+        let Some(login_db) = self.login_db() else {
+            return Vec::new();
+        };
+
+        let mut stmt = login_db.prepare(LoginStatements::SEL_ACCOUNT_MOUNTS);
+        stmt.set_u32(0, self.battlenet_account_id());
+
+        let mut result = match login_db.query(&stmt).await {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    account = self.account_id,
+                    bnet_account = self.battlenet_account_id(),
+                    "Failed to load account mounts: {e}"
+                );
+                return Vec::new();
+            }
+        };
+
+        if result.is_empty() {
+            return Vec::new();
+        }
+
+        let mut mounts = Vec::new();
+        loop {
+            let spell_id = result.try_read::<i32>(0).unwrap_or(0);
+            let flags = result.try_read::<u8>(1).unwrap_or(0);
+            let has_mount = spell_id > 0
+                && self.mount_store().is_none_or(|store| {
+                    store
+                        .get_by_source_spell_id_like_cpp(spell_id as u32)
+                        .is_some()
+                });
+            if has_mount {
+                mounts.push(AccountMount { spell_id, flags });
+            }
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        self.set_account_mounts_like_cpp(mounts.clone());
+        mounts
+    }
+
     /// Send the player login packet sequence to the client.
     ///
     /// Follows the exact C# RustyCore order:
@@ -7601,6 +8045,7 @@ impl WorldSession {
         known_spells: Vec<i32>,
         action_buttons: [i64; 180],
         skill_info: Vec<(u16, u16, u16, u16, u16, i16, u16)>,
+        account_mounts: Vec<AccountMount>,
     ) {
         // ── Phase 1: HandlePlayerLogin packets ──
 
@@ -7706,8 +8151,8 @@ impl WorldSession {
         self.send_raw_packet(&SetSpellModifier::flat_empty().to_bytes());
         self.send_raw_packet(&SetSpellModifier::pct_empty().to_bytes());
 
-        // 23. AccountMountUpdate (empty, full update)
-        self.send_packet(&AccountMountUpdate);
+        // 23. AccountMountUpdate
+        self.send_packet(&AccountMountUpdate::full(account_mounts));
 
         // 24. AccountToyUpdate (empty, full update)
         self.send_packet(&AccountToyUpdate);
@@ -8142,12 +8587,50 @@ mod tests {
     }
 
     #[test]
-    fn vendor_player_condition_fail_closed_until_condition_mgr_exists() {
-        assert_eq!(vendor_list_player_condition_failed_id(0), 0);
-        assert_eq!(vendor_list_player_condition_failed_id(42), 42);
-        assert_eq!(vendor_buy_player_condition_block_result(0), None);
+    fn vendor_player_condition_id_evaluates_player_condition_store_like_cpp() {
+        let store = PlayerConditionStore::from_entries([
+            wow_data::PlayerConditionEntry {
+                id: 42,
+                class_mask: 0,
+                ..Default::default()
+            },
+            wow_data::PlayerConditionEntry {
+                id: 43,
+                class_mask: 1 << 1,
+                ..Default::default()
+            },
+        ]);
+        let context = PlayerConditionContextLikeCpp {
+            class_mask: 1,
+            ..Default::default()
+        };
+
         assert_eq!(
-            vendor_buy_player_condition_block_result(42),
+            vendor_player_condition_failed_id_like_cpp(0, Some(&store), Some(context)),
+            0
+        );
+        assert_eq!(
+            vendor_player_condition_failed_id_like_cpp(42, Some(&store), Some(context)),
+            0
+        );
+        assert_eq!(
+            vendor_player_condition_failed_id_like_cpp(43, Some(&store), Some(context)),
+            43
+        );
+        assert_eq!(
+            vendor_player_condition_failed_id_like_cpp(999, Some(&store), Some(context)),
+            0
+        );
+        assert_eq!(
+            vendor_buy_player_condition_block_result_like_cpp(42, Some(&store), Some(context)),
+            None
+        );
+        assert_eq!(
+            vendor_buy_player_condition_block_result_like_cpp(43, Some(&store), Some(context)),
+            Some(InventoryResult::ItemLocked)
+        );
+        assert_eq!(
+            vendor_buy_player_condition_block_result_like_cpp(42, None, Some(context)),
             Some(InventoryResult::ItemLocked)
         );
     }

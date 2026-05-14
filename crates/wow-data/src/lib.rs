@@ -7,10 +7,16 @@
 
 pub mod area;
 pub mod area_trigger;
+pub mod area_trigger_template;
 pub mod chr_specialization;
 pub mod condition_attachments;
 pub mod conditions;
+pub mod creature_display;
+pub mod creature_template;
 pub mod currency;
+pub mod db2_id_store;
+pub mod difficulty;
+pub mod disable_mgr;
 pub mod dungeon_encounter;
 pub mod gossip;
 pub mod graveyard;
@@ -30,33 +36,58 @@ pub mod item_random_suffix;
 pub mod item_stats;
 pub mod lock;
 pub mod map;
+pub mod mount;
 pub mod phase;
 pub mod phasing;
+pub mod player_condition;
 pub mod player_power;
 pub mod player_stats;
 pub mod quest;
 pub mod quest_xp;
 pub mod rand_prop_points;
 pub mod skill;
+pub mod spawn_group;
 pub mod spell;
 pub mod spell_item_enchantment;
 pub mod terrain_swap;
 pub mod ui_map;
+pub mod vehicle;
 pub mod wdc4;
+pub mod world_id_store;
+pub mod world_safe_locs;
+pub mod world_spawn_id_store;
+pub mod world_state_expression;
 
 pub use area::{AreaTableEntry, AreaTableStore};
 pub use area_trigger::{
     AreaTriggerData, AreaTriggerStore, AreaTriggerTeleport, TriggerShape, load_area_triggers,
 };
+pub use area_trigger_template::AreaTriggerTemplateStore;
 pub use chr_specialization::{ChrSpecializationEntry, ChrSpecializationStore};
 pub use condition_attachments::{
     ConditionAttachmentReportLikeCpp, attach_loaded_conditions_like_cpp,
 };
 pub use conditions::{
-    Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionsByEntryMap,
-    ConditionsReference,
+    Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionLoadReport,
+    ConditionsByEntryMap, ConditionsReference, load_condition_rows_like_cpp,
+};
+pub use creature_display::{
+    CreatureDisplayInfoEntry, CreatureDisplayInfoStore, CreatureModelDataEntry,
+    CreatureModelDataStore, DEFAULT_COLLISION_HEIGHT_LIKE_CPP, unit_collision_height_like_cpp,
+};
+pub use creature_template::{
+    CreatureTemplateMountEntryLikeCpp, CreatureTemplateMountModelLikeCpp,
+    CreatureTemplateMountStoreLikeCpp,
 };
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
+pub use db2_id_store::Db2IdStore;
+pub use difficulty::DifficultyStore;
+pub use disable_mgr::{
+    DISABLE_TYPE_BATTLEGROUND, DISABLE_TYPE_CRITERIA, DISABLE_TYPE_LFG_MAP, DISABLE_TYPE_MAP,
+    DISABLE_TYPE_MMAP, DISABLE_TYPE_OUTDOORPVP, DISABLE_TYPE_QUEST, DISABLE_TYPE_SPELL,
+    DISABLE_TYPE_VMAP, DisableDbRowLikeCpp, DisableLoadReportLikeCpp, DisableMgrLikeCpp,
+    DisableMgrRefsLikeCpp, DisableWorldObjectRefLikeCpp,
+};
 pub use dungeon_encounter::{DungeonEncounterEntry, DungeonEncounterStore};
 pub use gossip::{GossipConditionAttachmentReport, GossipMenu, GossipMenuItem, GossipStore};
 pub use graveyard::{
@@ -92,11 +123,31 @@ pub use item_stats::{
     ItemRandomPropertyTemplateEntry, ItemSparseTemplateEntry, ItemStatEntry, ItemStatsStore,
 };
 pub use lock::{LockEntry, LockStore};
-pub use map::{MapDifficultyEntry, MapDifficultyStore, MapEntry, MapStore};
+pub use map::{
+    MapDifficultyEntry, MapDifficultyStore, MapDifficultyXConditionEntry,
+    MapDifficultyXConditionStore, MapEntry, MapStore,
+};
+pub use mount::{
+    AREA_MOUNT_FLAG_ALLOW_FLYING_MOUNTS, AREA_MOUNT_FLAG_ALLOW_GROUND_MOUNTS,
+    AREA_MOUNT_FLAG_ALLOW_SURFACE_SWIMMING_MOUNTS,
+    AREA_MOUNT_FLAG_ALLOW_UNDERWATER_SWIMMING_MOUNTS, DISPLAYID_HIDDEN_MOUNT,
+    MOUNT_CAPABILITY_FLAG_FLOAT, MOUNT_CAPABILITY_FLAG_FLYING, MOUNT_CAPABILITY_FLAG_GROUND,
+    MOUNT_CAPABILITY_FLAG_IGNORE_RESTRICTIONS, MOUNT_CAPABILITY_FLAG_UNDERWATER,
+    MOUNT_FLAG_SELF_MOUNT, MountCapabilityContextLikeCpp, MountCapabilityEntry,
+    MountCapabilityStore, MountEntry, MountStore, MountTypeXCapabilityEntry,
+    MountTypeXCapabilityStore, MountXDisplayEntry, MountXDisplayStore,
+};
 pub use phase::{PhaseEntry, PhaseGroupStore, PhaseStore, PhaseXPhaseGroupEntry};
 pub use phasing::{
     PhaseAreaInfo, PhaseConditionAttachmentReport, PhaseConditionContainer, PhaseInfoStore,
     PhaseInfoStruct,
+};
+pub use player_condition::{
+    PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
+    PlayerConditionEntry, PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
+    PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp, PlayerConditionStore,
+    is_player_meeting_condition_like_cpp, player_condition_compare_like_cpp,
+    player_condition_logic_like_cpp,
 };
 pub use player_power::{
     ClassPowerIndexRecord, Db2PlayerPowerIndexResolver, PlayerClassPowerIndexStore,
@@ -104,7 +155,27 @@ pub use player_power::{
 pub use player_stats::{PlayerLevelStats, PlayerStatsStore};
 pub use rand_prop_points::{RandPropPointsEntry, RandPropPointsStore};
 pub use skill::{SkillInfoEntry, SkillStore};
-pub use spell::{SpellInfo, SpellStore};
+pub use spawn_group::{
+    SpawnGroupTemplate, SpawnGroupTemplateLoadReport, SpawnGroupTemplateRow,
+    SpawnGroupTemplateStore,
+};
+pub use spell::{SpellEffectInfo, SpellInfo, SpellStore};
 pub use spell_item_enchantment::{SpellItemEnchantmentEntry, SpellItemEnchantmentStore};
 pub use terrain_swap::{TerrainSwapInfo, TerrainSwapStore, load_terrain_swaps};
 pub use ui_map::{UiMapXMapArtEntry, UiMapXMapArtStore};
+pub use vehicle::{
+    VEHICLE_SEAT_FLAG_B_EJECTABLE, VEHICLE_SEAT_FLAG_B_USABLE_FORCED,
+    VEHICLE_SEAT_FLAG_CAN_ENTER_OR_EXIT, VEHICLE_SEAT_FLAG_CAN_SWITCH,
+    VehicleAccessoryStoreLikeCpp, VehicleEntry, VehicleSeatEntry, VehicleSeatStore, VehicleStore,
+    VehicleTemplateStoreLikeCpp,
+};
+pub use world_id_store::WorldIdStore;
+pub use world_safe_locs::{
+    WorldSafeLoc, WorldSafeLocLoadReport, WorldSafeLocRow, WorldSafeLocStore,
+};
+pub use world_spawn_id_store::WorldSpawnIdStore;
+pub use world_state_expression::{
+    WorldStateExpressionContextLikeCpp, WorldStateExpressionEntry, WorldStateExpressionStore,
+    WorldStateExpressionTimeLikeCpp, WorldStateExpressionWorldState,
+    is_meeting_world_state_expression_like_cpp,
+};

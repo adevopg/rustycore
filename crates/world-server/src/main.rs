@@ -29,7 +29,7 @@ use wow_loot::{
     LootConditionId, LootConditionLinkReport, LootConditionReferenceUseLikeCpp,
     LootReferenceCheckReport, LootStore, LootStoreKind, LootStores, LootTemplateRow,
     check_loot_condition_links_like_cpp, check_loot_condition_references_like_cpp,
-    check_loot_references_like_cpp,
+    check_loot_references_like_cpp, loot_store_kind_for_condition_source_type_like_cpp,
 };
 use wow_network::session_mgr::SessionManager;
 use wow_network::world_socket::{AccountInfo, AccountLookup};
@@ -447,11 +447,15 @@ async fn main() -> Result<()> {
             .context("Failed to load Map.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} maps from Map.db2", map_store.len());
-    let mmap_disabled_map_ids =
-        load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store).await?;
+    let (world_safe_loc_store, world_safe_loc_report) =
+        wow_data::WorldSafeLocStore::load_like_cpp(world_db.as_ref(), &map_store)
+            .await
+            .context("Failed to load C++ world_safe_locs")?;
     info!(
-        "Loaded {} C++ mmap disable rows",
-        mmap_disabled_map_ids.len()
+        "Loaded {} world safe locs ({} missing maps, {} invalid positions)",
+        world_safe_loc_store.len(),
+        world_safe_loc_report.missing_maps.len(),
+        world_safe_loc_report.invalid_positions.len()
     );
     let ui_map_x_map_art_store = Arc::new(
         wow_data::UiMapXMapArtStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
@@ -483,7 +487,6 @@ async fn main() -> Result<()> {
         .load_area_phases_like_cpp(world_db.as_ref(), &area_table_store, &phase_store)
         .await
         .context("Failed to load phase_area rows")?;
-    let phase_info_store = Arc::new(phase_info_store);
     info!(
         "Seeded {} phase info records and {} phase area rows",
         phase_info_store.phase_info_count(),
@@ -496,6 +499,181 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to load C++ terrain swap stores")?,
     );
+    let mut graveyard_store = wow_data::GraveyardStore::default();
+    let graveyard_report = graveyard_store
+        .load_graveyard_zones_like_cpp(
+            world_db.as_ref(),
+            |safe_loc_id| world_safe_loc_store.contains(safe_loc_id),
+            |area_id| area_table_store.get(area_id).is_some(),
+        )
+        .await
+        .context("Failed to load C++ graveyard_zone links")?;
+    info!(
+        "Loaded {} graveyard-zone links ({} missing safe locs, {} missing zones, {} duplicates)",
+        graveyard_report.loaded,
+        graveyard_report.missing_safe_locs.len(),
+        graveyard_report.missing_zones.len(),
+        graveyard_report.duplicates.len()
+    );
+    let (mut gossip_store, gossip_load_report) =
+        wow_data::GossipStore::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load C++ gossip_menu/gossip_menu_option condition keys")?;
+    info!(
+        "Loaded {} gossip menu rows and {} gossip menu option keys",
+        gossip_load_report.menu_rows, gossip_load_report.menu_item_rows
+    );
+    let (spawn_group_store, spawn_group_report) =
+        wow_data::SpawnGroupTemplateStore::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load C++ spawn_group_template rows")?;
+    info!(
+        "Loaded {} spawn group templates ({} invalid flags, {} system/manual flag fixes, {} inserted defaults)",
+        spawn_group_store.len(),
+        spawn_group_report.invalid_flags.len(),
+        spawn_group_report.system_manual_spawn_flags.len(),
+        spawn_group_report.inserted_default_groups.len()
+    );
+    let creature_template_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "creature_template",
+            WorldStatements::SEL_CREATURE_TEMPLATE_IDS,
+        )
+        .await
+        .context("Failed to load creature_template ids for C++ ConditionMgr validation")?,
+    );
+    let gameobject_template_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "gameobject_template",
+            WorldStatements::SEL_GAMEOBJECT_TEMPLATE_IDS,
+        )
+        .await
+        .context("Failed to load gameobject_template ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation world id stores: {} creature templates, {} gameobject templates",
+        creature_template_store.len(),
+        gameobject_template_store.len()
+    );
+    let creature_template_mount_store = Arc::new(
+        wow_data::CreatureTemplateMountStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load creature_template mount fallback rows")?,
+    );
+    info!(
+        "Loaded {} creature template mount fallback rows",
+        creature_template_mount_store.len()
+    );
+    let creature_display_info_store = Arc::new(
+        wow_data::CreatureDisplayInfoStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load CreatureDisplayInfo.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} creature display info rows",
+        creature_display_info_store.len()
+    );
+    let creature_model_data_store = Arc::new(
+        wow_data::CreatureModelDataStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load CreatureModelData.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} creature model data rows",
+        creature_model_data_store.len()
+    );
+    let vehicle_store = Arc::new(
+        wow_data::VehicleStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load Vehicle.db2 / hotfix rows")?,
+    );
+    info!("Loaded {} vehicle rows", vehicle_store.len());
+    let vehicle_seat_store = Arc::new(
+        wow_data::VehicleSeatStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load VehicleSeat.db2 / hotfix rows")?,
+    );
+    info!("Loaded {} vehicle seat rows", vehicle_seat_store.len());
+    let vehicle_template_store = Arc::new(
+        wow_data::VehicleTemplateStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load C++ vehicle_template rows")?,
+    );
+    let vehicle_accessory_store = Arc::new(
+        wow_data::VehicleAccessoryStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load C++ vehicle accessory rows")?,
+    );
+    let creature_spawn_store = Arc::new(
+        wow_data::WorldSpawnIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "creature",
+            WorldStatements::SEL_CREATURE_SPAWN_IDS,
+        )
+        .await
+        .context("Failed to load creature spawn ids for C++ ConditionMgr validation")?,
+    );
+    let gameobject_spawn_store = Arc::new(
+        wow_data::WorldSpawnIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "gameobject",
+            WorldStatements::SEL_GAMEOBJECT_SPAWN_IDS,
+        )
+        .await
+        .context("Failed to load gameobject spawn ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation spawn id stores: {} creature spawns, {} gameobject spawns",
+        creature_spawn_store.len(),
+        gameobject_spawn_store.len()
+    );
+    let active_event_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "game_event",
+            WorldStatements::SEL_VALID_GAME_EVENT_IDS,
+        )
+        .await
+        .context("Failed to load game_event ids for C++ ConditionMgr validation")?,
+    );
+    let world_state_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "world_state",
+            WorldStatements::SEL_WORLD_STATE_IDS,
+        )
+        .await
+        .context("Failed to load world_state ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation world id stores: {} valid game events, {} world states",
+        active_event_store.len(),
+        world_state_store.len()
+    );
+    let trainer_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "trainer",
+            WorldStatements::SEL_TRAINER_IDS,
+        )
+        .await
+        .context("Failed to load trainer ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation trainer id store: {} trainers",
+        trainer_store.len()
+    );
+    let area_trigger_template_store = Arc::new(
+        wow_data::AreaTriggerTemplateStore::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load areatrigger_template keys for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation area-trigger template store: {} templates",
+        area_trigger_template_store.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -504,6 +682,130 @@ async fn main() -> Result<()> {
     info!(
         "Loaded {} map difficulties from MapDifficulty.db2",
         map_difficulty_store.len()
+    );
+    let map_difficulty_x_condition_store = Arc::new(
+        wow_data::MapDifficultyXConditionStore::load(&data_dir, &locale).context(
+            "Failed to load MapDifficultyXCondition.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    info!(
+        "Loaded {} map difficulty conditions from MapDifficultyXCondition.db2",
+        map_difficulty_x_condition_store.len()
+    );
+    let mount_store = Arc::new(
+        wow_data::MountStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load Mount.db2 / hotfix rows")?,
+    );
+    info!("Loaded {} mounts from Mount.db2", mount_store.len());
+    let mount_capability_store = Arc::new(
+        wow_data::MountCapabilityStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load MountCapability.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} mount capabilities from MountCapability.db2",
+        mount_capability_store.len()
+    );
+    let mount_type_x_capability_store = Arc::new(
+        wow_data::MountTypeXCapabilityStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load MountTypeXCapability.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} mount type capability rows from MountTypeXCapability.db2",
+        mount_type_x_capability_store.len()
+    );
+    let mount_x_display_store = Arc::new(
+        wow_data::MountXDisplayStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)
+            .await
+            .context("Failed to load MountXDisplay.db2 / hotfix rows")?,
+    );
+    info!(
+        "Loaded {} mount display rows from MountXDisplay.db2",
+        mount_x_display_store.len()
+    );
+    let difficulty_store = Arc::new(
+        wow_data::DifficultyStore::load(&data_dir, &locale)
+            .context("Failed to load Difficulty.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} difficulties from Difficulty.db2",
+        difficulty_store.len()
+    );
+    let faction_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "Faction.db2")
+            .context("Failed to load Faction.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let achievement_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "Achievement.db2")
+            .context("Failed to load Achievement.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let criteria_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "Criteria.db2")
+            .context("Failed to load Criteria.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let battlemaster_list_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "BattlemasterList.db2")
+            .context("Failed to load BattlemasterList.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let char_titles_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "CharTitles.db2")
+            .context("Failed to load CharTitles.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let battle_pet_species_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "BattlePetSpecies.db2")
+            .context("Failed to load BattlePetSpecies.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let scenario_step_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "ScenarioStep.db2")
+            .context("Failed to load ScenarioStep.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let scene_script_package_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "SceneScriptPackage.db2").context(
+            "Failed to load SceneScriptPackage.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    let player_condition_store = Arc::new(
+        wow_data::PlayerConditionStore::load(&data_dir, &locale)
+            .context("Failed to load PlayerCondition.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let world_state_expression_store = Arc::new(
+        wow_data::WorldStateExpressionStore::load(&data_dir, &locale).context(
+            "Failed to load WorldStateExpression.db2 — check DataDir and DBC.Locale config",
+        )?,
+    );
+    let conversation_line_store = Arc::new(
+        wow_data::Db2IdStore::load(&data_dir, &locale, "ConversationLine.db2")
+            .context("Failed to load ConversationLine.db2 — check DataDir and DBC.Locale config")?,
+    );
+    let conversation_line_template_store = Arc::new(
+        wow_data::WorldIdStore::load_filtering_like_cpp(
+            world_db.as_ref(),
+            "conversation_line_template",
+            WorldStatements::SEL_CONVERSATION_LINE_TEMPLATE_IDS,
+            |line_id| conversation_line_store.contains(line_id),
+        )
+        .await
+        .context("Failed to load conversation_line_template ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} criteria, {} battlemaster lists, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} world state expressions, {} conversation lines",
+        faction_store.len(),
+        achievement_store.len(),
+        criteria_store.len(),
+        battlemaster_list_store.len(),
+        char_titles_store.len(),
+        battle_pet_species_store.len(),
+        scenario_step_store.len(),
+        scene_script_package_store.len(),
+        player_condition_store.len(),
+        world_state_expression_store.len(),
+        conversation_line_store.len()
+    );
+    info!(
+        "Loaded condition validation conversation line template store: {} templates",
+        conversation_line_template_store.len()
     );
 
     // Load ItemAppearance.db2 for item display-info resolution.
@@ -647,11 +949,9 @@ async fn main() -> Result<()> {
     );
 
     // Load spell metadata (cast time, cooldown, effects, etc.) — Phase 2
-    let spell_store = Arc::new(
-        wow_data::SpellStore::load(&hotfix_db)
-            .await
-            .context("Failed to load SpellStore")?,
-    );
+    let mut spell_store = wow_data::SpellStore::load(&hotfix_db)
+        .await
+        .context("Failed to load SpellStore")?;
     info!("Loaded {} spells from SpellStore", spell_store.len());
 
     // Load area trigger store (collision detection + teleportation)
@@ -666,6 +966,23 @@ async fn main() -> Result<()> {
         wow_data::quest::load_quests(&world_db)
             .await
             .context("Failed to load quest store")?,
+    );
+    let disable_mgr = Arc::new(
+        load_disable_mgr_like_cpp(
+            world_db.as_ref(),
+            &map_store,
+            &map_difficulty_store,
+            &spell_store,
+            quest_store.as_ref(),
+            criteria_store.as_ref(),
+            battlemaster_list_store.as_ref(),
+        )
+        .await?,
+    );
+    let mmap_disabled_map_ids = disable_mgr.disabled_mmap_map_ids_like_cpp();
+    info!(
+        "Loaded {} C++ mmap disable rows",
+        mmap_disabled_map_ids.len()
     );
 
     let loaded_loot_stores = load_loot_stores_like_cpp(&world_db, &item_store)
@@ -766,6 +1083,133 @@ async fn main() -> Result<()> {
     let player_registry = Arc::new(PlayerRegistry::new());
     let object_accessor = wow_world::new_shared_object_accessor();
 
+    let mut condition_load_report =
+        wow_data::conditions::load_condition_rows_like_cpp(world_db.as_ref(), |_| 0)
+            .await
+            .context("Failed to load C++ conditions table")?;
+    let loot_template_exists = |source_type: wow_constants::ConditionSourceType,
+                                source_group: u32| {
+        loot_store_kind_for_condition_source_type_like_cpp(source_type as i32)
+            .and_then(|kind| loot_stores.get(&kind))
+            .is_some_and(|store| store.have_loot_for(source_group))
+    };
+    let loot_source_entry_exists = |source_type: wow_constants::ConditionSourceType,
+                                    source_group: u32,
+                                    source_entry: i32| {
+        let Some(source_entry) = u32::try_from(source_entry).ok() else {
+            return false;
+        };
+        let Some(store) = loot_store_kind_for_condition_source_type_like_cpp(source_type as i32)
+            .and_then(|kind| loot_stores.get(&kind))
+        else {
+            return false;
+        };
+        let Some(template) = store.get_loot_for(source_group) else {
+            return false;
+        };
+
+        item_store.get(source_entry).is_some() || template.is_reference_like_cpp(source_entry)
+    };
+    let externally_skipped_conditions =
+        wow_data::conditions::apply_external_condition_validation_like_cpp(
+            &mut condition_load_report,
+            wow_data::conditions::ConditionExternalValidationStoresLikeCpp {
+                item_store: Some(item_store.as_ref()),
+                spell_store: Some(&spell_store),
+                area_table_store: Some(area_table_store.as_ref()),
+                skill_store: Some(skill_store.as_ref()),
+                map_store: Some(map_store.as_ref()),
+                phase_store: Some(phase_store.as_ref()),
+                quest_store: Some(quest_store.as_ref()),
+                area_trigger_store: Some(area_trigger_store.as_ref()),
+                graveyard_store: Some(&graveyard_store),
+                spawn_group_store: Some(&spawn_group_store),
+                creature_template_store: Some(creature_template_store.as_ref()),
+                gameobject_template_store: Some(gameobject_template_store.as_ref()),
+                trainer_store: Some(trainer_store.as_ref()),
+                conversation_line_template_store: Some(conversation_line_template_store.as_ref()),
+                area_trigger_template_store: Some(area_trigger_template_store.as_ref()),
+                creature_spawn_store: Some(creature_spawn_store.as_ref()),
+                gameobject_spawn_store: Some(gameobject_spawn_store.as_ref()),
+                active_event_store: Some(active_event_store.as_ref()),
+                world_state_store: Some(world_state_store.as_ref()),
+                difficulty_store: Some(difficulty_store.as_ref()),
+                faction_store: Some(faction_store.as_ref()),
+                achievement_store: Some(achievement_store.as_ref()),
+                char_titles_store: Some(char_titles_store.as_ref()),
+                battle_pet_species_store: Some(battle_pet_species_store.as_ref()),
+                scenario_step_store: Some(scenario_step_store.as_ref()),
+                scene_script_package_store: Some(scene_script_package_store.as_ref()),
+                player_condition_store: Some(player_condition_store.as_ref()),
+                max_skill_value: Some(max_skill_value_like_cpp(&world_configs)),
+                loot_template_exists: Some(&loot_template_exists),
+                loot_source_entry_exists: Some(&loot_source_entry_exists),
+            },
+        );
+    for skipped in &condition_load_report.skipped {
+        warn!(
+            "Condition row skipped during C++ load-shape parsing: {:?}: {:?}",
+            skipped.row, skipped.reason
+        );
+    }
+    for skipped in &externally_skipped_conditions {
+        warn!(
+            "Condition row skipped during C++ external validation: {:?}: {:?}",
+            skipped.condition, skipped.reason
+        );
+    }
+    for warning in &condition_load_report.warnings {
+        warn!("Condition load warning: {warning:?}");
+    }
+    let condition_store = Arc::new(condition_load_report.into_store_like_cpp());
+    let condition_attachment_report = wow_data::attach_loaded_conditions_like_cpp(
+        condition_store.as_ref(),
+        Some(&mut gossip_store),
+        Some(&mut spell_store),
+        Some(&mut phase_info_store),
+        Some(&mut graveyard_store),
+    );
+    for missing in &condition_attachment_report.gossip_menus.missing_menus {
+        warn!(
+            "ConditionMgr gossip attachment warning: GossipMenu {} not found for condition id {:?}",
+            missing.source_group, missing
+        );
+    }
+    for missing in &condition_attachment_report
+        .gossip_menu_items
+        .missing_menu_items
+    {
+        warn!(
+            "ConditionMgr gossip attachment warning: GossipMenuId {} Item {} not found for condition id {:?}",
+            missing.source_group, missing.source_entry, missing
+        );
+    }
+    info!(
+        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} spell implicit target condition rows attached ({} deferred), {} gossip menu condition rows attached ({} missing menus), {} gossip menu option condition rows attached ({} missing items), {} phase condition rows attached, {} graveyard condition rows attached",
+        condition_store.bucket_count(),
+        externally_skipped_conditions.len(),
+        condition_attachment_report.spell_click_aura_spell_ids.len(),
+        condition_attachment_report.spell_implicit_target_condition_count,
+        condition_attachment_report.deferred_spell_implicit_target_condition_count,
+        condition_attachment_report
+            .gossip_menus
+            .attached_condition_count,
+        condition_attachment_report.gossip_menus.missing_menus.len(),
+        condition_attachment_report
+            .gossip_menu_items
+            .attached_condition_count,
+        condition_attachment_report
+            .gossip_menu_items
+            .missing_menu_items
+            .len(),
+        condition_attachment_report.phases.attached_condition_count,
+        condition_attachment_report
+            .graveyards
+            .attached_condition_count
+    );
+    wow_world::conditions::set_condition_mgr_store_like_cpp(Arc::clone(&condition_store));
+    let spell_store = Arc::new(spell_store);
+
     // Shared group registry and pending invites
     let group_registry = Arc::new(GroupRegistry::new());
     let pending_invites = Arc::new(PendingInvites::new());
@@ -826,16 +1270,32 @@ async fn main() -> Result<()> {
         )),
         item_disenchant_loot_store: Some(Arc::clone(&item_disenchant_loot_store)),
         loot_stores: Some(Arc::clone(&loot_stores)),
+        condition_store: Some(Arc::clone(&condition_store)),
+        player_condition_store: Some(Arc::clone(&player_condition_store)),
+        disable_mgr: Some(Arc::clone(&disable_mgr)),
         lock_store: Some(Arc::clone(&lock_store)),
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
         skill_store: Some(Arc::clone(&skill_store)),
         spell_store: Some(Arc::clone(&spell_store)),
+        area_table_store: Some(Arc::clone(&area_table_store)),
         area_trigger_store: Some(Arc::clone(&area_trigger_store)),
         chr_specialization_store: Some(Arc::clone(&chr_specialization_store)),
         dungeon_encounter_store: Some(Arc::clone(&dungeon_encounter_store)),
         map_store: Some(Arc::clone(&map_store)),
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
+        map_difficulty_x_condition_store: Some(Arc::clone(&map_difficulty_x_condition_store)),
+        creature_template_mount_store: Some(Arc::clone(&creature_template_mount_store)),
+        creature_display_info_store: Some(Arc::clone(&creature_display_info_store)),
+        creature_model_data_store: Some(Arc::clone(&creature_model_data_store)),
+        mount_store: Some(Arc::clone(&mount_store)),
+        mount_capability_store: Some(Arc::clone(&mount_capability_store)),
+        mount_type_x_capability_store: Some(Arc::clone(&mount_type_x_capability_store)),
+        mount_x_display_store: Some(Arc::clone(&mount_x_display_store)),
+        vehicle_store: Some(Arc::clone(&vehicle_store)),
+        vehicle_seat_store: Some(Arc::clone(&vehicle_seat_store)),
+        vehicle_template_store: Some(Arc::clone(&vehicle_template_store)),
+        vehicle_accessory_store: Some(Arc::clone(&vehicle_accessory_store)),
         terrain_swap_store: Some(Arc::clone(&terrain_swap_store)),
         phase_store: Some(Arc::clone(&phase_store)),
         phase_group_store: Some(Arc::clone(&phase_group_store)),
@@ -1070,6 +1530,15 @@ fn world_config_bool(configs: &WorldConfigSet, enum_name: &str, default: bool) -
     configs.get_bool(enum_name).unwrap_or(default)
 }
 
+fn max_skill_value_like_cpp(configs: &WorldConfigSet) -> u32 {
+    let max_player_level = u32::from(world_config_u8(configs, "CONFIG_MAX_PLAYER_LEVEL", 80));
+    if max_player_level > 60 {
+        300 + ((max_player_level - 60) * 75) / 10
+    } else {
+        max_player_level * 5
+    }
+}
+
 fn mmap_runtime_config_like_cpp(
     configs: &WorldConfigSet,
     disabled_map_ids: HashSet<u32>,
@@ -1081,40 +1550,31 @@ fn mmap_runtime_config_like_cpp(
     }
 }
 
-async fn load_mmap_disabled_map_ids_like_cpp(
+async fn load_disable_mgr_like_cpp(
     world_db: &WorldDatabase,
     map_store: &wow_data::MapStore,
-) -> Result<HashSet<u32>> {
-    const DISABLE_TYPE_MMAP_LIKE_CPP: u32 = 7;
+    map_difficulty_store: &wow_data::MapDifficultyStore,
+    spell_store: &wow_data::SpellStore,
+    quest_store: &wow_data::quest::QuestStore,
+    criteria_store: &wow_data::Db2IdStore,
+    battlemaster_list_store: &wow_data::Db2IdStore,
+) -> Result<wow_data::DisableMgrLikeCpp> {
+    let (disable_mgr, _) = wow_data::DisableMgrLikeCpp::load_like_cpp(
+        world_db,
+        wow_data::DisableMgrRefsLikeCpp {
+            map_store: Some(map_store),
+            map_difficulty_store: Some(map_difficulty_store),
+            spell_store: Some(spell_store),
+            quest_store: Some(quest_store),
+            criteria_store: Some(criteria_store),
+            battlemaster_list_store: Some(battlemaster_list_store),
+            ..Default::default()
+        },
+    )
+    .await
+    .context("Failed to query C++ disables")?;
 
-    let mut result = world_db
-        .direct_query("SELECT sourceType, entry, flags, params_0, params_1 FROM disables WHERE sourceType = 7")
-        .await
-        .context("Failed to query C++ mmap disables")?;
-    let mut disabled_map_ids = HashSet::new();
-
-    if result.is_empty() {
-        return Ok(disabled_map_ids);
-    }
-
-    loop {
-        let source_type = result.try_read::<u32>(0).unwrap_or(u32::MAX);
-        let entry = result.try_read::<u32>(1).unwrap_or(0);
-
-        if source_type == DISABLE_TYPE_MMAP_LIKE_CPP {
-            if map_store.get(entry).is_some() {
-                disabled_map_ids.insert(entry);
-            } else {
-                warn!("Map entry {entry} from `disables` doesn't exist in DB2, skipped");
-            }
-        }
-
-        if !result.next_row() {
-            break;
-        }
-    }
-
-    Ok(disabled_map_ids)
+    Ok(disable_mgr)
 }
 
 fn loot_drop_rates_like_cpp(configs: &WorldConfigSet) -> LootDropRatesLikeCpp {
@@ -1603,6 +2063,7 @@ async fn create_session(
     if let Some(ref db) = resources.login_db {
         session.set_login_db(Arc::clone(db));
     }
+    session.set_battlenet_account_id(account.battlenet_account_id);
     if let Some(ref generator) = resources.guid_generator {
         session.set_guid_generator(Arc::clone(generator));
     }
@@ -1663,6 +2124,15 @@ async fn create_session(
     if let Some(ref stores) = resources.loot_stores {
         session.set_loot_stores(Arc::clone(stores));
     }
+    if let Some(ref store) = resources.condition_store {
+        session.set_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.player_condition_store {
+        session.set_player_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.disable_mgr {
+        session.set_disable_mgr(Arc::clone(store));
+    }
     if let Some(ref store) = resources.lock_store {
         session.set_lock_store(Arc::clone(store));
     }
@@ -1678,6 +2148,9 @@ async fn create_session(
     if let Some(ref store) = resources.spell_store {
         session.set_spell_store(Arc::clone(store));
     }
+    if let Some(ref store) = resources.area_table_store {
+        session.set_area_table_store(Arc::clone(store));
+    }
     if let Some(ref store) = resources.area_trigger_store {
         session.set_area_trigger_store(Arc::clone(store));
     }
@@ -1692,6 +2165,42 @@ async fn create_session(
     }
     if let Some(ref store) = resources.map_difficulty_store {
         session.set_map_difficulty_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.map_difficulty_x_condition_store {
+        session.set_map_difficulty_x_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_template_mount_store {
+        session.set_creature_template_mount_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_display_info_store {
+        session.set_creature_display_info_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_model_data_store {
+        session.set_creature_model_data_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_store {
+        session.set_mount_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_capability_store {
+        session.set_mount_capability_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_type_x_capability_store {
+        session.set_mount_type_x_capability_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.mount_x_display_store {
+        session.set_mount_x_display_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.vehicle_store {
+        session.set_vehicle_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.vehicle_seat_store {
+        session.set_vehicle_seat_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.vehicle_template_store {
+        session.set_vehicle_template_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.vehicle_accessory_store {
+        session.set_vehicle_accessory_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.terrain_swap_store {
         session.set_terrain_swap_store(Arc::clone(store));

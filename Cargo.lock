@@ -3070,6 +3070,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "num-traits",
+ "rand",
  "tracing",
  "wow-constants",
  "wow-core",

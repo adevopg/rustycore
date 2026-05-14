@@ -1092,18 +1092,72 @@ impl ServerPacket for AllAchievementData {
 
 // ── AccountMountUpdate (SMSG 0x25ae) ─────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountMount {
+    pub spell_id: i32,
+    pub flags: u8,
+}
+
 /// Account-wide mount collection. Sent with IsFullUpdate=true on login.
-pub struct AccountMountUpdate;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountMountUpdate {
+    pub is_full_update: bool,
+    pub mounts: Vec<AccountMount>,
+}
+
+impl AccountMountUpdate {
+    pub fn full(mounts: Vec<AccountMount>) -> Self {
+        Self {
+            is_full_update: true,
+            mounts,
+        }
+    }
+
+    pub fn partial(mounts: Vec<AccountMount>) -> Self {
+        Self {
+            is_full_update: false,
+            mounts,
+        }
+    }
+
+    pub fn empty_full() -> Self {
+        Self::full(Vec::new())
+    }
+}
 
 impl ServerPacket for AccountMountUpdate {
     const OPCODE: ServerOpcodes = ServerOpcodes::AccountMountUpdate;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_bit(true); // IsFullUpdate
-        // write_int32 auto-flushes pending bits
-        pkt.write_int32(0); // Mounts.Count
-        // No mount entries (each would be: i32 SpellID + 4 bits Flags)
+        pkt.write_bit(self.is_full_update);
+        pkt.write_int32(self.mounts.len() as i32);
+        for mount in &self.mounts {
+            pkt.write_int32(mount.spell_id);
+            pkt.write_bits(u32::from(mount.flags & 0x0f), 4);
+        }
         pkt.flush_bits();
+    }
+}
+
+// ── MountSetFavorite (CMSG 0x3633) ─────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MountSetFavorite {
+    pub mount_spell_id: u32,
+    pub is_favorite: bool,
+}
+
+impl ClientPacket for MountSetFavorite {
+    const OPCODE: ClientOpcodes = ClientOpcodes::MountSetFavorite;
+
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        pkt.skip_opcode();
+        let mount_spell_id = pkt.read_uint32()?;
+        let is_favorite = pkt.read_bit()?;
+        Ok(Self {
+            mount_spell_id,
+            is_favorite,
+        })
     }
 }
 
@@ -1588,6 +1642,28 @@ impl ServerPacket for NewWorld {
         pkt.write_float(0.0);
         pkt.write_float(0.0);
         pkt.write_float(0.0);
+    }
+}
+
+// ── TransferAborted (SMSG 0x2703) ───────────────────────────────────
+
+/// C++ `WorldPackets::Movement::TransferAborted`.
+pub struct TransferAborted {
+    pub map_id: u32,
+    pub arg: u8,
+    pub map_difficulty_x_condition_id: i32,
+    pub transfer_abort: u32,
+}
+
+impl ServerPacket for TransferAborted {
+    const OPCODE: ServerOpcodes = ServerOpcodes::TransferAborted;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_uint32(self.map_id);
+        pkt.write_uint8(self.arg);
+        pkt.write_int32(self.map_difficulty_x_condition_id);
+        pkt.write_bits(self.transfer_abort, 6);
+        pkt.flush_bits();
     }
 }
 
@@ -2410,6 +2486,24 @@ mod tests {
     }
 
     #[test]
+    fn transfer_aborted_matches_cpp_layout() {
+        let bytes = TransferAborted {
+            map_id: 571,
+            arg: 0,
+            map_difficulty_x_condition_id: 0,
+            transfer_abort: 16,
+        }
+        .to_bytes();
+
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x2703);
+        assert_eq!(&bytes[2..6], &571u32.to_le_bytes());
+        assert_eq!(bytes[6], 0);
+        assert_eq!(&bytes[7..11], &0i32.to_le_bytes());
+        assert_eq!(bytes[11], 0x40);
+    }
+
+    #[test]
     fn client_cache_version_serializes() {
         let pkt = ClientCacheVersion { cache_version: 42 };
         let bytes = pkt.to_bytes();
@@ -2763,7 +2857,7 @@ mod tests {
 
     #[test]
     fn account_mount_update_empty() {
-        let pkt = AccountMountUpdate;
+        let pkt = AccountMountUpdate::empty_full();
         let bytes = pkt.to_bytes();
         // opcode(2) + 1 bit(padded to 1 byte) + i32(4) = 7
         // wait: write_bit(true) → 1 bit buffered, then write_int32(0)
@@ -2771,6 +2865,72 @@ mod tests {
         assert_eq!(bytes.len(), 7);
         let opcode = u16::from_le_bytes([bytes[0], bytes[1]]);
         assert_eq!(opcode, 0x25ae);
+    }
+
+    #[test]
+    fn account_mount_update_writes_mount_entries_like_cpp() {
+        let pkt = AccountMountUpdate::full(vec![
+            AccountMount {
+                spell_id: 100,
+                flags: 0x01,
+            },
+            AccountMount {
+                spell_id: 200,
+                flags: 0x12,
+            },
+        ]);
+        let bytes = pkt.to_bytes();
+
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x25ae);
+        assert_eq!(bytes[2], 0x80);
+        assert_eq!(
+            i32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            2
+        );
+        assert_eq!(
+            i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+            100
+        );
+        assert_eq!(bytes[11], 0x10);
+        assert_eq!(
+            i32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            200
+        );
+        assert_eq!(bytes[16], 0x20);
+    }
+
+    #[test]
+    fn account_mount_update_partial_clears_full_update_bit_like_cpp() {
+        let pkt = AccountMountUpdate::partial(vec![AccountMount {
+            spell_id: 100,
+            flags: 0x01,
+        }]);
+        let bytes = pkt.to_bytes();
+
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x25ae);
+        assert_eq!(bytes[2], 0x00);
+        assert_eq!(
+            i32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            1
+        );
+    }
+
+    #[test]
+    fn mount_set_favorite_reads_cpp_field_order() {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_uint16(ClientOpcodes::MountSetFavorite as u16);
+        pkt.write_uint32(1234);
+        pkt.write_bit(true);
+        pkt.flush_bits();
+
+        let decoded = MountSetFavorite::read(&mut pkt).unwrap();
+        assert_eq!(
+            decoded,
+            MountSetFavorite {
+                mount_spell_id: 1234,
+                is_favorite: true,
+            }
+        );
     }
 
     #[test]

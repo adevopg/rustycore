@@ -15,6 +15,7 @@ pub enum WorldStatements {
     SEL_SMART_SCRIPTS,
     DEL_GAMEOBJECT,
     DEL_EVENT_GAMEOBJECT,
+    SEL_WORLD_SAFE_LOCS,
     SEL_GRAVEYARD_ZONE,
     INS_GRAVEYARD_ZONE,
     DEL_GRAVEYARD_ZONE,
@@ -51,6 +52,15 @@ pub enum WorldStatements {
     DEL_CREATURE,
     SEL_COMMANDS,
     SEL_CREATURE_TEMPLATE,
+    SEL_CREATURE_TEMPLATE_IDS,
+    /// Load all creature spawn GUID/entry pairs for C++ ConditionMgr validation.
+    SEL_CREATURE_SPAWN_IDS,
+    /// Load all gameobject spawn GUID/entry pairs for C++ ConditionMgr validation.
+    SEL_GAMEOBJECT_SPAWN_IDS,
+    /// Load valid game event IDs for C++ ConditionMgr ActiveEvent validation.
+    SEL_VALID_GAME_EVENT_IDS,
+    /// Load world-state template IDs for C++ ConditionMgr WorldState validation.
+    SEL_WORLD_STATE_IDS,
     /// SELECT Experience FROM player_xp_for_level ORDER BY Level
     SEL_PLAYER_XP_FOR_LEVEL,
     SEL_CREATURE_BY_ID,
@@ -100,6 +110,7 @@ pub enum WorldStatements {
     SEL_INSTANCE_SPAWN_GROUPS,
     /// Load gameobject template for query response.
     SEL_GAMEOBJECT_TEMPLATE_BY_ENTRY,
+    SEL_GAMEOBJECT_TEMPLATE_IDS,
     /// SELECT InventoryType FROM item_template WHERE entry = ?
     SEL_ITEM_INVENTORY_TYPE,
     /// Load base stats for all race/class/level combos.
@@ -110,10 +121,16 @@ pub enum WorldStatements {
     SEL_CREATURE_GOSSIP_MENU,
     /// Gossip menu text ID (gossip_menu).
     SEL_GOSSIP_MENU,
+    /// Gossip menu text IDs (gossip_menu), used for C++ condition-based text selection.
+    SEL_GOSSIP_MENU_TEXTS,
+    /// Load all C++ ObjectMgr gossip_menu keys.
+    SEL_GOSSIP_MENUS,
     /// NPC text BroadcastTextID by npc_text ID.
     SEL_NPC_TEXT,
     /// Gossip menu options (gossip_menu_option) — includes OptionBroadcastTextID for localization.
     SEL_GOSSIP_MENU_OPTIONS,
+    /// Load all C++ ObjectMgr gossip_menu_option condition keys.
+    SEL_GOSSIP_MENU_OPTION_KEYS,
     /// Localized text from broadcast_text_locale by ID and locale.
     SEL_BROADCAST_TEXT_LOCALE,
     /// Localized creature name/subname/title by entry and locale.
@@ -219,6 +236,12 @@ pub enum WorldStatements {
     SEL_TRAINER_SPELLS,
     /// Load trainer type and greeting by trainer ID.
     SEL_TRAINER_INFO,
+    /// Load trainer IDs for C++ ConditionMgr source validation.
+    SEL_TRAINER_IDS,
+    /// Load conversation line template IDs for C++ ConditionMgr source validation.
+    SEL_CONVERSATION_LINE_TEMPLATE_IDS,
+    /// Load area-trigger template keys for C++ ConditionMgr source validation.
+    SEL_AREA_TRIGGER_TEMPLATE_IDS,
 }
 
 impl StatementDef for WorldStatements {
@@ -245,6 +268,9 @@ impl StatementDef for WorldStatements {
             ),
             Self::DEL_GAMEOBJECT => "DELETE FROM gameobject WHERE guid = ?",
             Self::DEL_EVENT_GAMEOBJECT => "DELETE FROM game_event_gameobject WHERE guid = ?",
+            Self::SEL_WORLD_SAFE_LOCS => {
+                "SELECT ID, MapID, LocX, LocY, LocZ, Facing FROM world_safe_locs"
+            }
             Self::SEL_GRAVEYARD_ZONE => "SELECT ID, GhostZone FROM graveyard_zone",
             Self::INS_GRAVEYARD_ZONE => "INSERT INTO graveyard_zone (ID, GhostZone) VALUES (?, ?)",
             Self::DEL_GRAVEYARD_ZONE => "DELETE FROM graveyard_zone WHERE ID = ? AND GhostZone = ?",
@@ -357,6 +383,13 @@ impl StatementDef for WorldStatements {
                 "ScriptName, StringId FROM creature_template ct ",
                 "LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId WHERE entry = ? OR 1 = ?",
             ),
+            Self::SEL_CREATURE_TEMPLATE_IDS => "SELECT entry FROM creature_template",
+            Self::SEL_CREATURE_SPAWN_IDS => "SELECT guid, id FROM creature",
+            Self::SEL_GAMEOBJECT_SPAWN_IDS => "SELECT guid, id FROM gameobject",
+            Self::SEL_VALID_GAME_EVENT_IDS => {
+                "SELECT eventEntry FROM game_event WHERE eventEntry <> 0 AND (`length` > 0 OR world_event > 0)"
+            }
+            Self::SEL_WORLD_STATE_IDS => "SELECT ID FROM world_state",
             Self::SEL_CREATURE_BY_ID => "SELECT guid FROM creature WHERE id = ?",
             Self::SEL_CREATURE_ENTRY_BY_GUID => "SELECT id FROM creature WHERE guid = ?",
             Self::SEL_GAMEOBJECT_NEAREST => {
@@ -496,10 +529,13 @@ impl StatementDef for WorldStatements {
                 "Data32, Data33, Data34, ContentTuningId ",
                 "FROM gameobject_template WHERE entry = ?",
             ),
+            Self::SEL_GAMEOBJECT_TEMPLATE_IDS => "SELECT entry FROM gameobject_template",
             Self::SEL_CREATURE_GOSSIP_MENU => {
                 "SELECT MenuID FROM creature_template_gossip WHERE CreatureID = ?"
             }
             Self::SEL_GOSSIP_MENU => "SELECT TextID FROM gossip_menu WHERE MenuID = ? LIMIT 1",
+            Self::SEL_GOSSIP_MENU_TEXTS => "SELECT TextID FROM gossip_menu WHERE MenuID = ?",
+            Self::SEL_GOSSIP_MENUS => "SELECT MenuID, TextID FROM gossip_menu",
             Self::SEL_NPC_TEXT => "SELECT BroadcastTextID0 FROM npc_text WHERE ID = ? LIMIT 1",
             Self::SEL_GOSSIP_MENU_OPTIONS => concat!(
                 "SELECT GossipOptionID, OptionID, OptionNpc, OptionText, ",
@@ -507,6 +543,9 @@ impl StatementDef for WorldStatements {
                 "OptionBroadcastTextID ",
                 "FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID ASC",
             ),
+            Self::SEL_GOSSIP_MENU_OPTION_KEYS => {
+                "SELECT MenuID, OptionID FROM gossip_menu_option ORDER BY MenuID, OptionID"
+            }
             Self::SEL_BROADCAST_TEXT_LOCALE => {
                 "SELECT Text_lang FROM hotfixes.broadcast_text_locale WHERE ID = ? AND locale = ?"
             }
@@ -682,6 +721,9 @@ impl StatementDef for WorldStatements {
                  FROM trainer_spell WHERE TrainerId = ?"
             }
             Self::SEL_TRAINER_INFO => "SELECT Id, Type, Greeting FROM trainer WHERE Id = ?",
+            Self::SEL_TRAINER_IDS => "SELECT Id FROM trainer",
+            Self::SEL_CONVERSATION_LINE_TEMPLATE_IDS => "SELECT Id FROM conversation_line_template",
+            Self::SEL_AREA_TRIGGER_TEMPLATE_IDS => "SELECT Id, IsCustom FROM areatrigger_template",
             Self::SEL_QUEST_TEMPLATE => concat!(
                 "SELECT qt.ID, qt.QuestType, qt.QuestLevel, qt.QuestMaxScalingLevel, qt.MinLevel, qt.QuestSortID, ",
                 "qt.QuestInfoID, qt.SuggestedGroupNum, qt.RewardNextQuest, qt.RewardXPDifficulty, qt.RewardXPMultiplier, ",

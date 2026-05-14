@@ -26,8 +26,10 @@ use tracing::{debug, info, warn};
 
 use wow_constants::{
     BagFamilyMask, ClientOpcodes, InventoryResult, ItemFieldFlags, ItemFlags, ItemUpdateState,
+    TypeId,
 };
 use wow_core::ObjectGuid;
+use wow_data::{DISABLE_TYPE_SPELL, DisableWorldObjectRefLikeCpp};
 use wow_database::{CharStatements, SqlTransaction, WorldStatements};
 use wow_entities::INVENTORY_SLOT_BAG_0;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
@@ -60,6 +62,9 @@ const CONDITION_OBJECT_ENTRY_GUID_LIKE_CPP: i32 = 51;
 const CONDITION_TYPE_MASK_LIKE_CPP: i32 = 52;
 const TYPEID_PLAYER_LIKE_CPP: u32 = 6;
 const PLAYER_TYPE_MASK_LIKE_CPP: u32 = 0x0001 | 0x0020 | 0x0040;
+const SPELL_FAILED_SPELL_UNAVAILABLE_LIKE_CPP: i32 = 128;
+const MAP_BATTLEGROUND_LIKE_CPP: i8 = 3;
+const MAP_ARENA_LIKE_CPP: i8 = 4;
 
 // ── Handler registrations ─────────────────────────────────────────
 
@@ -191,6 +196,24 @@ impl WorldSession {
                 return;
             }
         };
+
+        // C++ `Spell::CheckCast`: disabled spells fail with
+        // `SPELL_FAILED_SPELL_UNAVAILABLE` before cooldown/cast processing.
+        if self.is_spell_disabled_for_player_like_cpp(spell_id) {
+            warn!(
+                account = self.account_id,
+                spell_id = spell_id,
+                "Cast attempt for disabled spell"
+            );
+            self.send_packet(&CastFailed {
+                cast_id,
+                spell_id,
+                reason: SPELL_FAILED_SPELL_UNAVAILABLE_LIKE_CPP,
+                fail_arg1: 0,
+                fail_arg2: 0,
+            });
+            return;
+        }
 
         // ── Validation: Cooldown ────────────────────────────────────────
         // Check global cooldown (GCD)
@@ -1583,6 +1606,35 @@ impl WorldSession {
     /// Handle `CMSG_CANCEL_CHANNELLING` — player stops a channelled spell.
     pub async fn handle_cancel_channelling(&mut self, _pkt: wow_packet::WorldPacket) {
         // TODO: Phase 3 — implement cancel channelling
+    }
+
+    fn is_spell_disabled_for_player_like_cpp(&self, spell_id: i32) -> bool {
+        let Some(disable_mgr) = self.disable_mgr() else {
+            return false;
+        };
+
+        let map_id = u32::from(self.player_map_id_like_cpp());
+        let (_, area_id) = self.player_zone_area_like_cpp();
+        let map_instance_type = self
+            .map_store()
+            .and_then(|store| store.get(map_id))
+            .map(|entry| entry.instance_type);
+
+        disable_mgr.is_disabled_for_like_cpp(
+            DISABLE_TYPE_SPELL,
+            spell_id as u32,
+            Some(DisableWorldObjectRefLikeCpp {
+                type_id: TypeId::Player,
+                map_id,
+                area_id,
+                is_pet: false,
+                is_battle_arena: map_instance_type == Some(MAP_ARENA_LIKE_CPP),
+                is_battleground: map_instance_type == Some(MAP_BATTLEGROUND_LIKE_CPP),
+                player_map_difficulty: None,
+            }),
+            0,
+            self.map_store().map(|store| store.as_ref()),
+        )
     }
 }
 
