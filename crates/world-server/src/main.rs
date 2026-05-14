@@ -1226,6 +1226,7 @@ async fn main() -> Result<()> {
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
         skill_store: Some(Arc::clone(&skill_store)),
         spell_store: Some(Arc::clone(&spell_store)),
+        area_table_store: Some(Arc::clone(&area_table_store)),
         area_trigger_store: Some(Arc::clone(&area_trigger_store)),
         chr_specialization_store: Some(Arc::clone(&chr_specialization_store)),
         dungeon_encounter_store: Some(Arc::clone(&dungeon_encounter_store)),
@@ -2087,6 +2088,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.spell_store {
         session.set_spell_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.area_table_store {
+        session.set_area_table_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.area_trigger_store {
         session.set_area_trigger_store(Arc::clone(store));

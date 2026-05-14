@@ -29,19 +29,20 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
-    AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore, CurrencyTypesEntry,
-    CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp, DisableWorldObjectRefLikeCpp,
-    DungeonEncounterStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore,
-    ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
-    ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
-    ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
-    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapDifficultyXConditionStore,
-    MapStore, MountCapabilityStore, MountStore, MountTypeXCapabilityStore, MountXDisplayStore,
-    PhaseGroupStore, PhaseStore, PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp,
-    PlayerConditionCountLikeCpp, PlayerConditionPartyStatusLikeCpp,
-    PlayerConditionQuestKillLikeCpp, PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp,
-    PlayerConditionStore, PlayerStatsStore, RandPropPointsStore, SkillStore,
-    SpellItemEnchantmentStore, SpellStore, is_player_meeting_condition_like_cpp,
+    AreaTableStore, AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore,
+    CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp,
+    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
+    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
+    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
+    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
+    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore,
+    MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
+    MountTypeXCapabilityStore, MountXDisplayStore, PhaseGroupStore, PhaseStore,
+    PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
+    PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
+    PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp, PlayerConditionStore,
+    PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    is_player_meeting_condition_like_cpp,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -696,6 +697,9 @@ pub struct WorldSession {
 
     // Skill store (auto-learned spells from SkillLineAbility.db2 + SkillRaceClassInfo.db2)
     skill_store: Option<Arc<SkillStore>>,
+
+    // Area table store (area hierarchy + mount flags)
+    area_table_store: Option<Arc<AreaTableStore>>,
 
     // Area trigger store (collision detection + teleportation)
     area_trigger_store: Option<Arc<AreaTriggerStore>>,
@@ -1409,6 +1413,7 @@ impl WorldSession {
             spell_item_enchantment_store: None,
             hotfix_blob_cache: None,
             skill_store: None,
+            area_table_store: None,
             area_trigger_store: None,
             chr_specialization_store: None,
             dungeon_encounter_store: None,
@@ -3638,6 +3643,10 @@ impl WorldSession {
     /// Get the spell store reference.
     pub fn spell_store(&self) -> Option<&Arc<SpellStore>> {
         self.spell_store.as_ref()
+    }
+
+    pub fn set_area_table_store(&mut self, store: Arc<AreaTableStore>) {
+        self.area_table_store = Some(store);
     }
 
     /// Set the quest store shared reference.
@@ -6426,6 +6435,60 @@ impl WorldSession {
     }
 
     #[allow(dead_code)]
+    pub(crate) fn represented_mount_capability_for_type_like_cpp(
+        &self,
+        mount_type_id: u16,
+        riding_skill: u32,
+        mount_restriction_flags: Option<u8>,
+        is_submerged: bool,
+        is_in_water: bool,
+    ) -> Option<wow_data::MountCapabilityEntry> {
+        let capability_store = self.mount_capability_store.as_ref()?;
+        let type_store = self.mount_type_x_capability_store.as_ref()?;
+        let area_store = self.area_table_store.as_ref()?;
+
+        let map_id = u32::from(self.player_map_id_like_cpp());
+        let map = self.map_store.as_ref().and_then(|store| store.get(map_id));
+        let (_, area_id) = self.player_zone_area_like_cpp();
+        let mount_flags = mount_restriction_flags.unwrap_or_else(|| {
+            area_store
+                .get(area_id)
+                .map(|area| area.mount_flags as u8)
+                .unwrap_or(0)
+        });
+        let context = wow_data::MountCapabilityContextLikeCpp {
+            riding_skill,
+            mount_flags,
+            is_submerged,
+            is_in_water,
+            map_id: map_id as i32,
+            cosmetic_parent_map_id: map
+                .map(|entry| i32::from(entry.cosmetic_parent_map_id))
+                .unwrap_or(-1),
+            parent_map_id: map
+                .map(|entry| i32::from(entry.parent_map_id))
+                .unwrap_or(-1),
+        };
+
+        capability_store
+            .select_for_mount_type_like_cpp(
+                type_store,
+                mount_type_id,
+                &context,
+                |required_area_id| {
+                    area_store.is_in_area_like_cpp(area_id, u32::from(required_area_id))
+                },
+                |aura_id| {
+                    self.visible_auras
+                        .values()
+                        .any(|aura| u32::try_from(aura.spell_id).ok() == Some(aura_id))
+                },
+                |spell_id| self.known_spells_like_cpp().contains(&spell_id),
+            )
+            .copied()
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn represented_failed_map_difficulty_x_condition_like_cpp(
         &self,
         map_difficulty_id: u32,
@@ -9085,6 +9148,99 @@ mod tests {
         assert!(session.represented_mount_source_spell_usable_like_cpp(100));
         assert!(!session.represented_mount_source_spell_usable_like_cpp(101));
         assert!(!session.represented_mount_source_spell_usable_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_mount_capability_for_type_uses_session_state_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.current_map_id = 1;
+        session.set_player_zone_area_like_cpp(10, 77);
+        session.set_known_spells_like_cpp(vec![456]);
+        session
+            .apply_aura(123, ObjectGuid::EMPTY, 30_000, 0)
+            .unwrap();
+        session.set_area_table_store(Arc::new(wow_data::AreaTableStore::from_entries([
+            wow_data::AreaTableEntry {
+                id: 10,
+                parent_area_id: 0,
+                mount_flags: i32::from(wow_data::AREA_MOUNT_FLAG_ALLOW_GROUND_MOUNTS),
+                flags: 0,
+            },
+            wow_data::AreaTableEntry {
+                id: 77,
+                parent_area_id: 10,
+                mount_flags: i32::from(wow_data::AREA_MOUNT_FLAG_ALLOW_GROUND_MOUNTS),
+                flags: 0,
+            },
+        ])));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: 0,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+            wow_data::MapEntry {
+                id: 1,
+                instance_type: 0,
+                parent_map_id: 0,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.set_mount_capability_store(Arc::new(wow_data::MountCapabilityStore::from_entries(
+            [
+                wow_data::MountCapabilityEntry {
+                    id: 10,
+                    flags: wow_data::MOUNT_CAPABILITY_FLAG_FLYING,
+                    req_riding_skill: 0,
+                    req_area_id: 0,
+                    req_spell_aura_id: 0,
+                    req_spell_known_id: 0,
+                    mod_spell_aura_id: 1000,
+                    req_map_id: -1,
+                },
+                wow_data::MountCapabilityEntry {
+                    id: 11,
+                    flags: wow_data::MOUNT_CAPABILITY_FLAG_GROUND,
+                    req_riding_skill: 75,
+                    req_area_id: 10,
+                    req_spell_aura_id: 123,
+                    req_spell_known_id: 456,
+                    mod_spell_aura_id: 1001,
+                    req_map_id: 0,
+                },
+            ],
+        )));
+        session.set_mount_type_x_capability_store(Arc::new(
+            wow_data::MountTypeXCapabilityStore::from_entries([
+                wow_data::MountTypeXCapabilityEntry {
+                    id: 1,
+                    mount_type_id: 7,
+                    mount_capability_id: 10,
+                    order_index: 0,
+                },
+                wow_data::MountTypeXCapabilityEntry {
+                    id: 2,
+                    mount_type_id: 7,
+                    mount_capability_id: 11,
+                    order_index: 1,
+                },
+            ]),
+        ));
+
+        assert_eq!(
+            session
+                .represented_mount_capability_for_type_like_cpp(7, 75, None, false, false)
+                .map(|capability| capability.id),
+            Some(11)
+        );
+        assert!(
+            session
+                .represented_mount_capability_for_type_like_cpp(7, 74, None, false, false)
+                .is_none()
+        );
     }
 
     #[test]

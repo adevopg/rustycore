@@ -90,6 +90,7 @@ pub struct SessionResources {
     pub hotfix_blob_cache: Option<Arc<wow_data::HotfixBlobCache>>,
     pub skill_store: Option<Arc<wow_data::SkillStore>>,
     pub spell_store: Option<Arc<wow_data::SpellStore>>,
+    pub area_table_store: Option<Arc<wow_data::AreaTableStore>>,
     pub area_trigger_store: Option<Arc<wow_data::AreaTriggerStore>>,
     pub chr_specialization_store: Option<Arc<wow_data::ChrSpecializationStore>>,
     pub dungeon_encounter_store: Option<Arc<wow_data::DungeonEncounterStore>>,
