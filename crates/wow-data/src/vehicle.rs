@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use tracing::info;
+use wow_core::Position;
 use wow_database::{HotfixDatabase, HotfixStatements, WorldDatabase};
 use wow_entities::{VehicleAccessory, VehicleSeatAddon, VehicleSeatInfo, VehicleTemplate};
 
@@ -23,6 +24,7 @@ pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED: i32 = 0x0000_0002;
 pub const VEHICLE_SEAT_FLAG_B_EJECTABLE: i32 = 0x0000_0020;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_2: i32 = 0x0000_0040;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_3: i32 = 0x0000_0100;
+pub const VEHICLE_SEAT_FLAG_B_KEEP_PET: i32 = 0x0002_0000;
 pub const VEHICLE_SEAT_FLAG_B_USABLE_FORCED_4: i32 = 0x0200_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +35,12 @@ pub struct VehicleEntry {
     pub seat_ids: [u16; MAX_VEHICLE_SEATS_LIKE_CPP],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VehicleSeatEntry {
     pub id: u32,
+    pub attachment_offset_x: f32,
+    pub attachment_offset_y: f32,
+    pub attachment_offset_z: f32,
     pub flags: i32,
     pub flags_b: i32,
     pub flags_c: i32,
@@ -79,11 +84,18 @@ impl VehicleSeatEntry {
     pub fn to_vehicle_seat_info_like_cpp(&self) -> VehicleSeatInfo {
         VehicleSeatInfo {
             id: self.id,
+            attachment_offset: Position::new(
+                self.attachment_offset_x,
+                self.attachment_offset_y,
+                self.attachment_offset_z,
+                0.0,
+            ),
             can_enter_or_exit: self.can_enter_or_exit_like_cpp(),
             usable_by_override: self.usable_by_override_like_cpp(),
             can_control: self.has_flag(VEHICLE_SEAT_FLAG_CAN_CONTROL),
             disables_gravity: self.has_flag(VEHICLE_SEAT_FLAG_DISABLE_GRAVITY),
             passenger_not_selectable: self.has_flag(VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE),
+            keep_pet: self.has_flag_b(VEHICLE_SEAT_FLAG_B_KEEP_PET),
         }
     }
 }
@@ -215,6 +227,9 @@ impl VehicleSeatStore {
         for (id, idx) in reader.iter_records() {
             entries.push(VehicleSeatEntry {
                 id,
+                attachment_offset_x: f32::from_bits(reader.get_field_u32(idx, 1)),
+                attachment_offset_y: f32::from_bits(reader.get_field_u32(idx, 2)),
+                attachment_offset_z: f32::from_bits(reader.get_field_u32(idx, 3)),
                 flags: reader.get_field_i32(idx, 7),
                 flags_b: reader.get_field_i32(idx, 8),
                 flags_c: reader.get_field_i32(idx, 9),
@@ -254,6 +269,9 @@ impl VehicleSeatStore {
         loop {
             let entry = VehicleSeatEntry {
                 id: result.read(0),
+                attachment_offset_x: result.read(1),
+                attachment_offset_y: result.read(2),
+                attachment_offset_z: result.read(3),
                 flags: result.read(7),
                 flags_b: result.read(8),
                 flags_c: result.read(9),
@@ -475,6 +493,9 @@ mod tests {
     fn vehicle_seat_flags_match_cpp_helpers() {
         let control = VehicleSeatEntry {
             id: 1,
+            attachment_offset_x: 1.5,
+            attachment_offset_y: 2.5,
+            attachment_offset_z: 3.5,
             flags: VEHICLE_SEAT_FLAG_CAN_CONTROL,
             flags_b: 0,
             flags_c: 0,
@@ -482,21 +503,33 @@ mod tests {
         assert!(control.can_enter_or_exit_like_cpp());
         assert!(!control.usable_by_override_like_cpp());
         let control_info = control.to_vehicle_seat_info_like_cpp();
+        assert_eq!(
+            control_info.attachment_offset,
+            Position::new(1.5, 2.5, 3.5, 0.0)
+        );
         assert!(control_info.can_control);
         assert!(!control_info.disables_gravity);
         assert!(!control_info.passenger_not_selectable);
+        assert!(!control_info.keep_pet);
 
         let forced = VehicleSeatEntry {
             id: 2,
+            attachment_offset_x: 0.0,
+            attachment_offset_y: 0.0,
+            attachment_offset_z: 0.0,
             flags: 0,
-            flags_b: VEHICLE_SEAT_FLAG_B_USABLE_FORCED_3,
+            flags_b: VEHICLE_SEAT_FLAG_B_USABLE_FORCED_3 | VEHICLE_SEAT_FLAG_B_KEEP_PET,
             flags_c: 0,
         };
         assert!(!forced.can_enter_or_exit_like_cpp());
         assert!(forced.usable_by_override_like_cpp());
+        assert!(forced.to_vehicle_seat_info_like_cpp().keep_pet);
 
         let passenger_flags = VehicleSeatEntry {
             id: 3,
+            attachment_offset_x: 0.0,
+            attachment_offset_y: 0.0,
+            attachment_offset_z: 0.0,
             flags: VEHICLE_SEAT_FLAG_DISABLE_GRAVITY | VEHICLE_SEAT_FLAG_PASSENGER_NOT_SELECTABLE,
             flags_b: 0,
             flags_c: 0,
@@ -510,12 +543,18 @@ mod tests {
     fn vehicle_seat_handler_flags_match_cpp_helpers() {
         let switchable = VehicleSeatEntry {
             id: 1,
+            attachment_offset_x: 0.0,
+            attachment_offset_y: 0.0,
+            attachment_offset_z: 0.0,
             flags: VEHICLE_SEAT_FLAG_CAN_SWITCH,
             flags_b: 0,
             flags_c: 0,
         };
         let ejectable = VehicleSeatEntry {
             id: 2,
+            attachment_offset_x: 0.0,
+            attachment_offset_y: 0.0,
+            attachment_offset_z: 0.0,
             flags: 0,
             flags_b: VEHICLE_SEAT_FLAG_B_EJECTABLE,
             flags_c: 0,
@@ -538,12 +577,18 @@ mod tests {
         let seats = VehicleSeatStore::from_entries([
             VehicleSeatEntry {
                 id: 100,
+                attachment_offset_x: 1.0,
+                attachment_offset_y: 2.0,
+                attachment_offset_z: 3.0,
                 flags: VEHICLE_SEAT_FLAG_CAN_ENTER_OR_EXIT,
                 flags_b: 0,
                 flags_c: 0,
             },
             VehicleSeatEntry {
                 id: 101,
+                attachment_offset_x: 4.0,
+                attachment_offset_y: 5.0,
+                attachment_offset_z: 6.0,
                 flags: 0,
                 flags_b: VEHICLE_SEAT_FLAG_B_USABLE_FORCED,
                 flags_c: 0,
@@ -554,9 +599,17 @@ mod tests {
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0].0, 0);
         assert_eq!(defs[0].1.id, 100);
+        assert_eq!(
+            defs[0].1.attachment_offset,
+            Position::new(1.0, 2.0, 3.0, 0.0)
+        );
         assert!(defs[0].1.can_enter_or_exit);
         assert_eq!(defs[1].0, 2);
         assert_eq!(defs[1].1.id, 101);
+        assert_eq!(
+            defs[1].1.attachment_offset,
+            Position::new(4.0, 5.0, 6.0, 0.0)
+        );
         assert!(defs[1].1.usable_by_override);
     }
 

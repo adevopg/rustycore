@@ -61,14 +61,16 @@ impl Default for VehicleSeatAddon {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VehicleSeatInfo {
     pub id: u32,
+    pub attachment_offset: Position,
     pub can_enter_or_exit: bool,
     pub usable_by_override: bool,
     pub can_control: bool,
     pub disables_gravity: bool,
     pub passenger_not_selectable: bool,
+    pub keep_pet: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,6 +169,44 @@ pub struct VehiclePassengerRelocation {
     pub passenger: ObjectGuid,
     pub position: Position,
     pub set_home_position: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleJoinAbortPlan {
+    pub remove_pending_event: bool,
+    pub remove_control_vehicle_aura: bool,
+    pub despawn_accessory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleJoinExecutePlan {
+    pub passenger: ObjectGuid,
+    pub seat_id: i8,
+    pub abort: Option<VehicleJoinAbortPlan>,
+    pub pending_seat_aborts: VehiclePendingEventRemovalPlan,
+    pub pending_passenger_aborts: VehiclePendingEventRemovalPlan,
+    pub exit_existing_vehicle: bool,
+    pub passenger_info: Option<PassengerInfo>,
+    pub remove_npc_flag: bool,
+    pub interrupt_generic_spell: bool,
+    pub interrupt_autorepeat_spell: bool,
+    pub remove_mount_interrupt_auras: bool,
+    pub remove_mounted_auras: bool,
+    pub player_drop_battleground_flag: bool,
+    pub player_stop_casting_charm: bool,
+    pub player_stop_casting_bind_sight: bool,
+    pub player_cancel_expected_vehicle_ride_aura: bool,
+    pub player_unsummon_temporary_pet: bool,
+    pub set_disable_gravity: bool,
+    pub transport_position: Option<Position>,
+    pub set_vehicle_charm: bool,
+    pub send_clear_target: bool,
+    pub set_root_controlled: bool,
+    pub launch_transport_enter_spline: bool,
+    pub transfer_threat_to_vehicle: bool,
+    pub call_ai_passenger_boarded: bool,
+    pub call_on_add_passenger_script: bool,
+    pub call_on_install_accessory_script: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -663,6 +703,122 @@ impl Vehicle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn vehicle_join_execute_plan_like_cpp(
+        &mut self,
+        passenger: ObjectGuid,
+        seat_id: i8,
+        passenger_is_alive: bool,
+        passenger_had_vehicle: bool,
+        passenger_type_id: TypeId,
+        passenger_is_uninteractible: bool,
+        passenger_is_gravity_disabled: bool,
+        passenger_in_battleground: bool,
+        passenger_is_accessory: bool,
+        base_ai_enabled: bool,
+    ) -> Option<VehicleJoinExecutePlan> {
+        if !self.seats.contains_key(&seat_id) {
+            return None;
+        }
+
+        let pending_seat_aborts = self.remove_pending_events_for_seat_plan_like_cpp(seat_id);
+        let pending_passenger_aborts =
+            self.remove_pending_events_for_passenger_plan_like_cpp(passenger);
+
+        if !passenger_is_alive {
+            return Some(VehicleJoinExecutePlan {
+                passenger,
+                seat_id,
+                abort: Some(VehicleJoinAbortPlan {
+                    remove_pending_event: true,
+                    remove_control_vehicle_aura: true,
+                    despawn_accessory: passenger_is_accessory,
+                }),
+                pending_seat_aborts,
+                pending_passenger_aborts,
+                exit_existing_vehicle: false,
+                passenger_info: None,
+                remove_npc_flag: false,
+                interrupt_generic_spell: false,
+                interrupt_autorepeat_spell: false,
+                remove_mount_interrupt_auras: false,
+                remove_mounted_auras: false,
+                player_drop_battleground_flag: false,
+                player_stop_casting_charm: false,
+                player_stop_casting_bind_sight: false,
+                player_cancel_expected_vehicle_ride_aura: false,
+                player_unsummon_temporary_pet: false,
+                set_disable_gravity: false,
+                transport_position: None,
+                set_vehicle_charm: false,
+                send_clear_target: false,
+                set_root_controlled: false,
+                launch_transport_enter_spline: false,
+                transfer_threat_to_vehicle: false,
+                call_ai_passenger_boarded: false,
+                call_on_add_passenger_script: false,
+                call_on_install_accessory_script: false,
+            });
+        }
+
+        let seat = self.seats.get_mut(&seat_id)?;
+        let passenger_info = PassengerInfo {
+            guid: passenger,
+            is_uninteractible: passenger_is_uninteractible,
+            is_gravity_disabled: passenger_is_gravity_disabled,
+        };
+        seat.passenger = passenger_info;
+
+        let remove_npc_flag = if seat.seat_info.can_enter_or_exit {
+            debug_assert!(self.usable_seat_num > 0);
+            self.usable_seat_num = self.usable_seat_num.saturating_sub(1);
+            self.usable_seat_num == 0
+        } else {
+            false
+        };
+        let passenger_is_player = passenger_type_id == TypeId::Player;
+        let player_unsummon_temporary_pet = passenger_is_player && !seat.seat_info.keep_pet;
+        let transport_position = Position::new(
+            seat.seat_info.attachment_offset.x,
+            seat.seat_info.attachment_offset.y,
+            seat.seat_info.attachment_offset.z,
+            seat.seat_addon.seat_orientation_offset,
+        );
+        let set_vehicle_charm =
+            self.base_type_id == TypeId::Unit && passenger_is_player && seat.seat_info.can_control;
+
+        Some(VehicleJoinExecutePlan {
+            passenger,
+            seat_id,
+            abort: None,
+            pending_seat_aborts,
+            pending_passenger_aborts,
+            exit_existing_vehicle: passenger_had_vehicle,
+            passenger_info: Some(passenger_info),
+            remove_npc_flag,
+            interrupt_generic_spell: true,
+            interrupt_autorepeat_spell: true,
+            remove_mount_interrupt_auras: true,
+            remove_mounted_auras: true,
+            player_drop_battleground_flag: passenger_is_player && passenger_in_battleground,
+            player_stop_casting_charm: passenger_is_player,
+            player_stop_casting_bind_sight: passenger_is_player,
+            player_cancel_expected_vehicle_ride_aura: passenger_is_player,
+            player_unsummon_temporary_pet,
+            set_disable_gravity: seat.seat_info.disables_gravity,
+            transport_position: Some(transport_position),
+            set_vehicle_charm,
+            send_clear_target: true,
+            set_root_controlled: true,
+            launch_transport_enter_spline: true,
+            transfer_threat_to_vehicle: true,
+            call_ai_passenger_boarded: self.base_type_id == TypeId::Unit && base_ai_enabled,
+            call_on_add_passenger_script: self.base_type_id == TypeId::Unit,
+            call_on_install_accessory_script: self.base_type_id == TypeId::Unit
+                && passenger_is_accessory,
+        })
+    }
+
     pub fn remove_passenger(&mut self, passenger: ObjectGuid) -> Option<i8> {
         self.remove_passenger_plan_like_cpp(passenger, TypeId::Unit, false, false, false, false)
             .map(|plan| plan.seat_id)
@@ -905,11 +1061,13 @@ mod tests {
     fn seat(id: u32, can_enter_or_exit: bool) -> VehicleSeatInfo {
         VehicleSeatInfo {
             id,
+            attachment_offset: Position::new(0.0, 0.0, 0.0, 0.0),
             can_enter_or_exit,
             usable_by_override: false,
             can_control: false,
             disables_gravity: false,
             passenger_not_selectable: false,
+            keep_pet: false,
         }
     }
 
@@ -927,11 +1085,13 @@ mod tests {
                     2,
                     VehicleSeatInfo {
                         id: 1002,
+                        attachment_offset: Position::new(2.0, 0.0, 0.0, 0.0),
                         can_enter_or_exit: false,
                         usable_by_override: true,
                         can_control: true,
                         disables_gravity: false,
                         passenger_not_selectable: false,
+                        keep_pet: false,
                     },
                     VehicleSeatAddon::default(),
                 ),
@@ -1137,6 +1297,134 @@ mod tests {
 
         vehicle.status = VehicleStatus::Uninstalling;
         assert_eq!(vehicle.install_accessory_plan_like_cpp(accessory), None);
+    }
+
+    #[test]
+    fn vehicle_join_execute_plan_matches_cpp_success_path() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        vehicle.seats.get_mut(&0).unwrap().seat_info.can_control = true;
+        vehicle
+            .seats
+            .get_mut(&0)
+            .unwrap()
+            .seat_info
+            .disables_gravity = true;
+        vehicle
+            .seats
+            .get_mut(&0)
+            .unwrap()
+            .seat_info
+            .attachment_offset = Position::new(4.0, 5.0, 6.0, 0.0);
+        vehicle
+            .seats
+            .get_mut(&0)
+            .unwrap()
+            .seat_addon
+            .seat_orientation_offset = 0.75;
+        vehicle.add_pending_event(passenger, 0);
+
+        let plan = vehicle
+            .vehicle_join_execute_plan_like_cpp(
+                passenger,
+                0,
+                true,
+                true,
+                TypeId::Player,
+                true,
+                false,
+                true,
+                true,
+                true,
+            )
+            .expect("known seat executes");
+
+        assert_eq!(plan.abort, None);
+        assert!(plan.exit_existing_vehicle);
+        assert_eq!(
+            plan.passenger_info,
+            Some(PassengerInfo {
+                guid: passenger,
+                is_uninteractible: true,
+                is_gravity_disabled: false,
+            })
+        );
+        assert!(plan.remove_npc_flag);
+        assert!(plan.player_drop_battleground_flag);
+        assert!(plan.player_unsummon_temporary_pet);
+        assert!(plan.set_disable_gravity);
+        assert_eq!(
+            plan.transport_position,
+            Some(Position::new(4.0, 5.0, 6.0, 0.75))
+        );
+        assert!(plan.set_vehicle_charm);
+        assert!(plan.send_clear_target);
+        assert!(plan.set_root_controlled);
+        assert!(plan.launch_transport_enter_spline);
+        assert!(plan.transfer_threat_to_vehicle);
+        assert!(plan.call_ai_passenger_boarded);
+        assert!(plan.call_on_add_passenger_script);
+        assert!(plan.call_on_install_accessory_script);
+        assert_eq!(vehicle.passenger(0), Some(passenger));
+        assert_eq!(vehicle.usable_seat_num(), 0);
+    }
+
+    #[test]
+    fn vehicle_join_execute_plan_aborts_dead_passenger_like_cpp() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        vehicle.add_pending_event(passenger, 0);
+
+        let plan = vehicle
+            .vehicle_join_execute_plan_like_cpp(
+                passenger,
+                0,
+                false,
+                false,
+                TypeId::Unit,
+                false,
+                false,
+                false,
+                true,
+                false,
+            )
+            .expect("known seat executes");
+
+        assert_eq!(
+            plan.abort,
+            Some(VehicleJoinAbortPlan {
+                remove_pending_event: true,
+                remove_control_vehicle_aura: true,
+                despawn_accessory: true,
+            })
+        );
+        assert!(plan.passenger_info.is_none());
+        assert!(vehicle.passenger(0).is_none());
+        assert!(!vehicle.has_pending_event_for_seat(0));
+    }
+
+    #[test]
+    fn vehicle_join_execute_plan_keeps_pet_when_cpp_flag_is_set() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        vehicle.seats.get_mut(&0).unwrap().seat_info.keep_pet = true;
+
+        let plan = vehicle
+            .vehicle_join_execute_plan_like_cpp(
+                passenger,
+                0,
+                true,
+                false,
+                TypeId::Player,
+                false,
+                false,
+                false,
+                false,
+                false,
+            )
+            .expect("known seat executes");
+
+        assert!(!plan.player_unsummon_temporary_pet);
     }
 
     #[test]
