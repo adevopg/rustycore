@@ -624,6 +624,7 @@ pub enum ConditionTypeValidationErrorLikeCpp {
         condition_type: ConditionType,
         area_id: u32,
     },
+    ZoneIdUsesSubzone(u32),
     NonExistingSkill(u32),
     SkillValueAboveConfigMax {
         skill_id: u32,
@@ -1086,13 +1087,17 @@ pub fn validate_condition_type_external_like_cpp(
             }
         }
         ConditionType::ZoneId => {
-            if let Some(store) = stores.area_table_store
-                && store.get(condition.condition_value1).is_none()
-            {
-                return Err(Error::NonExistingArea {
-                    condition_type: condition.condition_type,
-                    area_id: condition.condition_value1,
-                });
+            if let Some(store) = stores.area_table_store {
+                let Some(area) = store.get(condition.condition_value1) else {
+                    return Err(Error::NonExistingArea {
+                        condition_type: condition.condition_type,
+                        area_id: condition.condition_value1,
+                    });
+                };
+
+                if area.parent_area_id != 0 && area.is_subzone_like_cpp() {
+                    return Err(Error::ZoneIdUsesSubzone(condition.condition_value1));
+                }
             }
         }
         ConditionType::Skill => {
@@ -2732,10 +2737,18 @@ mod tests {
         }]);
         let mut spell_store = crate::SpellStore::new();
         spell_store.insert(200, spell_info(200));
-        let area_store = crate::AreaTableStore::from_entries([crate::AreaTableEntry {
-            id: 300,
-            parent_area_id: 0,
-        }]);
+        let area_store = crate::AreaTableStore::from_entries([
+            crate::AreaTableEntry {
+                id: 300,
+                parent_area_id: 0,
+                flags: 0,
+            },
+            crate::AreaTableEntry {
+                id: 301,
+                parent_area_id: 300,
+                flags: crate::area::AREA_FLAG_IS_SUBZONE_LIKE_CPP,
+            },
+        ]);
         let skill_store = crate::SkillStore::from_skill_lines_like_cpp([400]);
         let map_store = crate::MapStore::from_entries([crate::MapEntry {
             id: 500,
@@ -2942,6 +2955,42 @@ mod tests {
                 stores
             ),
             Err(ConditionTypeValidationErrorLikeCpp::NonExistingItem { item_id: 999, .. })
+        ));
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::ZoneId,
+                    condition_value1: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionTypeValidationErrorLikeCpp::NonExistingArea {
+                condition_type: ConditionType::ZoneId,
+                area_id: 999
+            })
+        ));
+        assert_eq!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::AreaId,
+                    condition_value1: 301,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::ZoneId,
+                    condition_value1: 301,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionTypeValidationErrorLikeCpp::ZoneIdUsesSubzone(301))
         ));
         assert!(matches!(
             validate_condition_type_external_like_cpp(
@@ -3231,10 +3280,18 @@ mod tests {
             random_select: 0,
             random_suffix_group_id: 0,
         }]);
-        let area_store = crate::AreaTableStore::from_entries([crate::AreaTableEntry {
-            id: 7,
-            parent_area_id: 0,
-        }]);
+        let area_store = crate::AreaTableStore::from_entries([
+            crate::AreaTableEntry {
+                id: 7,
+                parent_area_id: 0,
+                flags: 0,
+            },
+            crate::AreaTableEntry {
+                id: 8,
+                parent_area_id: 7,
+                flags: crate::area::AREA_FLAG_IS_SUBZONE_LIKE_CPP,
+            },
+        ]);
         let map_store = crate::MapStore::from_entries([crate::MapEntry {
             id: 571,
             parent_map_id: -1,

@@ -18,11 +18,20 @@ use crate::wdc4::Wdc4Reader;
 pub struct AreaTableEntry {
     pub id: u32,
     pub parent_area_id: u16,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct AreaTableStore {
     entries: HashMap<u32, AreaTableEntry>,
+}
+
+pub const AREA_FLAG_IS_SUBZONE_LIKE_CPP: u32 = 0x4000_0000;
+
+impl AreaTableEntry {
+    pub fn is_subzone_like_cpp(&self) -> bool {
+        self.flags & AREA_FLAG_IS_SUBZONE_LIKE_CPP != 0
+    }
 }
 
 impl AreaTableStore {
@@ -56,6 +65,9 @@ impl AreaTableStore {
                     // WDC4 record ids supply C++ field 0 (`ID`), so
                     // `ParentAreaID` is DB2Meta field index 3.
                     parent_area_id: reader.get_field_u16(idx, 3),
+                    // `Flags1` is C++ field index 22, DB2Meta field index 21
+                    // when the record id supplies `ID`.
+                    flags: reader.get_field_u32(idx, 21),
                 },
             );
         }
@@ -92,6 +104,7 @@ impl AreaTableStore {
                 AreaTableEntry {
                     id,
                     parent_area_id: result.read(4),
+                    flags: result.read(22),
                 },
             );
             count += 1;
@@ -130,15 +143,21 @@ mod tests {
             AreaTableEntry {
                 id: 100,
                 parent_area_id: 0,
+                flags: 0,
             },
             AreaTableEntry {
                 id: 101,
                 parent_area_id: 100,
+                flags: AREA_FLAG_IS_SUBZONE_LIKE_CPP,
             },
         ]);
 
         assert!(store.contains(100));
         assert_eq!(store.get(101).map(|area| area.parent_area_id), Some(100));
+        assert_eq!(
+            store.get(101).map(|area| area.is_subzone_like_cpp()),
+            Some(true)
+        );
     }
 
     #[test]

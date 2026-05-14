@@ -328,6 +328,7 @@ mod tests {
         let area_store = AreaTableStore::from_entries([AreaTableEntry {
             id: 100,
             parent_area_id: 0,
+            flags: 0,
         }]);
         let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
         let mut store = PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
@@ -350,10 +351,12 @@ mod tests {
             AreaTableEntry {
                 id: 100,
                 parent_area_id: 0,
+                flags: 0,
             },
             AreaTableEntry {
                 id: 101,
                 parent_area_id: 100,
+                flags: 0,
             },
         ]);
         let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
@@ -379,10 +382,12 @@ mod tests {
             AreaTableEntry {
                 id: 100,
                 parent_area_id: 0,
+                flags: 0,
             },
             AreaTableEntry {
                 id: 200,
                 parent_area_id: 0,
+                flags: 0,
             },
         ]);
         let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
@@ -421,10 +426,12 @@ mod tests {
             AreaTableEntry {
                 id: 100,
                 parent_area_id: 0,
+                flags: 0,
             },
             AreaTableEntry {
                 id: 200,
                 parent_area_id: 0,
+                flags: 0,
             },
         ]);
         let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
@@ -450,6 +457,7 @@ mod tests {
         let area_store = AreaTableStore::from_entries([AreaTableEntry {
             id: 100,
             parent_area_id: 0,
+            flags: 0,
         }]);
         let phase_store = PhaseStore::from_entries([PhaseEntry { id: 10, flags: 0 }]);
         let mut store = PhaseInfoStore::from_phase_store_like_cpp(&phase_store);
