@@ -656,6 +656,14 @@ pub enum ConditionTypeValidationErrorLikeCpp {
     NonExistingScenarioStep(u32),
     NonExistingSceneScriptPackage(u32),
     NonExistingPlayerCondition(u32),
+    NonExistingCreatureTemplate {
+        condition_type: ConditionType,
+        entry: u32,
+    },
+    NonExistingGameObjectTemplate {
+        condition_type: ConditionType,
+        entry: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -694,6 +702,14 @@ pub enum ConditionSourceValidationErrorLikeCpp {
     },
     NonExistingSpawnGroup(i32),
     SystemSpawnGroup(i32),
+    NonExistingSourceCreatureTemplate {
+        source_type: ConditionSourceType,
+        entry: i32,
+    },
+    NonExistingSourceGameObjectTemplate {
+        source_type: ConditionSourceType,
+        entry: i32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -714,6 +730,8 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub area_trigger_store: Option<&'a crate::AreaTriggerStore>,
     pub graveyard_store: Option<&'a crate::GraveyardStore>,
     pub spawn_group_store: Option<&'a crate::SpawnGroupTemplateStore>,
+    pub creature_template_store: Option<&'a crate::WorldIdStore>,
+    pub gameobject_template_store: Option<&'a crate::WorldIdStore>,
     pub difficulty_store: Option<&'a crate::DifficultyStore>,
     pub faction_store: Option<&'a crate::Db2IdStore>,
     pub achievement_store: Option<&'a crate::Db2IdStore>,
@@ -1178,6 +1196,51 @@ pub fn validate_condition_type_external_like_cpp(
                 ));
             }
         }
+        ConditionType::NearCreature => {
+            if let Some(store) = stores.creature_template_store
+                && !store.contains(condition.condition_value1)
+            {
+                return Err(Error::NonExistingCreatureTemplate {
+                    condition_type: condition.condition_type,
+                    entry: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::NearGameObject => {
+            if let Some(store) = stores.gameobject_template_store
+                && !store.contains(condition.condition_value1)
+            {
+                return Err(Error::NonExistingGameObjectTemplate {
+                    condition_type: condition.condition_type,
+                    entry: condition.condition_value1,
+                });
+            }
+        }
+        ConditionType::ObjectEntryGuid => match condition.condition_value1 {
+            value if value == TypeId::Unit as u32 => {
+                if condition.condition_value2 != 0
+                    && let Some(store) = stores.creature_template_store
+                    && !store.contains(condition.condition_value2)
+                {
+                    return Err(Error::NonExistingCreatureTemplate {
+                        condition_type: condition.condition_type,
+                        entry: condition.condition_value2,
+                    });
+                }
+            }
+            value if value == TypeId::GameObject as u32 => {
+                if condition.condition_value2 != 0
+                    && let Some(store) = stores.gameobject_template_store
+                    && !store.contains(condition.condition_value2)
+                {
+                    return Err(Error::NonExistingGameObjectTemplate {
+                        condition_type: condition.condition_type,
+                        entry: condition.condition_value2,
+                    });
+                }
+            }
+            _ => {}
+        },
         _ => {}
     }
 
@@ -1238,6 +1301,14 @@ pub fn validate_condition_source_external_like_cpp(
             }
         }
         ConditionSourceType::NpcVendor => {
+            if let Some(store) = stores.creature_template_store
+                && !store.contains(condition.source_group)
+            {
+                return Err(Error::NonExistingSourceCreatureTemplate {
+                    source_type: condition.source_type,
+                    entry: condition.source_group as i32,
+                });
+            }
             if let Some(store) = stores.item_store
                 && u32::try_from(condition.source_entry)
                     .ok()
@@ -1247,11 +1318,40 @@ pub fn validate_condition_source_external_like_cpp(
                 return Err(Error::NonExistingNpcVendorItem(condition.source_entry));
             }
         }
+        ConditionSourceType::CreatureTemplateVehicle => {
+            if let Some(store) = stores.creature_template_store
+                && u32::try_from(condition.source_entry)
+                    .ok()
+                    .is_none_or(|entry| !store.contains(entry))
+            {
+                return Err(Error::NonExistingSourceCreatureTemplate {
+                    source_type: condition.source_type,
+                    entry: condition.source_entry,
+                });
+            }
+        }
+        ConditionSourceType::VehicleSpell | ConditionSourceType::SpellClickEvent => {
+            if let Some(store) = stores.creature_template_store
+                && !store.contains(condition.source_group)
+            {
+                return Err(Error::NonExistingSourceCreatureTemplate {
+                    source_type: condition.source_type,
+                    entry: condition.source_group as i32,
+                });
+            }
+
+            if let Some(store) = stores.spell_store
+                && store.get(condition.source_entry).is_none()
+            {
+                return Err(Error::NonExistingSourceSpell {
+                    source_type: condition.source_type,
+                    spell_id: condition.source_entry,
+                });
+            }
+        }
         ConditionSourceType::SpellImplicitTarget
         | ConditionSourceType::Spell
         | ConditionSourceType::SpellProc
-        | ConditionSourceType::VehicleSpell
-        | ConditionSourceType::SpellClickEvent
         | ConditionSourceType::TrainerSpell => {
             if let Some(store) = stores.spell_store
                 && store.get(condition.source_entry).is_none()
@@ -1305,6 +1405,33 @@ pub fn validate_condition_source_external_like_cpp(
                 }
             }
         }
+        ConditionSourceType::ObjectIdVisibility => match condition.source_group {
+            value if value == TypeId::Unit as u32 => {
+                if let Some(store) = stores.creature_template_store
+                    && u32::try_from(condition.source_entry)
+                        .ok()
+                        .is_none_or(|entry| !store.contains(entry))
+                {
+                    return Err(Error::NonExistingSourceCreatureTemplate {
+                        source_type: condition.source_type,
+                        entry: condition.source_entry,
+                    });
+                }
+            }
+            value if value == TypeId::GameObject as u32 => {
+                if let Some(store) = stores.gameobject_template_store
+                    && u32::try_from(condition.source_entry)
+                        .ok()
+                        .is_none_or(|entry| !store.contains(entry))
+                {
+                    return Err(Error::NonExistingSourceGameObjectTemplate {
+                        source_type: condition.source_type,
+                        entry: condition.source_entry,
+                    });
+                }
+            }
+            _ => {}
+        },
         _ => {}
     }
 
@@ -2497,6 +2624,8 @@ mod tests {
         let scene_script_package_store =
             crate::Db2IdStore::from_ids("SceneScriptPackage.db2", [960]);
         let player_condition_store = crate::Db2IdStore::from_ids("PlayerCondition.db2", [970]);
+        let creature_template_store = crate::WorldIdStore::from_ids("creature_template", [980]);
+        let gameobject_template_store = crate::WorldIdStore::from_ids("gameobject_template", [990]);
         let stores = ConditionExternalValidationStoresLikeCpp {
             item_store: Some(&item_store),
             spell_store: Some(&spell_store),
@@ -2513,6 +2642,8 @@ mod tests {
             scenario_step_store: Some(&scenario_step_store),
             scene_script_package_store: Some(&scene_script_package_store),
             player_condition_store: Some(&player_condition_store),
+            creature_template_store: Some(&creature_template_store),
+            gameobject_template_store: Some(&gameobject_template_store),
             max_skill_value: Some(450),
             ..ConditionExternalValidationStoresLikeCpp::default()
         };
@@ -2611,6 +2742,28 @@ mod tests {
             Condition {
                 condition_type: ConditionType::PlayerCondition,
                 condition_value1: 970,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearCreature,
+                condition_value1: 980,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ObjectEntryGuid,
+                condition_value1: TypeId::Unit as u32,
+                condition_value2: 980,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::NearGameObject,
+                condition_value1: 990,
+                ..Condition::default()
+            },
+            Condition {
+                condition_type: ConditionType::ObjectEntryGuid,
+                condition_value1: TypeId::GameObject as u32,
+                condition_value2: 990,
                 ..Condition::default()
             },
         ] {
@@ -2784,6 +2937,39 @@ mod tests {
             ),
             Err(ConditionTypeValidationErrorLikeCpp::NonExistingPlayerCondition(999))
         ));
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::NearCreature,
+                    condition_value1: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionTypeValidationErrorLikeCpp::NonExistingCreatureTemplate {
+                    condition_type: ConditionType::NearCreature,
+                    entry: 999
+                }
+            )
+        ));
+        assert!(matches!(
+            validate_condition_type_external_like_cpp(
+                &Condition {
+                    condition_type: ConditionType::ObjectEntryGuid,
+                    condition_value1: TypeId::GameObject as u32,
+                    condition_value2: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionTypeValidationErrorLikeCpp::NonExistingGameObjectTemplate {
+                    condition_type: ConditionType::ObjectEntryGuid,
+                    entry: 999
+                }
+            )
+        ));
     }
 
     #[test]
@@ -2847,6 +3033,8 @@ mod tests {
                 flags: crate::spawn_group::SPAWN_GROUP_FLAG_SYSTEM_LIKE_CPP,
             },
         ]);
+        let creature_template_store = crate::WorldIdStore::from_ids("creature_template", [600]);
+        let gameobject_template_store = crate::WorldIdStore::from_ids("gameobject_template", [601]);
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -2865,6 +3053,8 @@ mod tests {
             area_trigger_store: Some(&area_trigger_store),
             graveyard_store: Some(&graveyard_store),
             spawn_group_store: Some(&spawn_group_store),
+            creature_template_store: Some(&creature_template_store),
+            gameobject_template_store: Some(&gameobject_template_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -2896,6 +3086,7 @@ mod tests {
             validate_condition_source_external_like_cpp(
                 &Condition {
                     source_type: ConditionSourceType::NpcVendor,
+                    source_group: 600,
                     source_entry: 100,
                     ..Condition::default()
                 },
@@ -2907,6 +3098,7 @@ mod tests {
             validate_condition_source_external_like_cpp(
                 &Condition {
                     source_type: ConditionSourceType::NpcVendor,
+                    source_group: 600,
                     source_entry: 999,
                     ..Condition::default()
                 },
@@ -2925,10 +3117,23 @@ mod tests {
             ),
             Ok(())
         );
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::SpellClickEvent,
+                    source_group: 600,
+                    source_entry: 200,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
         assert!(matches!(
             validate_condition_source_external_like_cpp(
                 &Condition {
                     source_type: ConditionSourceType::SpellClickEvent,
+                    source_group: 600,
                     source_entry: 999,
                     ..Condition::default()
                 },
@@ -2938,6 +3143,50 @@ mod tests {
                 ConditionSourceValidationErrorLikeCpp::NonExistingSourceSpell {
                     source_type: ConditionSourceType::SpellClickEvent,
                     spell_id: 999
+                }
+            )
+        ));
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::VehicleSpell,
+                    source_group: 999,
+                    source_entry: 200,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingSourceCreatureTemplate {
+                    source_type: ConditionSourceType::VehicleSpell,
+                    entry: 999
+                }
+            )
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::CreatureTemplateVehicle,
+                    source_entry: 600,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::CreatureTemplateVehicle,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingSourceCreatureTemplate {
+                    source_type: ConditionSourceType::CreatureTemplateVehicle,
+                    entry: 999
                 }
             )
         ));
@@ -3024,6 +3273,47 @@ mod tests {
                 stores
             ),
             Err(ConditionSourceValidationErrorLikeCpp::SystemSpawnGroup(501))
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::ObjectIdVisibility,
+                    source_group: TypeId::Unit as u32,
+                    source_entry: 600,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::ObjectIdVisibility,
+                    source_group: TypeId::GameObject as u32,
+                    source_entry: 601,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::ObjectIdVisibility,
+                    source_group: TypeId::GameObject as u32,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingSourceGameObjectTemplate {
+                    source_type: ConditionSourceType::ObjectIdVisibility,
+                    entry: 999
+                }
+            )
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(

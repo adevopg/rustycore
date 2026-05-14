@@ -533,6 +533,29 @@ async fn main() -> Result<()> {
         spawn_group_report.system_manual_spawn_flags.len(),
         spawn_group_report.inserted_default_groups.len()
     );
+    let creature_template_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "creature_template",
+            WorldStatements::SEL_CREATURE_TEMPLATE_IDS,
+        )
+        .await
+        .context("Failed to load creature_template ids for C++ ConditionMgr validation")?,
+    );
+    let gameobject_template_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "gameobject_template",
+            WorldStatements::SEL_GAMEOBJECT_TEMPLATE_IDS,
+        )
+        .await
+        .context("Failed to load gameobject_template ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation world id stores: {} creature templates, {} gameobject templates",
+        creature_template_store.len(),
+        gameobject_template_store.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -891,6 +914,8 @@ async fn main() -> Result<()> {
                 area_trigger_store: Some(area_trigger_store.as_ref()),
                 graveyard_store: Some(&graveyard_store),
                 spawn_group_store: Some(&spawn_group_store),
+                creature_template_store: Some(creature_template_store.as_ref()),
+                gameobject_template_store: Some(gameobject_template_store.as_ref()),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 faction_store: Some(faction_store.as_ref()),
                 achievement_store: Some(achievement_store.as_ref()),

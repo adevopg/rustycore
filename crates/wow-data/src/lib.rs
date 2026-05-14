@@ -46,6 +46,7 @@ pub mod spell_item_enchantment;
 pub mod terrain_swap;
 pub mod ui_map;
 pub mod wdc4;
+pub mod world_id_store;
 pub mod world_safe_locs;
 
 pub use area::{AreaTableEntry, AreaTableStore};
@@ -118,6 +119,7 @@ pub use spell::{SpellInfo, SpellStore};
 pub use spell_item_enchantment::{SpellItemEnchantmentEntry, SpellItemEnchantmentStore};
 pub use terrain_swap::{TerrainSwapInfo, TerrainSwapStore, load_terrain_swaps};
 pub use ui_map::{UiMapXMapArtEntry, UiMapXMapArtStore};
+pub use world_id_store::WorldIdStore;
 pub use world_safe_locs::{
     WorldSafeLoc, WorldSafeLocLoadReport, WorldSafeLocRow, WorldSafeLocStore,
 };

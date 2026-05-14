@@ -52,6 +52,7 @@ pub enum WorldStatements {
     DEL_CREATURE,
     SEL_COMMANDS,
     SEL_CREATURE_TEMPLATE,
+    SEL_CREATURE_TEMPLATE_IDS,
     /// SELECT Experience FROM player_xp_for_level ORDER BY Level
     SEL_PLAYER_XP_FOR_LEVEL,
     SEL_CREATURE_BY_ID,
@@ -101,6 +102,7 @@ pub enum WorldStatements {
     SEL_INSTANCE_SPAWN_GROUPS,
     /// Load gameobject template for query response.
     SEL_GAMEOBJECT_TEMPLATE_BY_ENTRY,
+    SEL_GAMEOBJECT_TEMPLATE_IDS,
     /// SELECT InventoryType FROM item_template WHERE entry = ?
     SEL_ITEM_INVENTORY_TYPE,
     /// Load base stats for all race/class/level combos.
@@ -361,6 +363,7 @@ impl StatementDef for WorldStatements {
                 "ScriptName, StringId FROM creature_template ct ",
                 "LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId WHERE entry = ? OR 1 = ?",
             ),
+            Self::SEL_CREATURE_TEMPLATE_IDS => "SELECT entry FROM creature_template",
             Self::SEL_CREATURE_BY_ID => "SELECT guid FROM creature WHERE id = ?",
             Self::SEL_CREATURE_ENTRY_BY_GUID => "SELECT id FROM creature WHERE guid = ?",
             Self::SEL_GAMEOBJECT_NEAREST => {
@@ -500,6 +503,7 @@ impl StatementDef for WorldStatements {
                 "Data32, Data33, Data34, ContentTuningId ",
                 "FROM gameobject_template WHERE entry = ?",
             ),
+            Self::SEL_GAMEOBJECT_TEMPLATE_IDS => "SELECT entry FROM gameobject_template",
             Self::SEL_CREATURE_GOSSIP_MENU => {
                 "SELECT MenuID FROM creature_template_gossip WHERE CreatureID = ?"
             }
