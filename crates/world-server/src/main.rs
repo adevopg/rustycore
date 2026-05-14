@@ -447,6 +447,16 @@ async fn main() -> Result<()> {
             .context("Failed to load Map.db2 — check DataDir and DBC.Locale config")?,
     );
     info!("Loaded {} maps from Map.db2", map_store.len());
+    let (world_safe_loc_store, world_safe_loc_report) =
+        wow_data::WorldSafeLocStore::load_like_cpp(world_db.as_ref(), &map_store)
+            .await
+            .context("Failed to load C++ world_safe_locs")?;
+    info!(
+        "Loaded {} world safe locs ({} missing maps, {} invalid positions)",
+        world_safe_loc_store.len(),
+        world_safe_loc_report.missing_maps.len(),
+        world_safe_loc_report.invalid_positions.len()
+    );
     let mmap_disabled_map_ids =
         load_mmap_disabled_map_ids_like_cpp(world_db.as_ref(), &map_store).await?;
     info!(
@@ -495,6 +505,22 @@ async fn main() -> Result<()> {
         })
         .await
         .context("Failed to load C++ terrain swap stores")?,
+    );
+    let mut graveyard_store = wow_data::GraveyardStore::default();
+    let graveyard_report = graveyard_store
+        .load_graveyard_zones_like_cpp(
+            world_db.as_ref(),
+            |safe_loc_id| world_safe_loc_store.contains(safe_loc_id),
+            |area_id| area_table_store.get(area_id).is_some(),
+        )
+        .await
+        .context("Failed to load C++ graveyard_zone links")?;
+    info!(
+        "Loaded {} graveyard-zone links ({} missing safe locs, {} missing zones, {} duplicates)",
+        graveyard_report.loaded,
+        graveyard_report.missing_safe_locs.len(),
+        graveyard_report.missing_zones.len(),
+        graveyard_report.duplicates.len()
     );
 
     let map_difficulty_store = Arc::new(
@@ -813,7 +839,7 @@ async fn main() -> Result<()> {
                 phase_store: Some(phase_store.as_ref()),
                 quest_store: Some(quest_store.as_ref()),
                 area_trigger_store: Some(area_trigger_store.as_ref()),
-                graveyard_store: None,
+                graveyard_store: Some(&graveyard_store),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 max_skill_value: Some(max_skill_value_like_cpp(&world_configs)),
                 loot_template_exists: Some(&loot_template_exists),
@@ -836,14 +862,21 @@ async fn main() -> Result<()> {
         warn!("Condition load warning: {warning:?}");
     }
     let condition_store = Arc::new(condition_load_report.into_store_like_cpp());
-    let condition_attachment_report =
-        wow_data::attach_loaded_conditions_like_cpp(condition_store.as_ref(), None, None, None);
+    let condition_attachment_report = wow_data::attach_loaded_conditions_like_cpp(
+        condition_store.as_ref(),
+        None,
+        None,
+        Some(&mut graveyard_store),
+    );
     info!(
-        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} deferred spell implicit target conditions",
+        "Loaded C++ ConditionMgr store: {} buckets, {} externally skipped conditions, {} spell-click aura spell ids, {} deferred spell implicit target conditions, {} graveyard condition rows attached",
         condition_store.bucket_count(),
         externally_skipped_conditions.len(),
         condition_attachment_report.spell_click_aura_spell_ids.len(),
-        condition_attachment_report.deferred_spell_implicit_target_condition_count
+        condition_attachment_report.deferred_spell_implicit_target_condition_count,
+        condition_attachment_report
+            .graveyards
+            .attached_condition_count
     );
     wow_world::conditions::set_condition_mgr_store_like_cpp(Arc::clone(&condition_store));
 
