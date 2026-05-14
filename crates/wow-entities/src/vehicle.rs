@@ -105,6 +105,20 @@ pub struct VehicleAccessoryInstallPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehiclePendingJoinAbort {
+    pub passenger: ObjectGuid,
+    pub seat_id: i8,
+    pub target_vehicle_available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleRemoveAllPassengersPlan {
+    pub pending_join_aborts: Vec<VehiclePendingJoinAbort>,
+    pub remove_control_vehicle_auras: bool,
+    pub forced_exit_passengers: Vec<ObjectGuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VehicleSpellImmunityKind {
     Effect,
     State,
@@ -382,6 +396,35 @@ impl Vehicle {
         self.remove_all_passengers();
     }
 
+    pub fn remove_all_passengers_plan_like_cpp(&mut self) -> VehicleRemoveAllPassengersPlan {
+        let target_vehicle_available = self.status != VehicleStatus::Uninstalling;
+        let pending_join_aborts = self
+            .pending_join_events
+            .iter()
+            .map(|(passenger, seat_id)| VehiclePendingJoinAbort {
+                passenger: *passenger,
+                seat_id: *seat_id,
+                target_vehicle_available,
+            })
+            .collect();
+        let forced_exit_passengers = self
+            .seats
+            .values()
+            .filter_map(|seat| (!seat.passenger.guid.is_empty()).then_some(seat.passenger.guid))
+            .collect();
+
+        self.pending_join_events.clear();
+        for seat in self.seats.values_mut() {
+            seat.passenger.reset();
+        }
+
+        VehicleRemoveAllPassengersPlan {
+            pending_join_aborts,
+            remove_control_vehicle_auras: true,
+            forced_exit_passengers,
+        }
+    }
+
     pub fn install_all_accessories_plan_like_cpp(
         &mut self,
         evading: bool,
@@ -465,10 +508,7 @@ impl Vehicle {
     }
 
     pub fn remove_all_passengers(&mut self) {
-        self.pending_join_events.clear();
-        for seat in self.seats.values_mut() {
-            seat.passenger.reset();
-        }
+        let _ = self.remove_all_passengers_plan_like_cpp();
     }
 
     pub fn is_vehicle_in_use(&self) -> bool {
@@ -812,6 +852,51 @@ mod tests {
         assert_eq!(
             player_vehicle.reset_plan_like_cpp(false, true, true, false, &[]),
             None
+        );
+    }
+
+    #[test]
+    fn remove_all_passengers_plan_matches_cpp_pending_and_current_passengers() {
+        let mut vehicle = vehicle();
+        let boarded = passenger_guid(1);
+        let pending = passenger_guid(2);
+        assert!(vehicle.add_vehicle_passenger(boarded, 0));
+        vehicle.add_pending_event(pending, 1);
+
+        let plan = vehicle.remove_all_passengers_plan_like_cpp();
+
+        assert_eq!(
+            plan,
+            VehicleRemoveAllPassengersPlan {
+                pending_join_aborts: vec![VehiclePendingJoinAbort {
+                    passenger: pending,
+                    seat_id: 1,
+                    target_vehicle_available: true,
+                }],
+                remove_control_vehicle_auras: true,
+                forced_exit_passengers: vec![boarded],
+            }
+        );
+        assert!(vehicle.passenger(0).is_none());
+        assert!(!vehicle.has_pending_event_for_seat(1));
+    }
+
+    #[test]
+    fn remove_all_passengers_plan_marks_uninstalling_abort_target_like_cpp() {
+        let mut vehicle = vehicle();
+        let pending = passenger_guid(3);
+        vehicle.add_pending_event(pending, 1);
+        vehicle.status = VehicleStatus::Uninstalling;
+
+        let plan = vehicle.remove_all_passengers_plan_like_cpp();
+
+        assert_eq!(
+            plan.pending_join_aborts,
+            vec![VehiclePendingJoinAbort {
+                passenger: pending,
+                seat_id: 1,
+                target_vehicle_available: false,
+            }]
         );
     }
 
