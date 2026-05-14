@@ -30,13 +30,14 @@ use wow_constants::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore, CurrencyTypesEntry,
-    CurrencyTypesStore, DisableMgrLikeCpp, DungeonEncounterStore, HotfixBlobCache,
-    ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
-    ItemDisenchantLootStore, ItemExtendedCostStore, ItemModifiedAppearanceStore,
-    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
-    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore,
-    MapDifficultyStore, MapStore, PhaseGroupStore, PhaseStore, PlayerStatsStore,
-    RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellStore,
+    CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp, DisableWorldObjectRefLikeCpp,
+    DungeonEncounterStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore,
+    ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
+    ItemModifiedAppearanceStore, ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore,
+    ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore,
+    ItemStatsStore, ItemStore, LockStore, MapDifficultyStore, MapStore, PhaseGroupStore,
+    PhaseStore, PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore,
+    SpellStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -84,6 +85,9 @@ use wow_packet::{ClientPacket, WorldPacket};
 
 /// Maximum number of packets processed per `update()` call.
 const MAX_PACKETS_PER_UPDATE: usize = 100;
+const TRANSFER_ABORT_MAP_NOT_ALLOWED_LIKE_CPP: u32 = 16;
+const MAP_BATTLEGROUND_LIKE_CPP: i8 = 3;
+const MAP_ARENA_LIKE_CPP: i8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMapRuntimeConfigLikeCpp {
@@ -5388,6 +5392,21 @@ impl WorldSession {
             return;
         }
 
+        if self.is_map_disabled_for_player_like_cpp(new_map) {
+            warn!(
+                account = self.account_id,
+                map_id = new_map,
+                "Teleport blocked by C++ DisableMgr map gate"
+            );
+            self.send_packet(&wow_packet::packets::misc::TransferAborted {
+                map_id: new_map,
+                arg: 0,
+                map_difficulty_x_condition_id: 0,
+                transfer_abort: TRANSFER_ABORT_MAP_NOT_ALLOWED_LIKE_CPP,
+            });
+            return;
+        }
+
         let Some(current_pos) = self.player_position_like_cpp() else {
             warn!(
                 "Cannot teleport account {}: no current position",
@@ -5441,6 +5460,37 @@ impl WorldSession {
             new_pos.y,
             new_pos.z
         );
+    }
+
+    fn is_map_disabled_for_player_like_cpp(&self, map_id: u32) -> bool {
+        let Some(disable_mgr) = self.disable_mgr() else {
+            return false;
+        };
+        let Some(map_store) = self.map_store() else {
+            return false;
+        };
+
+        let current_map_id = u32::from(self.player_map_id_like_cpp());
+        let (_, area_id) = self.player_zone_area_like_cpp();
+        let current_map_instance_type = map_store
+            .get(current_map_id)
+            .map(|entry| entry.instance_type);
+
+        disable_mgr.is_disabled_for_like_cpp(
+            DISABLE_TYPE_MAP,
+            map_id,
+            Some(DisableWorldObjectRefLikeCpp {
+                type_id: TypeId::Player,
+                map_id: current_map_id,
+                area_id,
+                is_pet: false,
+                is_battle_arena: current_map_instance_type == Some(MAP_ARENA_LIKE_CPP),
+                is_battleground: current_map_instance_type == Some(MAP_BATTLEGROUND_LIKE_CPP),
+                player_map_difficulty: None,
+            }),
+            0,
+            Some(map_store.as_ref()),
+        )
     }
 
     /// Send a server packet back to the client via the instance (default) channel.

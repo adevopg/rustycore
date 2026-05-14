@@ -1591,6 +1591,28 @@ impl ServerPacket for NewWorld {
     }
 }
 
+// ── TransferAborted (SMSG 0x2703) ───────────────────────────────────
+
+/// C++ `WorldPackets::Movement::TransferAborted`.
+pub struct TransferAborted {
+    pub map_id: u32,
+    pub arg: u8,
+    pub map_difficulty_x_condition_id: i32,
+    pub transfer_abort: u32,
+}
+
+impl ServerPacket for TransferAborted {
+    const OPCODE: ServerOpcodes = ServerOpcodes::TransferAborted;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_uint32(self.map_id);
+        pkt.write_uint8(self.arg);
+        pkt.write_int32(self.map_difficulty_x_condition_id);
+        pkt.write_bits(self.transfer_abort, 6);
+        pkt.flush_bits();
+    }
+}
+
 // ── LogoutRequest (CMSG 0x34d6) ─────────────────────────────────────
 
 /// Client requests to log out.
