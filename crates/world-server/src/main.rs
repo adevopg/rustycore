@@ -557,6 +557,15 @@ async fn main() -> Result<()> {
         creature_template_store.len(),
         gameobject_template_store.len()
     );
+    let creature_template_mount_store = Arc::new(
+        wow_data::CreatureTemplateMountStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load creature_template mount fallback rows")?,
+    );
+    info!(
+        "Loaded {} creature template mount fallback rows",
+        creature_template_mount_store.len()
+    );
     let creature_spawn_store = Arc::new(
         wow_data::WorldSpawnIdStore::load_like_cpp(
             world_db.as_ref(),
@@ -1236,6 +1245,7 @@ async fn main() -> Result<()> {
         map_store: Some(Arc::clone(&map_store)),
         map_difficulty_store: Some(Arc::clone(&map_difficulty_store)),
         map_difficulty_x_condition_store: Some(Arc::clone(&map_difficulty_x_condition_store)),
+        creature_template_mount_store: Some(Arc::clone(&creature_template_mount_store)),
         mount_store: Some(Arc::clone(&mount_store)),
         mount_capability_store: Some(Arc::clone(&mount_capability_store)),
         mount_type_x_capability_store: Some(Arc::clone(&mount_type_x_capability_store)),
@@ -2112,6 +2122,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.map_difficulty_x_condition_store {
         session.set_map_difficulty_x_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.creature_template_mount_store {
+        session.set_creature_template_mount_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.mount_store {
         session.set_mount_store(Arc::clone(store));

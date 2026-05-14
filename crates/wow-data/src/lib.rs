@@ -11,6 +11,7 @@ pub mod area_trigger_template;
 pub mod chr_specialization;
 pub mod condition_attachments;
 pub mod conditions;
+pub mod creature_template;
 pub mod currency;
 pub mod db2_id_store;
 pub mod difficulty;
@@ -67,6 +68,10 @@ pub use condition_attachments::{
 pub use conditions::{
     Condition, ConditionContainer, ConditionEntriesByTypeStore, ConditionId, ConditionLoadReport,
     ConditionsByEntryMap, ConditionsReference, load_condition_rows_like_cpp,
+};
+pub use creature_template::{
+    CreatureTemplateMountEntryLikeCpp, CreatureTemplateMountModelLikeCpp,
+    CreatureTemplateMountStoreLikeCpp,
 };
 pub use currency::{CurrencyTypesEntry, CurrencyTypesStore};
 pub use db2_id_store::Db2IdStore;

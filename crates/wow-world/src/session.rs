@@ -31,13 +31,13 @@ use wow_constants::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator};
 use wow_data::{
     AreaTableStore, AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore,
-    CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp,
-    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache, ImportPriceStores,
-    ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore,
-    ItemExtendedCostStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
-    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
-    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore, MapDifficultyStore,
-    MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
+    CreatureTemplateMountStoreLikeCpp, CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP,
+    DisableMgrLikeCpp, DisableWorldObjectRefLikeCpp, DungeonEncounterStore, HotfixBlobCache,
+    ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
+    ItemDisenchantLootStore, ItemExtendedCostStore, ItemModifiedAppearanceStore,
+    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
+    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore, LockStore,
+    MapDifficultyStore, MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
     MountTypeXCapabilityStore, MountXDisplayStore, PhaseGroupStore, PhaseStore,
     PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
     PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
@@ -728,6 +728,7 @@ pub struct WorldSession {
     map_store: Option<Arc<MapStore>>,
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
     map_difficulty_x_condition_store: Option<Arc<MapDifficultyXConditionStore>>,
+    creature_template_mount_store: Option<Arc<CreatureTemplateMountStoreLikeCpp>>,
     mount_store: Option<Arc<MountStore>>,
     mount_capability_store: Option<Arc<MountCapabilityStore>>,
     mount_type_x_capability_store: Option<Arc<MountTypeXCapabilityStore>>,
@@ -966,6 +967,8 @@ pub struct WorldSession {
     taxi_mounted_like_cpp: bool,
     /// Represented `Unit::SetMountDisplayId` until UnitData owns live player fields.
     player_mount_display_id_like_cpp: i32,
+    /// Represented vehicle id selected from mount creature template until VehicleKit exists.
+    player_mount_vehicle_id_like_cpp: u32,
     /// Represented `UnitData::Flags` for player deltas not yet backed by canonical Unit.
     player_unit_flags_like_cpp: UnitFlags,
     /// Represented `UNIT_FLAG_MOUNT` state until UnitData owns live player flags.
@@ -1448,6 +1451,7 @@ impl WorldSession {
             map_store: None,
             map_difficulty_store: None,
             map_difficulty_x_condition_store: None,
+            creature_template_mount_store: None,
             mount_store: None,
             mount_capability_store: None,
             mount_type_x_capability_store: None,
@@ -1549,6 +1553,7 @@ impl WorldSession {
             taxi_unit_flags_like_cpp: UnitFlags::empty(),
             taxi_mounted_like_cpp: false,
             player_mount_display_id_like_cpp: 0,
+            player_mount_vehicle_id_like_cpp: 0,
             player_unit_flags_like_cpp: UnitFlags::PLAYER_CONTROLLED,
             player_mounted_like_cpp: false,
             player_pvp_hostile_like_cpp: false,
@@ -3525,6 +3530,13 @@ impl WorldSession {
         self.map_difficulty_x_condition_store = Some(store);
     }
 
+    pub fn set_creature_template_mount_store(
+        &mut self,
+        store: Arc<CreatureTemplateMountStoreLikeCpp>,
+    ) {
+        self.creature_template_mount_store = Some(store);
+    }
+
     pub fn set_mount_store(&mut self, store: Arc<MountStore>) {
         self.mount_store = Some(store);
     }
@@ -4501,10 +4513,17 @@ impl WorldSession {
         caster_guid: ObjectGuid,
         effect: &wow_data::SpellEffectInfo,
     ) -> Result<(), &'static str> {
-        let display_id = u32::try_from(spell_id)
+        let selected_display_id = u32::try_from(spell_id)
             .ok()
             .and_then(|spell_id| self.select_represented_mount_aura_display_like_cpp(spell_id))
-            .unwrap_or(effect.effect_misc_value_1);
+            .unwrap_or(0);
+        let creature_entry = u32::try_from(effect.effect_misc_value_1).unwrap_or(0);
+        let (display_id, vehicle_id) = if selected_display_id != 0 {
+            (selected_display_id, 0)
+        } else {
+            self.represented_mount_creature_template_fallback_like_cpp(creature_entry)
+                .unwrap_or((0, 0))
+        };
 
         let mut slot = 0u8;
         while self.visible_auras.contains_key(&slot) && slot < 255 {
@@ -4533,6 +4552,7 @@ impl WorldSession {
 
         self.visible_auras.insert(slot, aura);
         self.player_mount_display_id_like_cpp = display_id;
+        self.player_mount_vehicle_id_like_cpp = vehicle_id;
         self.player_mounted_like_cpp = display_id != 0;
         if self.player_mounted_like_cpp {
             self.player_unit_flags_like_cpp.insert(UnitFlags::MOUNT);
@@ -4571,6 +4591,7 @@ impl WorldSession {
 
         if aura.represented_effect == Some(RepresentedAuraEffectLikeCpp::Mounted) {
             self.player_mount_display_id_like_cpp = 0;
+            self.player_mount_vehicle_id_like_cpp = 0;
             self.player_mounted_like_cpp = false;
             self.player_unit_flags_like_cpp.remove(UnitFlags::MOUNT);
             self.send_represented_mount_unit_update_like_cpp(0);
@@ -6700,6 +6721,19 @@ impl WorldSession {
     ) -> Option<i32> {
         let candidates = self.represented_mount_aura_display_candidates_like_cpp(spell_id);
         candidates.choose(&mut rand::thread_rng()).copied()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_creature_template_fallback_like_cpp(
+        &self,
+        creature_entry: u32,
+    ) -> Option<(i32, u32)> {
+        let template = self
+            .creature_template_mount_store
+            .as_ref()?
+            .get(creature_entry)?;
+        let display_id = template.choose_display_id_like_cpp(&mut rand::thread_rng())?;
+        Some((i32::try_from(display_id).unwrap_or(0), template.vehicle_id))
     }
 
     #[allow(dead_code)]
@@ -9590,6 +9624,19 @@ mod tests {
     #[test]
     fn represented_mounted_aura_toggles_mount_flag_like_cpp() {
         let (mut session, _, _) = make_session();
+        session.set_creature_template_mount_store(Arc::new(
+            wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
+                wow_data::CreatureTemplateMountEntryLikeCpp {
+                    entry: 1234,
+                    vehicle_id: 55,
+                    models: vec![wow_data::CreatureTemplateMountModelLikeCpp {
+                        display_id: 4321,
+                        display_scale: 1.0,
+                        probability: 0.0,
+                    }],
+                },
+            ]),
+        ));
         let effect = wow_data::SpellEffectInfo {
             effect: wow_data::spell::spell_effect_types::SPELL_EFFECT_APPLY_AURA,
             effect_aura: wow_data::spell::aura_types::SPELL_AURA_MOUNTED,
@@ -9602,7 +9649,8 @@ mod tests {
             .apply_represented_mounted_aura_like_cpp(100, ObjectGuid::EMPTY, &effect)
             .unwrap();
 
-        assert_eq!(session.player_mount_display_id_like_cpp, 1234);
+        assert_eq!(session.player_mount_display_id_like_cpp, 4321);
+        assert_eq!(session.player_mount_vehicle_id_like_cpp, 55);
         assert!(session.player_mounted_like_cpp);
         assert!(
             session
@@ -9618,6 +9666,7 @@ mod tests {
         session.remove_aura(slot).unwrap();
 
         assert_eq!(session.player_mount_display_id_like_cpp, 0);
+        assert_eq!(session.player_mount_vehicle_id_like_cpp, 0);
         assert!(!session.player_mounted_like_cpp);
         assert!(
             session

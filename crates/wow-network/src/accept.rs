@@ -97,6 +97,7 @@ pub struct SessionResources {
     pub map_store: Option<Arc<wow_data::MapStore>>,
     pub map_difficulty_store: Option<Arc<wow_data::MapDifficultyStore>>,
     pub map_difficulty_x_condition_store: Option<Arc<wow_data::MapDifficultyXConditionStore>>,
+    pub creature_template_mount_store: Option<Arc<wow_data::CreatureTemplateMountStoreLikeCpp>>,
     pub mount_store: Option<Arc<wow_data::MountStore>>,
     pub mount_capability_store: Option<Arc<wow_data::MountCapabilityStore>>,
     pub mount_type_x_capability_store: Option<Arc<wow_data::MountTypeXCapabilityStore>>,
