@@ -2899,6 +2899,7 @@ impl WorldSession {
 
         // Load active quests from characters DB
         self.load_player_quests().await;
+        let account_mounts = self.load_account_mounts_like_cpp().await;
 
         self.send_login_sequence(
             guid,
@@ -2917,6 +2918,7 @@ impl WorldSession {
             known_spells,
             action_buttons,
             skill_info_tuples,
+            account_mounts,
         );
 
         // Mark online in DB
@@ -7939,6 +7941,46 @@ impl WorldSession {
         }
     }
 
+    async fn load_account_mounts_like_cpp(&self) -> Vec<AccountMount> {
+        let Some(login_db) = self.login_db() else {
+            return Vec::new();
+        };
+
+        let mut stmt = login_db.prepare(LoginStatements::SEL_ACCOUNT_MOUNTS);
+        stmt.set_u32(0, self.battlenet_account_id());
+
+        let mut result = match login_db.query(&stmt).await {
+            Ok(result) => result,
+            Err(e) => {
+                warn!(
+                    account = self.account_id,
+                    bnet_account = self.battlenet_account_id(),
+                    "Failed to load account mounts: {e}"
+                );
+                return Vec::new();
+            }
+        };
+
+        if result.is_empty() {
+            return Vec::new();
+        }
+
+        let mut mounts = Vec::new();
+        loop {
+            let spell_id = result.try_read::<i32>(0).unwrap_or(0);
+            let flags = result.try_read::<u8>(1).unwrap_or(0);
+            if spell_id > 0 {
+                mounts.push(AccountMount { spell_id, flags });
+            }
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        mounts
+    }
+
     /// Send the player login packet sequence to the client.
     ///
     /// Follows the exact C# RustyCore order:
@@ -7966,6 +8008,7 @@ impl WorldSession {
         known_spells: Vec<i32>,
         action_buttons: [i64; 180],
         skill_info: Vec<(u16, u16, u16, u16, u16, i16, u16)>,
+        account_mounts: Vec<AccountMount>,
     ) {
         // ── Phase 1: HandlePlayerLogin packets ──
 
@@ -8071,8 +8114,8 @@ impl WorldSession {
         self.send_raw_packet(&SetSpellModifier::flat_empty().to_bytes());
         self.send_raw_packet(&SetSpellModifier::pct_empty().to_bytes());
 
-        // 23. AccountMountUpdate (empty, full update)
-        self.send_packet(&AccountMountUpdate);
+        // 23. AccountMountUpdate
+        self.send_packet(&AccountMountUpdate::full(account_mounts));
 
         // 24. AccountToyUpdate (empty, full update)
         self.send_packet(&AccountToyUpdate);

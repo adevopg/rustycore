@@ -1959,6 +1959,7 @@ async fn create_session(
     if let Some(ref db) = resources.login_db {
         session.set_login_db(Arc::clone(db));
     }
+    session.set_battlenet_account_id(account.battlenet_account_id);
     if let Some(ref generator) = resources.guid_generator {
         session.set_guid_generator(Arc::clone(generator));
     }

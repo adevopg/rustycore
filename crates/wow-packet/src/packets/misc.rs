@@ -1092,17 +1092,42 @@ impl ServerPacket for AllAchievementData {
 
 // ── AccountMountUpdate (SMSG 0x25ae) ─────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountMount {
+    pub spell_id: i32,
+    pub flags: u8,
+}
+
 /// Account-wide mount collection. Sent with IsFullUpdate=true on login.
-pub struct AccountMountUpdate;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountMountUpdate {
+    pub is_full_update: bool,
+    pub mounts: Vec<AccountMount>,
+}
+
+impl AccountMountUpdate {
+    pub fn full(mounts: Vec<AccountMount>) -> Self {
+        Self {
+            is_full_update: true,
+            mounts,
+        }
+    }
+
+    pub fn empty_full() -> Self {
+        Self::full(Vec::new())
+    }
+}
 
 impl ServerPacket for AccountMountUpdate {
     const OPCODE: ServerOpcodes = ServerOpcodes::AccountMountUpdate;
 
     fn write(&self, pkt: &mut WorldPacket) {
-        pkt.write_bit(true); // IsFullUpdate
-        // write_int32 auto-flushes pending bits
-        pkt.write_int32(0); // Mounts.Count
-        // No mount entries (each would be: i32 SpellID + 4 bits Flags)
+        pkt.write_bit(self.is_full_update);
+        pkt.write_int32(self.mounts.len() as i32);
+        for mount in &self.mounts {
+            pkt.write_int32(mount.spell_id);
+            pkt.write_bits(u32::from(mount.flags & 0x0f), 4);
+        }
         pkt.flush_bits();
     }
 }
@@ -2803,7 +2828,7 @@ mod tests {
 
     #[test]
     fn account_mount_update_empty() {
-        let pkt = AccountMountUpdate;
+        let pkt = AccountMountUpdate::empty_full();
         let bytes = pkt.to_bytes();
         // opcode(2) + 1 bit(padded to 1 byte) + i32(4) = 7
         // wait: write_bit(true) → 1 bit buffered, then write_int32(0)
@@ -2811,6 +2836,38 @@ mod tests {
         assert_eq!(bytes.len(), 7);
         let opcode = u16::from_le_bytes([bytes[0], bytes[1]]);
         assert_eq!(opcode, 0x25ae);
+    }
+
+    #[test]
+    fn account_mount_update_writes_mount_entries_like_cpp() {
+        let pkt = AccountMountUpdate::full(vec![
+            AccountMount {
+                spell_id: 100,
+                flags: 0x01,
+            },
+            AccountMount {
+                spell_id: 200,
+                flags: 0x12,
+            },
+        ]);
+        let bytes = pkt.to_bytes();
+
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x25ae);
+        assert_eq!(bytes[2], 0x80);
+        assert_eq!(
+            i32::from_le_bytes([bytes[3], bytes[4], bytes[5], bytes[6]]),
+            2
+        );
+        assert_eq!(
+            i32::from_le_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+            100
+        );
+        assert_eq!(bytes[11], 0x10);
+        assert_eq!(
+            i32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            200
+        );
+        assert_eq!(bytes[16], 0x20);
     }
 
     #[test]

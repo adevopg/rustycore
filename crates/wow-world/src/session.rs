@@ -589,6 +589,7 @@ pub struct SpellCastState {
 pub struct WorldSession {
     // Account info
     pub account_id: u32,
+    battlenet_account_id: u32,
     pub account_name: String,
     pub security: u8,
     pub expansion: u8,
@@ -1360,6 +1361,7 @@ impl WorldSession {
 
         Self {
             account_id,
+            battlenet_account_id: account_id,
             account_name,
             security,
             expansion,
@@ -1886,6 +1888,14 @@ impl WorldSession {
     /// Set the login database for this session.
     pub fn set_login_db(&mut self, db: Arc<LoginDatabase>) {
         self.login_db = Some(db);
+    }
+
+    pub fn set_battlenet_account_id(&mut self, battlenet_account_id: u32) {
+        self.battlenet_account_id = battlenet_account_id;
+    }
+
+    pub fn battlenet_account_id(&self) -> u32 {
+        self.battlenet_account_id
     }
 
     /// Get the character database reference.
@@ -6323,6 +6333,32 @@ impl WorldSession {
         is_player_meeting_condition_like_cpp(condition, &context.as_context(self))
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn represented_taxi_edge_distance_like_cpp(
+        &self,
+        destination_has_required_team_flag: bool,
+        destination_condition_id: u32,
+        distance: u32,
+    ) -> u32 {
+        if !destination_has_required_team_flag {
+            return u16::MAX as u32;
+        }
+
+        if !self.represented_meets_player_condition_id_like_cpp(destination_condition_id) {
+            return u16::MAX as u32;
+        }
+
+        distance
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn represented_mount_x_display_usable_like_cpp(
+        &self,
+        player_condition_id: u32,
+    ) -> bool {
+        self.represented_meets_player_condition_id_like_cpp(player_condition_id)
+    }
+
     pub(crate) fn player_inventory_like_cpp(&self) -> Option<&SessionPlayerInventoryRuntime> {
         self.player_controller
             .as_ref()
@@ -8862,6 +8898,68 @@ mod tests {
         assert!(session.represented_meets_player_condition_id_like_cpp(42));
         assert!(!session.represented_meets_player_condition_id_like_cpp(43));
         assert!(session.represented_meets_player_condition_id_like_cpp(999));
+    }
+
+    #[test]
+    fn represented_taxi_edge_distance_matches_cpp_condition_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 42, 1234),
+            1234
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 43, 1234),
+            u16::MAX as u32
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(false, 42, 1234),
+            u16::MAX as u32
+        );
+        assert_eq!(
+            session.represented_taxi_edge_distance_like_cpp(true, 999, 1234),
+            1234
+        );
+    }
+
+    #[test]
+    fn represented_mount_x_display_usable_matches_cpp_condition_filter() {
+        let (mut session, _, _) = make_session();
+        session.player_class = 1;
+        session.set_player_condition_store(Arc::new(wow_data::PlayerConditionStore::from_entries(
+            [
+                wow_data::PlayerConditionEntry {
+                    id: 42,
+                    class_mask: 1,
+                    ..Default::default()
+                },
+                wow_data::PlayerConditionEntry {
+                    id: 43,
+                    class_mask: 1 << 1,
+                    ..Default::default()
+                },
+            ],
+        )));
+
+        assert!(session.represented_mount_x_display_usable_like_cpp(0));
+        assert!(session.represented_mount_x_display_usable_like_cpp(42));
+        assert!(!session.represented_mount_x_display_usable_like_cpp(43));
+        assert!(session.represented_mount_x_display_usable_like_cpp(999));
     }
 
     #[test]
