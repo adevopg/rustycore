@@ -6142,6 +6142,13 @@ impl WorldSession {
         &self.account_mounts_like_cpp
     }
 
+    pub(crate) fn account_mount_rows_like_cpp(&self) -> Vec<AccountMount> {
+        self.account_mounts_like_cpp
+            .iter()
+            .map(|(&spell_id, &flags)| AccountMount { spell_id, flags })
+            .collect()
+    }
+
     pub(crate) fn mount_set_favorite_like_cpp(
         &mut self,
         mount_spell_id: u32,

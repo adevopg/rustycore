@@ -2097,6 +2097,7 @@ impl WorldSession {
 
         // Trinity clears buyback slots before SaveToDB; persisted buyback items must not survive logout.
         self.clear_buyback_on_logout().await;
+        self.save_account_mounts_like_cpp().await;
 
         if let Some(player_guid) = self.player_guid() {
             self.close_active_loot_windows_like_cpp(player_guid);
@@ -2242,6 +2243,30 @@ impl WorldSession {
         }
         self.clear_buyback_runtime_like_cpp();
         self.sync_object_accessor_player();
+    }
+
+    async fn save_account_mounts_like_cpp(&self) {
+        let Some(login_db) = self.login_db() else {
+            return;
+        };
+
+        for mount in self.account_mount_rows_like_cpp() {
+            let Ok(mount_spell_id) = u32::try_from(mount.spell_id) else {
+                continue;
+            };
+            let mut stmt = login_db.prepare(LoginStatements::REP_ACCOUNT_MOUNTS);
+            stmt.set_u32(0, self.battlenet_account_id());
+            stmt.set_u32(1, mount_spell_id);
+            stmt.set_u8(2, mount.flags);
+            if let Err(error) = login_db.execute(&stmt).await {
+                warn!(
+                    account = self.account_id,
+                    bnet_account = self.battlenet_account_id(),
+                    mount_spell_id,
+                    "Failed to save account mount flags: {error}"
+                );
+            }
+        }
     }
 
     /// Handle ConnectToFailed — client couldn't connect to instance port.
