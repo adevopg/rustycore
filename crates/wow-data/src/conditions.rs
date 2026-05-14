@@ -692,6 +692,8 @@ pub enum ConditionSourceValidationErrorLikeCpp {
         safe_loc_id: i32,
         zone_id: u32,
     },
+    NonExistingSpawnGroup(i32),
+    SystemSpawnGroup(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -711,6 +713,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub quest_store: Option<&'a crate::quest::QuestStore>,
     pub area_trigger_store: Option<&'a crate::AreaTriggerStore>,
     pub graveyard_store: Option<&'a crate::GraveyardStore>,
+    pub spawn_group_store: Option<&'a crate::SpawnGroupTemplateStore>,
     pub difficulty_store: Option<&'a crate::DifficultyStore>,
     pub faction_store: Option<&'a crate::Db2IdStore>,
     pub achievement_store: Option<&'a crate::Db2IdStore>,
@@ -1286,6 +1289,19 @@ pub fn validate_condition_source_external_like_cpp(
                         safe_loc_id: condition.source_entry,
                         zone_id: condition.source_group,
                     });
+                }
+            }
+        }
+        ConditionSourceType::SpawnGroup => {
+            if let Some(store) = stores.spawn_group_store {
+                let Some(spawn_group_id) = u32::try_from(condition.source_entry).ok() else {
+                    return Err(Error::NonExistingSpawnGroup(condition.source_entry));
+                };
+                let Some(spawn_group) = store.get(spawn_group_id) else {
+                    return Err(Error::NonExistingSpawnGroup(condition.source_entry));
+                };
+                if spawn_group.is_system_like_cpp() {
+                    return Err(Error::SystemSpawnGroup(condition.source_entry));
                 }
             }
         }
@@ -2819,6 +2835,18 @@ mod tests {
             |_| true,
             |_| true,
         );
+        let (spawn_group_store, _) = crate::SpawnGroupTemplateStore::from_rows_like_cpp([
+            crate::SpawnGroupTemplateRow {
+                group_id: 500,
+                name: "manual".to_string(),
+                flags: 0,
+            },
+            crate::SpawnGroupTemplateRow {
+                group_id: 501,
+                name: "system".to_string(),
+                flags: crate::spawn_group::SPAWN_GROUP_FLAG_SYSTEM_LIKE_CPP,
+            },
+        ]);
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -2836,6 +2864,7 @@ mod tests {
             spell_store: Some(&spell_store),
             area_trigger_store: Some(&area_trigger_store),
             graveyard_store: Some(&graveyard_store),
+            spawn_group_store: Some(&spawn_group_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -2962,6 +2991,39 @@ mod tests {
                     zone_id: 7
                 }
             )
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::SpawnGroup,
+                    source_entry: 500,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::SpawnGroup,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingSpawnGroup(999))
+        ));
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::SpawnGroup,
+                    source_entry: 501,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::SystemSpawnGroup(501))
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(

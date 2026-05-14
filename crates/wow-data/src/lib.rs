@@ -40,6 +40,7 @@ pub mod quest;
 pub mod quest_xp;
 pub mod rand_prop_points;
 pub mod skill;
+pub mod spawn_group;
 pub mod spell;
 pub mod spell_item_enchantment;
 pub mod terrain_swap;
@@ -109,6 +110,10 @@ pub use player_power::{
 pub use player_stats::{PlayerLevelStats, PlayerStatsStore};
 pub use rand_prop_points::{RandPropPointsEntry, RandPropPointsStore};
 pub use skill::{SkillInfoEntry, SkillStore};
+pub use spawn_group::{
+    SpawnGroupTemplate, SpawnGroupTemplateLoadReport, SpawnGroupTemplateRow,
+    SpawnGroupTemplateStore,
+};
 pub use spell::{SpellInfo, SpellStore};
 pub use spell_item_enchantment::{SpellItemEnchantmentEntry, SpellItemEnchantmentStore};
 pub use terrain_swap::{TerrainSwapInfo, TerrainSwapStore, load_terrain_swaps};

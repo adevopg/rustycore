@@ -522,6 +522,17 @@ async fn main() -> Result<()> {
         graveyard_report.missing_zones.len(),
         graveyard_report.duplicates.len()
     );
+    let (spawn_group_store, spawn_group_report) =
+        wow_data::SpawnGroupTemplateStore::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load C++ spawn_group_template rows")?;
+    info!(
+        "Loaded {} spawn group templates ({} invalid flags, {} system/manual flag fixes, {} inserted defaults)",
+        spawn_group_store.len(),
+        spawn_group_report.invalid_flags.len(),
+        spawn_group_report.system_manual_spawn_flags.len(),
+        spawn_group_report.inserted_default_groups.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -879,6 +890,7 @@ async fn main() -> Result<()> {
                 quest_store: Some(quest_store.as_ref()),
                 area_trigger_store: Some(area_trigger_store.as_ref()),
                 graveyard_store: Some(&graveyard_store),
+                spawn_group_store: Some(&spawn_group_store),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 faction_store: Some(faction_store.as_ref()),
                 achievement_store: Some(achievement_store.as_ref()),
