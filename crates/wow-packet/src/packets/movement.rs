@@ -498,6 +498,23 @@ impl ServerPacket for MoveSetCollisionHeight {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MoveUpdateCollisionHeight {
+    pub status: MovementInfo,
+    pub height: f32,
+    pub scale: f32,
+}
+
+impl ServerPacket for MoveUpdateCollisionHeight {
+    const OPCODE: ServerOpcodes = ServerOpcodes::MoveUpdateCollisionHeight;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        self.status.write(pkt);
+        pkt.write_float(self.height);
+        pkt.write_float(self.scale);
+    }
+}
+
 /// C++ `MovementForceType`, stored as two bits on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MovementForceType {
@@ -1837,5 +1854,29 @@ mod tests {
             &4321u32.to_le_bytes()
         );
         assert_eq!(&bytes[bytes.len() - 4..], &0i32.to_le_bytes());
+    }
+
+    #[test]
+    fn move_update_collision_height_matches_cpp_opcode_and_tail() {
+        let guid = ObjectGuid::create_player(1, 42);
+        let pkt = MoveUpdateCollisionHeight {
+            status: MovementInfo {
+                guid,
+                position: Position::xyz(1.0, 2.0, 3.0),
+                time: 77,
+                ..MovementInfo::default()
+            },
+            height: 1.5,
+            scale: 1.0,
+        };
+        let bytes = pkt.to_bytes();
+
+        assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 0x2ddf);
+        assert!(bytes.len() > 10);
+        assert_eq!(
+            &bytes[bytes.len() - 8..bytes.len() - 4],
+            &1.5f32.to_le_bytes()
+        );
+        assert_eq!(&bytes[bytes.len() - 4..], &1.0f32.to_le_bytes());
     }
 }

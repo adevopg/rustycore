@@ -4652,6 +4652,33 @@ impl WorldSession {
             mount_display_id: u32::try_from(self.player_mount_display_id_like_cpp).unwrap_or(0),
             scale_duration: self.player_scale_duration_like_cpp,
         });
+
+        use wow_packet::ServerPacket;
+        let mut status = self.current_player_movement_info_like_cpp(player_guid);
+        status.time = self.player_movement_time_like_cpp();
+        self.broadcast_to_movement_set_like_cpp(
+            wow_packet::packets::movement::MoveUpdateCollisionHeight {
+                status,
+                height: self.player_collision_height_like_cpp,
+                scale: self.player_object_scale_like_cpp,
+            }
+            .to_bytes(),
+            false,
+        );
+    }
+
+    fn current_player_movement_info_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+    ) -> wow_packet::packets::movement::MovementInfo {
+        wow_packet::packets::movement::MovementInfo {
+            guid: player_guid,
+            position: self
+                .player_position_like_cpp()
+                .unwrap_or(wow_core::Position::ZERO),
+            time: self.player_movement_time_like_cpp(),
+            ..wow_packet::packets::movement::MovementInfo::default()
+        }
     }
 
     fn send_represented_mount_unit_update_like_cpp(&mut self, display_id: i32) {
@@ -9750,7 +9777,18 @@ mod tests {
     #[test]
     fn represented_mounted_aura_toggles_mount_flag_like_cpp() {
         let (mut session, _, send_rx) = make_session();
-        session.set_player_guid(Some(ObjectGuid::create_player(1, 42)));
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let other_guid = ObjectGuid::create_player(1, 43);
+        let registry = Arc::new(PlayerRegistry::default());
+        let (other_tx, other_rx) = flume::bounded(8);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_registry(Arc::clone(&registry));
+        session.set_player_position_like_cpp(Position::new(1.0, 2.0, 3.0, 0.5));
+        registry.insert(
+            player_guid,
+            broadcast_info(player_guid, flume::bounded(1).0),
+        );
+        registry.insert(other_guid, broadcast_info(other_guid, other_tx));
         session.set_creature_template_mount_store(Arc::new(
             wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
                 wow_data::CreatureTemplateMountEntryLikeCpp {
@@ -9789,6 +9827,11 @@ mod tests {
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetCollisionHeight as u16)));
+        let broadcast = wow_packet::WorldPacket::from_bytes(&other_rx.try_recv().unwrap());
+        assert_eq!(
+            broadcast.server_opcode(),
+            Some(wow_constants::ServerOpcodes::MoveUpdateCollisionHeight)
+        );
         assert!(
             session
                 .player_unit_flags_like_cpp
@@ -9815,6 +9858,11 @@ mod tests {
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::SetVehicleRecId as u16)));
         assert!(opcodes.contains(&(wow_constants::ServerOpcodes::MoveSetCollisionHeight as u16)));
+        let broadcast = wow_packet::WorldPacket::from_bytes(&other_rx.try_recv().unwrap());
+        assert_eq!(
+            broadcast.server_opcode(),
+            Some(wow_constants::ServerOpcodes::MoveUpdateCollisionHeight)
+        );
         assert!(
             session
                 .player_unit_flags_like_cpp
