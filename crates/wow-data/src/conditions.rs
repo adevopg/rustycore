@@ -712,6 +712,10 @@ pub enum ConditionSourceValidationErrorLikeCpp {
     },
     NonExistingTrainer(i32),
     NonExistingConversationLineTemplate(i32),
+    NonExistingAreaTriggerTemplate {
+        id: u32,
+        is_custom: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -736,6 +740,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub gameobject_template_store: Option<&'a crate::WorldIdStore>,
     pub trainer_store: Option<&'a crate::WorldIdStore>,
     pub conversation_line_template_store: Option<&'a crate::WorldIdStore>,
+    pub area_trigger_template_store: Option<&'a crate::AreaTriggerTemplateStore>,
     pub difficulty_store: Option<&'a crate::DifficultyStore>,
     pub faction_store: Option<&'a crate::Db2IdStore>,
     pub achievement_store: Option<&'a crate::Db2IdStore>,
@@ -1390,6 +1395,15 @@ pub fn validate_condition_source_external_like_cpp(
                 return Err(Error::NonExistingConversationLineTemplate(
                     condition.source_entry,
                 ));
+            }
+        }
+        ConditionSourceType::AreaTrigger => {
+            if let Some(store) = stores.area_trigger_template_store {
+                let id = condition.source_group;
+                let is_custom = condition.source_entry == 1;
+                if !store.contains(id, is_custom) {
+                    return Err(Error::NonExistingAreaTriggerTemplate { id, is_custom });
+                }
             }
         }
         ConditionSourceType::AreaTriggerClientTriggered => {
@@ -3068,6 +3082,8 @@ mod tests {
         let trainer_store = crate::WorldIdStore::from_ids("trainer", [700]);
         let conversation_line_template_store =
             crate::WorldIdStore::from_ids("conversation_line_template", [800]);
+        let area_trigger_template_store =
+            crate::AreaTriggerTemplateStore::from_keys([(900, false), (901, true)]);
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -3090,6 +3106,7 @@ mod tests {
             gameobject_template_store: Some(&gameobject_template_store),
             trainer_store: Some(&trainer_store),
             conversation_line_template_store: Some(&conversation_line_template_store),
+            area_trigger_template_store: Some(&area_trigger_template_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -3262,6 +3279,47 @@ mod tests {
                 stores
             ),
             Err(ConditionSourceValidationErrorLikeCpp::NonExistingConversationLineTemplate(999))
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::AreaTrigger,
+                    source_group: 900,
+                    source_entry: 0,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::AreaTrigger,
+                    source_group: 901,
+                    source_entry: 1,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::AreaTrigger,
+                    source_group: 900,
+                    source_entry: 1,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingAreaTriggerTemplate {
+                    id: 900,
+                    is_custom: true
+                }
+            )
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(

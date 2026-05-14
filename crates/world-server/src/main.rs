@@ -569,6 +569,15 @@ async fn main() -> Result<()> {
         "Loaded condition validation trainer id store: {} trainers",
         trainer_store.len()
     );
+    let area_trigger_template_store = Arc::new(
+        wow_data::AreaTriggerTemplateStore::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load areatrigger_template keys for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation area-trigger template store: {} templates",
+        area_trigger_template_store.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -950,6 +959,7 @@ async fn main() -> Result<()> {
                 gameobject_template_store: Some(gameobject_template_store.as_ref()),
                 trainer_store: Some(trainer_store.as_ref()),
                 conversation_line_template_store: Some(conversation_line_template_store.as_ref()),
+                area_trigger_template_store: Some(area_trigger_template_store.as_ref()),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 faction_store: Some(faction_store.as_ref()),
                 achievement_store: Some(achievement_store.as_ref()),

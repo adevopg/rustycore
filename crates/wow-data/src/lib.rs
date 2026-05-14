@@ -7,6 +7,7 @@
 
 pub mod area;
 pub mod area_trigger;
+pub mod area_trigger_template;
 pub mod chr_specialization;
 pub mod condition_attachments;
 pub mod conditions;
@@ -53,6 +54,7 @@ pub use area::{AreaTableEntry, AreaTableStore};
 pub use area_trigger::{
     AreaTriggerData, AreaTriggerStore, AreaTriggerTeleport, TriggerShape, load_area_triggers,
 };
+pub use area_trigger_template::AreaTriggerTemplateStore;
 pub use chr_specialization::{ChrSpecializationEntry, ChrSpecializationStore};
 pub use condition_attachments::{
     ConditionAttachmentReportLikeCpp, attach_loaded_conditions_like_cpp,
