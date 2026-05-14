@@ -710,6 +710,7 @@ pub enum ConditionSourceValidationErrorLikeCpp {
         source_type: ConditionSourceType,
         entry: i32,
     },
+    NonExistingTrainer(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -732,6 +733,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub spawn_group_store: Option<&'a crate::SpawnGroupTemplateStore>,
     pub creature_template_store: Option<&'a crate::WorldIdStore>,
     pub gameobject_template_store: Option<&'a crate::WorldIdStore>,
+    pub trainer_store: Option<&'a crate::WorldIdStore>,
     pub difficulty_store: Option<&'a crate::DifficultyStore>,
     pub faction_store: Option<&'a crate::Db2IdStore>,
     pub achievement_store: Option<&'a crate::Db2IdStore>,
@@ -1351,8 +1353,23 @@ pub fn validate_condition_source_external_like_cpp(
         }
         ConditionSourceType::SpellImplicitTarget
         | ConditionSourceType::Spell
-        | ConditionSourceType::SpellProc
-        | ConditionSourceType::TrainerSpell => {
+        | ConditionSourceType::SpellProc => {
+            if let Some(store) = stores.spell_store
+                && store.get(condition.source_entry).is_none()
+            {
+                return Err(Error::NonExistingSourceSpell {
+                    source_type: condition.source_type,
+                    spell_id: condition.source_entry,
+                });
+            }
+        }
+        ConditionSourceType::TrainerSpell => {
+            if let Some(store) = stores.trainer_store
+                && !store.contains(condition.source_group)
+            {
+                return Err(Error::NonExistingTrainer(condition.source_group as i32));
+            }
+
             if let Some(store) = stores.spell_store
                 && store.get(condition.source_entry).is_none()
             {
@@ -3035,6 +3052,7 @@ mod tests {
         ]);
         let creature_template_store = crate::WorldIdStore::from_ids("creature_template", [600]);
         let gameobject_template_store = crate::WorldIdStore::from_ids("gameobject_template", [601]);
+        let trainer_store = crate::WorldIdStore::from_ids("trainer", [700]);
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -3055,6 +3073,7 @@ mod tests {
             spawn_group_store: Some(&spawn_group_store),
             creature_template_store: Some(&creature_template_store),
             gameobject_template_store: Some(&gameobject_template_store),
+            trainer_store: Some(&trainer_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -3142,6 +3161,49 @@ mod tests {
             Err(
                 ConditionSourceValidationErrorLikeCpp::NonExistingSourceSpell {
                     source_type: ConditionSourceType::SpellClickEvent,
+                    spell_id: 999
+                }
+            )
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::TrainerSpell,
+                    source_group: 700,
+                    source_entry: 200,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::TrainerSpell,
+                    source_group: 999,
+                    source_entry: 200,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingTrainer(
+                999
+            ))
+        ));
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::TrainerSpell,
+                    source_group: 700,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingSourceSpell {
+                    source_type: ConditionSourceType::TrainerSpell,
                     spell_id: 999
                 }
             )

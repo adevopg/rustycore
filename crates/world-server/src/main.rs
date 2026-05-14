@@ -556,6 +556,19 @@ async fn main() -> Result<()> {
         creature_template_store.len(),
         gameobject_template_store.len()
     );
+    let trainer_store = Arc::new(
+        wow_data::WorldIdStore::load_like_cpp(
+            world_db.as_ref(),
+            "trainer",
+            WorldStatements::SEL_TRAINER_IDS,
+        )
+        .await
+        .context("Failed to load trainer ids for C++ ConditionMgr validation")?,
+    );
+    info!(
+        "Loaded condition validation trainer id store: {} trainers",
+        trainer_store.len()
+    );
 
     let map_difficulty_store = Arc::new(
         wow_data::MapDifficultyStore::load(&data_dir, &locale)
@@ -916,6 +929,7 @@ async fn main() -> Result<()> {
                 spawn_group_store: Some(&spawn_group_store),
                 creature_template_store: Some(creature_template_store.as_ref()),
                 gameobject_template_store: Some(gameobject_template_store.as_ref()),
+                trainer_store: Some(trainer_store.as_ref()),
                 difficulty_store: Some(difficulty_store.as_ref()),
                 faction_store: Some(faction_store.as_ref()),
                 achievement_store: Some(achievement_store.as_ref()),
