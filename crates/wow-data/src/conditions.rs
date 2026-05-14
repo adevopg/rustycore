@@ -520,6 +520,19 @@ pub fn useless_condition_value_fields_like_cpp(condition: &Condition) -> Vec<u8>
     if !condition.condition_string_value1.is_empty() && !info.has_condition_string_value1 {
         fields.push(4);
     }
+    if condition.condition_type == ConditionType::ObjectEntryGuid
+        && matches!(
+            condition.condition_value1,
+            value if value == TypeId::Player as u32 || value == TypeId::Corpse as u32
+        )
+    {
+        if condition.condition_value2 != 0 && !fields.contains(&2) {
+            fields.push(2);
+        }
+        if condition.condition_value3 != 0 && !fields.contains(&3) {
+            fields.push(3);
+        }
+    }
 
     fields
 }
@@ -2571,6 +2584,18 @@ mod tests {
             ..Condition::default()
         };
         assert_eq!(useless_condition_value_fields_like_cpp(&aura), vec![4]);
+
+        let player_object_entry_guid = Condition {
+            condition_type: ConditionType::ObjectEntryGuid,
+            condition_value1: TypeId::Player as u32,
+            condition_value2: 42,
+            condition_value3: 77,
+            ..Condition::default()
+        };
+        assert_eq!(
+            useless_condition_value_fields_like_cpp(&player_object_entry_guid),
+            vec![2, 3]
+        );
     }
 
     #[test]
