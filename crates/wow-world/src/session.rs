@@ -7107,7 +7107,6 @@ impl WorldSession {
         self.player_area_id_like_cpp = area_id;
     }
 
-    #[cfg(test)]
     pub(crate) fn player_zone_area_like_cpp(&self) -> (u32, u32) {
         (self.player_zone_id_like_cpp, self.player_area_id_like_cpp)
     }
