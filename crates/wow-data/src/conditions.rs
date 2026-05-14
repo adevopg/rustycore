@@ -676,6 +676,11 @@ pub enum ConditionSourceValidationErrorLikeCpp {
     NonExistingClientAreaTrigger(i32),
     NonExistingTerrainSwapMap(u32),
     NonExistingPhaseArea(u32),
+    NonExistingNpcVendorItem(i32),
+    NonExistingGraveyard {
+        safe_loc_id: i32,
+        zone_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -694,6 +699,7 @@ pub struct ConditionExternalValidationStoresLikeCpp<'a> {
     pub phase_store: Option<&'a crate::PhaseStore>,
     pub quest_store: Option<&'a crate::quest::QuestStore>,
     pub area_trigger_store: Option<&'a crate::AreaTriggerStore>,
+    pub graveyard_store: Option<&'a crate::GraveyardStore>,
     pub max_skill_value: Option<u32>,
     pub loot_template_exists: Option<&'a dyn Fn(ConditionSourceType, u32) -> bool>,
     pub loot_source_entry_exists: Option<&'a dyn Fn(ConditionSourceType, u32, i32) -> bool>,
@@ -1144,6 +1150,16 @@ pub fn validate_condition_source_external_like_cpp(
                 ));
             }
         }
+        ConditionSourceType::NpcVendor => {
+            if let Some(store) = stores.item_store
+                && u32::try_from(condition.source_entry)
+                    .ok()
+                    .and_then(|item_id| store.get(item_id))
+                    .is_none()
+            {
+                return Err(Error::NonExistingNpcVendorItem(condition.source_entry));
+            }
+        }
         ConditionSourceType::SpellImplicitTarget
         | ConditionSourceType::Spell
         | ConditionSourceType::SpellProc
@@ -1167,6 +1183,26 @@ pub fn validate_condition_source_external_like_cpp(
                     .is_none()
             {
                 return Err(Error::NonExistingClientAreaTrigger(condition.source_entry));
+            }
+        }
+        ConditionSourceType::Graveyard => {
+            if let Some(store) = stores.graveyard_store {
+                let Some(safe_loc_id) = u32::try_from(condition.source_entry).ok() else {
+                    return Err(Error::NonExistingGraveyard {
+                        safe_loc_id: condition.source_entry,
+                        zone_id: condition.source_group,
+                    });
+                };
+
+                if store
+                    .find_graveyard_data_like_cpp(safe_loc_id, condition.source_group)
+                    .is_none()
+                {
+                    return Err(Error::NonExistingGraveyard {
+                        safe_loc_id: condition.source_entry,
+                        zone_id: condition.source_group,
+                    });
+                }
             }
         }
         _ => {}
@@ -2494,6 +2530,16 @@ mod tests {
 
     #[test]
     fn condition_external_source_validation_uses_loaded_stores_like_cpp() {
+        let item_store = crate::ItemStore::from_records([crate::ItemRecord {
+            id: 100,
+            class_id: 0,
+            subclass_id: 0,
+            material: 0,
+            inventory_type: 0,
+            sheathe_type: 0,
+            random_select: 0,
+            random_suffix_group_id: 0,
+        }]);
         let area_store = crate::AreaTableStore::from_entries([crate::AreaTableEntry {
             id: 7,
             parent_area_id: 0,
@@ -2522,6 +2568,15 @@ mod tests {
             vertices: Vec::new(),
             teleport: None,
         });
+        let mut graveyard_store = crate::GraveyardStore::default();
+        graveyard_store.load_graveyard_zones_from_rows_like_cpp(
+            [crate::GraveyardZoneRow {
+                safe_loc_id: 400,
+                ghost_zone_id: 7,
+            }],
+            |_| true,
+            |_| true,
+        );
         let loot_template_exists = |source_type: ConditionSourceType, source_group: u32| {
             source_type == ConditionSourceType::CreatureLootTemplate && source_group == 123
         };
@@ -2532,11 +2587,13 @@ mod tests {
                     && (source_entry == 456 || source_entry == 900)
             };
         let stores = ConditionExternalValidationStoresLikeCpp {
+            item_store: Some(&item_store),
             area_table_store: Some(&area_store),
             map_store: Some(&map_store),
             quest_store: Some(&quest_store),
             spell_store: Some(&spell_store),
             area_trigger_store: Some(&area_trigger_store),
+            graveyard_store: Some(&graveyard_store),
             loot_template_exists: Some(&loot_template_exists),
             loot_source_entry_exists: Some(&loot_source_entry_exists),
             ..ConditionExternalValidationStoresLikeCpp::default()
@@ -2563,6 +2620,28 @@ mod tests {
                 stores
             ),
             Err(ConditionSourceValidationErrorLikeCpp::NonExistingQuestAvailable(999))
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::NpcVendor,
+                    source_entry: 100,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::NpcVendor,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(ConditionSourceValidationErrorLikeCpp::NonExistingNpcVendorItem(999))
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(
@@ -2612,6 +2691,35 @@ mod tests {
                 stores
             ),
             Err(ConditionSourceValidationErrorLikeCpp::NonExistingClientAreaTrigger(999))
+        ));
+        assert_eq!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::Graveyard,
+                    source_group: 7,
+                    source_entry: 400,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_condition_source_external_like_cpp(
+                &Condition {
+                    source_type: ConditionSourceType::Graveyard,
+                    source_group: 7,
+                    source_entry: 999,
+                    ..Condition::default()
+                },
+                stores
+            ),
+            Err(
+                ConditionSourceValidationErrorLikeCpp::NonExistingGraveyard {
+                    safe_loc_id: 999,
+                    zone_id: 7
+                }
+            )
         ));
         assert_eq!(
             validate_condition_source_external_like_cpp(

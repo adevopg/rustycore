@@ -805,6 +805,7 @@ async fn main() -> Result<()> {
                 phase_store: Some(phase_store.as_ref()),
                 quest_store: Some(quest_store.as_ref()),
                 area_trigger_store: Some(area_trigger_store.as_ref()),
+                graveyard_store: None,
                 max_skill_value: Some(max_skill_value_like_cpp(&world_configs)),
                 loot_template_exists: Some(&loot_template_exists),
                 loot_source_entry_exists: Some(&loot_source_entry_exists),
