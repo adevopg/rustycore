@@ -535,6 +535,30 @@ impl Vehicle {
         (!passenger.is_empty()).then_some(passenger)
     }
 
+    pub fn seat_id_for_passenger_like_cpp(&self, passenger: ObjectGuid) -> Option<i8> {
+        self.seats
+            .iter()
+            .find_map(|(seat_id, seat)| (seat.passenger.guid == passenger).then_some(*seat_id))
+    }
+
+    pub fn seat_info_for_passenger_like_cpp(
+        &self,
+        passenger: ObjectGuid,
+    ) -> Option<VehicleSeatInfo> {
+        self.seats
+            .values()
+            .find_map(|seat| (seat.passenger.guid == passenger).then_some(seat.seat_info))
+    }
+
+    pub fn seat_addon_for_passenger_like_cpp(
+        &self,
+        passenger: ObjectGuid,
+    ) -> Option<VehicleSeatAddon> {
+        self.seats
+            .values()
+            .find_map(|seat| (seat.passenger.guid == passenger).then_some(seat.seat_addon))
+    }
+
     pub fn available_seat_count(&self) -> u8 {
         self.seats
             .iter()
@@ -1006,6 +1030,35 @@ mod tests {
         );
         assert!(!plan.remove_charm);
         assert!(!plan.cast_parachute);
+    }
+
+    #[test]
+    fn passenger_seat_lookups_match_cpp_helpers() {
+        let mut vehicle = vehicle();
+        let passenger = passenger_guid(1);
+        assert!(vehicle.add_vehicle_passenger(passenger, 0));
+
+        assert_eq!(vehicle.seat_id_for_passenger_like_cpp(passenger), Some(0));
+        assert_eq!(
+            vehicle.seat_info_for_passenger_like_cpp(passenger),
+            Some(vehicle.seats().get(&0).unwrap().seat_info)
+        );
+        assert_eq!(
+            vehicle.seat_addon_for_passenger_like_cpp(passenger),
+            Some(vehicle.seats().get(&0).unwrap().seat_addon)
+        );
+        assert_eq!(
+            vehicle.seat_id_for_passenger_like_cpp(passenger_guid(2)),
+            None
+        );
+        assert_eq!(
+            vehicle.seat_info_for_passenger_like_cpp(passenger_guid(2)),
+            None
+        );
+        assert_eq!(
+            vehicle.seat_addon_for_passenger_like_cpp(passenger_guid(2)),
+            None
+        );
     }
 
     #[test]
