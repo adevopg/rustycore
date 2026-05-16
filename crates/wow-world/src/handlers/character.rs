@@ -3280,12 +3280,106 @@ impl WorldSession {
         let y_min = pos.y - RANGE;
         let y_max = pos.y + RANGE;
 
+        let map_creatures = self.visible_world_creatures_from_map_like_cpp(map_id, &pos);
+        let canonical_gameobjects =
+            self.visible_gameobjects_from_canonical_map_like_cpp(map_id, &pos, RANGE);
+        let has_map_visibility_source =
+            self.has_world_map_manager_like_cpp() || canonical_gameobjects.is_some();
+
+        if has_map_visibility_source {
+            let mut new_visible_creatures: HashSet<ObjectGuid> = HashSet::new();
+            let mut new_creature_blocks: Vec<UpdateBlock> = Vec::new();
+            for creature in &map_creatures {
+                let guid = creature.guid();
+                new_visible_creatures.insert(guid);
+                if !self.visible_creatures.contains(&guid) {
+                    let mut create_data = creature.create_data.clone();
+                    create_data.health = i64::from(creature.current_hp());
+                    create_data.max_health = i64::from(creature.max_hp());
+                    create_data.level = creature.level();
+                    new_creature_blocks.push(UpdateObject::create_creature_block(
+                        create_data,
+                        &creature.position(),
+                    ));
+                }
+            }
+
+            let removed_creatures: Vec<ObjectGuid> = self
+                .visible_creatures
+                .iter()
+                .filter(|g| !new_visible_creatures.contains(g))
+                .copied()
+                .collect();
+
+            if !new_creature_blocks.is_empty() {
+                debug!(
+                    "Visibility update: {} map-owned creatures",
+                    new_creature_blocks.len()
+                );
+                self.send_packet(&UpdateObject::create_creatures(new_creature_blocks, map_id));
+            }
+            if !removed_creatures.is_empty() {
+                debug!(
+                    "Visibility update: {} map-owned creatures out of range",
+                    removed_creatures.len()
+                );
+                self.send_packet(&UpdateObject::out_of_range_objects(
+                    removed_creatures,
+                    map_id,
+                ));
+            }
+            self.visible_creatures = new_visible_creatures;
+
+            if let Some(gameobjects) = canonical_gameobjects {
+                let new_visible_gos: HashSet<_> = gameobjects.iter().map(|go| go.guid).collect();
+                let new_go_blocks = gameobjects
+                    .into_iter()
+                    .filter(|go| !self.visible_gameobjects.contains(&go.guid))
+                    .map(UpdateObject::create_gameobject_block)
+                    .collect::<Vec<_>>();
+                let removed_gos: Vec<ObjectGuid> = self
+                    .visible_gameobjects
+                    .iter()
+                    .filter(|g| !new_visible_gos.contains(g))
+                    .copied()
+                    .collect();
+                for guid in &removed_gos {
+                    self.represented_gameobject_phase_shifts.remove(guid);
+                }
+
+                if !new_go_blocks.is_empty() {
+                    debug!(
+                        "Visibility update: {} canonical game objects",
+                        new_go_blocks.len()
+                    );
+                    self.send_packet(&UpdateObject::create_world_objects(new_go_blocks, map_id));
+                }
+                if !removed_gos.is_empty() {
+                    debug!(
+                        "Visibility update: {} canonical game objects out of range",
+                        removed_gos.len()
+                    );
+                    self.send_packet(&UpdateObject::out_of_range_objects(removed_gos, map_id));
+                }
+                self.visible_gameobjects = new_visible_gos;
+            }
+
+            self.last_visibility_pos = Some(pos);
+            debug!(
+                "Visibility updated at ({:.1}, {:.1}): {} creatures / {} GOs in range",
+                pos.x,
+                pos.y,
+                self.visible_creatures.len(),
+                self.visible_gameobjects.len()
+            );
+            return;
+        }
+
         // ── CREATURES ───────────────────────────────────────────────────
         let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
             None => return,
         };
-
         let mut stmt = world_db.prepare(WorldStatements::SEL_CREATURES_IN_RANGE);
         stmt.set_u16(0, map_id);
         stmt.set_f32(1, x_min);
@@ -3304,23 +3398,7 @@ impl WorldSession {
         let mut new_visible_creatures: HashSet<ObjectGuid> = HashSet::new();
         let mut new_creature_blocks: Vec<UpdateBlock> = Vec::new();
 
-        let map_creatures = self.visible_world_creatures_from_map_like_cpp(map_id, &pos);
-        if !map_creatures.is_empty() {
-            for creature in &map_creatures {
-                let guid = creature.guid();
-                new_visible_creatures.insert(guid);
-                if !self.visible_creatures.contains(&guid) {
-                    let mut create_data = creature.create_data.clone();
-                    create_data.health = i64::from(creature.current_hp());
-                    create_data.max_health = i64::from(creature.max_hp());
-                    create_data.level = creature.level();
-                    new_creature_blocks.push(UpdateObject::create_creature_block(
-                        create_data,
-                        &creature.position(),
-                    ));
-                }
-            }
-        } else if !cr.is_empty() {
+        if !cr.is_empty() {
             let mut cr = cr;
             loop {
                 let spawn_guid: u64 = cr
@@ -3497,52 +3575,6 @@ impl WorldSession {
         self.visible_creatures = new_visible_creatures;
 
         // ── GAME OBJECTS ────────────────────────────────────────────────
-        if let Some(gameobjects) =
-            self.visible_gameobjects_from_canonical_map_like_cpp(map_id, &pos, RANGE)
-            && (!gameobjects.is_empty() || !self.visible_gameobjects.is_empty())
-        {
-            let new_visible_gos: HashSet<_> = gameobjects.iter().map(|go| go.guid).collect();
-            let new_go_blocks = gameobjects
-                .into_iter()
-                .filter(|go| !self.visible_gameobjects.contains(&go.guid))
-                .map(UpdateObject::create_gameobject_block)
-                .collect::<Vec<_>>();
-            let removed_gos: Vec<ObjectGuid> = self
-                .visible_gameobjects
-                .iter()
-                .filter(|g| !new_visible_gos.contains(g))
-                .copied()
-                .collect();
-            for guid in &removed_gos {
-                self.represented_gameobject_phase_shifts.remove(guid);
-            }
-
-            if !new_go_blocks.is_empty() {
-                debug!(
-                    "Visibility update: {} canonical game objects",
-                    new_go_blocks.len()
-                );
-                self.send_packet(&UpdateObject::create_world_objects(new_go_blocks, map_id));
-            }
-            if !removed_gos.is_empty() {
-                debug!(
-                    "Visibility update: {} canonical game objects out of range",
-                    removed_gos.len()
-                );
-                self.send_packet(&UpdateObject::out_of_range_objects(removed_gos, map_id));
-            }
-            self.visible_gameobjects = new_visible_gos;
-            self.last_visibility_pos = Some(pos);
-            debug!(
-                "Visibility updated at ({:.1}, {:.1}): {} creatures / {} GOs in range",
-                pos.x,
-                pos.y,
-                self.visible_creatures.len(),
-                self.visible_gameobjects.len()
-            );
-            return;
-        }
-
         let mut go_stmt = world_db.prepare(WorldStatements::SEL_GAMEOBJECTS_IN_RANGE);
         go_stmt.set_u16(0, map_id);
         go_stmt.set_f32(1, x_min);

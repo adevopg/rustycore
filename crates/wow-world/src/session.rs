@@ -3489,6 +3489,10 @@ impl WorldSession {
         }
     }
 
+    pub(crate) fn has_world_map_manager_like_cpp(&self) -> bool {
+        self.map_manager.is_some()
+    }
+
     pub(crate) fn visible_world_creatures_from_map_like_cpp(
         &self,
         map_id: u16,
@@ -12859,6 +12863,69 @@ mod tests {
         assert_eq!(visible[0].display_id, 7000);
         assert_eq!(visible[0].go_type, 3);
         assert_eq!(visible[0].scale, 1.5);
+    }
+
+    #[tokio::test]
+    async fn update_visibility_uses_map_sources_without_world_db_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let player_position = Position::new(10.0, 10.0, 0.0, 0.0);
+        let creature_guid = test_creature_guid(40);
+        let gameobject_guid = test_gameobject_guid(912, 41);
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_player_map_position_like_cpp(571, player_position);
+
+        let creature_position = Position::new(20.0, 20.0, 0.0, 0.0);
+        let (grid_x, grid_y) =
+            crate::map_manager::world_to_grid_coords(creature_position.x, creature_position.y);
+        manager.write().unwrap().add_creature(
+            571,
+            0,
+            grid_x,
+            grid_y,
+            crate::map_manager::WorldCreature::new(
+                creature_guid,
+                901,
+                creature_position,
+                100,
+                80,
+                1,
+                2,
+                0.0,
+                1,
+                35,
+                0,
+                0,
+            ),
+        );
+
+        canonical.lock().unwrap().create_world_map(571, 0);
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            gameobject_guid,
+            912,
+            Position::new(30.0, 30.0, 0.0, 0.0),
+            3,
+        );
+        session.record_represented_gameobject_display_model_like_cpp(
+            gameobject_guid,
+            7002,
+            1.0,
+            [0.0, 0.0, 0.0, 1.0],
+        );
+
+        session.update_visibility().await;
+
+        assert!(session.visible_creatures.contains(&creature_guid));
+        assert!(session.visible_gameobjects.contains(&gameobject_guid));
+        assert_eq!(session.last_visibility_pos, Some(player_position));
+        assert!(
+            send_rx.try_recv().is_ok(),
+            "map-driven visibility should send create data without DB"
+        );
     }
 
     #[test]
