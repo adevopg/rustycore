@@ -14,7 +14,9 @@ use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use tracing::{debug, info, trace, warn};
 
-use crate::entity_update_bridge::player_values_update_to_update_object;
+use crate::entity_update_bridge::{
+    player_values_update_to_update_object, unit_values_update_to_update_object,
+};
 use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
 use crate::phasing::{
     init_db_phase_shift_like_cpp, init_db_visible_map_id_like_cpp,
@@ -3018,7 +3020,7 @@ impl WorldSession {
             phase_group_id,
             terrain_swap_map,
         );
-        let canonical_creature = {
+        let mut canonical_creature = {
             let mut creature = wow_entities::Creature::new(false);
             creature.unit_mut().world_mut().object_mut().create(guid);
             creature
@@ -3050,6 +3052,7 @@ impl WorldSession {
             creature.ai_ownership_mut().terrain_swap_map = validated_terrain_swap_map;
             creature
         };
+        canonical_creature.clear_data_changes();
         self.insert_canonical_creature_map_object_like_cpp(map_id, canonical_creature.clone());
 
         if let Some(manager) = &self.map_manager {
@@ -10804,7 +10807,7 @@ impl WorldSession {
 
         // Gather combat data from the canonical map-owned creature before
         // emitting combat packets.
-        let Some((swings, target_level, now_dead, move_stop)) = self
+        let Some((swings, target_level, now_dead, move_stop, values_update)) = self
             .mutate_world_creature(combat_target, |creature| {
                 if !creature.is_alive() {
                     return None;
@@ -10862,7 +10865,8 @@ impl WorldSession {
                 if canonical_swing_damages.is_none() {
                     creature.record_swing();
                 }
-                Some((sent_swings, level, died, move_stop))
+                let values_update = creature.creature.unit().values_update();
+                Some((sent_swings, level, died, move_stop, values_update))
             })
             .flatten()
         else {
@@ -10891,8 +10895,15 @@ impl WorldSession {
             let _ = self.send_tx.send(state_update.to_bytes());
         }
 
-        // TODO: creature health VALUES update — format needs verification vs client
-        // (temporarily disabled to prevent client crash from malformed packet)
+        if self.client_visible_guids_like_cpp.contains(&combat_target)
+            && let Some(update) = unit_values_update_to_update_object(
+                combat_target,
+                self.player_map_id_like_cpp(),
+                &values_update,
+            )
+        {
+            self.send_packet(&update);
+        }
 
         if now_dead {
             if let Some(bytes) = move_stop {
@@ -13869,13 +13880,14 @@ mod tests {
 
     #[test]
     fn combat_tick_damage_syncs_canonical_creature_health() {
-        let (mut session, _, _) = make_session();
+        let (mut session, _, send_rx) = make_session();
         let manager = shared_map_manager();
         let guid = test_creature_guid(18_003);
         let player = ObjectGuid::create_player(1, 43);
         session.player_guid = Some(player);
         session.combat_target = Some(guid);
         session.in_combat = true;
+        session.client_visible_guids_like_cpp.insert(guid);
         register_test_creature(&mut session, manager.clone(), guid, 40);
         session
             .mutate_world_creature(guid, |creature| {
@@ -13890,6 +13902,13 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert!(world_creature.current_hp() < 40);
+
+        let attacker_state = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([attacker_state[0], attacker_state[1]]);
+        assert_eq!(opcode, ServerOpcodes::AttackerStateUpdate as u16);
+        let values_update = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([values_update[0], values_update[1]]);
+        assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
     }
 
     #[test]
