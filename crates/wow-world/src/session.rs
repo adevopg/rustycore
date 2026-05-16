@@ -942,6 +942,8 @@ pub struct WorldSession {
 
     /// Pending creature spawn request (set during login, processed async).
     pub(crate) pending_creature_spawn: Option<PendingCreatureSpawn>,
+    /// Creature kills observed from synchronous melee ticks and completed in `process_pending`.
+    pending_creature_kill_loot_like_cpp: Vec<ObjectGuid>,
     /// Creatures waiting to respawn after corpse despawn.
     pub(crate) respawn_queue: Vec<PendingRespawn>,
 
@@ -1677,6 +1679,7 @@ impl WorldSession {
             player_guid: None,
             player_controller: None,
             pending_creature_spawn: None,
+            pending_creature_kill_loot_like_cpp: Vec::new(),
             respawn_queue: Vec::new(),
             inventory_items: HashMap::new(),
             buyback_items: HashMap::new(),
@@ -6944,6 +6947,7 @@ impl WorldSession {
     /// Process pending packets asynchronously. Call after `update()`.
     pub async fn process_pending(&mut self) {
         self.process_represented_session_commands_like_cpp().await;
+        self.process_pending_creature_kill_loot_like_cpp().await;
 
         // ── Spell casting tick ─────────────────────────────────────────
         // Check if an active spell cast has completed and execute it.
@@ -6966,6 +6970,20 @@ impl WorldSession {
         let packets: Vec<WorldPacket> = self.pending_packets.drain(..).collect();
         for pkt in packets {
             self.dispatch_packet(pkt).await;
+        }
+    }
+
+    async fn process_pending_creature_kill_loot_like_cpp(&mut self) {
+        if self.pending_creature_kill_loot_like_cpp.is_empty() {
+            return;
+        }
+
+        let mut pending = std::mem::take(&mut self.pending_creature_kill_loot_like_cpp);
+        pending.sort_by_key(|guid| (guid.high_value(), guid.low_value()));
+        pending.dedup();
+        for creature_guid in pending {
+            self.ensure_represented_creature_kill_loot_like_cpp(creature_guid)
+                .await;
         }
     }
 
@@ -11047,6 +11065,12 @@ impl WorldSession {
         }
 
         if now_dead {
+            if !self
+                .pending_creature_kill_loot_like_cpp
+                .contains(&combat_target)
+            {
+                self.pending_creature_kill_loot_like_cpp.push(combat_target);
+            }
             if let Some(bytes) = move_stop {
                 let _ = self.send_tx.send(bytes);
             }
@@ -14248,6 +14272,42 @@ mod tests {
         let values_update = send_rx.try_recv().unwrap();
         let opcode = u16::from_le_bytes([values_update[0], values_update[1]]);
         assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
+    }
+
+    #[tokio::test]
+    async fn combat_tick_kill_generates_creature_loot_after_pending_drain_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_015);
+        let player = ObjectGuid::create_player(1, 63);
+        session.player_guid = Some(player);
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 3);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature.enter_combat(player);
+                creature.creature.ai_ownership_mut().last_swing_ms = 0;
+                creature.creature.ai_ownership_mut().swing_timer_ms = 0;
+            })
+            .unwrap();
+
+        session.tick_combat_sync();
+
+        assert!(session.loot_table.get(&guid).is_none());
+        assert_eq!(session.pending_creature_kill_loot_like_cpp, vec![guid]);
+
+        session.process_pending().await;
+
+        let loot = session
+            .loot_table
+            .get(&guid)
+            .expect("melee kill loot is generated from pending bridge");
+        assert!(loot.allowed_looters.contains(&player));
+        assert_eq!(loot.loot_type, LOOT_TYPE_CORPSE_LIKE_CPP);
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert!(world_creature.creature.is_tapped_by(player));
     }
 
     #[test]
