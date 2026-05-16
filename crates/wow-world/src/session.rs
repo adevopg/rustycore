@@ -2214,6 +2214,37 @@ impl WorldSession {
         Some(f(creature))
     }
 
+    fn object_id_visibility_conditions_met_like_cpp(
+        &self,
+        target: &WorldObject,
+        seer: &WorldObject,
+    ) -> bool {
+        let Some(condition_store) = self.condition_store.as_ref() else {
+            return true;
+        };
+
+        let area_table_store = self.area_table_store.as_ref().map(Arc::clone);
+        crate::conditions::is_object_meeting_visibility_by_object_id_conditions_like_cpp(
+            condition_store,
+            target.object().type_id() as u32,
+            target.object().entry(),
+            Some(seer),
+            |condition, source_info| {
+                crate::conditions::condition_meets_basic_like_cpp(
+                    condition,
+                    source_info,
+                    |area_id, required_area_id| {
+                        area_table_store.as_ref().is_some_and(|store| {
+                            store.is_in_area_like_cpp(area_id, required_area_id)
+                        })
+                    },
+                )
+                .value()
+                .unwrap_or(false)
+            },
+        )
+    }
+
     fn canonical_unit_attack_target_state_like_cpp(
         &self,
         guid: ObjectGuid,
@@ -2247,8 +2278,15 @@ impl WorldSession {
                     .player_guid()
                     .and_then(|attacker_guid| map.map().get_typed_player(attacker_guid))
                     .map(|attacker| {
+                        let mut target_unit = player.unit().clone();
+                        target_unit.set_object_id_visibility_conditions_met_like_cpp(
+                            self.object_id_visibility_conditions_met_like_cpp(
+                                target_unit.world(),
+                                attacker.unit().world(),
+                            ),
+                        );
                         attacker.unit().can_see_or_detect_unit_like_cpp(
-                            player.unit(),
+                            &target_unit,
                             false,
                             true,
                             false,
@@ -2280,8 +2318,15 @@ impl WorldSession {
                     .player_guid()
                     .and_then(|attacker_guid| map.map().get_typed_player(attacker_guid))
                     .map(|attacker| {
+                        let mut target_unit = creature.unit().clone();
+                        target_unit.set_object_id_visibility_conditions_met_like_cpp(
+                            self.object_id_visibility_conditions_met_like_cpp(
+                                target_unit.world(),
+                                attacker.unit().world(),
+                            ),
+                        );
                         attacker.unit().can_see_or_detect_unit_like_cpp(
-                            creature.unit(),
+                            &target_unit,
                             false,
                             true,
                             false,
@@ -11162,13 +11207,13 @@ fn default_available_classes() -> Vec<wow_packet::packets::auth::RaceClassAvaila
 mod tests {
     use super::*;
     use wow_constants::{
-        BagFamilyMask, EnchantmentSlot, InventoryResult, InventoryType, ItemBondingType, ItemClass,
-        ItemContext, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState, PhaseShiftFlags,
-        ServerOpcodes, SpellItemEnchantmentFlags,
+        BagFamilyMask, ConditionSourceType, ConditionType, EnchantmentSlot, InventoryResult,
+        InventoryType, ItemBondingType, ItemClass, ItemContext, ItemFieldFlags, ItemFlags,
+        ItemFlags2, ItemUpdateState, PhaseShiftFlags, ServerOpcodes, SpellItemEnchantmentFlags,
     };
     use wow_core::{Position, guid::HighGuid};
     use wow_data::{
-        ImportPriceArmorEntry, ImportPriceArmorStore, ImportPriceQualityEntry,
+        Condition, ImportPriceArmorEntry, ImportPriceArmorStore, ImportPriceQualityEntry,
         ImportPriceQualityStore, ImportPriceShieldEntry, ImportPriceShieldStore, ImportPriceStores,
         ImportPriceWeaponEntry, ImportPriceWeaponStore, ItemAppearanceEntry, ItemAppearanceStore,
         ItemClassEntry, ItemClassStore, ItemCurrencyCostEntry, ItemCurrencyCostStore,
@@ -15013,6 +15058,89 @@ mod tests {
                 send_attack_start: true
             }
         );
+    }
+
+    #[test]
+    fn player_attack_rejects_object_id_visibility_conditions_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let attacker = ObjectGuid::create_player(1, 57);
+        let victim = ObjectGuid::create_player(1, 58);
+
+        session.set_condition_store(Arc::new(
+            ConditionEntriesByTypeStore::from_conditions_like_cpp([Condition {
+                source_type: ConditionSourceType::ObjectIdVisibility,
+                source_group: TypeId::Player as u32,
+                source_entry: 0,
+                source_id: 0,
+                condition_type: ConditionType::Aura,
+                condition_value1: 999_999,
+                condition_value2: 0,
+                ..Condition::default()
+            }]),
+        ));
+        canonical.lock().unwrap().create_world_map(571, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            attacker,
+            "Warrior".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+
+        let mut victim_player = Player::new(Some(8), false);
+        victim_player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(victim);
+        victim_player
+            .unit_mut()
+            .world_mut()
+            .set_map(571, 0)
+            .unwrap();
+        victim_player
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::new(11.0, 20.0, 30.0, 0.0));
+        victim_player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .add_to_world();
+        victim_player
+            .unit_mut()
+            .set_pvp_flag_like_cpp(UnitPvpFlags::PVP);
+        canonical
+            .lock()
+            .unwrap()
+            .find_map_mut(571, 0)
+            .unwrap()
+            .map_mut()
+            .insert_map_object_record(
+                wow_entities::MapObjectRecord::new_player(victim_player).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.start_player_attack_like_cpp(victim),
+            PlayerAttackStartLikeCppResult::Rejected
+        );
+        assert_eq!(session.combat_target, None);
     }
 
     #[test]
