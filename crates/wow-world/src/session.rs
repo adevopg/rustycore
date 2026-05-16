@@ -2162,6 +2162,12 @@ impl WorldSession {
                 self.remove_canonical_attacker_like_cpp(previous, player_guid);
             }
             self.add_canonical_attacker_like_cpp(victim, player_guid);
+            let _ = self.mutate_world_creature(victim, |victim| {
+                victim
+                    .creature
+                    .unit_mut()
+                    .add_attacker_like_cpp(player_guid);
+            });
         }
     }
 
@@ -2182,6 +2188,12 @@ impl WorldSession {
             self.set_selection_guid_like_cpp(None);
         }
         self.remove_canonical_attacker_like_cpp(target, player_guid);
+        let _ = self.mutate_world_creature(target, |victim| {
+            victim
+                .creature
+                .unit_mut()
+                .remove_attacker_like_cpp(player_guid);
+        });
         Some(target)
     }
 
@@ -13556,6 +13568,50 @@ mod tests {
             .expect("player remains canonical typed Player");
         assert_eq!(player_entity.unit().attacking(), None);
         assert_eq!(player_entity.unit().data().target, ObjectGuid::EMPTY);
+    }
+
+    #[test]
+    fn player_attack_tracks_world_creature_attacker_set_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let attacker = ObjectGuid::create_player(1, 75);
+        let victim = test_creature_guid(18_026);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            attacker,
+            "Warrior".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        register_test_creature(&mut session, manager.clone(), victim, 40);
+
+        session.start_player_attack_like_cpp(victim);
+        {
+            let guard = manager.read().unwrap();
+            let creature = guard.find_creature(0, 0, victim).unwrap();
+            assert!(creature.creature.unit().has_attacker_like_cpp(attacker));
+        }
+
+        assert_eq!(session.stop_player_attack_like_cpp(), Some(victim));
+        let guard = manager.read().unwrap();
+        let creature = guard.find_creature(0, 0, victim).unwrap();
+        assert!(!creature.creature.unit().has_attacker_like_cpp(attacker));
     }
 
     #[test]
