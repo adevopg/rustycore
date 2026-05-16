@@ -3906,10 +3906,10 @@ impl WorldSession {
 
         let go_type: i32 = result.try_read(1).unwrap_or(0);
         let display_id: i32 = result.try_read(2).unwrap_or(0);
-        let name: String = result.read_string(3);
+        let mut name: String = result.read_string(3);
         let icon_name: String = result.read_string(4);
-        let cast_bar_caption: String = result.read_string(5);
-        let unk_string: String = result.read_string(6);
+        let mut cast_bar_caption: String = result.read_string(5);
+        let mut unk_string: String = result.read_string(6);
         let size: f32 = result.try_read(7).unwrap_or(1.0);
 
         // Data0..Data34 at columns 8..42, matching C++ MAX_GAMEOBJECT_DATA.
@@ -3918,6 +3918,54 @@ impl WorldSession {
             data[i] = result.try_read(8 + i).unwrap_or(0);
         }
         let content_tuning_id = result.try_read(43).unwrap_or(0);
+
+        let locale = &self.locale;
+        if !locale.is_empty() && locale != "enUS" {
+            let mut loc_stmt = world_db.prepare(WorldStatements::SEL_GAMEOBJECT_TEMPLATE_LOCALE);
+            loc_stmt.set_u32(0, query.game_object_id);
+            loc_stmt.set_string(1, locale);
+            match world_db.query(&loc_stmt).await {
+                Ok(r) if !r.is_empty() => {
+                    let loc_name: String = r.read_string(0);
+                    let loc_cast_bar_caption: String = r.read_string(1);
+                    let loc_unk_string: String = r.read_string(2);
+                    if !loc_name.is_empty() {
+                        name = loc_name;
+                    }
+                    if !loc_cast_bar_caption.is_empty() {
+                        cast_bar_caption = loc_cast_bar_caption;
+                    }
+                    if !loc_unk_string.is_empty() {
+                        unk_string = loc_unk_string;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => debug!(
+                    "Failed to query gameobject locale {} {}: {e}",
+                    query.game_object_id, locale
+                ),
+            }
+        }
+
+        let mut quest_items = Vec::new();
+        let mut quest_item_stmt = world_db.prepare(WorldStatements::SEL_GAMEOBJECT_QUEST_ITEMS);
+        quest_item_stmt.set_u32(0, query.game_object_id);
+        match world_db.query(&quest_item_stmt).await {
+            Ok(mut quest_item_result) if !quest_item_result.is_empty() => loop {
+                let item_id: i32 = quest_item_result.try_read::<i32>(0).unwrap_or(0);
+                if item_id > 0 {
+                    quest_items.push(item_id);
+                }
+                if !quest_item_result.next_row() {
+                    break;
+                }
+            },
+            Ok(_) => {}
+            Err(e) => debug!(
+                "Failed to query gameobject quest items {}: {e}",
+                query.game_object_id
+            ),
+        }
 
         let mut names: [String; 4] = Default::default();
         names[0] = name;
@@ -3931,7 +3979,7 @@ impl WorldSession {
             display_id,
             data,
             size,
-            quest_items: Vec::new(),
+            quest_items,
             content_tuning_id,
         };
 

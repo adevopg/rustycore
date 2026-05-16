@@ -110,6 +110,10 @@ pub enum WorldStatements {
     SEL_INSTANCE_SPAWN_GROUPS,
     /// Load gameobject template for query response.
     SEL_GAMEOBJECT_TEMPLATE_BY_ENTRY,
+    /// Localized gameobject name/castbar/unk by entry and locale.
+    SEL_GAMEOBJECT_TEMPLATE_LOCALE,
+    /// C++ ObjectMgr gameobject quest item list by entry.
+    SEL_GAMEOBJECT_QUEST_ITEMS,
     SEL_GAMEOBJECT_TEMPLATE_IDS,
     /// SELECT InventoryType FROM item_template WHERE entry = ?
     SEL_ITEM_INVENTORY_TYPE,
@@ -534,6 +538,12 @@ impl StatementDef for WorldStatements {
                 "Data32, Data33, Data34, ContentTuningId ",
                 "FROM gameobject_template WHERE entry = ?",
             ),
+            Self::SEL_GAMEOBJECT_TEMPLATE_LOCALE => {
+                "SELECT Name, CastBarCaption, Unk1 FROM gameobject_template_locale WHERE entry = ? AND locale = ?"
+            }
+            Self::SEL_GAMEOBJECT_QUEST_ITEMS => {
+                "SELECT ItemId FROM gameobject_questitem WHERE GameObjectEntry = ? ORDER BY Idx ASC"
+            }
             Self::SEL_GAMEOBJECT_TEMPLATE_IDS => "SELECT entry FROM gameobject_template",
             Self::SEL_CREATURE_GOSSIP_MENU => {
                 "SELECT MenuID FROM creature_template_gossip WHERE CreatureID = ?"
