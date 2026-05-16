@@ -11330,7 +11330,7 @@ impl WorldSession {
         let account_id = self.account_id;
 
         // Si target es otra criatura — mutate canonical shared map state.
-        let kill_info = self
+        let (kill_info, values_update) = self
             .mutate_world_creature(target_guid, |creature| {
                 info!(
                     account = account_id,
@@ -11340,7 +11340,7 @@ impl WorldSession {
                 );
 
                 let died = creature.take_damage(damage_amount);
-                if died {
+                let kill_info = if died {
                     info!(
                         "Creature {} (entry={}) killed",
                         target_guid,
@@ -11357,7 +11357,8 @@ impl WorldSession {
                     Some((creature.entry(), target_guid, move_stop))
                 } else {
                     None
-                }
+                };
+                (kill_info, creature.creature.unit().values_update())
             })
             .ok_or("Target creature not found")?;
 
@@ -11375,6 +11376,16 @@ impl WorldSession {
                 self.give_xp(xp, guid, true).await;
             }
             self.on_creature_killed(entry, guid).await;
+        }
+
+        if self.client_visible_guids_like_cpp.contains(&target_guid)
+            && let Some(update) = unit_values_update_to_update_object(
+                target_guid,
+                self.player_map_id_like_cpp(),
+                &values_update,
+            )
+        {
+            self.send_packet(&update);
         }
 
         Ok(())
@@ -13825,10 +13836,11 @@ mod tests {
 
     #[tokio::test]
     async fn spell_damage_syncs_canonical_creature_health() {
-        let (mut session, _, _) = make_session();
+        let (mut session, _, send_rx) = make_session();
         let manager = shared_map_manager();
         let guid = test_creature_guid(18_002);
         session.player_guid = Some(ObjectGuid::create_player(1, 42));
+        session.client_visible_guids_like_cpp.insert(guid);
         register_test_creature(&mut session, manager.clone(), guid, 40);
 
         session.apply_damage(guid, 7).await.unwrap();
@@ -13836,6 +13848,9 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert_eq!(world_creature.current_hp(), 33);
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
     }
 
     #[tokio::test]
