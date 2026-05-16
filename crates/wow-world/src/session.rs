@@ -2379,6 +2379,28 @@ impl WorldSession {
         })
     }
 
+    fn current_group_member_guids_for_tap_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+    ) -> Vec<ObjectGuid> {
+        let (Some(group_guid), Some(group_registry)) =
+            (self.group_guid, self.group_registry.as_ref())
+        else {
+            return Vec::new();
+        };
+        group_registry
+            .get(&group_guid)
+            .map(|group| {
+                group
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|member| *member != player_guid)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn summon_private_object_owner_like_cpp(
         &self,
         caster_guid: ObjectGuid,
@@ -10911,6 +10933,8 @@ impl WorldSession {
             return;
         }
 
+        let tap_group_guids = self.current_group_member_guids_for_tap_like_cpp(player_guid);
+
         // Gather combat data from the canonical map-owned creature before
         // emitting combat packets.
         let Some((swings, target_level, now_dead, move_stop, values_update)) = self
@@ -10940,6 +10964,9 @@ impl WorldSession {
                     }
                     let damage = dmg.max(1);
                     let health_before = creature.current_hp();
+                    creature
+                        .creature
+                        .set_tapped_by_player(player_guid, &tap_group_guids);
                     died = creature.take_damage(damage);
                     let over_damage = if died {
                         damage.saturating_sub(health_before) as i32
@@ -11472,8 +11499,9 @@ impl WorldSession {
         use wow_packet::ServerPacket;
         use wow_packet::packets::movement::MonsterMoveStop;
 
-        let _player_guid = self.player_guid().ok_or("No player GUID")?;
+        let player_guid = self.player_guid().ok_or("No player GUID")?;
         let account_id = self.account_id;
+        let tap_group_guids = self.current_group_member_guids_for_tap_like_cpp(player_guid);
 
         // Si target es otra criatura — mutate canonical shared map state.
         let (kill_info, values_update) = self
@@ -11485,6 +11513,9 @@ impl WorldSession {
                     "Dealt damage to creature"
                 );
 
+                creature
+                    .creature
+                    .set_tapped_by_player(player_guid, &tap_group_guids);
                 let died = creature.take_damage(damage_amount);
                 let kill_info = if died {
                     info!(
@@ -14039,7 +14070,8 @@ mod tests {
         let (mut session, _, send_rx) = make_session();
         let manager = shared_map_manager();
         let guid = test_creature_guid(18_002);
-        session.player_guid = Some(ObjectGuid::create_player(1, 42));
+        let player = ObjectGuid::create_player(1, 42);
+        session.player_guid = Some(player);
         session.client_visible_guids_like_cpp.insert(guid);
         register_test_creature(&mut session, manager.clone(), guid, 40);
 
@@ -14048,6 +14080,8 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert_eq!(world_creature.current_hp(), 33);
+        assert!(world_creature.creature.is_tapped_by(player));
+        assert!(world_creature.creature.has_loot_recipient());
         let sent = send_rx.try_recv().unwrap();
         let opcode = u16::from_le_bytes([sent[0], sent[1]]);
         assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
@@ -14381,6 +14415,8 @@ mod tests {
 
         let guard = manager.read().unwrap();
         let world_creature = guard.find_creature(0, 0, guid).unwrap();
+        assert!(world_creature.creature.is_tapped_by(player));
+        assert!(world_creature.creature.has_loot_recipient());
         assert_eq!(
             world_creature
                 .creature
