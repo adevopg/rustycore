@@ -3497,6 +3497,52 @@ impl WorldSession {
         self.visible_creatures = new_visible_creatures;
 
         // ── GAME OBJECTS ────────────────────────────────────────────────
+        if let Some(gameobjects) =
+            self.visible_gameobjects_from_canonical_map_like_cpp(map_id, &pos, RANGE)
+            && (!gameobjects.is_empty() || !self.visible_gameobjects.is_empty())
+        {
+            let new_visible_gos: HashSet<_> = gameobjects.iter().map(|go| go.guid).collect();
+            let new_go_blocks = gameobjects
+                .into_iter()
+                .filter(|go| !self.visible_gameobjects.contains(&go.guid))
+                .map(UpdateObject::create_gameobject_block)
+                .collect::<Vec<_>>();
+            let removed_gos: Vec<ObjectGuid> = self
+                .visible_gameobjects
+                .iter()
+                .filter(|g| !new_visible_gos.contains(g))
+                .copied()
+                .collect();
+            for guid in &removed_gos {
+                self.represented_gameobject_phase_shifts.remove(guid);
+            }
+
+            if !new_go_blocks.is_empty() {
+                debug!(
+                    "Visibility update: {} canonical game objects",
+                    new_go_blocks.len()
+                );
+                self.send_packet(&UpdateObject::create_world_objects(new_go_blocks, map_id));
+            }
+            if !removed_gos.is_empty() {
+                debug!(
+                    "Visibility update: {} canonical game objects out of range",
+                    removed_gos.len()
+                );
+                self.send_packet(&UpdateObject::out_of_range_objects(removed_gos, map_id));
+            }
+            self.visible_gameobjects = new_visible_gos;
+            self.last_visibility_pos = Some(pos);
+            debug!(
+                "Visibility updated at ({:.1}, {:.1}): {} creatures / {} GOs in range",
+                pos.x,
+                pos.y,
+                self.visible_creatures.len(),
+                self.visible_gameobjects.len()
+            );
+            return;
+        }
+
         let mut go_stmt = world_db.prepare(WorldStatements::SEL_GAMEOBJECTS_IN_RANGE);
         go_stmt.set_u16(0, map_id);
         go_stmt.set_f32(1, x_min);
@@ -4045,12 +4091,32 @@ impl WorldSession {
         position: &Position,
         _zone_id: u32,
     ) {
+        const VISIBILITY_RANGE: f32 = 800.0;
+
+        if let Some(gameobjects) =
+            self.visible_gameobjects_from_canonical_map_like_cpp(map_id, position, VISIBILITY_RANGE)
+            && !gameobjects.is_empty()
+        {
+            let go_guids: HashSet<_> = gameobjects.iter().map(|go| go.guid).collect();
+            let blocks = gameobjects
+                .into_iter()
+                .map(UpdateObject::create_gameobject_block)
+                .collect::<Vec<_>>();
+            let count = blocks.len();
+            self.visible_gameobjects = go_guids;
+            self.send_packet(&UpdateObject::create_world_objects(blocks, map_id));
+            debug!(
+                "Sent {} canonical gameobjects to account {} on map {}",
+                count, self.account_id, map_id
+            );
+            return;
+        }
+
         let world_db = match self.world_db() {
             Some(db) => Arc::clone(db),
             None => return,
         };
 
-        const VISIBILITY_RANGE: f32 = 800.0;
         let x_min = position.x - VISIBILITY_RANGE;
         let x_max = position.x + VISIBILITY_RANGE;
         let y_min = position.y - VISIBILITY_RANGE;
