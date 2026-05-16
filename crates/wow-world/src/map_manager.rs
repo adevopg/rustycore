@@ -912,6 +912,15 @@ impl WorldCreature {
             .complete_ai_death_state_after_kill_hooks_like_cpp(self.now_ms());
     }
 
+    pub fn apply_corpse_loot_flags_after_death_state_like_cpp(
+        &mut self,
+        lootable: bool,
+        can_skin: bool,
+    ) {
+        self.creature
+            .apply_corpse_loot_flags_after_death_state_like_cpp(lootable, can_skin);
+    }
+
     pub fn die(&mut self) {
         self.creature.mark_ai_dead(self.now_ms());
     }

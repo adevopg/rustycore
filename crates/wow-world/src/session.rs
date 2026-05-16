@@ -1547,6 +1547,12 @@ pub(crate) enum RepresentedCreatureKillEventLikeCpp {
     DeathStateJustDied {
         victim_guid: ObjectGuid,
     },
+    LootFlagsApplied {
+        creature_guid: ObjectGuid,
+        lootable: bool,
+        can_skin: bool,
+        skinnable: bool,
+    },
     CreatureJustDiedAi {
         creature_guid: ObjectGuid,
         killer_guid: ObjectGuid,
@@ -9477,13 +9483,27 @@ impl WorldSession {
         attacker_guid: ObjectGuid,
         creature_guid: ObjectGuid,
     ) -> Option<wow_entities::UnitValuesUpdate> {
+        let lootable = self
+            .loot_table
+            .get(&creature_guid)
+            .is_some_and(|loot| loot.coins > 0 || loot.unlooted_count > 0);
+        let can_skin = false;
         let values_update = self.mutate_world_creature(creature_guid, |creature| {
             creature.complete_death_state_after_kill_hooks_like_cpp();
+            creature.apply_corpse_loot_flags_after_death_state_like_cpp(lootable, can_skin);
             creature.creature.unit().values_update()
         })?;
         self.represented_creature_kill_events_like_cpp.push(
             RepresentedCreatureKillEventLikeCpp::DeathStateJustDied {
                 victim_guid: creature_guid,
+            },
+        );
+        self.represented_creature_kill_events_like_cpp.push(
+            RepresentedCreatureKillEventLikeCpp::LootFlagsApplied {
+                creature_guid,
+                lootable,
+                can_skin,
+                skinnable: can_skin,
             },
         );
         self.represented_creature_kill_events_like_cpp.push(
@@ -11941,6 +11961,7 @@ mod tests {
         BagFamilyMask, ConditionSourceType, ConditionType, EnchantmentSlot, InventoryResult,
         InventoryType, ItemBondingType, ItemClass, ItemContext, ItemFieldFlags, ItemFlags,
         ItemFlags2, ItemUpdateState, PhaseShiftFlags, ServerOpcodes, SpellItemEnchantmentFlags,
+        UnitDynFlags, UnitFlags,
     };
     use wow_core::{Position, guid::HighGuid};
     use wow_data::{
@@ -14305,6 +14326,21 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert!(world_creature.creature.is_tapped_by(player));
+        assert!(
+            world_creature
+                .creature
+                .unit()
+                .world()
+                .object()
+                .has_dynamic_flag(UnitDynFlags::Lootable as u32)
+        );
+        assert!(
+            !world_creature
+                .creature
+                .unit()
+                .unit_flags_like_cpp()
+                .contains(UnitFlags::SKINNABLE)
+        );
         assert_eq!(
             session.represented_creature_kill_events_like_cpp(),
             &[
@@ -14318,6 +14354,12 @@ mod tests {
                 },
                 RepresentedCreatureKillEventLikeCpp::VictimDeathProc { victim_guid: guid },
                 RepresentedCreatureKillEventLikeCpp::DeathStateJustDied { victim_guid: guid },
+                RepresentedCreatureKillEventLikeCpp::LootFlagsApplied {
+                    creature_guid: guid,
+                    lootable: true,
+                    can_skin: false,
+                    skinnable: false,
+                },
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
                     killer_guid: player,
@@ -14569,6 +14611,21 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert!(world_creature.creature.is_tapped_by(player));
+        assert!(
+            world_creature
+                .creature
+                .unit()
+                .world()
+                .object()
+                .has_dynamic_flag(UnitDynFlags::Lootable as u32)
+        );
+        assert!(
+            !world_creature
+                .creature
+                .unit()
+                .unit_flags_like_cpp()
+                .contains(UnitFlags::SKINNABLE)
+        );
         assert_eq!(
             session.represented_creature_kill_events_like_cpp(),
             &[
@@ -14582,6 +14639,12 @@ mod tests {
                 },
                 RepresentedCreatureKillEventLikeCpp::VictimDeathProc { victim_guid: guid },
                 RepresentedCreatureKillEventLikeCpp::DeathStateJustDied { victim_guid: guid },
+                RepresentedCreatureKillEventLikeCpp::LootFlagsApplied {
+                    creature_guid: guid,
+                    lootable: true,
+                    can_skin: false,
+                    skinnable: false,
+                },
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
                     killer_guid: player,

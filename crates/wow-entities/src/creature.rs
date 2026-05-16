@@ -1,4 +1,6 @@
-use wow_constants::{DeathState, PowerType, TypeId, TypeMask, UnitState, WeaponAttackType};
+use wow_constants::{
+    DeathState, PowerType, TypeId, TypeMask, UnitDynFlags, UnitFlags, UnitState, WeaponAttackType,
+};
 use wow_core::{ObjectGuid, Position};
 
 use crate::{BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit};
@@ -1024,6 +1026,28 @@ impl Creature {
         }
         self.set_death_state_runtime(DeathState::JustDied, now_ms.min(i64::MAX as u64) as i64);
         self.unit.set_health(0);
+    }
+
+    pub fn apply_corpse_loot_flags_after_death_state_like_cpp(
+        &mut self,
+        lootable: bool,
+        can_skin: bool,
+    ) {
+        if lootable {
+            self.unit
+                .world_mut()
+                .object_mut()
+                .set_dynamic_flag(UnitDynFlags::Lootable as u32);
+        }
+        if can_skin {
+            self.unit
+                .world_mut()
+                .object_mut()
+                .set_dynamic_flag(UnitDynFlags::CanSkin as u32);
+            let mut flags = self.unit.unit_flags_like_cpp();
+            flags.insert(UnitFlags::SKINNABLE);
+            self.unit.set_unit_flags_like_cpp(flags);
+        }
     }
 
     pub fn respawn_ai(&mut self, now_ms: u64) {
@@ -2152,6 +2176,38 @@ mod tests {
         );
         assert_eq!(creature.respawn_time(), 20 + 30);
         assert!(creature.runtime_state().save_respawn_requested);
+    }
+
+    #[test]
+    fn creature_corpse_loot_flags_apply_after_death_state_like_cpp() {
+        let mut creature = Creature::new(false);
+        creature.unit_mut().set_max_health(40);
+        creature.unit_mut().set_health(40);
+        creature.apply_ai_damage_before_death_state_like_cpp(100, 20);
+        creature.complete_ai_death_state_after_kill_hooks_like_cpp(20);
+
+        creature.apply_corpse_loot_flags_after_death_state_like_cpp(true, true);
+
+        assert!(
+            creature
+                .unit()
+                .world()
+                .object()
+                .has_dynamic_flag(UnitDynFlags::Lootable as u32)
+        );
+        assert!(
+            creature
+                .unit()
+                .world()
+                .object()
+                .has_dynamic_flag(UnitDynFlags::CanSkin as u32)
+        );
+        assert!(
+            creature
+                .unit()
+                .unit_flags_like_cpp()
+                .contains(UnitFlags::SKINNABLE)
+        );
     }
 
     #[test]
