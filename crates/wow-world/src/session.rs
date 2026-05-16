@@ -230,6 +230,12 @@ pub(crate) struct RepresentedGameObjectUseState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RepresentedGameObjectAccessLikeCpp {
+    pub entry: u32,
+    pub position: wow_core::Position,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MovementAckEventLikeCpp {
     pub opcode: ClientOpcodes,
     pub mover_guid: ObjectGuid,
@@ -3201,6 +3207,42 @@ impl WorldSession {
         state.display_id = (display_id != 0).then_some(display_id);
         state.scale = scale;
         state.rotation = rotation;
+    }
+
+    pub(crate) fn canonical_gameobject_access_like_cpp(
+        &self,
+        guid: ObjectGuid,
+    ) -> Option<RepresentedGameObjectAccessLikeCpp> {
+        if guid.is_empty() || !guid.is_game_object() {
+            return None;
+        }
+        let manager = self.canonical_map_manager.as_ref()?;
+        let Ok(manager) = manager.lock() else {
+            return None;
+        };
+        let map = manager.find_map(u32::from(self.player_map_id_like_cpp()), 0)?;
+        let game_object = map.map().get_typed_game_object(guid)?;
+        Some(RepresentedGameObjectAccessLikeCpp {
+            entry: game_object.world().object().entry(),
+            position: game_object.world().position(),
+        })
+    }
+
+    pub(crate) fn represented_gameobject_can_interact_with_like_cpp(
+        &self,
+        guid: ObjectGuid,
+        interaction_distance: f32,
+    ) -> Option<RepresentedGameObjectAccessLikeCpp> {
+        let access = self.canonical_gameobject_access_like_cpp(guid)?;
+        let player_position = self.player_position_like_cpp()?;
+        if access
+            .position
+            .is_within_dist(&player_position, interaction_distance)
+        {
+            Some(access)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn represented_gameobject_is_per_player_despawned_like_cpp(
@@ -12448,6 +12490,71 @@ mod tests {
 
     fn test_creature_guid(counter: i64) -> ObjectGuid {
         ObjectGuid::create_world_object(wow_core::guid::HighGuid::Creature, 0, 1, 0, 0, 1, counter)
+    }
+
+    fn test_gameobject_guid(entry: u32, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(
+            wow_core::guid::HighGuid::GameObject,
+            0,
+            1,
+            571,
+            0,
+            entry,
+            counter,
+        )
+    }
+
+    #[test]
+    fn gameobject_interaction_resolves_canonical_map_object_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(777, 9);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "Tester".to_string(),
+            Position::new(10.0, 0.0, 0.0, 0.0),
+            571,
+            2,
+            1,
+            10,
+            0,
+        ));
+
+        let mut gameobject = GameObject::new();
+        gameobject.world_mut().object_mut().create(gameobject_guid);
+        gameobject.world_mut().object_mut().set_entry(777);
+        gameobject.world_mut().set_map(571, 0).unwrap();
+        gameobject
+            .world_mut()
+            .relocate(Position::new(14.9, 0.0, 0.0, 0.0));
+        gameobject.world_mut().object_mut().add_to_world();
+
+        canonical
+            .lock()
+            .unwrap()
+            .create_world_map(571, 0)
+            .map_mut()
+            .insert_map_object_record(
+                wow_entities::MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.represented_gameobject_can_interact_with_like_cpp(gameobject_guid, 5.0),
+            Some(RepresentedGameObjectAccessLikeCpp {
+                entry: 777,
+                position: Position::new(14.9, 0.0, 0.0, 0.0),
+            })
+        );
+
+        session.set_player_position_like_cpp(Position::new(20.1, 0.0, 0.0, 0.0));
+        assert_eq!(
+            session.represented_gameobject_can_interact_with_like_cpp(gameobject_guid, 5.0),
+            None
+        );
     }
 
     #[test]

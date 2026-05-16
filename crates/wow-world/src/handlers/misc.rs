@@ -28,6 +28,9 @@ use wow_packet::packets::misc::{
     MountSetFavorite, RatedPvpInfo, RequestCemeteryListResponse, TaxiNodeStatusPkt,
 };
 
+use crate::handlers::loot::represented_gameobject_interaction_distance_like_cpp;
+use crate::session::RepresentedGameObjectAccessLikeCpp;
+
 // ── inventory registrations ───────────────────────────────────────────────────
 
 inventory::submit! {
@@ -1089,21 +1092,39 @@ impl crate::session::WorldSession {
             }
         };
 
-        if !gameobject_guid.is_game_object() || !self.visible_gameobjects.contains(&gameobject_guid)
-        {
+        if !gameobject_guid.is_game_object() {
             return;
         }
+
+        let gameobject_access = if self.canonical_map_manager.is_some() {
+            match self.canonical_gameobject_access_like_cpp(gameobject_guid) {
+                Some(access) => access,
+                None => return,
+            }
+        } else {
+            if !self.visible_gameobjects.contains(&gameobject_guid) {
+                return;
+            }
+            RepresentedGameObjectAccessLikeCpp {
+                entry: gameobject_guid.entry(),
+                position: self
+                    .represented_gameobject_use_states
+                    .get(&gameobject_guid)
+                    .and_then(|state| state.position)
+                    .unwrap_or_default(),
+            }
+        };
 
         let Some(world_db) = self.world_db().cloned() else {
             return;
         };
         let mut stmt = world_db.prepare(WorldStatements::SEL_GAMEOBJECT_TEMPLATE_BY_ENTRY);
-        stmt.set_u32(0, gameobject_guid.entry());
+        stmt.set_u32(0, gameobject_access.entry);
         let result = match world_db.query(&stmt).await {
             Ok(result) => result,
             Err(e) => {
                 warn!(
-                    entry = gameobject_guid.entry(),
+                    entry = gameobject_access.entry,
                     "GameObjUse: failed to query gameobject template: {e}"
                 );
                 return;
@@ -1123,6 +1144,33 @@ impl crate::session::WorldSession {
         }
 
         let template = GameObjectTemplateData::new(go_type, data);
+        let icon_name: String = result.read_string(4);
+        if icon_name == "Point" {
+            return;
+        }
+        let interact_distance = represented_gameobject_interaction_distance_like_cpp(
+            Some(go_type as u8),
+            Some(template.get_interact_radius_override_like_cpp()),
+        );
+        let Some(player_position) = self.player_position_like_cpp() else {
+            return;
+        };
+        if self.canonical_map_manager.is_some() {
+            let Some(verified_access) = self.represented_gameobject_can_interact_with_like_cpp(
+                gameobject_guid,
+                interact_distance,
+            ) else {
+                return;
+            };
+            if verified_access.entry != gameobject_access.entry {
+                return;
+            }
+        } else if !gameobject_access
+            .position
+            .is_within_dist(&player_position, interact_distance)
+        {
+            return;
+        }
         if !self
             .represented_meets_player_condition_id_like_cpp(template.get_condition_id1_like_cpp())
         {

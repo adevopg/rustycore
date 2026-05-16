@@ -5521,7 +5521,7 @@ struct RepresentedGameObjectLootStateLikeCpp {
     owner_guid: Option<ObjectGuid>,
 }
 
-fn represented_gameobject_interaction_distance_like_cpp(
+pub(crate) fn represented_gameobject_interaction_distance_like_cpp(
     go_type: Option<u8>,
     interact_radius_override: Option<u32>,
 ) -> f32 {
