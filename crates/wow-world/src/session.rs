@@ -11544,6 +11544,8 @@ impl WorldSession {
             if let Some(bytes) = move_stop {
                 let _ = self.send_tx.send(bytes);
             }
+            self.ensure_represented_creature_kill_loot_like_cpp(guid)
+                .await;
             // Give XP for the kill
             let mob_level = self
                 .mutate_world_creature(guid, |creature| creature.level())
@@ -14085,6 +14087,28 @@ mod tests {
         let sent = send_rx.try_recv().unwrap();
         let opcode = u16::from_le_bytes([sent[0], sent[1]]);
         assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
+    }
+
+    #[tokio::test]
+    async fn spell_damage_kill_generates_creature_loot_for_tappers_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_006);
+        let player = ObjectGuid::create_player(1, 47);
+        session.player_guid = Some(player);
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+
+        session.apply_damage(guid, 100).await.unwrap();
+
+        let loot = session
+            .loot_table
+            .get(&guid)
+            .expect("creature corpse loot is generated during kill");
+        assert!(loot.allowed_looters.contains(&player));
+        assert_eq!(loot.loot_type, LOOT_TYPE_CORPSE_LIKE_CPP);
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert!(world_creature.creature.is_tapped_by(player));
     }
 
     #[tokio::test]

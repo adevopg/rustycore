@@ -2591,6 +2591,36 @@ impl WorldSession {
         })
     }
 
+    pub(crate) async fn ensure_represented_creature_kill_loot_like_cpp(
+        &mut self,
+        creature_guid: ObjectGuid,
+    ) {
+        let Some(creature) = self.represented_creature_loot_state_like_cpp(creature_guid) else {
+            return;
+        };
+        let Some(loot_owner_guid) = creature.tappers.first().copied() else {
+            return;
+        };
+
+        self.ensure_represented_creature_loot_like_cpp(
+            creature_guid,
+            loot_owner_guid,
+            creature.level,
+            creature.entry,
+            creature.loot_id,
+            creature.gold_min,
+            creature.gold_max,
+            creature.dungeon_encounter_id,
+        )
+        .await;
+
+        if let Some(loot) = self.loot_table.get_mut(&creature_guid) {
+            for tapper in creature.tappers {
+                mark_loot_allowed_for_player_like_cpp(loot, tapper);
+            }
+        }
+    }
+
     fn represented_on_loot_opened_like_cpp(
         &mut self,
         owner_guid: ObjectGuid,
@@ -4422,6 +4452,7 @@ impl WorldSession {
             gold_min: creature.gold_min(),
             gold_max: creature.gold_max(),
             dungeon_encounter_id: creature.dungeon_encounter_id(),
+            tappers: creature.creature.tap_list().to_vec(),
         })
     }
 
@@ -5497,7 +5528,7 @@ fn generated_creature_loot_item_to_entry_like_cpp(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RepresentedCreatureLootStateLikeCpp {
     is_alive: bool,
     position: wow_core::Position,
@@ -5507,6 +5538,7 @@ struct RepresentedCreatureLootStateLikeCpp {
     gold_min: u32,
     gold_max: u32,
     dungeon_encounter_id: u32,
+    tappers: Vec<ObjectGuid>,
 }
 
 #[derive(Debug, Clone, Copy)]
