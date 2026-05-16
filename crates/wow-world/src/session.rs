@@ -1249,8 +1249,6 @@ pub struct WorldSession {
     /// C++ `Player::m_clientGUIDs`: exact objects currently known by this client.
     /// Updated on login and each visibility refresh (player movement).
     pub(crate) client_visible_guids_like_cpp: std::collections::HashSet<wow_core::ObjectGuid>,
-    /// GUIDs of all game objects currently visible to this client.
-    pub(crate) visible_gameobjects: std::collections::HashSet<wow_core::ObjectGuid>,
     /// Represented C++ `GameObject::GetPhaseShift()` for visible DB-spawned
     /// gameobjects until canonical gameobject map ownership lands.
     pub(crate) represented_gameobject_phase_shifts:
@@ -1817,7 +1815,6 @@ impl WorldSession {
             represented_personal_loot_money: std::collections::HashMap::new(),
             represented_personal_loot_owners: std::collections::HashSet::new(),
             client_visible_guids_like_cpp: std::collections::HashSet::new(),
-            visible_gameobjects: std::collections::HashSet::new(),
             represented_gameobject_phase_shifts: std::collections::HashMap::new(),
             represented_player_phase_shift: PhaseShift::default(),
             last_visibility_pos: None,
@@ -12929,7 +12926,6 @@ mod tests {
                 .client_visible_guids_like_cpp
                 .contains(&gameobject_guid)
         );
-        assert!(session.visible_gameobjects.contains(&gameobject_guid));
         assert_eq!(session.last_visibility_pos, Some(player_position));
         assert!(
             send_rx.try_recv().is_ok(),

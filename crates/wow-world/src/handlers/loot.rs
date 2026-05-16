@@ -4457,7 +4457,7 @@ impl WorldSession {
         let represented_state = self.represented_gameobject_use_states.get(&guid);
         if canonical_position.is_none()
             && represented_state.and_then(|state| state.position).is_none()
-            && !self.visible_gameobjects.contains(&guid)
+            && !self.client_visible_guids_like_cpp.contains(&guid)
         {
             return None;
         }
@@ -4654,7 +4654,7 @@ impl WorldSession {
         else {
             return;
         };
-        self.visible_gameobjects.remove(&guid);
+        self.client_visible_guids_like_cpp.remove(&guid);
         self.send_packet(&UpdateObject::out_of_range_objects(vec![guid], map_id));
     }
 
@@ -7750,7 +7750,9 @@ mod tests {
         let other_tapper = ObjectGuid::create_player(1, 77);
         let gameobject_guid = test_gameobject_guid(91_011);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
         session
             .represented_gameobject_tap_lists
             .insert(gameobject_guid, vec![other_tapper]);
@@ -7788,7 +7790,9 @@ mod tests {
         let gameobject_guid = test_gameobject_guid(91_012);
         let loot_object = represented_loot_object_guid_like_cpp(gameobject_guid);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
         session.loot_table.insert(
             gameobject_guid,
             CreatureLoot {
@@ -7972,7 +7976,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_002);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         let source = GameObjectLootSource {
             loot_id: 55,
@@ -8015,7 +8021,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_004);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         let source = GameObjectLootSource {
             loot_id: 0,
@@ -8058,7 +8066,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_005);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         let source = GameObjectLootSource {
             loot_id: 0,
@@ -8101,7 +8111,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_006);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         session
             .open_represented_gameobject_chest_like_cpp(
@@ -8124,7 +8136,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_003);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         let source = GatheringNodeUseSource {
             loot_id: 0,
@@ -8166,7 +8180,9 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let gameobject_guid = test_gameobject_guid(91_007);
         session.set_player_guid(Some(player_guid));
-        session.visible_gameobjects.insert(gameobject_guid);
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
 
         let source = GatheringNodeUseSource {
             loot_id: 0,
@@ -12668,7 +12684,7 @@ mod tests {
         let loot_guid = test_gameobject_guid(19_014);
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
-        session.visible_gameobjects.insert(loot_guid);
+        session.client_visible_guids_like_cpp.insert(loot_guid);
         session.record_represented_gameobject_runtime_state_like_cpp(
             0,
             loot_guid,
@@ -13103,8 +13119,10 @@ mod tests {
         session.set_player_position_like_cpp(Position::ZERO);
         session.set_active_loot_guid(restocked_chest);
         session.add_active_loot_view_owner_like_cpp(fallback_chest);
-        session.visible_gameobjects.insert(restocked_chest);
-        session.visible_gameobjects.insert(fallback_chest);
+        session
+            .client_visible_guids_like_cpp
+            .insert(restocked_chest);
+        session.client_visible_guids_like_cpp.insert(fallback_chest);
 
         for (guid, restock_time) in [(restocked_chest, 45), (fallback_chest, 0)] {
             session.record_represented_gameobject_runtime_state_like_cpp(
@@ -13154,8 +13172,16 @@ mod tests {
         assert!(send_rx.try_recv().is_ok());
         assert!(send_rx.try_recv().is_ok());
         assert!(send_rx.try_recv().is_ok());
-        assert!(!session.visible_gameobjects.contains(&restocked_chest));
-        assert!(!session.visible_gameobjects.contains(&fallback_chest));
+        assert!(
+            !session
+                .client_visible_guids_like_cpp
+                .contains(&restocked_chest)
+        );
+        assert!(
+            !session
+                .client_visible_guids_like_cpp
+                .contains(&fallback_chest)
+        );
         assert_eq!(
             session
                 .represented_gameobject_use_states

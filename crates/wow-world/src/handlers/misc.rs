@@ -1102,7 +1102,10 @@ impl crate::session::WorldSession {
                 None => return,
             }
         } else {
-            if !self.visible_gameobjects.contains(&gameobject_guid) {
+            if !self
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+            {
                 return;
             }
             RepresentedGameObjectAccessLikeCpp {
@@ -1247,7 +1250,10 @@ impl crate::session::WorldSession {
                 None => return,
             }
         } else {
-            if !self.visible_gameobjects.contains(&gameobject_guid) {
+            if !self
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+            {
                 return;
             }
             let Some(position) = state.and_then(|state| state.position) else {

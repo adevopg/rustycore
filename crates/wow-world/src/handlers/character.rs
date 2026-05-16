@@ -3344,13 +3344,13 @@ impl WorldSession {
                 let new_visible_gos: HashSet<_> = gameobjects.iter().map(|go| go.guid).collect();
                 let new_go_blocks = gameobjects
                     .into_iter()
-                    .filter(|go| !self.visible_gameobjects.contains(&go.guid))
+                    .filter(|go| !self.client_visible_guids_like_cpp.contains(&go.guid))
                     .map(UpdateObject::create_gameobject_block)
                     .collect::<Vec<_>>();
                 let removed_gos: Vec<ObjectGuid> = self
-                    .visible_gameobjects
+                    .client_visible_guids_like_cpp
                     .iter()
-                    .filter(|g| !new_visible_gos.contains(g))
+                    .filter(|g| g.is_game_object() && !new_visible_gos.contains(g))
                     .copied()
                     .collect();
                 for guid in &removed_gos {
@@ -3379,7 +3379,6 @@ impl WorldSession {
                 }
                 self.client_visible_guids_like_cpp
                     .extend(new_visible_gos.iter().copied());
-                self.visible_gameobjects = new_visible_gos;
             }
 
             self.last_visibility_pos = Some(pos);
@@ -3391,7 +3390,10 @@ impl WorldSession {
                     .iter()
                     .filter(|guid| guid.is_any_type_creature())
                     .count(),
-                self.visible_gameobjects.len()
+                self.client_visible_guids_like_cpp
+                    .iter()
+                    .filter(|guid| guid.is_game_object())
+                    .count()
             );
             return;
         }
@@ -3726,7 +3728,7 @@ impl WorldSession {
                     terrain_swap_map,
                 );
 
-                if !self.visible_gameobjects.contains(&guid) {
+                if !self.client_visible_guids_like_cpp.contains(&guid) {
                     let go_pos = Position::new(pos_x, pos_y, pos_z, orientation);
                     let create_data = GameObjectCreateData {
                         guid,
@@ -3784,9 +3786,9 @@ impl WorldSession {
         }
 
         let removed_gos: Vec<ObjectGuid> = self
-            .visible_gameobjects
+            .client_visible_guids_like_cpp
             .iter()
-            .filter(|g| !new_visible_gos.contains(g))
+            .filter(|g| g.is_game_object() && !new_visible_gos.contains(g))
             .cloned()
             .collect();
         for guid in &removed_gos {
@@ -3815,7 +3817,6 @@ impl WorldSession {
         }
         self.client_visible_guids_like_cpp
             .extend(new_visible_gos.iter().copied());
-        self.visible_gameobjects = new_visible_gos;
 
         // ── Update position marker ──────────────────────────────────────
         self.last_visibility_pos = Some(pos);
@@ -3827,7 +3828,10 @@ impl WorldSession {
                 .iter()
                 .filter(|guid| guid.is_any_type_creature())
                 .count(),
-            self.visible_gameobjects.len()
+            self.client_visible_guids_like_cpp
+                .iter()
+                .filter(|guid| guid.is_game_object())
+                .count()
         );
     }
 
@@ -4174,7 +4178,6 @@ impl WorldSession {
                 .retain(|guid| !guid.is_game_object());
             self.client_visible_guids_like_cpp
                 .extend(go_guids.iter().copied());
-            self.visible_gameobjects = go_guids;
             self.send_packet(&UpdateObject::create_world_objects(blocks, map_id));
             debug!(
                 "Sent {} canonical gameobjects to account {} on map {}",
@@ -4379,7 +4382,6 @@ impl WorldSession {
             .retain(|guid| !guid.is_game_object());
         self.client_visible_guids_like_cpp
             .extend(go_guids.iter().copied());
-        self.visible_gameobjects = go_guids.iter().cloned().collect();
         let count = blocks.len();
         let update = UpdateObject::create_world_objects(blocks, map_id);
         self.send_packet(&update);
@@ -8636,7 +8638,6 @@ impl WorldSession {
         // Clear per-session loot/visibility state for fresh login. Creatures
         // remain map-owned, matching C++ Map ownership.
         self.client_visible_guids_like_cpp.clear();
-        self.visible_gameobjects.clear();
         self.loot_table.clear();
         self.set_active_loot_guid(ObjectGuid::EMPTY);
         self.combat_target = None;
