@@ -11302,19 +11302,39 @@ impl WorldSession {
             return Ok(());
         }
 
-        // Si target es otra criatura/jugador
-        if self.mutate_world_creature(target_guid, |_| ()).is_some() {
-            info!(
-                account = self.account_id,
-                creature = ?target_guid,
-                heal = heal_amount,
-                "Healed creature"
-            );
-            // TODO: Actualizar HP de la criatura
-            return Ok(());
+        let account_id = self.account_id;
+        let values_update = self
+            .mutate_world_creature(target_guid, |creature| {
+                info!(
+                    account = account_id,
+                    creature = ?target_guid,
+                    heal = heal_amount,
+                    "Healed creature"
+                );
+
+                {
+                    let unit = creature.creature.unit_mut();
+                    let current = unit.data().health;
+                    let max = unit.data().max_health;
+                    let healed = current.saturating_add(u64::from(heal_amount)).min(max);
+                    unit.set_health(healed);
+                }
+
+                creature.creature.unit().values_update()
+            })
+            .ok_or("Target not found")?;
+
+        if self.client_visible_guids_like_cpp.contains(&target_guid)
+            && let Some(update) = unit_values_update_to_update_object(
+                target_guid,
+                self.player_map_id_like_cpp(),
+                &values_update,
+            )
+        {
+            self.send_packet(&update);
         }
 
-        Err("Target not found")
+        Ok(())
     }
 
     /// Helper: apply damage to target creature.
@@ -13848,6 +13868,31 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert_eq!(world_creature.current_hp(), 33);
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
+    }
+
+    #[tokio::test]
+    async fn spell_heal_syncs_canonical_creature_health_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let manager = shared_map_manager();
+        let guid = test_creature_guid(18_003);
+        session.player_guid = Some(ObjectGuid::create_player(1, 43));
+        session.client_visible_guids_like_cpp.insert(guid);
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature.take_damage(20);
+                creature.creature.clear_data_changes();
+            })
+            .unwrap();
+
+        session.apply_heal(guid, 7).await.unwrap();
+
+        let manager = manager.read().unwrap();
+        let world_creature = manager.find_creature(0, 0, guid).unwrap();
+        assert_eq!(world_creature.current_hp(), 27);
         let sent = send_rx.try_recv().unwrap();
         let opcode = u16::from_le_bytes([sent[0], sent[1]]);
         assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
