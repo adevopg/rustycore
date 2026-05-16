@@ -66,8 +66,9 @@ use wow_entities::{
     ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG, NULL_SLOT,
     ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
     PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
-    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, Vehicle, VehicleAccessory,
-    VisibleItemValues, WorldObject, is_bag_pos, is_equipment_packed_pos, make_item_pos,
+    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, UNIT_DATA_HEALTH_BIT,
+    UnitDataUpdate, UnitDataValues, UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues,
+    WorldObject, is_bag_pos, is_equipment_packed_pos, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::LootStores;
@@ -4755,6 +4756,30 @@ impl WorldSession {
         }
 
         let update = player.values_update(true);
+        if let Some(packet) =
+            player_values_update_to_update_object(guid, self.player_map_id_like_cpp(), &update)
+        {
+            self.send_packet(&packet);
+        }
+    }
+
+    fn send_player_health_values_update_like_cpp(&self, guid: ObjectGuid, health: u64) {
+        let mut mask = UpdateMask::new(UNIT_DATA_HEALTH_BIT + 1);
+        mask.set(UNIT_DATA_HEALTH_BIT);
+        let update = wow_entities::PlayerValuesUpdate {
+            changed_object_type_mask: 0,
+            object_data: None,
+            unit_data: Some(UnitDataUpdate {
+                mask,
+                values: UnitDataValues {
+                    health,
+                    ..Default::default()
+                },
+            }),
+            player_data: None,
+            active_player_data: None,
+        };
+
         if let Some(packet) =
             player_values_update_to_update_object(guid, self.player_map_id_like_cpp(), &update)
         {
@@ -11296,9 +11321,20 @@ impl WorldSession {
         // Si target es el mismo jugador
         if target_guid == player_guid {
             info!(account = self.account_id, heal = heal_amount, "Healed self");
-            // TODO: Actualizar HP del jugador en la DB
-            // self.player_health = min(self.player_health + heal_amount, self.player_max_health);
-            // Enviar UpdateObject con VALUES update
+            let current = self.player_health_like_cpp;
+            let healed = current
+                .saturating_add(heal_amount)
+                .min(self.player_max_health_like_cpp);
+            if healed != current {
+                self.player_health_like_cpp = healed;
+                self.player_alive_like_cpp = healed > 0;
+                let max_health = self.player_max_health_like_cpp;
+                let _ = self.mutate_canonical_player_like_cpp(|player| {
+                    player.unit_mut().set_max_health(u64::from(max_health));
+                    player.unit_mut().set_health(u64::from(healed));
+                });
+                self.send_player_health_values_update_like_cpp(player_guid, u64::from(healed));
+            }
             return Ok(());
         }
 
@@ -13893,6 +13929,47 @@ mod tests {
         let manager = manager.read().unwrap();
         let world_creature = manager.find_creature(0, 0, guid).unwrap();
         assert_eq!(world_creature.current_hp(), 27);
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
+    }
+
+    #[tokio::test]
+    async fn spell_self_heal_syncs_player_health_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let guid = ObjectGuid::create_player(1, 44);
+        let canonical = shared_canonical_map_manager();
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            guid,
+            "Healer".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        session.set_player_health_like_cpp(50, 100);
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+
+        session.apply_heal(guid, 20).await.unwrap();
+
+        assert_eq!(session.player_health_like_cpp(), 70);
+        let canonical_health = session
+            .mutate_canonical_player_like_cpp(|player| player.unit().data().health)
+            .unwrap();
+        assert_eq!(canonical_health, 70);
         let sent = send_rx.try_recv().unwrap();
         let opcode = u16::from_le_bytes([sent[0], sent[1]]);
         assert_eq!(opcode, ServerOpcodes::UpdateObject as u16);
