@@ -167,6 +167,16 @@ pub(crate) struct RepresentedLootRollState {
     pub voters: HashMap<ObjectGuid, RepresentedLootRollVote>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PlayerSaveToDbSnapshotLikeCpp {
+    pub guid: ObjectGuid,
+    pub map_id: u16,
+    pub position: Position,
+    pub level: u8,
+    pub xp: u32,
+    pub money: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepresentedGameObjectUseEffect {
     TriggerGameEvent {
@@ -1828,6 +1838,9 @@ impl WorldSession {
             gender_from_u8(self.player_gender_like_cpp()),
         );
         player.unit_mut().set_level(self.player_level_like_cpp());
+        player.set_xp(self.player_xp_like_cpp() as i32);
+        player.set_next_level_xp(self.player_next_level_xp_like_cpp() as i32);
+        player.set_money(self.player_gold_like_cpp());
         player
             .unit_mut()
             .set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
@@ -1876,6 +1889,46 @@ impl WorldSession {
                 seer_can_never_see_target,
             );
         });
+    }
+
+    pub(crate) fn current_player_save_to_db_snapshot_like_cpp(
+        &self,
+    ) -> Option<PlayerSaveToDbSnapshotLikeCpp> {
+        let guid = self.player_guid()?;
+        if let Some(manager) = self.canonical_map_manager.as_ref()
+            && let Ok(manager) = manager.lock()
+            && let Some(map) = manager.find_map(u32::from(self.player_map_id_like_cpp()), 0)
+            && let Some(player) = map.map().get_typed_player(guid)
+        {
+            return Some(PlayerSaveToDbSnapshotLikeCpp {
+                guid,
+                map_id: player.unit().world().map_id() as u16,
+                position: player.unit().world().position(),
+                level: player.unit().data().level.clamp(0, i32::from(u8::MAX)) as u8,
+                xp: player.active_data().xp.max(0) as u32,
+                money: player.active_data().coinage,
+            });
+        }
+
+        Some(PlayerSaveToDbSnapshotLikeCpp {
+            guid,
+            map_id: self.player_map_id_like_cpp(),
+            position: self.player_position_like_cpp()?,
+            level: self.player_level_like_cpp(),
+            xp: self.player_xp_like_cpp(),
+            money: self.player_gold_like_cpp(),
+        })
+    }
+
+    pub(crate) fn sync_session_from_save_to_db_snapshot_like_cpp(
+        &mut self,
+    ) -> Option<PlayerSaveToDbSnapshotLikeCpp> {
+        let snapshot = self.current_player_save_to_db_snapshot_like_cpp()?;
+        self.set_player_map_position_like_cpp(snapshot.map_id, snapshot.position);
+        self.set_player_level_like_cpp(snapshot.level);
+        self.set_player_xp_like_cpp(snapshot.xp);
+        self.set_player_gold_like_cpp(snapshot.money);
+        Some(snapshot)
     }
 
     fn sync_canonical_player_entity_like_cpp(
@@ -5266,6 +5319,32 @@ impl WorldSession {
         stmt.set_u64(0, self.player_gold_like_cpp());
         stmt.set_u32(1, guid);
         let _ = char_db.execute(&stmt).await;
+    }
+
+    async fn save_player_level_xp_like_cpp(&self) {
+        let (Some(guid), Some(char_db)) = (self.player_guid(), self.char_db().map(Arc::clone))
+        else {
+            return;
+        };
+        let mut stmt = char_db.prepare(CharStatements::UPD_CHAR_LEVEL);
+        stmt.set_u8(0, self.player_level_like_cpp());
+        stmt.set_u32(1, self.player_xp_like_cpp());
+        stmt.set_u32(2, guid.counter() as u32);
+        if let Err(err) = char_db.execute(&stmt).await {
+            warn!("Failed to save level/xp for guid {}: {err}", guid.counter());
+        }
+    }
+
+    pub(crate) async fn save_current_player_to_db_like_cpp(&mut self) {
+        if self
+            .sync_session_from_save_to_db_snapshot_like_cpp()
+            .is_none()
+        {
+            return;
+        }
+        self.save_player_level_xp_like_cpp().await;
+        self.save_player_gold().await;
+        self.save_played_time().await;
     }
 
     /// Give XP to the player, leveling up if threshold reached.
@@ -15574,6 +15653,66 @@ mod tests {
                 send_attack_start: true
             }
         );
+    }
+
+    #[test]
+    fn logout_save_snapshot_uses_canonical_player_state_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 70);
+        let saved_position = Position::new(44.0, 55.0, 66.0, 1.25);
+
+        canonical.lock().unwrap().create_world_map(571, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "Saver".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            571,
+            1,
+            3,
+            10,
+            0,
+        ));
+        session.set_player_xp_like_cpp(1);
+        session.set_player_gold_like_cpp(2);
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session
+            .mutate_canonical_player_like_cpp(|player| {
+                player.unit_mut().world_mut().relocate(saved_position);
+                player.unit_mut().set_level(42);
+                player.set_xp(1234);
+                player.set_money(5678);
+            })
+            .unwrap();
+
+        let snapshot = session
+            .sync_session_from_save_to_db_snapshot_like_cpp()
+            .unwrap();
+        assert_eq!(
+            snapshot,
+            PlayerSaveToDbSnapshotLikeCpp {
+                guid: player_guid,
+                map_id: 571,
+                position: saved_position,
+                level: 42,
+                xp: 1234,
+                money: 5678,
+            }
+        );
+        assert_eq!(session.player_position_like_cpp(), Some(saved_position));
+        assert_eq!(session.player_level_like_cpp(), 42);
+        assert_eq!(session.player_xp_like_cpp(), 1234);
+        assert_eq!(session.player_gold_like_cpp(), 5678);
     }
 
     #[test]

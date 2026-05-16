@@ -2101,11 +2101,9 @@ impl WorldSession {
         // Complete logout immediately
         self.logout_time = None;
 
-        // Persist played time to DB before marking offline
-        self.save_played_time().await;
-
         // Trinity clears buyback slots before SaveToDB; persisted buyback items must not survive logout.
         self.clear_buyback_on_logout().await;
+        self.save_current_player_to_db_like_cpp().await;
         self.save_account_mounts_like_cpp().await;
 
         if let Some(player_guid) = self.player_guid() {
@@ -2151,7 +2149,7 @@ impl WorldSession {
 
     /// Save accumulated played time (`totaltime` + `leveltime`) back to the
     /// characters database.  Called on logout so time is not lost.
-    async fn save_played_time(&self) {
+    pub(crate) async fn save_played_time(&self) {
         let guid = match self.player_guid() {
             Some(g) => g,
             None => return,
