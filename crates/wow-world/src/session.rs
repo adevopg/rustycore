@@ -48,7 +48,7 @@ use wow_data::{
     PlayerStatsStore, RandPropPointsStore, SkillStore, SpellItemEnchantmentStore, SpellMiscStore,
     SpellRangeStore, SpellStore, VEHICLE_SEAT_FLAG_CAN_ATTACK, VehicleAccessoryStoreLikeCpp,
     VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
-    is_player_meeting_condition_like_cpp,
+    is_player_meeting_condition_like_cpp, progression_rewards::FactionTemplateStore,
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -82,6 +82,7 @@ use wow_recastdetour::PathQueryFilterContext;
 
 const PLAYER_FLAGS_UBER_LIKE_CPP: u32 = 0x0008_0000;
 const PLAYER_FLAGS_CONTESTED_PVP_LIKE_CPP: u32 = 0x0000_0100;
+const FACTION_TEMPLATE_FLAG_CONTESTED_GUARD_LIKE_CPP: u16 = 0x0000_1000;
 const ATTACK_DISPLAY_DELAY_LIKE_CPP_MS: u32 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -783,6 +784,7 @@ pub struct WorldSession {
     map_store: Option<Arc<MapStore>>,
     map_difficulty_store: Option<Arc<MapDifficultyStore>>,
     map_difficulty_x_condition_store: Option<Arc<MapDifficultyXConditionStore>>,
+    faction_template_store: Option<Arc<FactionTemplateStore>>,
     creature_template_mount_store: Option<Arc<CreatureTemplateMountStoreLikeCpp>>,
     creature_display_info_store: Option<Arc<CreatureDisplayInfoStore>>,
     gameobject_display_info_store: Option<Arc<GameObjectDisplayInfoStore>>,
@@ -1571,6 +1573,7 @@ impl WorldSession {
             map_store: None,
             map_difficulty_store: None,
             map_difficulty_x_condition_store: None,
+            faction_template_store: None,
             creature_template_mount_store: None,
             creature_display_info_store: None,
             gameobject_display_info_store: None,
@@ -1956,6 +1959,27 @@ impl WorldSession {
         result
     }
 
+    fn attack_reputation_faction_snapshot_like_cpp(
+        &self,
+        creature: &wow_entities::Creature,
+    ) -> Option<(u32, bool)> {
+        let faction_template_id = u32::try_from(creature.unit().data().faction_template).ok()?;
+        self.faction_template_store
+            .as_ref()
+            .and_then(|store| store.get(faction_template_id))
+            .map(|entry| {
+                (
+                    u32::from(entry.faction),
+                    entry.flags & FACTION_TEMPLATE_FLAG_CONTESTED_GUARD_LIKE_CPP != 0,
+                )
+            })
+            .or_else(|| {
+                creature
+                    .attack_reputation_faction_id_like_cpp()
+                    .map(|faction_id| (faction_id, creature.is_contested_guard_like_cpp()))
+            })
+    }
+
     fn is_player_facing_target_for_melee_like_cpp(
         player_position: Position,
         target_position: Position,
@@ -2165,12 +2189,13 @@ impl WorldSession {
                     .can_see_phase_shift_like_cpp(creature.unit().world().phase_shift()),
                 ..Default::default()
             };
-            if let Some(reputation_faction_id) = creature.attack_reputation_faction_id_like_cpp()
+            if let Some((reputation_faction_id, is_contested_guard)) =
+                self.attack_reputation_faction_snapshot_like_cpp(creature)
                 && let Some(attacker_guid) = self.player_guid()
                 && let Some(attacker) = map.map().get_typed_player(attacker_guid)
             {
                 context.player_creature_reputation_represented = true;
-                context.creature_is_contested_guard = creature.is_contested_guard_like_cpp();
+                context.creature_is_contested_guard = is_contested_guard;
                 context.player_has_contested_pvp_flag =
                     attacker.has_player_flag(PLAYER_FLAGS_CONTESTED_PVP_LIKE_CPP);
                 context.creature_has_forced_reputation_rank =
@@ -4575,6 +4600,10 @@ impl WorldSession {
         store: Arc<MapDifficultyXConditionStore>,
     ) {
         self.map_difficulty_x_condition_store = Some(store);
+    }
+
+    pub fn set_faction_template_store(&mut self, store: Arc<FactionTemplateStore>) {
+        self.faction_template_store = Some(store);
     }
 
     pub fn set_creature_template_mount_store(
@@ -15347,6 +15376,75 @@ mod tests {
                 creature.set_attack_reputation_faction_id_like_cpp(Some(72));
             })
             .unwrap();
+
+        session.start_player_attack_like_cpp(victim);
+
+        let guard = canonical.lock().unwrap();
+        let map = guard.find_map(0, 0).unwrap().map();
+        assert_eq!(
+            map.get_typed_player(player).unwrap().unit().attacking(),
+            Some(victim)
+        );
+        assert!(
+            map.get_typed_creature(victim)
+                .unwrap()
+                .unit()
+                .has_attacker_like_cpp(player)
+        );
+        assert_eq!(session.combat_target, Some(victim));
+        assert!(session.in_combat);
+    }
+
+    #[test]
+    fn player_attack_creature_reputation_uses_faction_template_store_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let player = ObjectGuid::create_player(1, 155);
+        let victim = test_creature_guid(18_112);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_faction_template_store(Arc::new(
+            wow_data::progression_rewards::FactionTemplateStore::from_entries([
+                wow_data::progression_rewards::FactionTemplateEntry {
+                    id: 14,
+                    faction: 72,
+                    flags: FACTION_TEMPLATE_FLAG_CONTESTED_GUARD_LIKE_CPP,
+                    faction_group: 0,
+                    friend_group: 0,
+                    enemy_group: 0,
+                    enemies: [0; 8],
+                    friend: [0; 8],
+                },
+            ]),
+        ));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player,
+            "Warrior".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session
+            .mutate_canonical_player_by_guid_like_cpp(player, |player| {
+                player.set_player_flag(PLAYER_FLAGS_CONTESTED_PVP_LIKE_CPP);
+            })
+            .unwrap();
+        register_test_creature(&mut session, manager, victim, 40);
 
         session.start_player_attack_like_cpp(victim);
 
