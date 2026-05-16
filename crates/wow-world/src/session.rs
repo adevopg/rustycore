@@ -2745,6 +2745,84 @@ impl WorldSession {
         attacker_started && victim_started
     }
 
+    fn canonical_creature_threat_value_like_cpp(
+        &self,
+        creature_guid: ObjectGuid,
+        attacker_guid: ObjectGuid,
+    ) -> Option<f32> {
+        let manager = self.canonical_map_manager.as_ref()?.clone();
+        let manager = manager.lock().ok()?;
+        let managed = manager.find_map(u32::from(self.player_map_id_like_cpp()), 0)?;
+        let creature = managed.map().get_typed_creature(creature_guid)?;
+        creature
+            .unit()
+            .subsystems()
+            .combat
+            .threat_value(attacker_guid)
+    }
+
+    fn mirror_canonical_creature_threat_from_attacker_like_cpp(
+        &mut self,
+        creature_guid: ObjectGuid,
+        attacker_guid: ObjectGuid,
+        threat_value: f32,
+    ) -> bool {
+        if threat_value <= 0.0 {
+            return false;
+        }
+        if !self.begin_canonical_player_combat_ref_like_cpp(
+            attacker_guid,
+            creature_guid,
+            false,
+            false,
+            false,
+        ) {
+            return false;
+        }
+
+        let Some(manager) = self.canonical_map_manager.as_ref().cloned() else {
+            return false;
+        };
+        let Ok(mut manager) = manager.lock() else {
+            return false;
+        };
+        let Some(managed) = manager.find_map_mut(u32::from(self.player_map_id_like_cpp()), 0)
+        else {
+            return false;
+        };
+        let map = managed.map_mut();
+
+        let threat_ref = {
+            let Some(creature) = map.get_typed_creature_mut(creature_guid) else {
+                return false;
+            };
+            creature
+                .unit_mut()
+                .subsystems_mut()
+                .combat
+                .set_threat(attacker_guid, threat_value);
+            creature
+                .unit()
+                .subsystems()
+                .combat
+                .threat_ref(attacker_guid)
+                .copied()
+        };
+
+        let Some(threat_ref) = threat_ref else {
+            return false;
+        };
+        let Some(attacker) = map.get_typed_player_mut(attacker_guid) else {
+            return false;
+        };
+        attacker
+            .unit_mut()
+            .subsystems_mut()
+            .combat
+            .put_threatened_by_me_ref(creature_guid, threat_ref);
+        true
+    }
+
     fn revalidate_canonical_player_combat_refs_like_cpp(&mut self, player_guid: ObjectGuid) {
         let Some(manager) = self.canonical_map_manager.as_ref().cloned() else {
             return;
@@ -10672,6 +10750,9 @@ impl WorldSession {
             return;
         };
         self.combat_target = Some(combat_target);
+        let canonical_threat_before = self
+            .canonical_creature_threat_value_like_cpp(combat_target, player_guid)
+            .unwrap_or(0.0);
         let now = Instant::now();
         let diff_ms = now
             .saturating_duration_since(self.combat_tick_last_at_like_cpp)
@@ -10904,6 +10985,14 @@ impl WorldSession {
                     .unit_mut()
                     .set_last_damaged_target_like_cpp(Some(combat_target));
             });
+            if !now_dead {
+                let total_damage: u32 = swings.iter().map(|(damage, _, _)| *damage).sum();
+                let _ = self.mirror_canonical_creature_threat_from_attacker_like_cpp(
+                    combat_target,
+                    player_guid,
+                    canonical_threat_before + total_damage as f32,
+                );
+            }
         }
 
         for (dmg, _swing_killed, over_damage) in &swings {
@@ -10943,6 +11032,7 @@ impl WorldSession {
             let _ = self.mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().attack_stop_like_cpp()
             });
+            self.revalidate_canonical_player_combat_refs_like_cpp(player_guid);
             self.combat_target = None;
             self.in_combat = false;
         }
@@ -14285,6 +14375,7 @@ mod tests {
                 creature.creature.ai_ownership_mut().swing_timer_ms = 0;
             })
             .unwrap();
+        assert!(session.mirror_canonical_creature_threat_from_attacker_like_cpp(guid, player, 3.0));
 
         session.tick_combat_sync();
 
@@ -14311,6 +14402,41 @@ mod tests {
         assert_eq!(
             player_entity.unit().last_damaged_target_like_cpp(),
             Some(guid)
+        );
+        assert!(
+            player_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_threatening_to(guid, true)
+        );
+        assert!(
+            player_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_in_combat_with(guid)
+        );
+        let creature_entity = canonical
+            .find_map(0, 0)
+            .unwrap()
+            .map()
+            .get_typed_creature(guid)
+            .unwrap();
+        assert_eq!(
+            creature_entity
+                .unit()
+                .subsystems()
+                .combat
+                .threat_value(player),
+            Some(10.0)
+        );
+        assert!(
+            creature_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_in_combat_with(player)
         );
     }
 
@@ -15393,6 +15519,7 @@ mod tests {
                 creature.creature.ai_ownership_mut().swing_timer_ms = 0;
             })
             .unwrap();
+        assert!(session.mirror_canonical_creature_threat_from_attacker_like_cpp(guid, player, 1.0));
 
         session.tick_combat_sync();
 
@@ -15429,6 +15556,41 @@ mod tests {
             .unwrap();
         assert_eq!(player_entity.unit().attacking(), None);
         assert_eq!(player_entity.unit().data().target, ObjectGuid::EMPTY);
+        assert!(
+            !player_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_in_combat_with(guid)
+        );
+        assert!(
+            !player_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_threatening_to(guid, true)
+        );
+        let creature_entity = guard
+            .find_map(0, 0)
+            .unwrap()
+            .map()
+            .get_typed_creature(guid)
+            .unwrap();
+        assert!(
+            !creature_entity
+                .unit()
+                .subsystems()
+                .combat
+                .is_in_combat_with(player)
+        );
+        assert_eq!(
+            creature_entity
+                .unit()
+                .subsystems()
+                .combat
+                .threat_value(player),
+            None
+        );
         assert_eq!(session.combat_target, None);
         assert!(!session.in_combat);
     }
