@@ -2093,6 +2093,8 @@ impl WorldSession {
             self.send_packet(&LootReleaseAll);
         }
 
+        self.set_player_logout_like_cpp(true);
+
         // Always allow instant logout for now (no combat/duel checks)
         self.send_packet(&LogoutResponse::instant_ok());
 
@@ -2135,6 +2137,7 @@ impl WorldSession {
         // connection. If we don't swap back, the next PlayerLogin sends
         // ConnectTo on the dead instance socket → client stuck at 90%.
         self.restore_realm_channels();
+        self.set_player_logout_like_cpp(false);
 
         info!("Player logged out for account {}", self.account_id);
     }

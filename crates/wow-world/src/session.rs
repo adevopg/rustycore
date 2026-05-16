@@ -843,6 +843,8 @@ pub struct WorldSession {
     // ── ConnectTo flow ──────────────────────────────────────────
     /// GUID of the character being logged in (set during PlayerLogin).
     player_loading: Option<ObjectGuid>,
+    /// C++ `WorldSession::m_playerLogout`: true only while the logout routine is executing.
+    player_logout_like_cpp: bool,
 
     /// The ConnectToKey.Raw value for the pending instance connection.
     connect_to_key: Option<i64>,
@@ -1612,6 +1614,7 @@ impl WorldSession {
             legit_characters: Vec::new(),
             pending_packets: Vec::new(),
             player_loading: None,
+            player_logout_like_cpp: false,
             connect_to_key: None,
             connect_to_serial: None,
             session_mgr: None,
@@ -1832,11 +1835,43 @@ impl WorldSession {
         Some(player)
     }
 
+    fn player_session_never_visible_for_seer_like_cpp(&self, guid: ObjectGuid) -> bool {
+        self.player_logout_like_cpp || self.player_loading == Some(guid)
+    }
+
+    fn apply_player_session_visibility_detection_like_cpp(
+        player: &mut Player,
+        never_visible_for_seer: bool,
+    ) {
+        player
+            .unit_mut()
+            .set_never_visible_for_seer_like_cpp(never_visible_for_seer);
+    }
+
+    fn sync_current_player_session_visibility_detection_like_cpp(&mut self) {
+        let Some(guid) = self.player_guid() else {
+            return;
+        };
+        let never_visible_for_seer = self.player_session_never_visible_for_seer_like_cpp(guid);
+        let _ = self.mutate_canonical_player_by_guid_like_cpp(guid, |player| {
+            Self::apply_player_session_visibility_detection_like_cpp(
+                player,
+                never_visible_for_seer,
+            );
+        });
+    }
+
     fn sync_canonical_player_entity_like_cpp(
+        &self,
         managed: &mut wow_map::ManagedMap,
         mut player: Player,
     ) {
         let guid = player.guid();
+        let never_visible_for_seer = self.player_session_never_visible_for_seer_like_cpp(guid);
+        Self::apply_player_session_visibility_detection_like_cpp(
+            &mut player,
+            never_visible_for_seer,
+        );
         let map = managed.map_mut();
         if let Some(existing) = map.get_typed_player_mut(guid) {
             let attacking = existing.unit().attacking();
@@ -1865,6 +1900,10 @@ impl WorldSession {
             existing
                 .unit_mut()
                 .replace_visibility_detection_like_cpp(visibility_detection);
+            Self::apply_player_session_visibility_detection_like_cpp(
+                existing,
+                never_visible_for_seer,
+            );
             return;
         }
 
@@ -2645,7 +2684,7 @@ impl WorldSession {
             };
             if let Some(key) = key {
                 if let Some(managed) = manager.find_map_mut(key.map_id, key.instance_id) {
-                    Self::sync_canonical_player_entity_like_cpp(managed, player);
+                    self.sync_canonical_player_entity_like_cpp(managed, player);
                 }
             }
         }
@@ -5643,11 +5682,17 @@ impl WorldSession {
     /// Set the player loading GUID (ConnectTo flow).
     pub fn set_player_loading(&mut self, guid: Option<ObjectGuid>) {
         self.player_loading = guid;
+        self.sync_current_player_session_visibility_detection_like_cpp();
     }
 
     /// Get the player loading GUID.
     pub fn player_loading(&self) -> Option<ObjectGuid> {
         self.player_loading
+    }
+
+    pub(crate) fn set_player_logout_like_cpp(&mut self, player_logout: bool) {
+        self.player_logout_like_cpp = player_logout;
+        self.sync_current_player_session_visibility_detection_like_cpp();
     }
 
     /// Set the ConnectTo key.
@@ -12013,10 +12058,11 @@ mod tests {
     #[test]
     fn time_sync_response_sets_initial_clock_delta_like_cpp() {
         let (mut session, _pkt_tx, _send_rx) = make_session();
-        let sent_time = WorldSession::game_time_ms_like_cpp().wrapping_sub(20);
+        let now = WorldSession::game_time_ms_like_cpp();
+        let sent_time = if now >= 20 { now - 20 } else { 1_020 };
         session.time_sync_pending_requests.insert(7, sent_time);
 
-        session.record_time_sync_response_like_cpp(7, sent_time.wrapping_sub(1_000));
+        session.record_time_sync_response_like_cpp(7, sent_time - 1_000);
 
         assert!(session.time_sync_pending_requests.is_empty());
         assert_eq!(session.time_sync_clock_delta_queue.len(), 1);
@@ -14698,6 +14744,84 @@ mod tests {
         }
         assert_eq!(session.combat_target, Some(victim));
         assert!(session.in_combat);
+    }
+
+    #[test]
+    fn player_attack_rejects_player_loading_visibility_like_cpp() {
+        let (mut attacker_session, _, _) = make_session();
+        let (mut victim_session, _, _) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let attacker = ObjectGuid::create_player(1, 51);
+        let victim = ObjectGuid::create_player(1, 52);
+        let map_store = Arc::new(wow_data::MapStore::from_entries([wow_data::MapEntry {
+            id: 571,
+            instance_type: wow_data::map::MAP_COMMON,
+            parent_map_id: -1,
+            cosmetic_parent_map_id: -1,
+            flags1: 0,
+        }]));
+
+        canonical.lock().unwrap().create_world_map(571, 0);
+        attacker_session.set_canonical_map_manager(Arc::clone(&canonical));
+        victim_session.set_canonical_map_manager(Arc::clone(&canonical));
+        attacker_session.set_map_store(Arc::clone(&map_store));
+        victim_session.set_map_store(map_store);
+
+        attacker_session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            attacker,
+            "Warrior".to_string(),
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        victim_session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            victim,
+            "Rogue".to_string(),
+            Position::new(11.0, 20.0, 30.0, 0.0),
+            571,
+            1,
+            4,
+            80,
+            0,
+        ));
+        let _ = attacker_session.ensure_canonical_world_map_for_current_player_like_cpp();
+        let _ = victim_session.ensure_canonical_world_map_for_current_player_like_cpp();
+        victim_session
+            .mutate_canonical_player_by_guid_like_cpp(victim, |player| {
+                player.unit_mut().set_pvp_flag_like_cpp(UnitPvpFlags::PVP);
+            })
+            .unwrap();
+
+        victim_session.set_player_loading(Some(victim));
+        assert_eq!(
+            attacker_session.start_player_attack_like_cpp(victim),
+            PlayerAttackStartLikeCppResult::Rejected
+        );
+        assert_eq!(attacker_session.combat_target, None);
+
+        victim_session.set_player_loading(None);
+        assert_eq!(
+            attacker_session.start_player_attack_like_cpp(victim),
+            PlayerAttackStartLikeCppResult::Accepted {
+                send_attack_start: true
+            }
+        );
+
+        let guard = canonical.lock().unwrap();
+        let map = guard.find_map(571, 0).unwrap().map();
+        assert_eq!(
+            map.get_typed_player(attacker).unwrap().unit().attacking(),
+            Some(victim)
+        );
+        assert!(
+            map.get_typed_player(victim)
+                .unwrap()
+                .unit()
+                .has_attacker_like_cpp(attacker)
+        );
     }
 
     #[test]
