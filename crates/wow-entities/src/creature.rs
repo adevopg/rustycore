@@ -994,8 +994,9 @@ impl Creature {
         self.ai_ownership.combat_target = None;
         self.ai_ownership.move_target = None;
         self.ai_ownership.death_time_ms = Some(now_ms);
-        self.unit.set_attacking(None);
-        self.unit.set_death_state(DeathState::Corpse);
+        self.unit.set_health(0);
+        self.respawn_delay = self.ai_ownership.respawn_time_secs.min(u64::from(u32::MAX)) as u32;
+        self.set_death_state_runtime(DeathState::JustDied, now_ms.min(i64::MAX as u64) as i64);
         self.unit.set_health(0);
     }
 
@@ -2092,6 +2093,12 @@ mod tests {
         assert_eq!(creature.unit().death_state(), DeathState::Corpse);
         assert_eq!(creature.ai_state(), CreatureAiState::Dead);
         assert_eq!(creature.ai_ownership().death_time_ms, Some(20));
+        assert_eq!(
+            creature.corpse_remove_time(),
+            20 + i64::from(DEFAULT_CORPSE_DELAY_SECS)
+        );
+        assert_eq!(creature.respawn_time(), 20 + 30);
+        assert!(creature.runtime_state().save_respawn_requested);
         assert!(!creature.should_ai_respawn(29_999));
         assert!(creature.should_ai_respawn(30_020));
     }
