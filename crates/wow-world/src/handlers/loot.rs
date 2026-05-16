@@ -6340,7 +6340,7 @@ mod tests {
     use std::time::{Duration, Instant};
     use std::{
         collections::{HashMap, HashSet},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, RwLock},
     };
     use wow_ai::CreatureAI;
     use wow_constants::{
@@ -6384,6 +6384,7 @@ mod tests {
         LOOT_TYPE_NONE_LIKE_CPP, LOOT_TYPE_PROSPECTING_LIKE_CPP, LOOT_TYPE_SKINNING_LIKE_CPP,
         LootEntry, LootEntryFlags, LootRoll, MasterLootItem, SetLootSpecialization,
     };
+    use wow_packet::packets::update::CreatureCreateData;
 
     use crate::session::{
         AuraApplication, InventoryItem, SPELL_AURA_INTERRUPT_FLAG_LOOTING_LIKE_CPP, SpellCastState,
@@ -6553,9 +6554,7 @@ mod tests {
         let owner_guid = test_creature_guid(19_096);
         let loot_guid = represented_loot_object_guid_like_cpp(owner_guid);
         let entry = represented_loot_entry(0, 25, player_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -6949,6 +6948,58 @@ mod tests {
         );
         creature.is_alive = is_alive;
         creature
+    }
+
+    fn register_test_creature_like_cpp(session: &mut WorldSession, creature: CreatureAI) {
+        if session.map_manager.is_none() {
+            session.set_map_manager(Arc::new(RwLock::new(crate::map_manager::MapManager::new())));
+        }
+
+        let create_data = CreatureCreateData {
+            guid: creature.guid,
+            entry: creature.entry,
+            display_id: creature.display_id,
+            native_display_id: creature.display_id,
+            health: i64::from(creature.hp.max(1)),
+            max_health: i64::from(creature.max_hp.max(1)),
+            level: creature.level,
+            faction_template: creature.faction as i32,
+            npc_flags: u64::from(creature.npc_flags),
+            unit_flags: creature.unit_flags,
+            unit_flags2: 0,
+            unit_flags3: 0,
+            scale: 1.0,
+            unit_class: 1,
+            base_attack_time: 2000,
+            ranged_attack_time: 0,
+            zone_id: 0,
+            speed_walk_rate: 1.0,
+            speed_run_rate: 1.14286,
+        };
+        let guid = creature.guid;
+        let is_alive = creature.is_alive;
+        session.register_world_creature(
+            session.player_map_id_like_cpp(),
+            creature.current_pos,
+            create_data,
+            creature.min_dmg,
+            creature.max_dmg,
+            creature.aggro_radius,
+            creature.loot_id,
+            creature.gold_min,
+            creature.gold_max,
+            creature.boss_id,
+            creature.dungeon_encounter_id,
+            0,
+            0,
+            0,
+            -1,
+        );
+        if !is_alive {
+            let _ = session.mutate_world_creature(guid, |world_creature| {
+                world_creature.creature.mark_ai_dead(0);
+            });
+        }
     }
 
     fn loot_response_failure_reason(sent: &[u8]) -> u8 {
@@ -8860,9 +8911,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_creature_guid(19_006);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, true));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, true));
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -8885,9 +8934,7 @@ mod tests {
             player_guid,
             SPELL_AURA_INTERRUPT_FLAG_LOOTING_LIKE_CPP,
         );
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -8905,9 +8952,7 @@ mod tests {
         let loot_guid = test_creature_guid(19_034);
         session.set_player_guid(Some(player_guid));
         install_active_spell_cast(&mut session, player_guid);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -8928,9 +8973,7 @@ mod tests {
             SPELL_AURA_INTERRUPT_FLAG_LOOTING_LIKE_CPP,
         );
         install_visible_aura_with_interrupt_flags(&mut session, 4, 778, player_guid, 0);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -8947,9 +8990,7 @@ mod tests {
         let loot_object = represented_loot_object_guid_like_cpp(owner_guid);
         session.set_player_guid(Some(master_guid));
         install_master_loot_group(&mut session, master_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9016,9 +9057,7 @@ mod tests {
         let owner_guid = test_creature_guid(19_047);
         session.set_player_guid(Some(master_guid));
         install_master_loot_group(&mut session, master_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9067,9 +9106,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(master_guid));
         install_master_loot_group(&mut session, master_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9148,9 +9185,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9283,9 +9318,7 @@ mod tests {
             0,
             ItemFlags2::CanOnlyRollGreed as u32,
         );
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9356,9 +9389,7 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
         install_disenchantable_test_item_template(&mut session, 25);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9500,9 +9531,7 @@ mod tests {
         let loot_object = represented_loot_object_guid_like_cpp(owner_guid);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9563,9 +9592,7 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.pass_on_group_loot = true;
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9659,9 +9686,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9751,9 +9776,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -9919,9 +9942,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -10055,9 +10076,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -10169,9 +10188,7 @@ mod tests {
         session.set_player_registry(player_registry);
         session.set_player_guid(Some(player_guid));
         install_group_loot_group(&mut session, player_guid, candidate_guid);
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
         session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -10280,9 +10297,7 @@ mod tests {
         remote_session.set_player_registry(Arc::clone(&player_registry));
         remote_session.set_player_guid(Some(candidate_guid));
         install_group_loot_group(&mut owner_session, player_guid, candidate_guid);
-        owner_session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut owner_session, test_creature(owner_guid, false));
         owner_session.loot_table.insert(
             owner_guid,
             CreatureLoot {
@@ -10393,9 +10408,7 @@ mod tests {
                 looted_by_player: false,
             },
         );
-        session
-            .creatures
-            .insert(new_guid, test_creature(new_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(new_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(new_guid)).await;
 
@@ -10425,9 +10438,6 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_gameobject_guid(19_019);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -10445,7 +10455,7 @@ mod tests {
         session.set_player_position_like_cpp(Position::ZERO);
         let mut creature = test_creature(loot_guid, false);
         creature.current_pos = Position::new(31.0, 0.0, 0.0, 0.0);
-        session.creatures.insert(loot_guid, creature);
+        register_test_creature_like_cpp(&mut session, creature);
 
         session.handle_loot_unit(loot_unit_packet(loot_guid)).await;
 
@@ -10460,9 +10470,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let owner_guid = test_creature_guid(19_022);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(owner_guid, test_creature(owner_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(owner_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(owner_guid)).await;
 
@@ -10494,12 +10502,8 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.set_enable_ae_loot_like_cpp(true);
         session.set_player_position_like_cpp(Position::ZERO);
-        session
-            .creatures
-            .insert(main_guid, test_creature(main_guid, false));
-        session
-            .creatures
-            .insert(secondary_guid, test_creature(secondary_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(main_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(secondary_guid, false));
 
         session.handle_loot_unit(loot_unit_packet(main_guid)).await;
 
@@ -10574,9 +10578,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_creature_guid(19_007);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -10608,9 +10610,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 42);
         let loot_guid = test_creature_guid(19_017);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -10655,9 +10655,7 @@ mod tests {
         let other_guid = ObjectGuid::create_player(1, 43);
         let loot_guid = test_creature_guid(19_018);
         session.set_player_guid(Some(player_guid));
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -11048,9 +11046,7 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
         session.set_player_position_like_cpp(Position::ZERO);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -11109,9 +11105,7 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
         session.set_player_position_like_cpp(Position::ZERO);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -11167,9 +11161,7 @@ mod tests {
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
         session.set_player_position_like_cpp(Position::ZERO);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -11995,7 +11987,7 @@ mod tests {
 
         let mut creature = test_creature(loot_guid, false);
         creature.current_pos = Position::new(31.0, 0.0, 0.0, 0.0);
-        session.creatures.insert(loot_guid, creature);
+        register_test_creature_like_cpp(&mut session, creature);
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -12627,9 +12619,7 @@ mod tests {
         let loot_guid = test_creature_guid(19_013);
         session.set_player_guid(Some(player_guid));
         session.set_active_loot_guid(loot_guid);
-        session
-            .creatures
-            .insert(loot_guid, test_creature(loot_guid, false));
+        register_test_creature_like_cpp(&mut session, test_creature(loot_guid, false));
         session.loot_table.insert(
             loot_guid,
             CreatureLoot {
@@ -12669,10 +12659,8 @@ mod tests {
         );
         assert!(
             session
-                .creatures
-                .get(&loot_guid)
+                .mutate_world_creature(loot_guid, |creature| creature.corpse_despawn_at())
                 .unwrap()
-                .corpse_despawn_at
                 .is_none()
         );
     }

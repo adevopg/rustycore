@@ -1004,8 +1004,6 @@ pub struct WorldSession {
     // ── Creature AI tracking ──────────────────────────────────────
     /// Tick counter for creature movement (throttle to every N ticks).
     pub(crate) creature_tick: u32,
-    #[cfg(test)]
-    pub(crate) creatures: std::collections::HashMap<wow_core::ObjectGuid, wow_ai::CreatureAI>,
     /// Per-session finite vendor stock state, mirroring Creature::m_vendorItemCounts
     /// until vendor ownership moves into the shared creature model.
     pub(crate) vendor_item_counts: HashMap<(wow_core::ObjectGuid, u32), VendorItemCount>,
@@ -1529,7 +1527,7 @@ pub struct PendingRespawn {
     pub home_pos: wow_core::Position,
     /// Full create data — reused verbatim for the respawn CREATE packet.
     pub create_data: wow_packet::packets::update::CreatureCreateData,
-    /// AI fields needed to rebuild `CreatureAI`.
+    /// AI fields needed to rebuild the canonical creature runtime.
     pub max_hp: u32,
     pub level: u8,
     pub min_dmg: u32,
@@ -1701,8 +1699,6 @@ impl WorldSession {
             registered_addon_prefixes: Vec::new(),
             filter_addon_messages: false,
             creature_tick: 0,
-            #[cfg(test)]
-            creatures: std::collections::HashMap::new(),
             vendor_item_counts: HashMap::new(),
             map_manager: None,
             canonical_map_manager: None,
@@ -3446,25 +3442,7 @@ impl WorldSession {
             }
         }
 
-        #[cfg(test)]
-        {
-            let mut legacy = self.creatures.remove(&guid)?;
-            let mut creature =
-                Self::test_world_creature_from_legacy(self.player_map_id_like_cpp(), &legacy);
-            let result = f.take().expect("creature mutator is called once")(&mut creature);
-            Self::sync_test_world_creature_to_legacy(&creature, &mut legacy);
-            let position = creature.position();
-            let canonical_creature = creature.creature.clone();
-            self.creatures.insert(guid, legacy);
-            self.relocate_canonical_creature_map_object_like_cpp(guid, position);
-            self.sync_canonical_creature_entity_like_cpp(canonical_creature);
-            return Some(result);
-        }
-
-        #[cfg(not(test))]
-        {
-            None
-        }
+        None
     }
 
     pub(crate) fn world_creature_guids(&self) -> Vec<ObjectGuid> {
@@ -3475,15 +3453,7 @@ impl WorldSession {
                 .creature_guids(self.player_map_id_like_cpp(), 0);
         }
 
-        #[cfg(test)]
-        {
-            return self.creatures.keys().copied().collect();
-        }
-
-        #[cfg(not(test))]
-        {
-            Vec::new()
-        }
+        Vec::new()
     }
 
     pub(crate) fn has_world_map_manager_like_cpp(&self) -> bool {
@@ -3582,141 +3552,6 @@ impl WorldSession {
         }
 
         Some(gameobjects)
-    }
-
-    #[cfg(test)]
-    fn test_world_creature_from_legacy(
-        map_id: u16,
-        legacy: &wow_ai::CreatureAI,
-    ) -> crate::map_manager::WorldCreature {
-        let mut creature = wow_entities::Creature::new(false);
-        creature
-            .unit_mut()
-            .world_mut()
-            .object_mut()
-            .create(legacy.guid);
-        creature
-            .unit_mut()
-            .world_mut()
-            .object_mut()
-            .set_entry(legacy.entry);
-        let _ = creature.unit_mut().world_mut().set_map(map_id as u32, 0);
-        creature.unit_mut().world_mut().relocate(legacy.current_pos);
-        creature.set_ai_home_position(legacy.home_pos);
-        creature.unit_mut().set_level(legacy.level);
-        creature.unit_mut().set_max_health(u64::from(legacy.max_hp));
-        creature.unit_mut().set_health(u64::from(legacy.hp));
-        creature.set_ai_identity_runtime(
-            legacy.display_id,
-            legacy.faction,
-            legacy.npc_flags,
-            legacy.unit_flags,
-        );
-        creature.configure_ai_runtime(
-            legacy.home_pos,
-            legacy.aggro_radius,
-            legacy.wander_radius,
-            legacy.respawn_time_secs,
-        );
-        {
-            let ai = creature.ai_ownership_mut();
-            ai.state = match legacy.state {
-                wow_ai::CreatureState::Idle => wow_entities::CreatureAiState::Idle,
-                wow_ai::CreatureState::WalkingRandom => {
-                    wow_entities::CreatureAiState::WalkingRandom
-                }
-                wow_ai::CreatureState::WalkingWaypoint => {
-                    wow_entities::CreatureAiState::WalkingWaypoint
-                }
-                wow_ai::CreatureState::InCombat => wow_entities::CreatureAiState::InCombat,
-                wow_ai::CreatureState::Dead => wow_entities::CreatureAiState::Dead,
-                wow_ai::CreatureState::Returning => wow_entities::CreatureAiState::Returning,
-            };
-            ai.move_target = legacy.move_target;
-            ai.move_duration_ms = legacy.move_duration_ms;
-            ai.combat_target = legacy.combat_target;
-            ai.min_damage = legacy.min_dmg;
-            ai.max_damage = legacy.max_dmg;
-            ai.swing_timer_ms = legacy.swing_timer_ms;
-            ai.spline_id = legacy.spline_id;
-            ai.loot_id = legacy.loot_id;
-            ai.gold_min = legacy.gold_min;
-            ai.gold_max = legacy.gold_max;
-            ai.boss_id = legacy.boss_id;
-            ai.dungeon_encounter_id = legacy.dungeon_encounter_id;
-        }
-        if !legacy.is_alive {
-            creature.mark_ai_dead(0);
-        }
-
-        crate::map_manager::WorldCreature::from_canonical(
-            creature,
-            wow_packet::packets::update::CreatureCreateData {
-                guid: legacy.guid,
-                entry: legacy.entry,
-                display_id: legacy.display_id,
-                native_display_id: legacy.display_id,
-                health: legacy.max_hp as i64,
-                max_health: legacy.max_hp as i64,
-                level: legacy.level,
-                faction_template: legacy.faction as i32,
-                npc_flags: legacy.npc_flags as u64,
-                unit_flags: legacy.unit_flags,
-                unit_flags2: 0,
-                unit_flags3: 0,
-                scale: 1.0,
-                unit_class: 1,
-                base_attack_time: 2000,
-                ranged_attack_time: 0,
-                zone_id: 0,
-                speed_walk_rate: 1.0,
-                speed_run_rate: 1.14286,
-            },
-        )
-    }
-
-    #[cfg(test)]
-    fn sync_test_world_creature_to_legacy(
-        creature: &crate::map_manager::WorldCreature,
-        legacy: &mut wow_ai::CreatureAI,
-    ) {
-        legacy.current_pos = creature.position();
-        legacy.home_pos = creature.home_position();
-        legacy.hp = creature.current_hp();
-        legacy.max_hp = creature.max_hp();
-        legacy.level = creature.level();
-        legacy.state = match creature.state() {
-            wow_entities::CreatureAiState::Idle => wow_ai::CreatureState::Idle,
-            wow_entities::CreatureAiState::WalkingRandom => wow_ai::CreatureState::WalkingRandom,
-            wow_entities::CreatureAiState::WalkingWaypoint => {
-                wow_ai::CreatureState::WalkingWaypoint
-            }
-            wow_entities::CreatureAiState::InCombat => wow_ai::CreatureState::InCombat,
-            wow_entities::CreatureAiState::Dead => wow_ai::CreatureState::Dead,
-            wow_entities::CreatureAiState::Returning => wow_ai::CreatureState::Returning,
-        };
-        let ai = creature.creature.ai_ownership();
-        legacy.move_target = ai.move_target;
-        legacy.move_duration_ms = ai.move_duration_ms;
-        legacy.combat_target = ai.combat_target;
-        legacy.min_dmg = ai.min_damage;
-        legacy.max_dmg = ai.max_damage;
-        legacy.aggro_radius = ai.aggro_radius;
-        legacy.wander_radius = ai.wander_radius;
-        legacy.respawn_time_secs = ai.respawn_time_secs;
-        legacy.npc_flags = ai.npc_flags;
-        legacy.unit_flags = ai.unit_flags;
-        legacy.display_id = ai.display_id;
-        legacy.faction = ai.faction;
-        legacy.spline_id = ai.spline_id;
-        legacy.swing_timer_ms = ai.swing_timer_ms;
-        legacy.loot_id = ai.loot_id;
-        legacy.gold_min = ai.gold_min;
-        legacy.gold_max = ai.gold_max;
-        legacy.boss_id = ai.boss_id;
-        legacy.dungeon_encounter_id = ai.dungeon_encounter_id;
-        legacy.is_alive = creature.is_alive();
-        legacy.corpse_despawn_at = creature.corpse_despawn_at();
     }
 
     pub fn set_realm_id(&mut self, realm_id: u16) {
