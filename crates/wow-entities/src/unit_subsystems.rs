@@ -1084,6 +1084,7 @@ pub struct CombatSubsystem {
     pub pvp_refs: HashMap<ObjectGuid, CombatReferenceState>,
     pub attackers: HashSet<ObjectGuid>,
     pub attacking_guid: Option<ObjectGuid>,
+    pub last_damaged_target_guid: Option<ObjectGuid>,
     pub combat_disallowed: bool,
 }
 
@@ -1102,6 +1103,7 @@ impl Default for CombatSubsystem {
             pvp_refs: HashMap::new(),
             attackers: HashSet::new(),
             attacking_guid: None,
+            last_damaged_target_guid: None,
             combat_disallowed: false,
         }
     }
@@ -1448,6 +1450,10 @@ impl CombatSubsystem {
 
     pub fn set_attacking(&mut self, victim: Option<ObjectGuid>) {
         self.attacking_guid = victim;
+    }
+
+    pub fn set_last_damaged_target_like_cpp(&mut self, target: Option<ObjectGuid>) {
+        self.last_damaged_target_guid = target;
     }
 }
 

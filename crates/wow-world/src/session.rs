@@ -9921,6 +9921,14 @@ impl WorldSession {
             return;
         };
 
+        if !swings.is_empty() {
+            let _ = self.mutate_canonical_player_like_cpp(|player| {
+                player
+                    .unit_mut()
+                    .set_last_damaged_target_like_cpp(Some(combat_target));
+            });
+        }
+
         for (dmg, _swing_killed, over_damage) in &swings {
             let state_update = AttackerStateUpdate {
                 attacker: player_guid,
@@ -12777,6 +12785,19 @@ mod tests {
                 .combat
                 .threat_value(player),
             Some(7.0)
+        );
+        drop(guard);
+
+        let canonical = canonical.lock().unwrap();
+        let player_entity = canonical
+            .find_map(0, 0)
+            .unwrap()
+            .map()
+            .get_typed_player(player)
+            .unwrap();
+        assert_eq!(
+            player_entity.unit().last_damaged_target_like_cpp(),
+            Some(guid)
         );
     }
 

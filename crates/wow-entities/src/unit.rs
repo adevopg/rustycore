@@ -437,6 +437,16 @@ impl Unit {
         self.subsystems.combat.attackers.contains(&attacker)
     }
 
+    pub const fn last_damaged_target_like_cpp(&self) -> Option<ObjectGuid> {
+        self.subsystems.combat.last_damaged_target_guid
+    }
+
+    pub fn set_last_damaged_target_like_cpp(&mut self, target: Option<ObjectGuid>) {
+        self.subsystems
+            .combat
+            .set_last_damaged_target_like_cpp(target);
+    }
+
     pub fn attack_like_cpp(
         &mut self,
         victim_guid: ObjectGuid,
