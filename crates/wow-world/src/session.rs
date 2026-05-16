@@ -1880,18 +1880,17 @@ impl WorldSession {
         result
     }
 
-    fn canonical_player_attack_target_like_cpp(&self) -> Option<ObjectGuid> {
+    fn canonical_player_attack_state_like_cpp(&self) -> Option<Option<ObjectGuid>> {
         let guid = self.player_guid?;
         let map_id = u32::from(self.player_map_id_like_cpp());
         let manager = Arc::clone(self.canonical_map_manager.as_ref()?);
         let manager = manager.lock().ok()?;
         let mut result = None;
         manager.do_for_all_maps_with_map_id(map_id, |managed| {
-            if result.is_none() {
-                result = managed
-                    .map()
-                    .get_typed_player(guid)
-                    .and_then(|player| player.unit().attacking());
+            if result.is_none()
+                && let Some(player) = managed.map().get_typed_player(guid)
+            {
+                result = Some(player.unit().attacking());
             }
         });
         result
@@ -1941,6 +1940,12 @@ impl WorldSession {
             let mut swings = Vec::new();
             let mut processed_ready_attack = false;
             let mut base_attack_error = None;
+            // C++: Unit::DoMeleeAttackIfReady, Unit.cpp:2087 exits before
+            // processing swings unless UNIT_STATE_MELEE_ATTACKING is present.
+            if !unit.has_unit_state(UnitState::MELEE_ATTACKING.bits()) {
+                return None;
+            }
+            // C++: Unit::DoMeleeAttackIfReady, Unit.cpp:2090 exits while charging.
             if unit.has_unit_state(UnitState::CHARGING.bits()) {
                 return None;
             }
@@ -9838,10 +9843,14 @@ impl WorldSession {
         let Some(player_guid) = self.player_guid() else {
             return;
         };
-        let Some(combat_target) = self
-            .canonical_player_attack_target_like_cpp()
-            .or(self.combat_target)
-        else {
+        let canonical_attack_state = self.canonical_player_attack_state_like_cpp();
+        let Some(combat_target) = (match canonical_attack_state {
+            Some(Some(target)) => Some(target),
+            // C++: Unit::GetVictim() is authoritative. If the canonical Player
+            // exists but has no victim, do not resurrect stale session mirrors.
+            Some(None) => None,
+            None => self.combat_target,
+        }) else {
             self.combat_target = None;
             self.in_combat = false;
             return;
@@ -12667,6 +12676,9 @@ mod tests {
             .mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().set_attacking(Some(guid));
                 player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
             })
             .unwrap();
         session.combat_target = None;
@@ -12722,6 +12734,9 @@ mod tests {
             .mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().set_attacking(Some(guid));
                 player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 player
                     .unit_mut()
                     .set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
@@ -12795,6 +12810,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
             })
@@ -12874,6 +12890,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
                 unit.set_current_cast_spell(wow_entities::CurrentSpellSlot::Melee, melee_spell);
@@ -12955,6 +12972,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
             })
@@ -13031,6 +13049,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.subsystems_mut().auras.register_applied_aura(
                     aura,
                     None,
@@ -13060,6 +13079,131 @@ mod tests {
             .get_typed_player(player)
             .unwrap();
         assert!(!player_entity.unit().subsystems().auras.has_applied(aura));
+    }
+
+    #[test]
+    fn combat_tick_canonical_player_without_victim_does_not_use_stale_session_target_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let guid = test_creature_guid(18_028);
+        let player = ObjectGuid::create_player(1, 77);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player,
+            "NoVictim".to_string(),
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+
+        session.tick_combat_sync();
+
+        assert_eq!(
+            manager
+                .read()
+                .unwrap()
+                .find_creature(0, 0, guid)
+                .unwrap()
+                .current_hp(),
+            40
+        );
+        assert_eq!(session.combat_target, None);
+        assert!(!session.in_combat);
+    }
+
+    #[test]
+    fn combat_tick_without_melee_attacking_state_skips_update_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let guid = test_creature_guid(18_029);
+        let player = ObjectGuid::create_player(1, 78);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player,
+            "NotMelee".to_string(),
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session
+            .mutate_canonical_player_like_cpp(|player| {
+                let unit = player.unit_mut();
+                unit.set_attacking(Some(guid));
+                unit.set_target(guid);
+                unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
+                unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
+            })
+            .unwrap();
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature.enter_combat(player);
+                creature.creature.ai_ownership_mut().last_swing_ms = 0;
+                creature.creature.ai_ownership_mut().swing_timer_ms = 0;
+            })
+            .unwrap();
+
+        session.tick_combat_sync();
+
+        assert_eq!(
+            manager
+                .read()
+                .unwrap()
+                .find_creature(0, 0, guid)
+                .unwrap()
+                .current_hp(),
+            40
+        );
+        let guard = canonical.lock().unwrap();
+        let player_entity = guard
+            .find_map(0, 0)
+            .unwrap()
+            .map()
+            .get_typed_player(player)
+            .unwrap();
+        assert_eq!(
+            player_entity
+                .unit()
+                .attack_timer(WeaponAttackType::BaseAttack),
+            0
+        );
     }
 
     #[test]
@@ -13097,6 +13241,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.add_unit_state(UnitState::CHARGING.bits());
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
@@ -13174,6 +13319,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_unit_flags_like_cpp(UnitFlags::PLAYER_CONTROLLED | UnitFlags::PACIFIED);
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
@@ -13249,6 +13395,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_can_dual_wield_like_cpp(true);
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::OffAttack, 2_000);
@@ -13326,6 +13473,9 @@ mod tests {
             .mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().set_attacking(Some(guid));
                 player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
             })
             .unwrap();
         session.combat_target = Some(guid);
@@ -13402,6 +13552,9 @@ mod tests {
             .mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().set_attacking(Some(guid));
                 player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
             })
             .unwrap();
         session.combat_target = Some(guid);
@@ -13481,6 +13634,9 @@ mod tests {
             .mutate_canonical_player_like_cpp(|player| {
                 player.unit_mut().set_attacking(Some(guid));
                 player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
             })
             .unwrap();
         session.combat_target = Some(guid);
@@ -13569,6 +13725,7 @@ mod tests {
                 let unit = player.unit_mut();
                 unit.set_attacking(Some(guid));
                 unit.set_target(guid);
+                unit.add_unit_state(UnitState::MELEE_ATTACKING.bits());
                 unit.set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
                 unit.set_weapon_damage(WeaponAttackType::BaseAttack, 7.0, 7.0);
             })
