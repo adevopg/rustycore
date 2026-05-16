@@ -85,6 +85,8 @@ const PLAYER_FLAGS_UBER_LIKE_CPP: u32 = 0x0008_0000;
 const PLAYER_FLAGS_CONTESTED_PVP_LIKE_CPP: u32 = 0x0000_0100;
 const FACTION_TEMPLATE_FLAG_CONTESTED_GUARD_LIKE_CPP: u16 = 0x0000_1000;
 const ATTACK_DISPLAY_DELAY_LIKE_CPP_MS: u32 = 200;
+const MIN_MELEE_REACH_LIKE_CPP: f32 = 2.0;
+const NOMINAL_MELEE_RANGE_LIKE_CPP: f32 = 5.0;
 const SUMMON_PROPERTIES_ONLY_VISIBLE_TO_SUMMONER_LIKE_CPP: u32 = 0x0000_0010;
 const SUMMON_PROPERTIES_ONLY_VISIBLE_TO_SUMMONER_GROUP_LIKE_CPP: u32 = 0x0001_0000;
 
@@ -2117,6 +2119,27 @@ impl WorldSession {
                         can_have_reputation: None,
                     })
             })
+    }
+
+    fn is_within_melee_range_like_cpp(
+        attacker_position: Position,
+        attacker_combat_reach: f32,
+        target_position: Position,
+        target_combat_reach: f32,
+    ) -> bool {
+        let melee_range =
+            (attacker_combat_reach.max(0.0) + target_combat_reach.max(0.0) + 4.0 / 3.0)
+                .max(NOMINAL_MELEE_RANGE_LIKE_CPP);
+        attacker_position.distance(&target_position) <= melee_range
+    }
+
+    fn is_within_target_boundary_radius_like_cpp(
+        attacker_position: Position,
+        target_position: Position,
+        target_bounding_radius: f32,
+    ) -> bool {
+        let boundary_radius = target_bounding_radius.max(MIN_MELEE_REACH_LIKE_CPP);
+        attacker_position.distance(&target_position) < boundary_radius
     }
 
     fn is_player_facing_target_for_melee_like_cpp(
@@ -10565,20 +10588,34 @@ impl WorldSession {
         // clear the canonical player's attack state as well as session mirrors.
         #[derive(Clone, Copy)]
         enum CombatTargetRuntimeLikeCpp {
-            WorldCreature { position: Position },
-            CanonicalPlayer { position: Position },
+            WorldCreature {
+                position: Position,
+                combat_reach: f32,
+                bounding_radius: f32,
+            },
+            CanonicalPlayer {
+                position: Position,
+                combat_reach: f32,
+                bounding_radius: f32,
+            },
         }
 
         let target_runtime = self
             .mutate_world_creature(combat_target, |creature| {
+                let unit_data = creature.creature.unit().data();
                 CombatTargetRuntimeLikeCpp::WorldCreature {
                     position: creature.position(),
+                    combat_reach: unit_data.combat_reach,
+                    bounding_radius: unit_data.bounding_radius,
                 }
             })
             .or_else(|| {
                 self.mutate_canonical_player_by_guid_like_cpp(combat_target, |player| {
+                    let unit_data = player.unit().data();
                     CombatTargetRuntimeLikeCpp::CanonicalPlayer {
                         position: player.unit().world().position(),
+                        combat_reach: unit_data.combat_reach,
+                        bounding_radius: unit_data.bounding_radius,
                     }
                 })
             });
@@ -10590,17 +10627,39 @@ impl WorldSession {
             self.in_combat = false;
             return;
         };
-        let target_position = match target_runtime {
-            CombatTargetRuntimeLikeCpp::WorldCreature { position }
-            | CombatTargetRuntimeLikeCpp::CanonicalPlayer { position } => position,
+        let (target_position, target_combat_reach, target_bounding_radius) = match target_runtime {
+            CombatTargetRuntimeLikeCpp::WorldCreature {
+                position,
+                combat_reach,
+                bounding_radius,
+            }
+            | CombatTargetRuntimeLikeCpp::CanonicalPlayer {
+                position,
+                combat_reach,
+                bounding_radius,
+            } => (position, combat_reach, bounding_radius),
         };
         let player_position = self.player_position_like_cpp();
+        let player_combat_reach = self
+            .mutate_canonical_player_like_cpp(|player| player.unit().data().combat_reach)
+            .unwrap_or(0.0);
         let in_melee_range = player_position
-            .map(|position| position.distance(&target_position) <= 5.0)
+            .map(|position| {
+                Self::is_within_melee_range_like_cpp(
+                    position,
+                    player_combat_reach,
+                    target_position,
+                    target_combat_reach,
+                )
+            })
             .unwrap_or(true);
         let facing_target = player_position
             .map(|position| {
-                Self::is_player_facing_target_for_melee_like_cpp(position, target_position)
+                Self::is_within_target_boundary_radius_like_cpp(
+                    position,
+                    target_position,
+                    target_bounding_radius,
+                ) || Self::is_player_facing_target_for_melee_like_cpp(position, target_position)
             })
             .unwrap_or(true);
         let within_los = self.player_melee_los_to_target_like_cpp.unwrap_or(true);
@@ -14526,6 +14585,142 @@ mod tests {
         assert_eq!(opcode, ServerOpcodes::AttackSwingError as u16);
         let mut pkt = WorldPacket::from_bytes(&sent[2..]);
         assert_eq!(pkt.read_bits(3).unwrap(), 1);
+    }
+
+    #[test]
+    fn combat_tick_melee_range_uses_combat_reach_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let guid = test_creature_guid(18_019);
+        let player = ObjectGuid::create_player(1, 68);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player,
+            "Reach".to_string(),
+            Position::new(10.0, 10.0, 0.0, 0.0),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session
+            .mutate_canonical_player_like_cpp(|player| {
+                player.unit_mut().set_attacking(Some(guid));
+                player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
+            })
+            .unwrap();
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature
+                    .creature
+                    .set_ai_position(Position::new(17.0, 10.0, 0.0, 0.0));
+                creature.creature.unit_mut().set_combat_reach(6.0);
+                creature.enter_combat(player);
+                creature.creature.ai_ownership_mut().last_swing_ms = 0;
+                creature.creature.ai_ownership_mut().swing_timer_ms = 0;
+            })
+            .unwrap();
+
+        session.tick_combat_sync();
+
+        let hp = manager
+            .read()
+            .unwrap()
+            .find_creature(0, 0, guid)
+            .unwrap()
+            .current_hp();
+        assert!(hp < 40);
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::AttackerStateUpdate as u16);
+    }
+
+    #[test]
+    fn combat_tick_boundary_radius_suppresses_bad_facing_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let guid = test_creature_guid(18_020);
+        let player = ObjectGuid::create_player(1, 69);
+
+        canonical.lock().unwrap().create_world_map(0, 0);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 0,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player,
+            "Boundary".to_string(),
+            Position::new(10.0, 10.0, 0.0, std::f32::consts::PI),
+            0,
+            1,
+            1,
+            80,
+            0,
+        ));
+        let _ = session.ensure_canonical_world_map_for_current_player_like_cpp();
+        session
+            .mutate_canonical_player_like_cpp(|player| {
+                player.unit_mut().set_attacking(Some(guid));
+                player.unit_mut().set_target(guid);
+                player
+                    .unit_mut()
+                    .add_unit_state(UnitState::MELEE_ATTACKING.bits());
+            })
+            .unwrap();
+        session.combat_target = Some(guid);
+        session.in_combat = true;
+        register_test_creature(&mut session, manager.clone(), guid, 40);
+        session
+            .mutate_world_creature(guid, |creature| {
+                creature
+                    .creature
+                    .set_ai_position(Position::new(12.0, 10.0, 0.0, 0.0));
+                creature.creature.unit_mut().set_bounding_radius(3.0);
+                creature.enter_combat(player);
+                creature.creature.ai_ownership_mut().last_swing_ms = 0;
+                creature.creature.ai_ownership_mut().swing_timer_ms = 0;
+            })
+            .unwrap();
+
+        session.tick_combat_sync();
+
+        let hp = manager
+            .read()
+            .unwrap()
+            .find_creature(0, 0, guid)
+            .unwrap()
+            .current_hp();
+        assert!(hp < 40);
+        let sent = send_rx.try_recv().unwrap();
+        let opcode = u16::from_le_bytes([sent[0], sent[1]]);
+        assert_eq!(opcode, ServerOpcodes::AttackerStateUpdate as u16);
     }
 
     #[test]
