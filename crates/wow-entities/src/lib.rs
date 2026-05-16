@@ -305,6 +305,6 @@ pub use world_object::{
     DEFAULT_HEIGHT_SEARCH, DEFAULT_VISIBILITY_DISTANCE, DEFAULT_VISIBILITY_INSTANCE,
     INVALID_HEIGHT, LineOfSightEndpoint, LineOfSightOptions, LineOfSightQuery, MAPID_INVALID,
     MAX_HEIGHT, MAX_VISIBILITY_DISTANCE, MapBindingError, PhaseShift, SIGHT_RANGE_UNIT,
-    WorldLocation, WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
-    Z_OFFSET_FIND_HEIGHT,
+    SmoothPhasingInfoLikeCpp, SmoothPhasingLikeCpp, WorldLocation, WorldObject,
+    WorldObjectEnvironment, WorldObjectHeightQuery, Z_OFFSET_FIND_HEIGHT,
 };

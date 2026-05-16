@@ -546,6 +546,16 @@ impl Unit {
             return false;
         }
 
+        if target
+            .world
+            .smooth_phasing_like_cpp()
+            .is_some_and(|smooth_phasing| {
+                smooth_phasing.is_being_replaced_for_seer_like_cpp(seer_guid)
+            })
+        {
+            return false;
+        }
+
         let gm_visibility = target.visibility_detection.server_side_visibility_gm;
         if gm_visibility == 0 {
             if self.visibility_detection.server_side_visibility_detect_gm != 0 {
@@ -1956,6 +1966,24 @@ mod tests {
         assert!(seer.can_see_or_detect_unit_like_cpp(&target, false, true, false));
 
         target.set_private_object_owner_like_cpp(ObjectGuid::EMPTY);
+        target
+            .world_mut()
+            .get_or_create_smooth_phasing_like_cpp()
+            .set_viewer_dependent_info_like_cpp(
+                seer_guid,
+                crate::SmoothPhasingInfoLikeCpp::default(),
+            );
+        target.set_always_detectable_for_seer_like_cpp(true);
+        assert!(!seer.can_see_or_detect_unit_like_cpp(&target, false, true, false));
+
+        target
+            .world_mut()
+            .smooth_phasing_mut_like_cpp()
+            .unwrap()
+            .disable_replacement_for_seer_like_cpp(seer_guid);
+        assert!(seer.can_see_or_detect_unit_like_cpp(&target, false, true, false));
+
+        target.set_always_detectable_for_seer_like_cpp(false);
         target.set_invisibility_like_cpp(0, 100);
         assert!(!seer.can_see_or_detect_unit_like_cpp(&target, false, true, false));
         seer.set_seer_can_always_see_target_guid_like_cpp(target.world().object().guid());
