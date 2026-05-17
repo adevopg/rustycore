@@ -1576,6 +1576,10 @@ pub(crate) enum RepresentedCreatureKillEventLikeCpp {
         creature_guid: ObjectGuid,
         killer_guid: ObjectGuid,
     },
+    ScriptMgrOnCreatureKill {
+        killer_guid: ObjectGuid,
+        creature_guid: ObjectGuid,
+    },
 }
 
 /// A creature waiting to respawn after its corpse despawned.
@@ -9622,6 +9626,14 @@ impl WorldSession {
                 killer_guid: attacker_guid,
             },
         );
+        if attacker_guid.is_player() {
+            self.represented_creature_kill_events_like_cpp.push(
+                RepresentedCreatureKillEventLikeCpp::ScriptMgrOnCreatureKill {
+                    killer_guid: attacker_guid,
+                    creature_guid,
+                },
+            );
+        }
         Some(values_update)
     }
 
@@ -14519,6 +14531,10 @@ mod tests {
                     creature_guid: guid,
                     killer_guid: player,
                 },
+                RepresentedCreatureKillEventLikeCpp::ScriptMgrOnCreatureKill {
+                    killer_guid: player,
+                    creature_guid: guid,
+                },
             ]
         );
     }
@@ -14643,6 +14659,10 @@ mod tests {
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
                     killer_guid: player,
+                },
+                RepresentedCreatureKillEventLikeCpp::ScriptMgrOnCreatureKill {
+                    killer_guid: player,
+                    creature_guid: guid,
                 },
             ]
         );
@@ -15021,6 +15041,10 @@ mod tests {
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
                     killer_guid: player,
+                },
+                RepresentedCreatureKillEventLikeCpp::ScriptMgrOnCreatureKill {
+                    killer_guid: player,
+                    creature_guid: guid,
                 },
             ]
         );
