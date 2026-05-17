@@ -10893,6 +10893,14 @@ impl WorldSession {
         {
             return false;
         }
+        let current_state = self
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .and_then(|state| state.new_flag_state)
+            .unwrap_or(RepresentedNewFlagStateRequest::InBase);
+        if current_state != RepresentedNewFlagStateRequest::InBase {
+            return false;
+        }
         {
             let state = self
                 .represented_gameobject_use_states
@@ -24626,6 +24634,35 @@ mod tests {
         assert_eq!(state.new_flag_carrier_guid, Some(player_guid));
         assert!(state.new_flag_taken_from_base_game_time_ms.is_some());
         assert!(state.new_flag_respawn_until.is_none());
+    }
+
+    #[test]
+    fn gameobject_use_new_flag_rejects_non_in_base_state_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 36);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .new_flag_state = Some(RepresentedNewFlagStateRequest::Taken);
+
+        assert!(!session.use_represented_gameobject_new_flag_like_cpp(
+            gameobject_guid,
+            player_guid,
+            179_830,
+            wow_entities::NewFlagUseSource {
+                pickup_spell_id: 11,
+                expire_duration_ms: 22,
+                respawn_time_ms: 33,
+                flag_drop_entry: 44,
+                exclusive_category: -55,
+                world_state_id: 66,
+                return_on_defender_interact: true,
+            },
+        ));
+        assert!(session.represented_gameobject_use_effects.is_empty());
     }
 
     #[test]
