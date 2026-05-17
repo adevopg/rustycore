@@ -408,6 +408,22 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         area_id: u32,
         prevent_unfriendly_outside_instances: bool,
     },
+    FishingNodeOwnerRejected {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        owner_guid: ObjectGuid,
+    },
+    FishingNodeActivated {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    },
+    FishNotHooked {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    },
+    FinishChanneledSpell {
+        player_guid: ObjectGuid,
+    },
     SpellcasterPartyOnlyRejected {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -10562,6 +10578,72 @@ impl WorldSession {
                 prevent_unfriendly_outside_instances: source.prevent_unfriendly_outside_instances,
             },
         );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_fishing_node_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    ) -> bool {
+        let known_owner = self
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .and_then(|state| state.owner_guid);
+        if let Some(owner_guid) = known_owner {
+            if owner_guid != player_guid {
+                self.represented_gameobject_use_effects.push(
+                    RepresentedGameObjectUseEffect::FishingNodeOwnerRejected {
+                        gameobject_guid,
+                        player_guid,
+                        owner_guid,
+                    },
+                );
+                return false;
+            }
+        }
+
+        let current_loot_state = self
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .and_then(|state| state.loot_state)
+            .unwrap_or(wow_entities::LootState::Ready);
+
+        match current_loot_state {
+            wow_entities::LootState::Ready => {
+                let state = self
+                    .represented_gameobject_use_states
+                    .entry(gameobject_guid)
+                    .or_default();
+                state.loot_state = Some(wow_entities::LootState::Activated);
+                state.loot_state_unit_guid = player_guid;
+                state.go_state = Some(wow_entities::GoState::Active);
+                state.gameobject_flags = wow_entities::GO_FLAG_IN_MULTI_USE;
+                self.represented_gameobject_use_effects.push(
+                    RepresentedGameObjectUseEffect::FishingNodeActivated {
+                        gameobject_guid,
+                        player_guid,
+                    },
+                );
+            }
+            wow_entities::LootState::JustDeactivated => {}
+            _ => {
+                self.represented_gameobject_use_states
+                    .entry(gameobject_guid)
+                    .or_default()
+                    .loot_state = Some(wow_entities::LootState::JustDeactivated);
+                self.represented_gameobject_use_effects.push(
+                    RepresentedGameObjectUseEffect::FishNotHooked {
+                        gameobject_guid,
+                        player_guid,
+                    },
+                );
+            }
+        }
+
+        self.represented_gameobject_use_effects
+            .push(RepresentedGameObjectUseEffect::FinishChanneledSpell { player_guid });
 
         true
     }
@@ -23462,6 +23544,101 @@ mod tests {
                     prevent_unfriendly_outside_instances: true,
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_activates_ready_bobber_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 17);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .owner_guid = Some(player_guid);
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::FishingNodeActivated {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::FinishChanneledSpell { player_guid },
+            ]
+        );
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(state.loot_state, Some(wow_entities::LootState::Activated));
+        assert_eq!(state.go_state, Some(wow_entities::GoState::Active));
+        assert_eq!(state.gameobject_flags, wow_entities::GO_FLAG_IN_MULTI_USE);
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_rejects_known_wrong_owner_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let owner_guid = ObjectGuid::create_player(1, 100);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 17);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .owner_guid = Some(owner_guid);
+
+        assert!(
+            !session
+                .use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::FishingNodeOwnerRejected {
+                gameobject_guid,
+                player_guid,
+                owner_guid,
+            }]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_not_ready_sends_not_hooked_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 17);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .loot_state = Some(wow_entities::LootState::Activated);
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::FishNotHooked {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::FinishChanneledSpell { player_guid },
+            ]
+        );
+        assert_eq!(
+            session
+                .represented_gameobject_use_states
+                .get(&gameobject_guid)
+                .and_then(|state| state.loot_state),
+            Some(wow_entities::LootState::JustDeactivated)
         );
     }
 
