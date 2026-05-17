@@ -162,6 +162,11 @@ pub struct ChairUseSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct QuestgiverUseSource {
+    pub gossip_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CameraUseSource {
     pub cinematic_id: u32,
     pub event_id: u32,
@@ -346,6 +351,16 @@ impl GameObjectTemplateData {
             chair_slots: self.data[0],
             chair_height: self.data[1],
             triggered_event_id: self.data[3],
+        })
+    }
+
+    pub const fn questgiver_use_source_like_cpp(&self) -> Option<QuestgiverUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_QUESTGIVER {
+            return None;
+        }
+
+        Some(QuestgiverUseSource {
+            gossip_id: self.data[3],
         })
     }
 
@@ -1273,6 +1288,23 @@ mod tests {
         );
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data).chair_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn questgiver_use_source_uses_cpp_data_indices() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[3] = 42;
+
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_QUESTGIVER, data)
+                .questgiver_use_source_like_cpp(),
+            Some(QuestgiverUseSource { gossip_id: 42 })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+                .questgiver_use_source_like_cpp(),
             None
         );
     }

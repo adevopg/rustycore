@@ -103,7 +103,7 @@ pub use game_object::{
     GAMEOBJECT_TYPE_UI_LINK, GO_DYNFLAG_LO_NO_INTERACT, GO_FLAG_IN_USE, GameObject,
     GameObjectDataUpdate, GameObjectDataValues, GameObjectLootSource, GameObjectTemplateData,
     GameObjectValuesUpdate, GatheringNodeUseSource, GoState, GooberUseSource, LootState,
-    MAX_GAMEOBJECT_DATA, TrapUseSource,
+    MAX_GAMEOBJECT_DATA, QuestgiverUseSource, TrapUseSource,
 };
 pub use item::{
     APPEARANCE_MODIFIER_SLOT_BY_SPEC, ArtifactPower, BOP_TRADEABLE_DURATION_SECS,

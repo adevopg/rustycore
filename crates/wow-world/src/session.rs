@@ -10126,6 +10126,22 @@ impl WorldSession {
         true
     }
 
+    pub(crate) fn use_represented_gameobject_questgiver_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::QuestgiverUseSource,
+    ) -> bool {
+        self.represented_gameobject_use_effects
+            .push(RepresentedGameObjectUseEffect::SendGossip {
+                gameobject_guid,
+                player_guid,
+                gossip_id: source.gossip_id,
+            });
+
+        true
+    }
+
     pub(crate) fn use_represented_gameobject_spell_focus_like_cpp(
         &mut self,
         gameobject_guid: ObjectGuid,
@@ -22503,6 +22519,28 @@ mod tests {
             vec![RepresentedGameObjectUseEffect::ChairNoFreeSlot {
                 gameobject_guid,
                 player_guid,
+            }]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_questgiver_sends_gossip_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 19);
+
+        assert!(session.use_represented_gameobject_questgiver_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::QuestgiverUseSource { gossip_id: 123 },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::SendGossip {
+                gameobject_guid,
+                player_guid,
+                gossip_id: 123,
             }]
         );
     }
