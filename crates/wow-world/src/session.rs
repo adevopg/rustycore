@@ -509,6 +509,7 @@ pub(crate) enum RepresentedBattlegroundObjectUseRejection {
     RecentlyDroppedFlag,
     DamageImmune,
     Dead,
+    Vehicle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10213,6 +10214,25 @@ impl WorldSession {
         true
     }
 
+    pub(crate) fn represented_player_reject_battleground_object_vehicle_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    ) -> bool {
+        if self.player_vehicle_seat_flags_like_cpp.is_none() {
+            return false;
+        }
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                gameobject_guid,
+                player_guid,
+                reason: RepresentedBattlegroundObjectUseRejection::Vehicle,
+            },
+        );
+        true
+    }
+
     pub(crate) fn record_represented_gameobject_report_use_ai_like_cpp(
         &mut self,
         gameobject_guid: ObjectGuid,
@@ -10616,6 +10636,12 @@ impl WorldSession {
         {
             return false;
         }
+        if self.represented_player_reject_battleground_object_vehicle_like_cpp(
+            gameobject_guid,
+            player_guid,
+        ) {
+            return false;
+        }
 
         self.represented_gameobject_use_effects.push(
             RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
@@ -10646,6 +10672,12 @@ impl WorldSession {
         if !self
             .represented_player_can_use_battleground_object_like_cpp(gameobject_guid, player_guid)
         {
+            return false;
+        }
+        if self.represented_player_reject_battleground_object_vehicle_like_cpp(
+            gameobject_guid,
+            player_guid,
+        ) {
             return false;
         }
 
@@ -24035,6 +24067,35 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_use_flagstand_rejects_vehicle_before_bg_click_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 40);
+        session.player_vehicle_seat_flags_like_cpp = Some(0);
+
+        assert!(!session.use_represented_gameobject_flagstand_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::FlagStandUseSource {
+                pickup_spell_id: 11,
+                return_aura_id: 33,
+                return_spell_id: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                    gameobject_guid,
+                    player_guid,
+                    reason: RepresentedBattlegroundObjectUseRejection::Vehicle,
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn gameobject_use_flagdrop_triggers_event_and_delete_like_cpp() {
         let (mut session, _pkt_tx, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 99);
@@ -24078,6 +24139,37 @@ mod tests {
                     event_id: 22,
                 },
                 RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_flagdrop_rejects_vehicle_before_delete_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 41);
+        session.player_vehicle_seat_flags_like_cpp = Some(0);
+
+        assert!(!session.use_represented_gameobject_flagdrop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            179785,
+            wow_entities::FlagDropUseSource {
+                event_id: 22,
+                pickup_spell_id: 33,
+                expire_duration_ms: 44,
+            },
+        ));
+        assert!(send_rx.try_recv().is_err());
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                    gameobject_guid,
+                    player_guid,
+                    reason: RepresentedBattlegroundObjectUseRejection::Vehicle,
+                }
             ]
         );
     }
