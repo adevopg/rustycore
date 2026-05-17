@@ -6059,6 +6059,10 @@ impl WorldSession {
         self.area_table_store = Some(store);
     }
 
+    pub(crate) fn area_table_store(&self) -> Option<&Arc<AreaTableStore>> {
+        self.area_table_store.as_ref()
+    }
+
     /// Set the quest store shared reference.
     pub fn set_quest_store(&mut self, store: Arc<wow_data::quest::QuestStore>) {
         self.quest_store = Some(store);

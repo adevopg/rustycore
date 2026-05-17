@@ -38,7 +38,7 @@ use wow_entities::{
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_loot::{
-    GeneratedLootItem, LootConditionId, LootConditionRowLikeCpp, LootFillOptions,
+    GeneratedLootItem, LootConditionId, LootConditionRowLikeCpp, LootFillError, LootFillOptions,
     LootItemRandomProperties, LootItemTemplateMetadata, LootStoreItem, LootStoreItemContext,
     LootStoreKind, LootTemplate, condition_compare_values_like_cpp,
     generate_money_loot_with_rate_like_cpp, loot_condition_reference_ids_like_cpp,
@@ -90,6 +90,7 @@ const LOOT_SLOT_TYPE_ROLL_ONGOING_LIKE_CPP: u8 = 1;
 const LOOT_SLOT_TYPE_LOCKED_LIKE_CPP: u8 = 2;
 const DISENCHANT_LOOT_ROLL_CRITERIA_SPELL_LIKE_CPP: u32 = 13_262;
 const LOOT_MODE_DEFAULT_LIKE_CPP: u16 = 0x01;
+const LOOT_MODE_JUNK_FISH_LIKE_CPP: u16 = 0x8000;
 const ITEM_FLAGS_CU_FOLLOW_LOOT_RULES_LIKE_CPP: u32 = 0x0004;
 const ITEM_FLAGS_CU_IGNORE_QUEST_STATUS_LIKE_CPP: u32 = 0x0002;
 const MAX_LOOT_REFERENCE_FRAMES_LIKE_CPP: u32 = 64;
@@ -399,6 +400,101 @@ impl WorldSession {
         }
     }
 
+    pub(crate) async fn open_represented_fishing_node_loot_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        area_id: u32,
+        junk: bool,
+    ) {
+        let Some(player_guid) = self.player_guid() else {
+            return;
+        };
+        if !self.player_is_alive_like_cpp() {
+            return;
+        }
+        if !self.represented_gameobject_exists_for_loot_like_cpp(gameobject_guid) {
+            return;
+        }
+
+        let loot_type = if junk {
+            LOOT_TYPE_FISHING_JUNK_LIKE_CPP
+        } else {
+            LOOT_TYPE_FISHING_LIKE_CPP
+        };
+        let loot_mode = if junk {
+            LOOT_MODE_JUNK_FISH_LIKE_CPP
+        } else {
+            LOOT_MODE_DEFAULT_LIKE_CPP
+        };
+        let items = self
+            .generate_represented_fishing_loot_items_like_cpp(area_id, loot_mode)
+            .await
+            .unwrap_or_else(|| {
+                debug!(
+                    area_id,
+                    gameobject = ?gameobject_guid,
+                    junk,
+                    "fishing loot template unavailable"
+                );
+                Vec::new()
+            });
+
+        self.loot_table.insert(
+            gameobject_guid,
+            CreatureLoot {
+                loot_guid: represented_loot_object_guid_like_cpp(gameobject_guid),
+                coins: 0,
+                unlooted_count: 0,
+                loot_type,
+                dungeon_encounter_id: 0,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
+                allowed_looters: vec![player_guid],
+                items,
+                looted_by_player: false,
+            },
+        );
+
+        if let Some(loot) = self.loot_table.get_mut(&gameobject_guid) {
+            mark_loot_allowed_for_player_like_cpp(loot, player_guid);
+        }
+
+        let Some(loot) = self.loot_table.get(&gameobject_guid) else {
+            return;
+        };
+        if !self.represented_loot_can_be_opened_by_player_like_cpp(
+            gameobject_guid,
+            loot,
+            player_guid,
+        ) {
+            return;
+        }
+
+        let response = LootResponse {
+            owner: gameobject_guid,
+            loot_obj: loot.loot_guid,
+            failure_reason: 0,
+            acquire_reason: loot_type_for_client_like_cpp(loot.loot_type),
+            loot_method: loot.loot_method,
+            threshold: 2,
+            coins: loot.coins,
+            items: represented_loot_response_items_like_cpp(loot, player_guid),
+            currencies: vec![],
+            acquired: true,
+            ae_looting: false,
+        };
+
+        if !self.active_loot_guid.is_empty() && !self.active_loot_guid.is_item() {
+            self.do_loot_release_all_like_cpp(player_guid).await;
+        }
+        self.set_active_loot_guid(gameobject_guid);
+        self.send_packet(&response);
+        self.represented_on_loot_opened_like_cpp(gameobject_guid, player_guid);
+    }
+
     pub(crate) async fn open_represented_gathering_node_like_cpp(
         &mut self,
         gameobject_guid: ObjectGuid,
@@ -593,7 +689,11 @@ impl WorldSession {
 
         if replace_existing || !self.loot_table.contains_key(&gameobject_guid) {
             let items = self
-                .generate_represented_gameobject_loot_items_like_cpp(loot_id)
+                .generate_represented_gameobject_loot_items_for_store_like_cpp(
+                    loot_id,
+                    LootStoreKind::Gameobject,
+                    LOOT_MODE_DEFAULT_LIKE_CPP,
+                )
                 .await
                 .unwrap_or_else(|| {
                     debug!(
@@ -3386,15 +3486,28 @@ impl WorldSession {
         &self,
         loot_id: u32,
     ) -> Option<Vec<LootEntry>> {
+        self.generate_represented_gameobject_loot_items_for_store_like_cpp(
+            loot_id,
+            LootStoreKind::Gameobject,
+            LOOT_MODE_DEFAULT_LIKE_CPP,
+        )
+        .await
+    }
+
+    async fn generate_represented_gameobject_loot_items_for_store_like_cpp(
+        &self,
+        loot_id: u32,
+        store_kind: LootStoreKind,
+        loot_mode: u16,
+    ) -> Option<Vec<LootEntry>> {
         if loot_id == 0 {
             return Some(Vec::new());
         }
 
         let stores = self.loot_stores()?;
-        let store = stores.get(&LootStoreKind::Gameobject)?;
+        let store = stores.get(&store_kind)?;
         let rates = self.loot_drop_rates_like_cpp();
-        let condition_ids =
-            store.condition_ids_for_fill_like_cpp(loot_id, LootStoreKind::Gameobject, stores);
+        let condition_ids = store.condition_ids_for_fill_like_cpp(loot_id, store_kind, stores);
         let condition_rows = self
             .load_represented_creature_loot_condition_rows_like_cpp(&condition_ids)
             .await;
@@ -3408,46 +3521,46 @@ impl WorldSession {
             .await;
         let generated = {
             let mut rng = rand::thread_rng();
-            store
-                .fill_loot_with_context_like_cpp(
-                    loot_id,
-                    LootStoreKind::Gameobject,
-                    stores,
-                    LootFillOptions {
-                        loot_mode: LOOT_MODE_DEFAULT_LIKE_CPP,
-                        rates_allowed: true,
-                        referenced_amount_rate: rates.item_referenced_amount,
-                        item_context: ItemContext::None as u8,
-                    },
-                    &mut rng,
-                    |item_id| {
-                        self.item_storage_template(item_id).map(|template| {
-                            LootItemTemplateMetadata {
-                                max_stack: template.max_stack_size.max(1),
-                                has_multi_drop_flag: template.flags.contains(ItemFlags::MULTI_DROP),
-                                has_follow_loot_rules_flag: false,
-                            }
+            match store.fill_loot_with_context_like_cpp(
+                loot_id,
+                store_kind,
+                stores,
+                LootFillOptions {
+                    loot_mode,
+                    rates_allowed: true,
+                    referenced_amount_rate: rates.item_referenced_amount,
+                    item_context: ItemContext::None as u8,
+                },
+                &mut rng,
+                |item_id| {
+                    self.item_storage_template(item_id)
+                        .map(|template| LootItemTemplateMetadata {
+                            max_stack: template.max_stack_size.max(1),
+                            has_multi_drop_flag: template.flags.contains(ItemFlags::MULTI_DROP),
+                            has_follow_loot_rules_flag: false,
                         })
-                    },
-                    |item| self.item_drop_rate_like_cpp(item.item_id),
-                    |context| {
-                        self.represented_creature_loot_item_allowed_like_cpp(
-                            context,
-                            &condition_rows,
-                            &condition_references,
-                            &addon_metadata,
-                        )
-                    },
-                    |item_id| {
-                        let random_properties =
-                            self.generate_loot_store_random_properties_like_cpp(item_id);
-                        LootItemRandomProperties {
-                            id: random_properties.id,
-                            seed: random_properties.seed,
-                        }
-                    },
-                )
-                .ok()?
+                },
+                |item| self.item_drop_rate_like_cpp(item.item_id),
+                |context| {
+                    self.represented_creature_loot_item_allowed_like_cpp(
+                        context,
+                        &condition_rows,
+                        &condition_references,
+                        &addon_metadata,
+                    )
+                },
+                |item_id| {
+                    let random_properties =
+                        self.generate_loot_store_random_properties_like_cpp(item_id);
+                    LootItemRandomProperties {
+                        id: random_properties.id,
+                        seed: random_properties.seed,
+                    }
+                },
+            ) {
+                Ok(generated) => generated,
+                Err(LootFillError::MissingLootTemplate { .. }) => Vec::new(),
+            }
         };
 
         Some(
@@ -3462,6 +3575,41 @@ impl WorldSession {
                 })
                 .collect(),
         )
+    }
+
+    async fn generate_represented_fishing_loot_items_like_cpp(
+        &self,
+        area_id: u32,
+        loot_mode: u16,
+    ) -> Option<Vec<LootEntry>> {
+        let mut current_area_id = area_id;
+        while current_area_id != 0 {
+            let items = self
+                .generate_represented_gameobject_loot_items_for_store_like_cpp(
+                    current_area_id,
+                    LootStoreKind::Fishing,
+                    loot_mode,
+                )
+                .await?;
+            if !items.is_empty() {
+                return Some(items);
+            }
+            let Some(parent_area_id) = self
+                .area_table_store()
+                .and_then(|store| store.get(current_area_id))
+                .map(|entry| u32::from(entry.parent_area_id))
+            else {
+                break;
+            };
+            current_area_id = parent_area_id;
+        }
+
+        self.generate_represented_gameobject_loot_items_for_store_like_cpp(
+            1,
+            LootStoreKind::Fishing,
+            loot_mode,
+        )
+        .await
     }
 
     async fn generate_represented_gameobject_personal_loot_items_like_cpp(
@@ -6402,13 +6550,13 @@ mod tests {
         GAMEOBJECT_TYPE_DOOR, GAMEOBJECT_TYPE_GUILD_BANK, GAMEOBJECT_TYPE_QUESTGIVER,
         INVENTORY_SLOT_BAG_0, ITEM_FLAGS_CU_FOLLOW_LOOT_RULES_LIKE_CPP,
         ItemTemplateAddonLootMetadataLikeCpp, LOCK_KEY_SKILL_LIKE_CPP, LOCK_KEY_SPELL_LIKE_CPP,
-        LOOT_METHOD_GROUP_LIKE_CPP, LOOT_METHOD_MASTER_LIKE_CPP,
-        LOOT_SLOT_TYPE_ALLOW_LOOT_LIKE_CPP, LOOT_SLOT_TYPE_ROLL_ONGOING_LIKE_CPP,
-        LootStoreRandomProperties, ROLL_ALL_TYPE_NO_DISENCHANT_LIKE_CPP,
-        ROLL_FLAG_TYPE_NEED_LIKE_CPP, ROLL_VOTE_GREED_LIKE_CPP, ROLL_VOTE_NEED_LIKE_CPP,
-        ROLL_VOTE_NOT_EMITTED_YET_LIKE_CPP, ROLL_VOTE_NOT_VALID_LIKE_CPP, ROLL_VOTE_PASS_LIKE_CPP,
-        RepresentedLootPlayerContext, SPELL_EFFECT_OPEN_LOCK_LIKE_CPP,
-        assign_represented_personal_loot_items_like_cpp,
+        LOOT_METHOD_GROUP_LIKE_CPP, LOOT_METHOD_MASTER_LIKE_CPP, LOOT_MODE_DEFAULT_LIKE_CPP,
+        LOOT_MODE_JUNK_FISH_LIKE_CPP, LOOT_SLOT_TYPE_ALLOW_LOOT_LIKE_CPP,
+        LOOT_SLOT_TYPE_ROLL_ONGOING_LIKE_CPP, LootStoreRandomProperties,
+        ROLL_ALL_TYPE_NO_DISENCHANT_LIKE_CPP, ROLL_FLAG_TYPE_NEED_LIKE_CPP,
+        ROLL_VOTE_GREED_LIKE_CPP, ROLL_VOTE_NEED_LIKE_CPP, ROLL_VOTE_NOT_EMITTED_YET_LIKE_CPP,
+        ROLL_VOTE_NOT_VALID_LIKE_CPP, ROLL_VOTE_PASS_LIKE_CPP, RepresentedLootPlayerContext,
+        SPELL_EFFECT_OPEN_LOCK_LIKE_CPP, assign_represented_personal_loot_items_like_cpp,
         generated_creature_loot_item_to_entry_like_cpp, loot_is_looted_like_cpp, loot_item_context,
         loot_store_data_can_stack_with_item, loot_type_for_client_like_cpp,
         mark_loot_allowed_for_player_like_cpp, mark_loot_item_looted_for_player_like_cpp,
@@ -6435,8 +6583,8 @@ mod tests {
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_data::quest::{QuestObjective, QuestStore, QuestTemplate};
     use wow_data::{
-        ChrSpecializationEntry, ChrSpecializationStore, ItemDisenchantLootEntry,
-        ItemDisenchantLootStore, ItemRandomEnchantmentTemplateEntry,
+        AreaTableEntry, AreaTableStore, ChrSpecializationEntry, ChrSpecializationStore,
+        ItemDisenchantLootEntry, ItemDisenchantLootStore, ItemRandomEnchantmentTemplateEntry,
         ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesEntry, ItemRandomPropertiesStore,
         ItemRandomPropertyTemplateEntry, ItemRandomSuffixEntry, ItemRandomSuffixStore, ItemRecord,
         ItemSparseTemplateEntry, ItemStatsStore, ItemStore, RandPropPointsEntry,
@@ -6451,7 +6599,8 @@ mod tests {
         MAX_ITEM_SPELLS, WorldObject,
     };
     use wow_loot::{
-        GeneratedLootItem, LOOT_SLOT_TYPE_OWNER_LIKE_CPP, LootConditionRowLikeCpp, LootStoreItem,
+        GeneratedLootItem, LOOT_SLOT_TYPE_OWNER_LIKE_CPP, LootConditionRowLikeCpp, LootStore,
+        LootStoreItem, LootStoreKind, LootStores, LootTemplateRow,
     };
     use wow_network::{
         GroupInfo, GroupRegistry, LootDropRatesLikeCpp, LootRollVoteCommand, PendingInvites,
@@ -8373,6 +8522,110 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn represented_fishing_node_loot_walks_parent_area_like_cpp() {
+        let (mut session, _send_rx) = make_session_with_send();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_051);
+        let item_id = 80_001;
+        session.set_player_guid(Some(player_guid));
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.set_area_table_store(Arc::new(AreaTableStore::from_entries([
+            AreaTableEntry {
+                id: 77,
+                parent_area_id: 10,
+                mount_flags: 0,
+                flags: 0,
+            },
+            AreaTableEntry {
+                id: 10,
+                parent_area_id: 0,
+                mount_flags: 0,
+                flags: 0,
+            },
+        ])));
+        install_limited_test_item_template(&mut session, item_id, 0);
+        let mut fishing_store = LootStore::for_kind_like_cpp(LootStoreKind::Fishing);
+        fishing_store
+            .load_rows_like_cpp(
+                [LootTemplateRow {
+                    entry: 10,
+                    item: LootStoreItem {
+                        item_id,
+                        reference: 0,
+                        chance: 100.0,
+                        needs_quest: false,
+                        loot_mode: LOOT_MODE_DEFAULT_LIKE_CPP,
+                        group_id: 0,
+                        min_count: 1,
+                        max_count: 1,
+                    },
+                }],
+                |_| true,
+            )
+            .unwrap();
+        let mut stores = LootStores::new();
+        stores.insert(LootStoreKind::Fishing, fishing_store);
+        session.set_loot_stores(Arc::new(stores));
+
+        session
+            .open_represented_fishing_node_loot_like_cpp(gameobject_guid, 77, false)
+            .await;
+
+        let loot = session.loot_table.get(&gameobject_guid).unwrap();
+        assert_eq!(loot.loot_type, LOOT_TYPE_FISHING_LIKE_CPP);
+        assert_eq!(loot.items.len(), 1);
+        assert_eq!(loot.items[0].item_id, item_id);
+        assert!(session.is_active_loot_guid(gameobject_guid));
+    }
+
+    #[tokio::test]
+    async fn represented_fishing_node_junk_loot_uses_default_zone_like_cpp() {
+        let (mut session, _send_rx) = make_session_with_send();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let gameobject_guid = test_gameobject_guid(91_052);
+        let item_id = 80_002;
+        session.set_player_guid(Some(player_guid));
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        install_limited_test_item_template(&mut session, item_id, 0);
+        let mut fishing_store = LootStore::for_kind_like_cpp(LootStoreKind::Fishing);
+        fishing_store
+            .load_rows_like_cpp(
+                [LootTemplateRow {
+                    entry: 1,
+                    item: LootStoreItem {
+                        item_id,
+                        reference: 0,
+                        chance: 100.0,
+                        needs_quest: false,
+                        loot_mode: LOOT_MODE_JUNK_FISH_LIKE_CPP,
+                        group_id: 0,
+                        min_count: 1,
+                        max_count: 1,
+                    },
+                }],
+                |_| true,
+            )
+            .unwrap();
+        let mut stores = LootStores::new();
+        stores.insert(LootStoreKind::Fishing, fishing_store);
+        session.set_loot_stores(Arc::new(stores));
+
+        session
+            .open_represented_fishing_node_loot_like_cpp(gameobject_guid, 77, true)
+            .await;
+
+        let loot = session.loot_table.get(&gameobject_guid).unwrap();
+        assert_eq!(loot.loot_type, LOOT_TYPE_FISHING_JUNK_LIKE_CPP);
+        assert_eq!(loot.items.len(), 1);
+        assert_eq!(loot.items[0].item_id, item_id);
+        assert!(session.is_active_loot_guid(gameobject_guid));
     }
 
     #[tokio::test]

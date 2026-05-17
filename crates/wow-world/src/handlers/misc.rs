@@ -30,12 +30,13 @@ use wow_packet::packets::item::{
     GetItemPurchaseData, ItemPurchaseContents, ItemPurchaseRefundCurrency, ItemPurchaseRefundItem,
     SetItemPurchaseData,
 };
+use wow_packet::packets::loot::{LOOT_TYPE_FISHING_JUNK_LIKE_CPP, LOOT_TYPE_FISHING_LIKE_CPP};
 use wow_packet::packets::misc::{
     MountSetFavorite, RatedPvpInfo, RequestCemeteryListResponse, TaxiNodeStatusPkt,
 };
 
 use crate::handlers::loot::represented_gameobject_interaction_distance_like_cpp;
-use crate::session::RepresentedGameObjectAccessLikeCpp;
+use crate::session::{RepresentedGameObjectAccessLikeCpp, RepresentedGameObjectUseEffect};
 
 // ── inventory registrations ───────────────────────────────────────────────────
 
@@ -1247,7 +1248,42 @@ impl crate::session::WorldSession {
                 return;
             }
             GAMEOBJECT_TYPE_FISHING_NODE => {
+                let effect_start = self.represented_gameobject_use_effects.len();
                 self.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid);
+                let (_, area_id) = self.player_zone_area_like_cpp();
+                let loot_request = self
+                    .represented_gameobject_use_effects
+                    .get(effect_start..)
+                    .unwrap_or(&[])
+                    .iter()
+                    .rev()
+                    .find_map(|effect| match effect {
+                        RepresentedGameObjectUseEffect::FishingLootRequested {
+                            gameobject_guid: effect_guid,
+                            loot_type,
+                            ..
+                        } if *effect_guid == gameobject_guid => Some(*loot_type),
+                        _ => None,
+                    });
+                match loot_request {
+                    Some(LOOT_TYPE_FISHING_LIKE_CPP) => {
+                        self.open_represented_fishing_node_loot_like_cpp(
+                            gameobject_guid,
+                            area_id,
+                            false,
+                        )
+                        .await;
+                    }
+                    Some(LOOT_TYPE_FISHING_JUNK_LIKE_CPP) => {
+                        self.open_represented_fishing_node_loot_like_cpp(
+                            gameobject_guid,
+                            area_id,
+                            true,
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
                 return;
             }
             GAMEOBJECT_TYPE_RITUAL => {
