@@ -538,6 +538,7 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub chest_personal_loot_id: Option<u32>,
     pub map_id: Option<u16>,
     pub position: Option<wow_core::Position>,
+    pub go_anim_progress: u8,
     pub display_id: Option<u32>,
     pub scale: f32,
     pub rotation: [f32; 4],
@@ -709,6 +710,7 @@ impl Default for RepresentedGameObjectUseState {
             chest_personal_loot_id: None,
             map_id: None,
             position: None,
+            go_anim_progress: 255,
             display_id: None,
             scale: 1.0,
             rotation: [0.0, 0.0, 0.0, 1.0],
@@ -3738,6 +3740,17 @@ impl WorldSession {
         state.display_id = (display_id != 0).then_some(display_id);
         state.scale = scale;
         state.rotation = rotation;
+    }
+
+    pub(crate) fn record_represented_gameobject_anim_progress_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        anim_progress: u8,
+    ) {
+        self.represented_gameobject_use_states
+            .entry(guid)
+            .or_default()
+            .go_anim_progress = anim_progress;
     }
 
     pub(crate) fn canonical_gameobject_access_like_cpp(
@@ -11277,21 +11290,36 @@ impl WorldSession {
                 );
             }
         } else {
-            let state = self
-                .represented_gameobject_use_states
-                .entry(gameobject_guid)
-                .or_default();
-            state.gameobject_flags |= wow_entities::GO_FLAG_IN_USE;
-            state.loot_state = Some(wow_entities::LootState::Activated);
-            state.loot_state_unit_guid = player_guid;
-            let go_state = if source.custom_anim != 0 {
-                None
-            } else {
-                state.go_state = Some(wow_entities::GoState::Active);
-                Some(wow_entities::GoState::Active)
+            let (go_state, custom_anim_progress) = {
+                let state = self
+                    .represented_gameobject_use_states
+                    .entry(gameobject_guid)
+                    .or_default();
+                state.gameobject_flags |= wow_entities::GO_FLAG_IN_USE;
+                state.loot_state = Some(wow_entities::LootState::Activated);
+                state.loot_state_unit_guid = player_guid;
+                let custom_anim_progress = if source.custom_anim != 0 {
+                    Some(u32::from(state.go_anim_progress))
+                } else {
+                    state.go_state = Some(wow_entities::GoState::Active);
+                    None
+                };
+                state.cooldown_until =
+                    Some(Instant::now() + Duration::from_millis(u64::from(source.auto_close_ms)));
+                (
+                    custom_anim_progress
+                        .is_none()
+                        .then_some(wow_entities::GoState::Active),
+                    custom_anim_progress,
+                )
             };
-            state.cooldown_until =
-                Some(Instant::now() + Duration::from_millis(u64::from(source.auto_close_ms)));
+            if let Some(custom_anim) = custom_anim_progress {
+                self.send_packet(&wow_packet::packets::misc::GameObjectCustomAnim {
+                    object_guid: gameobject_guid,
+                    custom_anim,
+                    play_as_despawn: false,
+                });
+            }
             self.represented_gameobject_use_effects.push(
                 RepresentedGameObjectUseEffect::GooberUsed {
                     gameobject_guid,
@@ -25125,10 +25153,11 @@ mod tests {
 
     #[test]
     fn gameobject_use_goober_state_branch_matches_cpp_custom_anim_and_go_cast() {
-        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let (mut session, _pkt_tx, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 13);
+        session.record_represented_gameobject_anim_progress_like_cpp(gameobject_guid, 123);
 
         assert!(session.use_represented_gameobject_goober_state_like_cpp(
             gameobject_guid,
@@ -25147,6 +25176,13 @@ mod tests {
             .get(&gameobject_guid)
             .unwrap();
         assert_eq!(state.go_state, None);
+        let mut expected = (ServerOpcodes::GameObjectCustomAnim as u16)
+            .to_le_bytes()
+            .to_vec();
+        expected.extend_from_slice(&gameobject_guid.to_raw_bytes());
+        expected.extend_from_slice(&123_u32.to_le_bytes());
+        expected.push(0x00);
+        assert_eq!(send_rx.try_recv().unwrap(), expected);
         assert_eq!(
             session.represented_gameobject_use_effects,
             vec![

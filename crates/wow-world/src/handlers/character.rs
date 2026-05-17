@@ -3789,6 +3789,7 @@ impl WorldSession {
                     scale,
                     [rot0, rot1, rot2, rot3],
                 );
+                self.record_represented_gameobject_anim_progress_like_cpp(guid, anim_progress);
 
                 if !go_result.next_row() {
                     break;
@@ -4384,6 +4385,7 @@ impl WorldSession {
                 scale,
                 [rot0, rot1, rot2, rot3],
             );
+            self.record_represented_gameobject_anim_progress_like_cpp(guid, anim_progress);
 
             if !result.next_row() {
                 break;

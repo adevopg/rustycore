@@ -129,6 +129,28 @@ impl ServerPacket for GameObjectInteraction {
     }
 }
 
+// ── GameObjectCustomAnim (SMSG 0x25c4) ───────────────────────────────
+
+/// Broadcasts a custom animation for a gameobject.
+pub struct GameObjectCustomAnim {
+    pub object_guid: ObjectGuid,
+    pub custom_anim: u32,
+    pub play_as_despawn: bool,
+}
+
+impl ServerPacket for GameObjectCustomAnim {
+    const OPCODE: ServerOpcodes = ServerOpcodes::GameObjectCustomAnim;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        for byte in self.object_guid.to_raw_bytes() {
+            pkt.write_uint8(byte);
+        }
+        pkt.write_uint32(self.custom_anim);
+        pkt.write_bit(self.play_as_despawn);
+        pkt.flush_bits();
+    }
+}
+
 // ── TriggerCinematic (SMSG 0x27ca) ──────────────────────────────────
 
 /// Starts a cinematic sequence for the player.
@@ -3513,6 +3535,41 @@ mod tests {
         assert_eq!(&bytes[2..18], &guid.to_raw_bytes());
         assert_eq!(&bytes[18..22], &40_i32.to_le_bytes());
         assert_eq!(bytes.len(), 22);
+    }
+
+    #[test]
+    fn gameobject_custom_anim_writes_guid_anim_and_despawn_bit_like_cpp() {
+        let guid = ObjectGuid::create_world_object(
+            wow_core::guid::HighGuid::GameObject,
+            0,
+            1,
+            571,
+            0,
+            777,
+            23,
+        );
+        let bytes = GameObjectCustomAnim {
+            object_guid: guid,
+            custom_anim: 255,
+            play_as_despawn: false,
+        }
+        .to_bytes();
+        assert_eq!(
+            bytes[0..2],
+            (ServerOpcodes::GameObjectCustomAnim as u16).to_le_bytes()
+        );
+        assert_eq!(&bytes[2..18], &guid.to_raw_bytes());
+        assert_eq!(&bytes[18..22], &255_u32.to_le_bytes());
+        assert_eq!(bytes[22], 0x00);
+        assert_eq!(bytes.len(), 23);
+
+        let despawn_bytes = GameObjectCustomAnim {
+            object_guid: guid,
+            custom_anim: 7,
+            play_as_despawn: true,
+        }
+        .to_bytes();
+        assert_eq!(despawn_bytes[22], 0x80);
     }
 
     #[test]
