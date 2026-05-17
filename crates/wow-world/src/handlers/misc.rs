@@ -13,10 +13,10 @@ use wow_database::{SqlTransaction, WorldStatements};
 use wow_entities::{
     GAMEOBJECT_TYPE_BARBER_CHAIR, GAMEOBJECT_TYPE_BUTTON, GAMEOBJECT_TYPE_CAMERA,
     GAMEOBJECT_TYPE_CAPTURE_POINT, GAMEOBJECT_TYPE_CHAIR, GAMEOBJECT_TYPE_DOOR,
-    GAMEOBJECT_TYPE_FISHING_HOLE, GAMEOBJECT_TYPE_GATHERING_NODE, GAMEOBJECT_TYPE_GOOBER,
-    GAMEOBJECT_TYPE_ITEM_FORGE, GAMEOBJECT_TYPE_QUESTGIVER, GAMEOBJECT_TYPE_SPELL_FOCUS,
-    GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK,
-    GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
+    GAMEOBJECT_TYPE_FISHING_HOLE, GAMEOBJECT_TYPE_FLAGDROP, GAMEOBJECT_TYPE_FLAGSTAND,
+    GAMEOBJECT_TYPE_GATHERING_NODE, GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_ITEM_FORGE,
+    GAMEOBJECT_TYPE_QUESTGIVER, GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER,
+    GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK, GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
@@ -1299,6 +1299,27 @@ impl crate::session::WorldSession {
                     self.use_represented_gameobject_capture_point_like_cpp(
                         gameobject_guid,
                         player_guid,
+                        source,
+                    );
+                }
+                return;
+            }
+            GAMEOBJECT_TYPE_FLAGSTAND => {
+                if let Some(source) = template.flag_stand_use_source_like_cpp() {
+                    self.use_represented_gameobject_flagstand_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        source,
+                    );
+                }
+                return;
+            }
+            GAMEOBJECT_TYPE_FLAGDROP => {
+                if let Some(source) = template.flag_drop_use_source_like_cpp() {
+                    self.use_represented_gameobject_flagdrop_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        gameobject_guid.entry(),
                         source,
                     );
                 }

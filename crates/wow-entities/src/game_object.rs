@@ -189,6 +189,20 @@ pub struct CapturePointUseSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlagStandUseSource {
+    pub pickup_spell_id: u32,
+    pub return_aura_id: u32,
+    pub return_spell_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlagDropUseSource {
+    pub event_id: u32,
+    pub pickup_spell_id: u32,
+    pub expire_duration_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct QuestgiverUseSource {
     pub gossip_id: u32,
 }
@@ -431,6 +445,30 @@ impl GameObjectTemplateData {
             world_state_id: self.data[10],
             contested_event_horde: self.data[11],
             contested_event_alliance: self.data[14],
+        })
+    }
+
+    pub const fn flag_stand_use_source_like_cpp(&self) -> Option<FlagStandUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_FLAGSTAND {
+            return None;
+        }
+
+        Some(FlagStandUseSource {
+            pickup_spell_id: self.data[1],
+            return_aura_id: self.data[3],
+            return_spell_id: self.data[4],
+        })
+    }
+
+    pub const fn flag_drop_use_source_like_cpp(&self) -> Option<FlagDropUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_FLAGDROP {
+            return None;
+        }
+
+        Some(FlagDropUseSource {
+            event_id: self.data[1],
+            pickup_spell_id: self.data[2],
+            expire_duration_ms: self.data[6],
         })
     }
 
@@ -1466,6 +1504,42 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
                 .capture_point_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn battleground_flag_use_sources_use_cpp_data_indices() {
+        let mut stand = [0; MAX_GAMEOBJECT_DATA];
+        stand[1] = 111;
+        stand[3] = 333;
+        stand[4] = 444;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_FLAGSTAND, stand)
+                .flag_stand_use_source_like_cpp(),
+            Some(FlagStandUseSource {
+                pickup_spell_id: 111,
+                return_aura_id: 333,
+                return_spell_id: 444,
+            })
+        );
+
+        let mut drop = [0; MAX_GAMEOBJECT_DATA];
+        drop[1] = 222;
+        drop[2] = 333;
+        drop[6] = 666;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_FLAGDROP, drop)
+                .flag_drop_use_source_like_cpp(),
+            Some(FlagDropUseSource {
+                event_id: 222,
+                pickup_spell_id: 333,
+                expire_duration_ms: 666,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, drop)
+                .flag_drop_use_source_like_cpp(),
             None
         );
     }

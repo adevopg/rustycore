@@ -193,6 +193,10 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
     },
+    RemoveStealthOrInvisibilityAuras {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    },
     ClearPlayerTalkMenus {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -336,6 +340,25 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         contested_event_horde: u32,
         contested_event_alliance: u32,
     },
+    BattlegroundFlagStandClicked {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        pickup_spell_id: u32,
+        return_aura_id: u32,
+        return_spell_id: u32,
+    },
+    BattlegroundFlagDropClicked {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        gameobject_entry: u32,
+        click_target: BattlegroundFlagDropClickTarget,
+        event_id: u32,
+        pickup_spell_id: u32,
+        expire_duration_ms: u32,
+    },
+    GameObjectDeleted {
+        gameobject_guid: ObjectGuid,
+    },
     SpellcasterPartyOnlyRejected {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -349,6 +372,13 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         player_guid: ObjectGuid,
         spell_id: u32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BattlegroundFlagDropClickTarget {
+    None,
+    WarsongGulch,
+    EyeOfTheStorm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10235,6 +10265,76 @@ impl WorldSession {
                 contested_event_alliance: source.contested_event_alliance,
             },
         );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_flagstand_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::FlagStandUseSource,
+    ) -> bool {
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                gameobject_guid,
+                player_guid,
+            },
+        );
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::BattlegroundFlagStandClicked {
+                gameobject_guid,
+                player_guid,
+                pickup_spell_id: source.pickup_spell_id,
+                return_aura_id: source.return_aura_id,
+                return_spell_id: source.return_spell_id,
+            },
+        );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_flagdrop_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        gameobject_entry: u32,
+        source: wow_entities::FlagDropUseSource,
+    ) -> bool {
+        let click_target = match gameobject_entry {
+            179785 | 179786 => BattlegroundFlagDropClickTarget::WarsongGulch,
+            184142 => BattlegroundFlagDropClickTarget::EyeOfTheStorm,
+            _ => BattlegroundFlagDropClickTarget::None,
+        };
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                gameobject_guid,
+                player_guid,
+            },
+        );
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::BattlegroundFlagDropClicked {
+                gameobject_guid,
+                player_guid,
+                gameobject_entry,
+                click_target,
+                event_id: source.event_id,
+                pickup_spell_id: source.pickup_spell_id,
+                expire_duration_ms: source.expire_duration_ms,
+            },
+        );
+        if source.event_id != 0 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::TriggerGameEvent {
+                    gameobject_guid,
+                    player_guid,
+                    event_id: source.event_id,
+                },
+            );
+        }
+        self.represented_gameobject_use_effects
+            .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
 
         true
     }
@@ -22795,6 +22895,121 @@ mod tests {
                     contested_event_horde: 456,
                     contested_event_alliance: 789,
                 }
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_flagstand_records_battleground_click_hook_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 26);
+
+        assert!(session.use_represented_gameobject_flagstand_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::FlagStandUseSource {
+                pickup_spell_id: 11,
+                return_aura_id: 33,
+                return_spell_id: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::BattlegroundFlagStandClicked {
+                    gameobject_guid,
+                    player_guid,
+                    pickup_spell_id: 11,
+                    return_aura_id: 33,
+                    return_spell_id: 44,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_flagdrop_triggers_event_and_delete_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 27);
+
+        assert!(session.use_represented_gameobject_flagdrop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            179785,
+            wow_entities::FlagDropUseSource {
+                event_id: 22,
+                pickup_spell_id: 33,
+                expire_duration_ms: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::BattlegroundFlagDropClicked {
+                    gameobject_guid,
+                    player_guid,
+                    gameobject_entry: 179785,
+                    click_target: BattlegroundFlagDropClickTarget::WarsongGulch,
+                    event_id: 22,
+                    pickup_spell_id: 33,
+                    expire_duration_ms: 44,
+                },
+                RepresentedGameObjectUseEffect::TriggerGameEvent {
+                    gameobject_guid,
+                    player_guid,
+                    event_id: 22,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_flagdrop_unknown_entry_keeps_delete_without_bg_click_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 27);
+
+        assert!(session.use_represented_gameobject_flagdrop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            1,
+            wow_entities::FlagDropUseSource {
+                event_id: 0,
+                pickup_spell_id: 33,
+                expire_duration_ms: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::BattlegroundFlagDropClicked {
+                    gameobject_guid,
+                    player_guid,
+                    gameobject_entry: 1,
+                    click_target: BattlegroundFlagDropClickTarget::None,
+                    event_id: 0,
+                    pickup_spell_id: 33,
+                    expire_duration_ms: 44,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
             ]
         );
     }
