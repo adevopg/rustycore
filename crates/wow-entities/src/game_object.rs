@@ -174,6 +174,12 @@ pub struct UiLinkUseSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemForgeUseSource {
+    pub condition_id: u32,
+    pub forge_type: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct QuestgiverUseSource {
     pub gossip_id: u32,
 }
@@ -392,6 +398,17 @@ impl GameObjectTemplateData {
 
         Some(UiLinkUseSource {
             ui_link_type: self.data[0],
+        })
+    }
+
+    pub const fn item_forge_use_source_like_cpp(&self) -> Option<ItemForgeUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_ITEM_FORGE {
+            return None;
+        }
+
+        Some(ItemForgeUseSource {
+            condition_id: self.data[0],
+            forge_type: self.data[5],
         })
     }
 
@@ -1381,6 +1398,27 @@ mod tests {
         );
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data).ui_link_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn item_forge_use_source_uses_cpp_data_indices() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[0] = 77;
+        data[5] = 4;
+
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_ITEM_FORGE, data)
+                .item_forge_use_source_like_cpp(),
+            Some(ItemForgeUseSource {
+                condition_id: 77,
+                forge_type: 4,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+                .item_forge_use_source_like_cpp(),
             None
         );
     }

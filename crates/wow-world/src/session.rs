@@ -322,6 +322,12 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         player_guid: ObjectGuid,
         ui_link_type: u32,
     },
+    ItemForgeUsed {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        condition_id: u32,
+        forge_type: u32,
+    },
     SpellcasterPartyOnlyRejected {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -10181,6 +10187,24 @@ impl WorldSession {
                 gameobject_guid,
                 player_guid,
                 ui_link_type: source.ui_link_type,
+            },
+        );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_item_forge_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::ItemForgeUseSource,
+    ) -> bool {
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::ItemForgeUsed {
+                gameobject_guid,
+                player_guid,
+                condition_id: source.condition_id,
+                forge_type: source.forge_type,
             },
         );
 
@@ -22685,6 +22709,32 @@ mod tests {
                 gameobject_guid,
                 player_guid,
                 ui_link_type: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_item_forge_records_condition_checked_noop_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 24);
+
+        assert!(session.use_represented_gameobject_item_forge_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::ItemForgeUseSource {
+                condition_id: 77,
+                forge_type: 4,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::ItemForgeUsed {
+                gameobject_guid,
+                player_guid,
+                condition_id: 77,
+                forge_type: 4,
             }]
         );
     }
