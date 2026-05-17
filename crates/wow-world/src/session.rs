@@ -1567,6 +1567,11 @@ pub(crate) enum RepresentedCreatureKillEventLikeCpp {
         can_skin: bool,
         skinnable: bool,
     },
+    CreatureOnHealthDepletedAi {
+        creature_guid: ObjectGuid,
+        attacker_guid: ObjectGuid,
+        is_kill: bool,
+    },
     CreatureJustDiedAi {
         creature_guid: ObjectGuid,
         killer_guid: ObjectGuid,
@@ -9605,6 +9610,13 @@ impl WorldSession {
             },
         );
         self.represented_creature_kill_events_like_cpp.push(
+            RepresentedCreatureKillEventLikeCpp::CreatureOnHealthDepletedAi {
+                creature_guid,
+                attacker_guid,
+                is_kill: true,
+            },
+        );
+        self.represented_creature_kill_events_like_cpp.push(
             RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                 creature_guid,
                 killer_guid: attacker_guid,
@@ -14498,6 +14510,11 @@ mod tests {
                     can_skin: false,
                     skinnable: false,
                 },
+                RepresentedCreatureKillEventLikeCpp::CreatureOnHealthDepletedAi {
+                    creature_guid: guid,
+                    attacker_guid: player,
+                    is_kill: true,
+                },
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
                     killer_guid: player,
@@ -14617,6 +14634,11 @@ mod tests {
                     lootable: true,
                     can_skin: false,
                     skinnable: false,
+                },
+                RepresentedCreatureKillEventLikeCpp::CreatureOnHealthDepletedAi {
+                    creature_guid: guid,
+                    attacker_guid: player,
+                    is_kill: true,
                 },
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
@@ -14990,6 +15012,11 @@ mod tests {
                     lootable: true,
                     can_skin: false,
                     skinnable: false,
+                },
+                RepresentedCreatureKillEventLikeCpp::CreatureOnHealthDepletedAi {
+                    creature_guid: guid,
+                    attacker_guid: player,
+                    is_kill: true,
                 },
                 RepresentedCreatureKillEventLikeCpp::CreatureJustDiedAi {
                     creature_guid: guid,
