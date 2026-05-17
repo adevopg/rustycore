@@ -51,7 +51,7 @@ use wow_data::{
     SpellRangeStore, SpellStore, SummonPropertiesEntry, VEHICLE_SEAT_FLAG_CAN_ATTACK,
     VehicleAccessoryStoreLikeCpp, VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
     is_player_meeting_condition_like_cpp,
-    progression_rewards::{FactionStore, FactionTemplateStore},
+    progression_rewards::{ContentTuningStore, FactionStore, FactionTemplateStore},
 };
 use wow_database::{
     CharStatements, CharacterDatabase, LoginDatabase, PreparedStatement, SqlTransaction,
@@ -407,6 +407,14 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
         target_guid: Option<ObjectGuid>,
+    },
+    MeetingStoneLevelRejected {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        target_guid: ObjectGuid,
+        player_level: u8,
+        target_level: u8,
+        required_level: i32,
     },
     GameObjectPostUseSpellMissing {
         gameobject_guid: ObjectGuid,
@@ -1110,6 +1118,9 @@ pub struct WorldSession {
 
     // C++ PlayerCondition.db2 store used by ConditionMgr player-condition checks.
     player_condition_store: Option<Arc<PlayerConditionStore>>,
+
+    // C++ ContentTuning.db2 store used by level gates such as Meeting Stone.
+    content_tuning_store: Option<Arc<ContentTuningStore>>,
 
     // C++ DisableMgr store loaded from world.disables.
     disable_mgr: Option<Arc<DisableMgrLikeCpp>>,
@@ -1985,6 +1996,7 @@ impl WorldSession {
             loot_stores: None,
             condition_store: None,
             player_condition_store: None,
+            content_tuning_store: None,
             disable_mgr: None,
             lock_store: None,
             spell_item_enchantment_store: None,
@@ -5507,6 +5519,10 @@ impl WorldSession {
     /// Set the C++ PlayerCondition.db2 store for this session.
     pub fn set_player_condition_store(&mut self, store: Arc<PlayerConditionStore>) {
         self.player_condition_store = Some(store);
+    }
+
+    pub fn set_content_tuning_store(&mut self, store: Arc<ContentTuningStore>) {
+        self.content_tuning_store = Some(store);
     }
 
     /// Get the loaded PlayerCondition.db2 store reference.
@@ -10701,6 +10717,10 @@ impl WorldSession {
         if !target_guid.is_some_and(|target_guid| {
             target_guid != player_guid
                 && self.represented_player_is_same_raid_with_like_cpp(player_guid, target_guid)
+                && self
+                    .player_registry
+                    .as_ref()
+                    .is_some_and(|registry| registry.contains_key(&target_guid))
         }) {
             self.represented_gameobject_use_effects.push(
                 RepresentedGameObjectUseEffect::MeetingStoneTargetRejected {
@@ -10712,6 +10732,33 @@ impl WorldSession {
             return false;
         }
         let target_guid = target_guid.expect("checked above");
+        if let Some(content_tuning) = self
+            .content_tuning_store
+            .as_ref()
+            .and_then(|store| store.get(source.content_tuning_id))
+        {
+            let player_level = self.player_level_like_cpp();
+            let target_level = self
+                .player_registry
+                .as_ref()
+                .and_then(|registry| registry.get(&target_guid).map(|target| target.level))
+                .unwrap_or(0);
+            if i32::from(player_level) < content_tuning.max_level
+                || i32::from(target_level) < content_tuning.max_level
+            {
+                self.represented_gameobject_use_effects.push(
+                    RepresentedGameObjectUseEffect::MeetingStoneLevelRejected {
+                        gameobject_guid,
+                        player_guid,
+                        target_guid,
+                        player_level,
+                        target_level,
+                        required_level: content_tuning.max_level,
+                    },
+                );
+                return false;
+            }
+        }
         let spell_id = if gameobject_entry == 194097 {
             61994
         } else {
@@ -24042,6 +24089,12 @@ mod tests {
         group_registry.insert(group_guid, group);
         session.group_guid = Some(group_guid);
         session.set_group_registry(group_registry, Arc::new(PendingInvites::default()));
+        let player_registry = Arc::new(PlayerRegistry::default());
+        let (target_tx, _target_rx) = flume::bounded(1);
+        let mut target_info = broadcast_info(target_guid, target_tx);
+        target_info.level = 80;
+        player_registry.insert(target_guid, target_info);
+        session.set_player_registry(player_registry);
 
         assert!(session.use_represented_gameobject_meeting_stone_like_cpp(
             gameobject_guid,
@@ -24050,6 +24103,7 @@ mod tests {
             wow_entities::MeetingStoneUseSource {
                 area_id: 456,
                 prevent_unfriendly_outside_instances: true,
+                content_tuning_id: 0,
             },
         ));
         assert_eq!(
@@ -24096,6 +24150,7 @@ mod tests {
         let source = wow_entities::MeetingStoneUseSource {
             area_id: 456,
             prevent_unfriendly_outside_instances: true,
+            content_tuning_id: 0,
         };
 
         assert!(!session.use_represented_gameobject_meeting_stone_like_cpp(
@@ -24146,6 +24201,75 @@ mod tests {
                 target_guid: Some(target_guid),
             }]
         );
+    }
+
+    #[test]
+    fn gameobject_use_meeting_stone_checks_content_tuning_levels_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let target_guid = ObjectGuid::create_player(1, 100);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 23);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_level_like_cpp(19);
+        session.set_selection_guid_like_cpp(Some(target_guid));
+        session.set_content_tuning_store(Arc::new(ContentTuningStore::from_entries([
+            wow_data::progression_rewards::ContentTuningEntry {
+                id: 55,
+                min_level: 1,
+                max_level: 20,
+                flags: 0,
+                expected_stat_mod_id: 0,
+                difficulty_esm_id: 0,
+            },
+        ])));
+
+        let group_registry = Arc::new(GroupRegistry::default());
+        let mut group = GroupInfo::new(player_guid);
+        group.add_member(target_guid);
+        let group_guid = group.group_guid;
+        group_registry.insert(group_guid, group);
+        session.group_guid = Some(group_guid);
+        session.set_group_registry(group_registry, Arc::new(PendingInvites::default()));
+
+        let player_registry = Arc::new(PlayerRegistry::default());
+        let (target_tx, _target_rx) = flume::bounded(1);
+        let mut target_info = broadcast_info(target_guid, target_tx);
+        target_info.level = 20;
+        player_registry.insert(target_guid, target_info);
+        session.set_player_registry(player_registry);
+        let source = wow_entities::MeetingStoneUseSource {
+            area_id: 456,
+            prevent_unfriendly_outside_instances: true,
+            content_tuning_id: 55,
+        };
+
+        assert!(!session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            source,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::MeetingStoneLevelRejected {
+                gameobject_guid,
+                player_guid,
+                target_guid,
+                player_level: 19,
+                target_level: 20,
+                required_level: 20,
+            }]
+        );
+
+        session.represented_gameobject_use_effects.clear();
+        session.set_player_level_like_cpp(20);
+        assert!(session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            source,
+        ));
     }
 
     #[test]

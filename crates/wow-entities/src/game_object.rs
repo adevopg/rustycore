@@ -238,6 +238,7 @@ pub struct RitualUseSource {
 pub struct MeetingStoneUseSource {
     pub area_id: u32,
     pub prevent_unfriendly_outside_instances: bool,
+    pub content_tuning_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -551,6 +552,7 @@ impl GameObjectTemplateData {
         Some(MeetingStoneUseSource {
             area_id: self.data[2],
             prevent_unfriendly_outside_instances: self.data[4] != 0,
+            content_tuning_id: 0,
         })
     }
 
@@ -1701,6 +1703,7 @@ mod tests {
             Some(MeetingStoneUseSource {
                 area_id: 345,
                 prevent_unfriendly_outside_instances: true,
+                content_tuning_id: 0,
             })
         );
         assert_eq!(

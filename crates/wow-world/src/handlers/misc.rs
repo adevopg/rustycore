@@ -1364,7 +1364,8 @@ impl crate::session::WorldSession {
                 return;
             }
             GAMEOBJECT_TYPE_MEETINGSTONE => {
-                if let Some(source) = template.meeting_stone_use_source_like_cpp() {
+                if let Some(mut source) = template.meeting_stone_use_source_like_cpp() {
+                    source.content_tuning_id = result.try_read::<u32>(43).unwrap_or(0);
                     self.use_represented_gameobject_meeting_stone_like_cpp(
                         gameobject_guid,
                         player_guid,

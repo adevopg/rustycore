@@ -776,6 +776,14 @@ async fn main() -> Result<()> {
         wow_data::PlayerConditionStore::load(&data_dir, &locale)
             .context("Failed to load PlayerCondition.db2 — check DataDir and DBC.Locale config")?,
     );
+    let content_tuning_store = Arc::new(
+        wow_data::progression_rewards::ContentTuningStore::load(&data_dir, &locale)
+            .context("Failed to load ContentTuning.db2 — check DataDir and DBC.Locale config")?,
+    );
+    info!(
+        "Loaded {} content tuning rows from ContentTuning.db2",
+        content_tuning_store.len()
+    );
     let world_state_expression_store = Arc::new(
         wow_data::WorldStateExpressionStore::load(&data_dir, &locale).context(
             "Failed to load WorldStateExpression.db2 — check DataDir and DBC.Locale config",
@@ -1288,6 +1296,7 @@ async fn main() -> Result<()> {
         loot_stores: Some(Arc::clone(&loot_stores)),
         condition_store: Some(Arc::clone(&condition_store)),
         player_condition_store: Some(Arc::clone(&player_condition_store)),
+        content_tuning_store: Some(Arc::clone(&content_tuning_store)),
         disable_mgr: Some(Arc::clone(&disable_mgr)),
         lock_store: Some(Arc::clone(&lock_store)),
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
@@ -2152,6 +2161,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.player_condition_store {
         session.set_player_condition_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.content_tuning_store {
+        session.set_content_tuning_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.disable_mgr {
         session.set_disable_mgr(Arc::clone(store));
