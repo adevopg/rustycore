@@ -19,12 +19,14 @@ pub const GAMEOBJECT_TYPE_CHAIR: u32 = 7;
 pub const GAMEOBJECT_TYPE_SPELL_FOCUS: u32 = 8;
 pub const GAMEOBJECT_TYPE_TEXT: u32 = 9;
 pub const GAMEOBJECT_TYPE_GOOBER: u32 = 10;
+pub const GAMEOBJECT_TYPE_TRANSPORT: u32 = 11;
 pub const GAMEOBJECT_TYPE_AREADAMAGE: u32 = 12;
 pub const GAMEOBJECT_TYPE_CAMERA: u32 = 13;
 pub const GAMEOBJECT_TYPE_MAP_OBJECT: u32 = 14;
 pub const GAMEOBJECT_TYPE_FISHING_NODE: u32 = 17;
 pub const GAMEOBJECT_TYPE_RITUAL: u32 = 18;
 pub const GAMEOBJECT_TYPE_MAILBOX: u32 = 19;
+pub const GAMEOBJECT_TYPE_GUARDPOST: u32 = 21;
 pub const GAMEOBJECT_TYPE_SPELLCASTER: u32 = 22;
 pub const GAMEOBJECT_TYPE_MEETINGSTONE: u32 = 23;
 pub const GAMEOBJECT_TYPE_FLAGSTAND: u32 = 24;
@@ -153,9 +155,13 @@ pub struct GatheringNodeUseSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrapUseSource {
+    pub radius: u32,
     pub spell_id: u32,
     pub charges: u32,
     pub cooldown_secs: u32,
+    pub start_delay_secs: u32,
+    pub ignore_totems: bool,
+    pub check_all_units: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -186,9 +192,20 @@ pub struct ItemForgeUseSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CapturePointUseSource {
     pub capture_time_ms: u32,
+    pub assault_broadcast_horde: u32,
+    pub capture_broadcast_horde: u32,
+    pub defended_broadcast_horde: u32,
+    pub assault_broadcast_alliance: u32,
+    pub capture_broadcast_alliance: u32,
+    pub defended_broadcast_alliance: u32,
     pub world_state_id: u32,
     pub contested_event_horde: u32,
+    pub capture_event_horde: u32,
+    pub defended_event_horde: u32,
     pub contested_event_alliance: u32,
+    pub capture_event_alliance: u32,
+    pub defended_event_alliance: u32,
+    pub spell_visual_ids: [u32; 5],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -244,6 +261,13 @@ pub struct MeetingStoneUseSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct QuestgiverUseSource {
     pub gossip_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GuardPostUseSource {
+    pub creature_id: u32,
+    pub charges: u32,
+    pub prefer_only_if_in_line_of_sight: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -428,9 +452,13 @@ impl GameObjectTemplateData {
         }
 
         Some(TrapUseSource {
+            radius: self.data[2],
             spell_id: self.data[3],
             charges: self.data[4],
             cooldown_secs: self.data[5],
+            start_delay_secs: self.data[7],
+            ignore_totems: self.data[14] != 0,
+            check_all_units: self.data[20] != 0,
         })
     }
 
@@ -486,9 +514,26 @@ impl GameObjectTemplateData {
 
         Some(CapturePointUseSource {
             capture_time_ms: self.data[0],
+            assault_broadcast_horde: self.data[4],
+            capture_broadcast_horde: self.data[5],
+            defended_broadcast_horde: self.data[6],
+            assault_broadcast_alliance: self.data[7],
+            capture_broadcast_alliance: self.data[8],
+            defended_broadcast_alliance: self.data[9],
             world_state_id: self.data[10],
             contested_event_horde: self.data[11],
+            capture_event_horde: self.data[12],
+            defended_event_horde: self.data[13],
             contested_event_alliance: self.data[14],
+            capture_event_alliance: self.data[15],
+            defended_event_alliance: self.data[16],
+            spell_visual_ids: [
+                self.data[17],
+                self.data[18],
+                self.data[19],
+                self.data[20],
+                self.data[21],
+            ],
         })
     }
 
@@ -591,6 +636,18 @@ impl GameObjectTemplateData {
             spell_id: self.data[0],
             charges: self.data[1],
             party_only: self.data[2] != 0,
+        })
+    }
+
+    pub const fn guard_post_use_source_like_cpp(&self) -> Option<GuardPostUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_GUARDPOST {
+            return None;
+        }
+
+        Some(GuardPostUseSource {
+            creature_id: self.data[0],
+            charges: self.data[1],
+            prefer_only_if_in_line_of_sight: self.data[2] != 0,
         })
     }
 
@@ -815,9 +872,7 @@ impl GameObject {
 
     pub fn set_spell_id(&mut self, spell_id: u32) {
         self.spell_id = spell_id;
-        if spell_id != 0 {
-            self.spawned_by_default = false;
-        }
+        self.spawned_by_default = false;
     }
 
     pub const fn respawn_time(&self) -> i64 {
@@ -1488,16 +1543,24 @@ mod tests {
     #[test]
     fn trap_use_source_uses_cpp_data_indices() {
         let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[2] = 20;
         data[3] = 123;
         data[4] = 1;
         data[5] = 9;
+        data[7] = 3;
+        data[14] = 1;
+        data[20] = 1;
 
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_TRAP, data).trap_use_source_like_cpp(),
             Some(TrapUseSource {
+                radius: 20,
                 spell_id: 123,
                 charges: 1,
                 cooldown_secs: 9,
+                start_delay_secs: 3,
+                ignore_totems: true,
+                check_all_units: true,
             })
         );
         assert_eq!(
@@ -1592,18 +1655,44 @@ mod tests {
     fn capture_point_use_source_uses_cpp_data_indices() {
         let mut data = [0; MAX_GAMEOBJECT_DATA];
         data[0] = 60_000;
+        data[4] = 401;
+        data[5] = 501;
+        data[6] = 601;
+        data[7] = 701;
+        data[8] = 801;
+        data[9] = 901;
         data[10] = 123;
         data[11] = 456;
+        data[12] = 1200;
+        data[13] = 1300;
         data[14] = 789;
+        data[15] = 1500;
+        data[16] = 1600;
+        data[17] = 1700;
+        data[18] = 1800;
+        data[19] = 1900;
+        data[20] = 2000;
+        data[21] = 2100;
 
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CAPTURE_POINT, data)
                 .capture_point_use_source_like_cpp(),
             Some(CapturePointUseSource {
                 capture_time_ms: 60_000,
+                assault_broadcast_horde: 401,
+                capture_broadcast_horde: 501,
+                defended_broadcast_horde: 601,
+                assault_broadcast_alliance: 701,
+                capture_broadcast_alliance: 801,
+                defended_broadcast_alliance: 901,
                 world_state_id: 123,
                 contested_event_horde: 456,
+                capture_event_horde: 1200,
+                defended_event_horde: 1300,
                 contested_event_alliance: 789,
+                capture_event_alliance: 1500,
+                defended_event_alliance: 1600,
+                spell_visual_ids: [1700, 1800, 1900, 2000, 2100],
             })
         );
         assert_eq!(
@@ -1770,6 +1859,29 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
                 .spellcaster_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn guard_post_use_source_uses_cpp_data_indices() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[0] = 4321;
+        data[1] = 5;
+        data[2] = 1;
+
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_GUARDPOST, data)
+                .guard_post_use_source_like_cpp(),
+            Some(GuardPostUseSource {
+                creature_id: 4321,
+                charges: 5,
+                prefer_only_if_in_line_of_sight: true,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+                .guard_post_use_source_like_cpp(),
             None
         );
     }
@@ -2047,6 +2159,11 @@ mod tests {
         assert!(go.spawned_by_default());
         assert_eq!(go.cooldown_time(), 77);
         assert!(go.respawn_compatibility_mode());
+
+        go.set_spawned_by_default(true);
+        go.set_spell_id(0);
+        assert_eq!(go.spell_id(), 0);
+        assert!(!go.spawned_by_default());
     }
 
     #[test]

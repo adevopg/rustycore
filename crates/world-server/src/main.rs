@@ -966,6 +966,10 @@ async fn main() -> Result<()> {
         wow_data::SkillStore::load(&data_dir, &locale)
             .context("Failed to load SkillLineAbility/SkillRaceClassInfo DB2 files")?,
     );
+    let skill_line_store = Arc::new(
+        wow_data::SkillLineStore::load(&data_dir, &locale)
+            .context("Failed to load SkillLine.db2")?,
+    );
 
     // Load spell metadata (cast time, cooldown, effects, etc.) — Phase 2
     let mut spell_store = wow_data::SpellStore::load(&hotfix_db)
@@ -1307,6 +1311,7 @@ async fn main() -> Result<()> {
         spell_item_enchantment_store: Some(Arc::clone(&spell_item_enchantment_store)),
         hotfix_blob_cache: Some(Arc::clone(&hotfix_blob_cache)),
         skill_store: Some(Arc::clone(&skill_store)),
+        skill_line_store: Some(Arc::clone(&skill_line_store)),
         spell_store: Some(Arc::clone(&spell_store)),
         spell_misc_store: Some(Arc::clone(&spell_misc_store)),
         spell_range_store: Some(Arc::clone(&spell_range_store)),
@@ -2185,6 +2190,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.skill_store {
         session.set_skill_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.skill_line_store {
+        session.set_skill_line_store(Arc::clone(store));
     }
     if let Some(ref store) = resources.spell_store {
         session.set_spell_store(Arc::clone(store));

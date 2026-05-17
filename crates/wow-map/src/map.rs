@@ -1105,6 +1105,17 @@ where
         record.game_object()
     }
 
+    pub fn get_typed_game_object_mut(&mut self, guid: ObjectGuid) -> Option<&mut GameObject> {
+        let record = self.map_objects.get_mut(&guid)?;
+        if !matches!(
+            record.kind(),
+            AccessorObjectKind::GameObject | AccessorObjectKind::Transport
+        ) {
+            return None;
+        }
+        record.game_object_mut()
+    }
+
     pub fn get_typed_player(&self, guid: ObjectGuid) -> Option<&Player> {
         let record = self.map_object_record(guid)?;
         if record.kind() != AccessorObjectKind::Player {

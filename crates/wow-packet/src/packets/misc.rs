@@ -6,7 +6,7 @@
 //! Miscellaneous login-sequence packets sent to the client during character login.
 
 use wow_constants::{ClientOpcodes, ServerOpcodes};
-use wow_core::ObjectGuid;
+use wow_core::{ObjectGuid, Position};
 
 use crate::world_packet::PacketError;
 use crate::{ClientPacket, ServerPacket, WorldPacket};
@@ -164,6 +164,35 @@ impl ServerPacket for GameObjectDespawn {
     fn write(&self, pkt: &mut WorldPacket) {
         for byte in self.object_guid.to_raw_bytes() {
             pkt.write_uint8(byte);
+        }
+    }
+}
+
+// ── UpdateCapturePoint (SMSG 0xbadd) ───────────────────────────────
+
+/// C++ `WorldPackets::Battleground::UpdateCapturePoint`.
+pub struct UpdateCapturePoint {
+    pub guid: ObjectGuid,
+    pub position: Position,
+    pub state: u8,
+    pub capture_time_ms: u32,
+    pub capture_total_duration_ms: u32,
+}
+
+impl ServerPacket for UpdateCapturePoint {
+    const OPCODE: ServerOpcodes = ServerOpcodes::UpdateCapturePoint;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        for byte in self.guid.to_raw_bytes() {
+            pkt.write_uint8(byte);
+        }
+        pkt.write_float(self.position.x);
+        pkt.write_float(self.position.y);
+        pkt.write_uint8(self.state);
+
+        if matches!(self.state, 2 | 3) {
+            pkt.write_uint32(self.capture_time_ms);
+            pkt.write_uint32(self.capture_total_duration_ms);
         }
     }
 }
@@ -3624,6 +3653,49 @@ mod tests {
         );
         assert_eq!(&bytes[2..18], &guid.to_raw_bytes());
         assert_eq!(bytes.len(), 18);
+    }
+
+    #[test]
+    fn update_capture_point_writes_cpp_capture_point_info() {
+        let guid = ObjectGuid::create_world_object(
+            wow_core::guid::HighGuid::GameObject,
+            0,
+            1,
+            571,
+            0,
+            777,
+            24,
+        );
+        let bytes = UpdateCapturePoint {
+            guid,
+            position: Position::new(12.5, 34.25, 56.0, 1.0),
+            state: 2,
+            capture_time_ms: 15_000,
+            capture_total_duration_ms: 60_000,
+        }
+        .to_bytes();
+        assert_eq!(
+            bytes[0..2],
+            (ServerOpcodes::UpdateCapturePoint as u16).to_le_bytes()
+        );
+        assert_eq!(&bytes[2..18], &guid.to_raw_bytes());
+        assert_eq!(&bytes[18..22], &12.5_f32.to_le_bytes());
+        assert_eq!(&bytes[22..26], &34.25_f32.to_le_bytes());
+        assert_eq!(bytes[26], 2);
+        assert_eq!(&bytes[27..31], &15_000_u32.to_le_bytes());
+        assert_eq!(&bytes[31..35], &60_000_u32.to_le_bytes());
+        assert_eq!(bytes.len(), 35);
+
+        let captured_bytes = UpdateCapturePoint {
+            guid,
+            position: Position::new(12.5, 34.25, 56.0, 1.0),
+            state: 4,
+            capture_time_ms: 0,
+            capture_total_duration_ms: 60_000,
+        }
+        .to_bytes();
+        assert_eq!(captured_bytes[26], 4);
+        assert_eq!(captured_bytes.len(), 27);
     }
 
     #[test]

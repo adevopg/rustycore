@@ -578,6 +578,8 @@ impl WorldSession {
         state.chest_restock_time_secs = Some(source.chest_restock_time_secs);
         state.chest_consumable = Some(source.chest_consumable);
         state.chest_personal_loot_id = Some(source.personal_loot_id);
+        state.linked_trap_entry =
+            (source.linked_trap_entry != 0).then_some(source.linked_trap_entry);
     }
 
     fn record_represented_gathering_node_runtime_state_like_cpp(
@@ -600,6 +602,8 @@ impl WorldSession {
                 state.go_state = Some(GoState::Active);
                 state.dynamic_flags |= GO_DYNFLAG_LO_NO_INTERACT;
             }
+            state.linked_trap_entry =
+                (source.linked_trap_entry != 0).then_some(source.linked_trap_entry);
         }
 
         let activated_now = self
@@ -610,6 +614,9 @@ impl WorldSession {
                 .get_mut(&gameobject_guid)
             {
                 state.despawn_delay_secs = Some(source.despawn_delay_secs);
+                state.despawn_delay_until = Some(
+                    Instant::now() + Duration::from_secs(u64::from(source.despawn_delay_secs)),
+                );
             }
         }
 
@@ -4637,6 +4644,16 @@ impl WorldSession {
             .map(|object| object.position())
     }
 
+    fn canonical_gameobject_owner_for_loot_like_cpp(&self, guid: ObjectGuid) -> Option<ObjectGuid> {
+        let manager = self.canonical_map_manager.as_ref()?;
+        let manager = manager.lock().ok()?;
+        let map = manager
+            .find_map(u32::from(self.player_map_id_like_cpp()), 0)?
+            .map();
+        let owner_guid = map.get_typed_game_object(guid)?.owner_guid();
+        (!owner_guid.is_empty()).then_some(owner_guid)
+    }
+
     fn represented_creature_loot_state_like_cpp(
         &mut self,
         guid: ObjectGuid,
@@ -4683,6 +4700,7 @@ impl WorldSession {
                 AccessorObjectKind::Transport,
             ],
         );
+        let canonical_owner = self.canonical_gameobject_owner_for_loot_like_cpp(guid);
         let represented_state = self.represented_gameobject_use_states.get(&guid);
         if canonical_position.is_none()
             && represented_state.and_then(|state| state.position).is_none()
@@ -4703,7 +4721,8 @@ impl WorldSession {
             interact_radius_override: represented_state
                 .and_then(|state| state.interact_radius_override),
             lock_id: represented_state.and_then(|state| state.lock_id),
-            owner_guid: represented_state.and_then(|state| state.owner_guid),
+            owner_guid: canonical_owner
+                .or_else(|| represented_state.and_then(|state| state.owner_guid)),
         })
     }
 
@@ -4843,6 +4862,22 @@ impl WorldSession {
                 state.loot_state_unit_guid = ObjectGuid::EMPTY;
             }
             Some(GAMEOBJECT_TYPE_GATHERING_NODE) if fully_looted => {}
+            Some(GAMEOBJECT_TYPE_CHEST)
+                if fully_looted
+                    && state.chest_consumable == Some(false)
+                    && state
+                        .chest_personal_loot_id
+                        .is_none_or(|loot_id| loot_id == 0)
+                    && state
+                        .chest_restock_time_secs
+                        .is_some_and(|restock_time| restock_time != 0) =>
+            {
+                let restock_secs = state.chest_restock_time_secs.unwrap_or_default();
+                state.loot_state = Some(LootState::NotReady);
+                state.loot_state_unit_guid = ObjectGuid::EMPTY;
+                state.chest_restock_until =
+                    Some(Instant::now() + Duration::from_secs(u64::from(restock_secs)));
+            }
             _ if fully_looted => {
                 state.loot_state = Some(LootState::JustDeactivated);
                 state.loot_state_unit_guid = ObjectGuid::EMPTY;
@@ -4850,6 +4885,17 @@ impl WorldSession {
             _ => {
                 state.loot_state = Some(LootState::Activated);
                 state.loot_state_unit_guid = player_guid;
+                if go_type == Some(GAMEOBJECT_TYPE_CHEST)
+                    && state.chest_consumable == Some(false)
+                    && state.chest_restock_until.is_none()
+                    && state
+                        .chest_restock_time_secs
+                        .is_some_and(|restock_time| restock_time != 0)
+                {
+                    let restock_secs = state.chest_restock_time_secs.unwrap_or_default();
+                    state.chest_restock_until =
+                        Some(Instant::now() + Duration::from_secs(u64::from(restock_secs)));
+                }
             }
         }
         if go_type == Some(GAMEOBJECT_TYPE_GATHERING_NODE) {
@@ -4868,6 +4914,7 @@ impl WorldSession {
             state.per_player_despawn_secs = Some(delay_secs);
             state.per_player_despawn_until =
                 Some(Instant::now() + Duration::from_secs(u64::from(delay_secs)));
+            state.per_player_state_player_guid = Some(player_guid);
         }
     }
 
@@ -6567,7 +6614,7 @@ mod tests {
     };
     use crate::session::{
         RepresentedGameObjectSpellCaster, RepresentedGameObjectUseEffect,
-        RepresentedLootRollCriteriaEvent,
+        RepresentedLootRollCriteriaEvent, SessionState,
     };
     use rand::{SeedableRng, rngs::StdRng};
     use std::time::{Duration, Instant};
@@ -6595,8 +6642,8 @@ mod tests {
     use wow_entities::{
         AccessorObjectKind, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_FISHING_HOLE,
         GAMEOBJECT_TYPE_FISHING_NODE, GAMEOBJECT_TYPE_GATHERING_NODE, GO_DYNFLAG_LO_NO_INTERACT,
-        GameObjectLootSource, GatheringNodeUseSource, GoState, Item, ItemCreateInfo, LootState,
-        MAX_ITEM_SPELLS, WorldObject,
+        GameObject, GameObjectLootSource, GatheringNodeUseSource, GoState, Item, ItemCreateInfo,
+        LootState, MAX_ITEM_SPELLS, WorldObject,
     };
     use wow_loot::{
         GeneratedLootItem, LOOT_SLOT_TYPE_OWNER_LIKE_CPP, LootConditionRowLikeCpp, LootStore,
@@ -6683,6 +6730,23 @@ mod tests {
                 .create_world_map(map_id, instance_id)
                 .map_mut()
                 .add_to_map_like_cpp(kind, object)
+                .unwrap();
+        }
+        session.set_canonical_map_manager(manager);
+    }
+
+    fn attach_canonical_gameobject(session: &mut WorldSession, game_object: GameObject) {
+        let map_id = game_object.world().map_id();
+        let instance_id = game_object.world().instance_id();
+        let manager = Arc::new(Mutex::new(wow_map::MapManager::default()));
+        {
+            let mut manager = manager.lock().unwrap();
+            manager
+                .create_world_map(map_id, instance_id)
+                .map_mut()
+                .insert_map_object_record(
+                    wow_entities::MapObjectRecord::new_game_object(game_object).unwrap(),
+                )
                 .unwrap();
         }
         session.set_canonical_map_manager(manager);
@@ -8668,6 +8732,7 @@ mod tests {
         assert_eq!(state.loot_state, Some(LootState::Activated));
         assert_eq!(state.loot_state_unit_guid, player_guid);
         assert_eq!(state.despawn_delay_secs, Some(15));
+        assert!(state.despawn_delay_until.is_some());
         assert_eq!(
             session.represented_gameobject_use_effects,
             vec![
@@ -12974,6 +13039,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loot_item_owned_gameobject_skips_distance_from_canonical_created_by_like_cpp() {
+        let (mut session, send_rx) = make_session_with_send();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let loot_guid = test_gameobject_guid(19_036);
+        let mut game_object = GameObject::new();
+        game_object.world_mut().object_mut().create(loot_guid);
+        game_object
+            .world_mut()
+            .set_map(u32::from(session.player_map_id_like_cpp()), 0)
+            .unwrap();
+        game_object
+            .world_mut()
+            .relocate(Position::new(100.0, 0.0, 0.0, 0.0));
+        game_object.world_mut().object_mut().add_to_world();
+        game_object.set_created_by(player_guid);
+
+        session.set_player_guid(Some(player_guid));
+        session.set_player_position_like_cpp(Position::ZERO);
+        session.set_active_loot_guid(loot_guid);
+        attach_canonical_gameobject(&mut session, game_object);
+        session.loot_table.insert(
+            loot_guid,
+            CreatureLoot {
+                loot_guid,
+                coins: 0,
+                unlooted_count: 0,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 0,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
+                allowed_looters: Vec::new(),
+                items: vec![LootEntry {
+                    loot_list_id: 0,
+                    item_id: 25,
+                    quantity: 1,
+                    random_properties_id: 0,
+                    random_properties_seed: 0,
+                    item_context: 0,
+                    flags: LootEntryFlags {
+                        blocked: true,
+                        ..Default::default()
+                    },
+                    allowed_looters: vec![player_guid],
+                    roll_winner: ObjectGuid::EMPTY,
+                    ffa_looted_by: Vec::new(),
+                    taken: false,
+                }],
+                looted_by_player: false,
+            },
+        );
+
+        session
+            .handle_loot_item(loot_item_packet(loot_guid, 0))
+            .await;
+
+        let sent = send_rx.try_recv().unwrap();
+        let mut sent = WorldPacket::from_bytes(&sent);
+        assert_eq!(
+            sent.read_uint16().unwrap(),
+            wow_constants::ServerOpcodes::LootReleaseAll as u16
+        );
+        assert_eq!(sent.remaining(), 0);
+        assert!(!session.loot_table.get(&loot_guid).unwrap().items[0].taken);
+        assert!(session.is_active_loot_guid(loot_guid));
+    }
+
+    #[tokio::test]
     async fn loot_release_ignores_guid_outside_active_view_like_cpp() {
         let (mut session, send_rx) = make_session_with_send();
         let player_guid = ObjectGuid::create_player(1, 42);
@@ -13655,5 +13790,156 @@ mod tests {
                 .is_some()
         );
         assert!(session.represented_gameobject_is_per_player_despawned_like_cpp(restocked_chest));
+    }
+
+    #[tokio::test]
+    async fn loot_release_shared_chest_restock_starts_like_cpp() {
+        let (mut session, _send_rx) = make_session_with_send_capacity(4);
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let partial_chest = test_gameobject_guid(19_041);
+        let full_chest = test_gameobject_guid(19_042);
+        session.set_player_guid(Some(player_guid));
+        session.set_active_loot_guid(partial_chest);
+        session.add_active_loot_view_owner_like_cpp(full_chest);
+
+        for guid in [partial_chest, full_chest] {
+            session.record_represented_gameobject_runtime_state_like_cpp(
+                0,
+                guid,
+                guid.entry(),
+                Position::ZERO,
+                GAMEOBJECT_TYPE_CHEST as u8,
+            );
+            session.record_represented_gameobject_chest_release_metadata_like_cpp(
+                guid,
+                GameObjectLootSource {
+                    loot_id: 7_001,
+                    chest_restock_time_secs: 45,
+                    chest_consumable: false,
+                    ..Default::default()
+                },
+            );
+        }
+        session.loot_table.insert(
+            partial_chest,
+            CreatureLoot {
+                loot_guid: partial_chest,
+                coins: 0,
+                unlooted_count: 1,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 0,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: vec![player_guid],
+                allowed_looters: Vec::new(),
+                items: vec![LootEntry {
+                    loot_list_id: 0,
+                    item_id: 25,
+                    quantity: 1,
+                    random_properties_id: 0,
+                    random_properties_seed: 0,
+                    item_context: 0,
+                    flags: LootEntryFlags::default(),
+                    allowed_looters: Vec::new(),
+                    roll_winner: ObjectGuid::EMPTY,
+                    ffa_looted_by: Vec::new(),
+                    taken: false,
+                }],
+                looted_by_player: false,
+            },
+        );
+        session.loot_table.insert(
+            full_chest,
+            CreatureLoot {
+                loot_guid: full_chest,
+                coins: 0,
+                unlooted_count: 0,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 0,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: vec![player_guid],
+                allowed_looters: Vec::new(),
+                items: Vec::new(),
+                looted_by_player: false,
+            },
+        );
+
+        session
+            .handle_loot_release(loot_release_packet(partial_chest))
+            .await;
+        session
+            .handle_loot_release(loot_release_packet(full_chest))
+            .await;
+
+        let partial_state = session
+            .represented_gameobject_use_states
+            .get(&partial_chest)
+            .unwrap();
+        assert_eq!(partial_state.loot_state, Some(LootState::Activated));
+        assert!(partial_state.chest_restock_until.is_some());
+        assert!(session.loot_table.contains_key(&partial_chest));
+
+        let full_state = session
+            .represented_gameobject_use_states
+            .get(&full_chest)
+            .unwrap();
+        assert_eq!(full_state.loot_state, Some(LootState::NotReady));
+        assert!(full_state.chest_restock_until.is_some());
+        assert!(!session.loot_table.contains_key(&full_chest));
+    }
+
+    #[tokio::test]
+    async fn process_pending_shared_chest_restock_clears_loot_like_cpp() {
+        let (mut session, _send_rx) = make_session_with_send_capacity(4);
+        let chest_guid = test_gameobject_guid(19_043);
+        session.set_state(SessionState::LoggedIn);
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            0,
+            chest_guid,
+            chest_guid.entry(),
+            Position::ZERO,
+            GAMEOBJECT_TYPE_CHEST as u8,
+        );
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .get_mut(&chest_guid)
+                .unwrap();
+            state.loot_state = Some(LootState::Activated);
+            state.chest_restock_until = Some(Instant::now() - Duration::from_secs(1));
+        }
+        session.loot_table.insert(
+            chest_guid,
+            CreatureLoot {
+                loot_guid: chest_guid,
+                coins: 7,
+                unlooted_count: 1,
+                loot_type: LOOT_TYPE_CHEST_LIKE_CPP,
+                dungeon_encounter_id: 0,
+                loot_method: 0,
+                loot_master: ObjectGuid::EMPTY,
+                round_robin_player: ObjectGuid::EMPTY,
+                player_ffa_items: Vec::new(),
+                players_looting: Vec::new(),
+                allowed_looters: Vec::new(),
+                items: Vec::new(),
+                looted_by_player: false,
+            },
+        );
+
+        session.process_pending().await;
+
+        let state = session
+            .represented_gameobject_use_states
+            .get(&chest_guid)
+            .unwrap();
+        assert_eq!(state.loot_state, Some(LootState::Ready));
+        assert!(state.chest_restock_until.is_none());
+        assert!(!session.loot_table.contains_key(&chest_guid));
     }
 }
