@@ -162,6 +162,7 @@ pub struct CameraUseSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GooberUseSource {
+    pub lock_id: u32,
     pub quest_id: u32,
     pub event_id: u32,
     pub auto_close_ms: u32,
@@ -354,6 +355,7 @@ impl GameObjectTemplateData {
         }
 
         Some(GooberUseSource {
+            lock_id: self.data[0],
             quest_id: self.data[1],
             event_id: self.data[2],
             auto_close_ms: self.data[3],
@@ -1274,6 +1276,7 @@ mod tests {
     #[test]
     fn goober_use_source_uses_cpp_data_indices() {
         let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[0] = 99;
         data[1] = 101;
         data[2] = 202;
         data[3] = 303;
@@ -1289,6 +1292,7 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_GOOBER, data).goober_use_source_like_cpp(),
             Some(GooberUseSource {
+                lock_id: 99,
                 quest_id: 101,
                 event_id: 202,
                 auto_close_ms: 303,

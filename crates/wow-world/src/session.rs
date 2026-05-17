@@ -281,6 +281,23 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         spell_id: u32,
         caster_is_player: bool,
     },
+    #[allow(dead_code)]
+    GooberLinkedTrapDespawn {
+        gameobject_guid: ObjectGuid,
+        trap_entry: u32,
+    },
+    #[allow(dead_code)]
+    GooberUniqueUserSpell {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        spell_id: u32,
+    },
+    #[allow(dead_code)]
+    GooberCleared {
+        gameobject_guid: ObjectGuid,
+        loot_state: wow_entities::LootState,
+        go_state: Option<wow_entities::GoState>,
+    },
     CastSpell {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -294,7 +311,7 @@ pub(crate) struct RepresentedPendingBind {
     pub time_until_lock_ms: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RepresentedGameObjectUseState {
     pub loot_state: Option<wow_entities::LootState>,
     pub loot_state_unit_guid: wow_core::ObjectGuid,
@@ -306,6 +323,7 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub per_player_despawn_secs: Option<u32>,
     pub per_player_despawn_until: Option<Instant>,
     pub personal_loot_uses: u32,
+    pub unique_users: Vec<wow_core::ObjectGuid>,
     pub chest_restock_time_secs: Option<u32>,
     pub chest_consumable: Option<bool>,
     pub chest_personal_loot_id: Option<u32>,
@@ -472,6 +490,7 @@ impl Default for RepresentedGameObjectUseState {
             per_player_despawn_secs: None,
             per_player_despawn_until: None,
             personal_loot_uses: 0,
+            unique_users: Vec::new(),
             chest_restock_time_secs: None,
             chest_consumable: None,
             chest_personal_loot_id: None,
@@ -10231,6 +10250,73 @@ impl WorldSession {
                     target_guid: player_guid,
                     spell_id: source.spell_id,
                     caster_is_player: source.player_cast,
+                },
+            );
+        }
+
+        true
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn apply_represented_gameobject_goober_just_deactivated_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        source: wow_entities::GooberUseSource,
+    ) -> bool {
+        if source.linked_trap_entry != 0 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::GooberLinkedTrapDespawn {
+                    gameobject_guid,
+                    trap_entry: source.linked_trap_entry,
+                },
+            );
+        }
+
+        let mut unique_users = Vec::new();
+        {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            if source.spell_id != 0 {
+                unique_users = std::mem::take(&mut state.unique_users);
+            } else {
+                state.unique_users.clear();
+            }
+
+            state.loot_state_unit_guid = wow_core::ObjectGuid::EMPTY;
+            state.gameobject_flags &= !wow_entities::GO_FLAG_IN_USE;
+            state.cooldown_until = None;
+            if source.lock_id != 0 || source.auto_close_ms != 0 {
+                state.go_state = Some(wow_entities::GoState::Ready);
+            }
+            state.loot_state = if source.consumable {
+                Some(wow_entities::LootState::NotReady)
+            } else {
+                Some(wow_entities::LootState::Ready)
+            };
+        }
+
+        if source.spell_id != 0 {
+            for player_guid in unique_users {
+                self.represented_gameobject_use_effects.push(
+                    RepresentedGameObjectUseEffect::GooberUniqueUserSpell {
+                        gameobject_guid,
+                        player_guid,
+                        spell_id: source.spell_id,
+                    },
+                );
+            }
+        }
+
+        if let Some(state) = self.represented_gameobject_use_states.get(&gameobject_guid) {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::GooberCleared {
+                    gameobject_guid,
+                    loot_state: state
+                        .loot_state
+                        .unwrap_or(wow_entities::LootState::NotReady),
+                    go_state: state.go_state,
                 },
             );
         }
@@ -22666,6 +22752,112 @@ mod tests {
                 gameobject_guid,
                 player_guid,
                 despawn_secs: 45,
+            }]
+        );
+    }
+
+    #[test]
+    fn gameobject_goober_just_deactivated_resets_and_clears_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let other_player_guid = ObjectGuid::create_player(1, 100);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 15);
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.loot_state = Some(wow_entities::LootState::JustDeactivated);
+            state.loot_state_unit_guid = player_guid;
+            state.gameobject_flags = wow_entities::GO_FLAG_IN_USE;
+            state.go_state = Some(wow_entities::GoState::Active);
+            state.unique_users = vec![player_guid, other_player_guid];
+            state.cooldown_until = Some(Instant::now() + Duration::from_secs(30));
+        }
+
+        assert!(
+            session.apply_represented_gameobject_goober_just_deactivated_like_cpp(
+                gameobject_guid,
+                wow_entities::GooberUseSource {
+                    lock_id: 12,
+                    auto_close_ms: 3_000,
+                    spell_id: 7777,
+                    linked_trap_entry: 999,
+                    ..Default::default()
+                },
+            )
+        );
+
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(state.loot_state, Some(wow_entities::LootState::Ready));
+        assert_eq!(state.loot_state_unit_guid, ObjectGuid::EMPTY);
+        assert_eq!(state.gameobject_flags & wow_entities::GO_FLAG_IN_USE, 0);
+        assert_eq!(state.go_state, Some(wow_entities::GoState::Ready));
+        assert!(state.unique_users.is_empty());
+        assert!(state.cooldown_until.is_none());
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::GooberLinkedTrapDespawn {
+                    gameobject_guid,
+                    trap_entry: 999,
+                },
+                RepresentedGameObjectUseEffect::GooberUniqueUserSpell {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: 7777,
+                },
+                RepresentedGameObjectUseEffect::GooberUniqueUserSpell {
+                    gameobject_guid,
+                    player_guid: other_player_guid,
+                    spell_id: 7777,
+                },
+                RepresentedGameObjectUseEffect::GooberCleared {
+                    gameobject_guid,
+                    loot_state: wow_entities::LootState::Ready,
+                    go_state: Some(wow_entities::GoState::Ready),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_goober_just_deactivated_consumable_stays_not_ready_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 16);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .loot_state = Some(wow_entities::LootState::JustDeactivated);
+
+        assert!(
+            session.apply_represented_gameobject_goober_just_deactivated_like_cpp(
+                gameobject_guid,
+                wow_entities::GooberUseSource {
+                    consumable: true,
+                    ..Default::default()
+                },
+            )
+        );
+
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(state.loot_state, Some(wow_entities::LootState::NotReady));
+        assert_eq!(state.go_state, None);
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::GooberCleared {
+                gameobject_guid,
+                loot_state: wow_entities::LootState::NotReady,
+                go_state: None,
             }]
         );
     }
