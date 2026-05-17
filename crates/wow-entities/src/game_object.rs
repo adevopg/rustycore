@@ -36,6 +36,7 @@ pub const GAMEOBJECT_TYPE_BARBER_CHAIR: u32 = 32;
 pub const GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING: u32 = 33;
 pub const GAMEOBJECT_TYPE_GUILD_BANK: u32 = 34;
 pub const GAMEOBJECT_TYPE_NEW_FLAG: u32 = 36;
+pub const GAMEOBJECT_TYPE_NEW_FLAG_DROP: u32 = 37;
 pub const GAMEOBJECT_TYPE_CAPTURE_POINT: u32 = 42;
 pub const GAMEOBJECT_TYPE_ITEM_FORGE: u32 = 47;
 pub const GAMEOBJECT_TYPE_UI_LINK: u32 = 48;
@@ -203,6 +204,22 @@ pub struct FlagDropUseSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NewFlagUseSource {
+    pub pickup_spell_id: u32,
+    pub expire_duration_ms: u32,
+    pub respawn_time_ms: u32,
+    pub flag_drop_entry: u32,
+    pub exclusive_category: i32,
+    pub world_state_id: u32,
+    pub return_on_defender_interact: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NewFlagDropUseSource {
+    pub spawn_vignette_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct QuestgiverUseSource {
     pub gossip_id: u32,
 }
@@ -304,6 +321,8 @@ impl GameObjectTemplateData {
             GAMEOBJECT_TYPE_BARBER_CHAIR => 3,
             GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING => 27,
             GAMEOBJECT_TYPE_GUILD_BANK => 1,
+            GAMEOBJECT_TYPE_NEW_FLAG => 14,
+            GAMEOBJECT_TYPE_NEW_FLAG_DROP => 2,
             GAMEOBJECT_TYPE_GATHERING_NODE => 24,
             _ => return 0,
         };
@@ -323,6 +342,8 @@ impl GameObjectTemplateData {
             GAMEOBJECT_TYPE_FLAGSTAND => 0,
             GAMEOBJECT_TYPE_FISHING_HOLE => 4,
             GAMEOBJECT_TYPE_FLAGDROP => 0,
+            GAMEOBJECT_TYPE_NEW_FLAG => 0,
+            GAMEOBJECT_TYPE_NEW_FLAG_DROP => 0,
             GAMEOBJECT_TYPE_GATHERING_NODE => 3,
             _ => return 0,
         };
@@ -479,6 +500,32 @@ impl GameObjectTemplateData {
 
         Some(QuestgiverUseSource {
             gossip_id: self.data[3],
+        })
+    }
+
+    pub const fn new_flag_use_source_like_cpp(&self) -> Option<NewFlagUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_NEW_FLAG {
+            return None;
+        }
+
+        Some(NewFlagUseSource {
+            pickup_spell_id: self.data[1],
+            expire_duration_ms: self.data[7],
+            respawn_time_ms: self.data[8],
+            flag_drop_entry: self.data[9],
+            exclusive_category: self.data[10] as i32,
+            world_state_id: self.data[11],
+            return_on_defender_interact: self.data[12] != 0,
+        })
+    }
+
+    pub const fn new_flag_drop_use_source_like_cpp(&self) -> Option<NewFlagDropUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_NEW_FLAG_DROP {
+            return None;
+        }
+
+        Some(NewFlagDropUseSource {
+            spawn_vignette_id: self.data[1],
         })
     }
 
@@ -1195,6 +1242,8 @@ mod tests {
             (GAMEOBJECT_TYPE_BARBER_CHAIR, 3),
             (GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING, 27),
             (GAMEOBJECT_TYPE_GUILD_BANK, 1),
+            (GAMEOBJECT_TYPE_NEW_FLAG, 14),
+            (GAMEOBJECT_TYPE_NEW_FLAG_DROP, 2),
             (GAMEOBJECT_TYPE_GATHERING_NODE, 24),
         ];
 
@@ -1230,6 +1279,8 @@ mod tests {
             (GAMEOBJECT_TYPE_FLAGSTAND, 0),
             (GAMEOBJECT_TYPE_FISHING_HOLE, 4),
             (GAMEOBJECT_TYPE_FLAGDROP, 0),
+            (GAMEOBJECT_TYPE_NEW_FLAG, 0),
+            (GAMEOBJECT_TYPE_NEW_FLAG_DROP, 0),
             (GAMEOBJECT_TYPE_GATHERING_NODE, 3),
         ];
 
@@ -1557,6 +1608,45 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
                 .questgiver_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn new_flag_use_sources_use_cpp_data_indices() {
+        let mut flag = [0; MAX_GAMEOBJECT_DATA];
+        flag[1] = 111;
+        flag[7] = 777;
+        flag[8] = 888;
+        flag[9] = 999;
+        flag[10] = u32::MAX;
+        flag[11] = 1111;
+        flag[12] = 1;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_NEW_FLAG, flag)
+                .new_flag_use_source_like_cpp(),
+            Some(NewFlagUseSource {
+                pickup_spell_id: 111,
+                expire_duration_ms: 777,
+                respawn_time_ms: 888,
+                flag_drop_entry: 999,
+                exclusive_category: -1,
+                world_state_id: 1111,
+                return_on_defender_interact: true,
+            })
+        );
+
+        let mut drop = [0; MAX_GAMEOBJECT_DATA];
+        drop[1] = 222;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_NEW_FLAG_DROP, drop)
+                .new_flag_drop_use_source_like_cpp(),
+            Some(NewFlagDropUseSource {
+                spawn_vignette_id: 222,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, drop).new_flag_use_source_like_cpp(),
             None
         );
     }

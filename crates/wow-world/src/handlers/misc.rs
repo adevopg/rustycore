@@ -15,8 +15,9 @@ use wow_entities::{
     GAMEOBJECT_TYPE_CAPTURE_POINT, GAMEOBJECT_TYPE_CHAIR, GAMEOBJECT_TYPE_DOOR,
     GAMEOBJECT_TYPE_FISHING_HOLE, GAMEOBJECT_TYPE_FLAGDROP, GAMEOBJECT_TYPE_FLAGSTAND,
     GAMEOBJECT_TYPE_GATHERING_NODE, GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_ITEM_FORGE,
-    GAMEOBJECT_TYPE_QUESTGIVER, GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER,
-    GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK, GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
+    GAMEOBJECT_TYPE_NEW_FLAG, GAMEOBJECT_TYPE_NEW_FLAG_DROP, GAMEOBJECT_TYPE_QUESTGIVER,
+    GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TRAP,
+    GAMEOBJECT_TYPE_UI_LINK, GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
@@ -1321,6 +1322,27 @@ impl crate::session::WorldSession {
                         player_guid,
                         gameobject_guid.entry(),
                         source,
+                    );
+                }
+                return;
+            }
+            GAMEOBJECT_TYPE_NEW_FLAG => {
+                if let Some(source) = template.new_flag_use_source_like_cpp() {
+                    self.use_represented_gameobject_new_flag_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        source,
+                    );
+                }
+                return;
+            }
+            GAMEOBJECT_TYPE_NEW_FLAG_DROP => {
+                if let Some(source) = template.new_flag_drop_use_source_like_cpp() {
+                    self.use_represented_gameobject_new_flag_drop_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        source,
+                        None,
                     );
                 }
                 return;

@@ -359,6 +359,27 @@ pub(crate) enum RepresentedGameObjectUseEffect {
     GameObjectDeleted {
         gameobject_guid: ObjectGuid,
     },
+    NewFlagPickupRequested {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        pickup_spell_id: u32,
+        expire_duration_ms: u32,
+        respawn_time_ms: u32,
+        flag_drop_entry: u32,
+        exclusive_category: i32,
+        world_state_id: u32,
+        return_on_defender_interact: bool,
+    },
+    NewFlagDropInteracted {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        spawn_vignette_id: u32,
+    },
+    NewFlagOwnerStateRequested {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        state: RepresentedNewFlagStateRequest,
+    },
     SpellcasterPartyOnlyRejected {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -379,6 +400,12 @@ pub(crate) enum BattlegroundFlagDropClickTarget {
     None,
     WarsongGulch,
     EyeOfTheStorm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepresentedNewFlagStateRequest {
+    InBase,
+    Taken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10333,6 +10360,65 @@ impl WorldSession {
                 },
             );
         }
+        self.represented_gameobject_use_effects
+            .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_new_flag_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::NewFlagUseSource,
+    ) -> bool {
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::NewFlagPickupRequested {
+                gameobject_guid,
+                player_guid,
+                pickup_spell_id: source.pickup_spell_id,
+                expire_duration_ms: source.expire_duration_ms,
+                respawn_time_ms: source.respawn_time_ms,
+                flag_drop_entry: source.flag_drop_entry,
+                exclusive_category: source.exclusive_category,
+                world_state_id: source.world_state_id,
+                return_on_defender_interact: source.return_on_defender_interact,
+            },
+        );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_new_flag_drop_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::NewFlagDropUseSource,
+        owner_return_on_defender_interact: Option<bool>,
+    ) -> bool {
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::NewFlagDropInteracted {
+                gameobject_guid,
+                player_guid,
+                spawn_vignette_id: source.spawn_vignette_id,
+            },
+        );
+
+        if let Some(return_on_defender_interact) = owner_return_on_defender_interact {
+            let state = if return_on_defender_interact {
+                RepresentedNewFlagStateRequest::InBase
+            } else {
+                RepresentedNewFlagStateRequest::Taken
+            };
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
+                    gameobject_guid,
+                    player_guid,
+                    state,
+                },
+            );
+        }
+
         self.represented_gameobject_use_effects
             .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
 
@@ -23008,6 +23094,103 @@ mod tests {
                     event_id: 0,
                     pickup_spell_id: 33,
                     expire_duration_ms: 44,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_new_flag_records_pickup_request_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 36);
+
+        assert!(session.use_represented_gameobject_new_flag_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::NewFlagUseSource {
+                pickup_spell_id: 11,
+                expire_duration_ms: 22,
+                respawn_time_ms: 33,
+                flag_drop_entry: 44,
+                exclusive_category: -55,
+                world_state_id: 66,
+                return_on_defender_interact: true,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::NewFlagPickupRequested {
+                gameobject_guid,
+                player_guid,
+                pickup_spell_id: 11,
+                expire_duration_ms: 22,
+                respawn_time_ms: 33,
+                flag_drop_entry: 44,
+                exclusive_category: -55,
+                world_state_id: 66,
+                return_on_defender_interact: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_new_flag_drop_records_owner_state_and_delete_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 37);
+
+        assert!(session.use_represented_gameobject_new_flag_drop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::NewFlagDropUseSource {
+                spawn_vignette_id: 222,
+            },
+            Some(false),
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::NewFlagDropInteracted {
+                    gameobject_guid,
+                    player_guid,
+                    spawn_vignette_id: 222,
+                },
+                RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
+                    gameobject_guid,
+                    player_guid,
+                    state: RepresentedNewFlagStateRequest::Taken,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_new_flag_drop_without_owner_still_deletes_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 37);
+
+        assert!(session.use_represented_gameobject_new_flag_drop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::NewFlagDropUseSource {
+                spawn_vignette_id: 222,
+            },
+            None,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::NewFlagDropInteracted {
+                    gameobject_guid,
+                    player_guid,
+                    spawn_vignette_id: 222,
                 },
                 RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
             ]
