@@ -26,6 +26,7 @@ pub const GAMEOBJECT_TYPE_FISHING_NODE: u32 = 17;
 pub const GAMEOBJECT_TYPE_RITUAL: u32 = 18;
 pub const GAMEOBJECT_TYPE_MAILBOX: u32 = 19;
 pub const GAMEOBJECT_TYPE_SPELLCASTER: u32 = 22;
+pub const GAMEOBJECT_TYPE_MEETINGSTONE: u32 = 23;
 pub const GAMEOBJECT_TYPE_FLAGSTAND: u32 = 24;
 pub const GAMEOBJECT_TYPE_FISHING_HOLE: u32 = 25;
 pub const GAMEOBJECT_TYPE_FLAGDROP: u32 = 26;
@@ -220,6 +221,25 @@ pub struct NewFlagDropUseSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RitualUseSource {
+    pub casters_required: u32,
+    pub spell_id: u32,
+    pub anim_spell_id: u32,
+    pub persistent: bool,
+    pub caster_target_spell_id: u32,
+    pub caster_target_spell_targets: u32,
+    pub casters_grouped: bool,
+    pub no_target_check: bool,
+    pub allow_unfriendly_cross_faction_party: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeetingStoneUseSource {
+    pub area_id: u32,
+    pub prevent_unfriendly_outside_instances: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct QuestgiverUseSource {
     pub gossip_id: u32,
 }
@@ -313,6 +333,7 @@ impl GameObjectTemplateData {
             GAMEOBJECT_TYPE_RITUAL => 9,
             GAMEOBJECT_TYPE_MAILBOX => 1,
             GAMEOBJECT_TYPE_SPELLCASTER => 8,
+            GAMEOBJECT_TYPE_MEETINGSTONE => 3,
             GAMEOBJECT_TYPE_FLAGSTAND => 13,
             GAMEOBJECT_TYPE_FISHING_HOLE => 5,
             GAMEOBJECT_TYPE_FLAGDROP => 10,
@@ -500,6 +521,35 @@ impl GameObjectTemplateData {
 
         Some(QuestgiverUseSource {
             gossip_id: self.data[3],
+        })
+    }
+
+    pub const fn ritual_use_source_like_cpp(&self) -> Option<RitualUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_RITUAL {
+            return None;
+        }
+
+        Some(RitualUseSource {
+            casters_required: self.data[0],
+            spell_id: self.data[1],
+            anim_spell_id: self.data[2],
+            persistent: self.data[3] != 0,
+            caster_target_spell_id: self.data[4],
+            caster_target_spell_targets: self.data[5],
+            casters_grouped: self.data[6] != 0,
+            no_target_check: self.data[7] != 0,
+            allow_unfriendly_cross_faction_party: self.data[10] != 0,
+        })
+    }
+
+    pub const fn meeting_stone_use_source_like_cpp(&self) -> Option<MeetingStoneUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_MEETINGSTONE {
+            return None;
+        }
+
+        Some(MeetingStoneUseSource {
+            area_id: self.data[2],
+            prevent_unfriendly_outside_instances: self.data[4] != 0,
         })
     }
 
@@ -1234,6 +1284,7 @@ mod tests {
             (GAMEOBJECT_TYPE_RITUAL, 9),
             (GAMEOBJECT_TYPE_MAILBOX, 1),
             (GAMEOBJECT_TYPE_SPELLCASTER, 8),
+            (GAMEOBJECT_TYPE_MEETINGSTONE, 3),
             (GAMEOBJECT_TYPE_FLAGSTAND, 13),
             (GAMEOBJECT_TYPE_FISHING_HOLE, 5),
             (GAMEOBJECT_TYPE_FLAGDROP, 10),
@@ -1608,6 +1659,51 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
                 .questgiver_use_source_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn ritual_and_meeting_stone_use_sources_use_cpp_data_indices() {
+        let mut ritual = [0; MAX_GAMEOBJECT_DATA];
+        ritual[0] = 3;
+        ritual[1] = 62330;
+        ritual[2] = 111;
+        ritual[3] = 1;
+        ritual[4] = 222;
+        ritual[5] = 2;
+        ritual[6] = 1;
+        ritual[7] = 1;
+        ritual[10] = 1;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_RITUAL, ritual)
+                .ritual_use_source_like_cpp(),
+            Some(RitualUseSource {
+                casters_required: 3,
+                spell_id: 62330,
+                anim_spell_id: 111,
+                persistent: true,
+                caster_target_spell_id: 222,
+                caster_target_spell_targets: 2,
+                casters_grouped: true,
+                no_target_check: true,
+                allow_unfriendly_cross_faction_party: true,
+            })
+        );
+
+        let mut meeting_stone = [0; MAX_GAMEOBJECT_DATA];
+        meeting_stone[2] = 345;
+        meeting_stone[4] = 1;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_MEETINGSTONE, meeting_stone)
+                .meeting_stone_use_source_like_cpp(),
+            Some(MeetingStoneUseSource {
+                area_id: 345,
+                prevent_unfriendly_outside_instances: true,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, ritual).ritual_use_source_like_cpp(),
             None
         );
     }

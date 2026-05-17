@@ -15,9 +15,10 @@ use wow_entities::{
     GAMEOBJECT_TYPE_CAPTURE_POINT, GAMEOBJECT_TYPE_CHAIR, GAMEOBJECT_TYPE_DOOR,
     GAMEOBJECT_TYPE_FISHING_HOLE, GAMEOBJECT_TYPE_FLAGDROP, GAMEOBJECT_TYPE_FLAGSTAND,
     GAMEOBJECT_TYPE_GATHERING_NODE, GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_ITEM_FORGE,
-    GAMEOBJECT_TYPE_NEW_FLAG, GAMEOBJECT_TYPE_NEW_FLAG_DROP, GAMEOBJECT_TYPE_QUESTGIVER,
-    GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TRAP,
-    GAMEOBJECT_TYPE_UI_LINK, GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
+    GAMEOBJECT_TYPE_MEETINGSTONE, GAMEOBJECT_TYPE_NEW_FLAG, GAMEOBJECT_TYPE_NEW_FLAG_DROP,
+    GAMEOBJECT_TYPE_QUESTGIVER, GAMEOBJECT_TYPE_RITUAL, GAMEOBJECT_TYPE_SPELL_FOCUS,
+    GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK,
+    GameObjectTemplateData, MAX_GAMEOBJECT_DATA,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
@@ -1245,6 +1246,16 @@ impl crate::session::WorldSession {
                 }
                 return;
             }
+            GAMEOBJECT_TYPE_RITUAL => {
+                if let Some(source) = template.ritual_use_source_like_cpp() {
+                    self.use_represented_gameobject_ritual_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        source,
+                    );
+                }
+                return;
+            }
             GAMEOBJECT_TYPE_CHAIR => {
                 if let Some(source) = template.chair_use_source_like_cpp() {
                     let gameobject_size = self
@@ -1343,6 +1354,17 @@ impl crate::session::WorldSession {
                         player_guid,
                         source,
                         None,
+                    );
+                }
+                return;
+            }
+            GAMEOBJECT_TYPE_MEETINGSTONE => {
+                if let Some(source) = template.meeting_stone_use_source_like_cpp() {
+                    self.use_represented_gameobject_meeting_stone_like_cpp(
+                        gameobject_guid,
+                        player_guid,
+                        gameobject_access.entry,
+                        source,
                     );
                 }
                 return;

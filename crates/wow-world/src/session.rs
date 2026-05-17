@@ -380,6 +380,34 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         player_guid: ObjectGuid,
         state: RepresentedNewFlagStateRequest,
     },
+    RitualWaitingForParticipants {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        unique_user_count: u32,
+        casters_required: u32,
+    },
+    RitualCasterTargetSpellRequested {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        spell_id: u32,
+        target_count: u32,
+    },
+    RitualCompleted {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        final_spell_id: u32,
+        triggered: bool,
+        persistent: bool,
+        unique_user_count: u32,
+    },
+    MeetingStoneSummonRequested {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        gameobject_entry: u32,
+        spell_id: u32,
+        area_id: u32,
+        prevent_unfriendly_outside_instances: bool,
+    },
     SpellcasterPartyOnlyRejected {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -10421,6 +10449,119 @@ impl WorldSession {
 
         self.represented_gameobject_use_effects
             .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_ritual_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        source: wow_entities::RitualUseSource,
+    ) -> bool {
+        if source.anim_spell_id != 0 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::CastSpell {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: source.anim_spell_id,
+                },
+            );
+        }
+
+        let unique_user_count = {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            if !state.unique_users.contains(&player_guid) {
+                state.unique_users.push(player_guid);
+            }
+            state.unique_users.len() as u32
+        };
+
+        if unique_user_count != source.casters_required {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::RitualWaitingForParticipants {
+                    gameobject_guid,
+                    player_guid,
+                    unique_user_count,
+                    casters_required: source.casters_required,
+                },
+            );
+            return false;
+        }
+
+        let mut final_spell_id = source.spell_id;
+        let mut triggered = source.anim_spell_id != 0;
+        if final_spell_id == 62330 {
+            final_spell_id = 61993;
+            triggered = true;
+        }
+
+        if source.caster_target_spell_id != 0 && source.caster_target_spell_id != 1 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::RitualCasterTargetSpellRequested {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: source.caster_target_spell_id,
+                    target_count: source.caster_target_spell_targets,
+                },
+            );
+        }
+
+        if source.persistent {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.owner_guid = None;
+            state.unique_users.clear();
+            state.use_count = 0;
+        } else {
+            self.represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default()
+                .loot_state = Some(wow_entities::LootState::JustDeactivated);
+        }
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::RitualCompleted {
+                gameobject_guid,
+                player_guid,
+                final_spell_id,
+                triggered,
+                persistent: source.persistent,
+                unique_user_count,
+            },
+        );
+
+        true
+    }
+
+    pub(crate) fn use_represented_gameobject_meeting_stone_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        gameobject_entry: u32,
+        source: wow_entities::MeetingStoneUseSource,
+    ) -> bool {
+        let spell_id = if gameobject_entry == 194097 {
+            61994
+        } else {
+            59782
+        };
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::MeetingStoneSummonRequested {
+                gameobject_guid,
+                player_guid,
+                gameobject_entry,
+                spell_id,
+                area_id: source.area_id,
+                prevent_unfriendly_outside_instances: source.prevent_unfriendly_outside_instances,
+            },
+        );
 
         true
     }
@@ -23193,6 +23334,133 @@ mod tests {
                     spawn_vignette_id: 222,
                 },
                 RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_ritual_waits_until_required_unique_casters_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 18);
+
+        assert!(!session.use_represented_gameobject_ritual_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::RitualUseSource {
+                casters_required: 2,
+                spell_id: 100,
+                anim_spell_id: 200,
+                persistent: false,
+                caster_target_spell_id: 0,
+                caster_target_spell_targets: 0,
+                casters_grouped: true,
+                no_target_check: true,
+                allow_unfriendly_cross_faction_party: false,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::CastSpell {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: 200,
+                },
+                RepresentedGameObjectUseEffect::RitualWaitingForParticipants {
+                    gameobject_guid,
+                    player_guid,
+                    unique_user_count: 1,
+                    casters_required: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_ritual_completes_and_deactivates_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let other_player_guid = ObjectGuid::create_player(1, 100);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 18);
+        session
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default()
+            .unique_users = vec![other_player_guid];
+
+        assert!(session.use_represented_gameobject_ritual_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::RitualUseSource {
+                casters_required: 2,
+                spell_id: 62330,
+                anim_spell_id: 0,
+                persistent: false,
+                caster_target_spell_id: 333,
+                caster_target_spell_targets: 1,
+                casters_grouped: true,
+                no_target_check: true,
+                allow_unfriendly_cross_faction_party: false,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::RitualCasterTargetSpellRequested {
+                    gameobject_guid,
+                    player_guid,
+                    spell_id: 333,
+                    target_count: 1,
+                },
+                RepresentedGameObjectUseEffect::RitualCompleted {
+                    gameobject_guid,
+                    player_guid,
+                    final_spell_id: 61993,
+                    triggered: true,
+                    persistent: false,
+                    unique_user_count: 2,
+                },
+            ]
+        );
+        assert_eq!(
+            session
+                .represented_gameobject_use_states
+                .get(&gameobject_guid)
+                .and_then(|state| state.loot_state),
+            Some(wow_entities::LootState::JustDeactivated)
+        );
+    }
+
+    #[test]
+    fn gameobject_use_meeting_stone_maps_spell_by_entry_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 23);
+
+        assert!(session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            wow_entities::MeetingStoneUseSource {
+                area_id: 456,
+                prevent_unfriendly_outside_instances: true,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::MeetingStoneSummonRequested {
+                    gameobject_guid,
+                    player_guid,
+                    gameobject_entry: 194097,
+                    spell_id: 61994,
+                    area_id: 456,
+                    prevent_unfriendly_outside_instances: true,
+                }
             ]
         );
     }
