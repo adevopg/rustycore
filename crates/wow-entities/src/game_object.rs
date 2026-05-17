@@ -146,6 +146,13 @@ pub struct GatheringNodeUseSource {
     pub linked_trap_entry: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrapUseSource {
+    pub spell_id: u32,
+    pub charges: u32,
+    pub cooldown_secs: u32,
+}
+
 impl GameObjectTemplateData {
     pub const fn new(go_type: u32, data: [u32; MAX_GAMEOBJECT_DATA]) -> Self {
         Self { go_type, data }
@@ -286,6 +293,18 @@ impl GameObjectTemplateData {
             GAMEOBJECT_TYPE_GOOBER => self.data[3],
             _ => 0,
         }
+    }
+
+    pub const fn trap_use_source_like_cpp(&self) -> Option<TrapUseSource> {
+        if self.go_type != GAMEOBJECT_TYPE_TRAP {
+            return None;
+        }
+
+        Some(TrapUseSource {
+            spell_id: self.data[3],
+            charges: self.data[4],
+            cooldown_secs: self.data[5],
+        })
     }
 
     pub const fn chest_loot_source_like_cpp(&self) -> Option<GameObjectLootSource> {
@@ -1131,6 +1150,27 @@ mod tests {
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, [99; MAX_GAMEOBJECT_DATA])
                 .get_auto_close_time_like_cpp(),
             0
+        );
+    }
+
+    #[test]
+    fn trap_use_source_uses_cpp_data_indices() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[3] = 123;
+        data[4] = 1;
+        data[5] = 9;
+
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_TRAP, data).trap_use_source_like_cpp(),
+            Some(TrapUseSource {
+                spell_id: 123,
+                charges: 1,
+                cooldown_secs: 9,
+            })
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data).trap_use_source_like_cpp(),
+            None
         );
     }
 
