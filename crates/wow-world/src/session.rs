@@ -229,6 +229,11 @@ pub(crate) enum RepresentedGameObjectUseEffect {
     DoorOrButtonRejectedNotReady {
         gameobject_guid: ObjectGuid,
     },
+    #[allow(dead_code)]
+    DoorOrButtonReset {
+        gameobject_guid: ObjectGuid,
+        go_state: wow_entities::GoState,
+    },
     TriggerCinematic {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -559,6 +564,7 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub ritual_owner_guid: Option<wow_core::ObjectGuid>,
     pub owner_current_channeled_spell_active: Option<bool>,
     pub go_state: Option<wow_entities::GoState>,
+    pub prev_go_state: Option<wow_entities::GoState>,
     pub gameobject_flags: u32,
     pub dynamic_flags: u32,
     pub despawn_delay_secs: Option<u32>,
@@ -741,6 +747,7 @@ impl Default for RepresentedGameObjectUseState {
             ritual_owner_guid: None,
             owner_current_channeled_spell_active: None,
             go_state: None,
+            prev_go_state: None,
             gameobject_flags: 0,
             dynamic_flags: 0,
             despawn_delay_secs: None,
@@ -10488,9 +10495,11 @@ impl WorldSession {
         } else {
             wow_entities::GoState::Ready
         };
+        state.prev_go_state = Some(current_go_state);
         state.go_state = Some(next_go_state);
         state.loot_state = Some(wow_entities::LootState::Activated);
         state.loot_state_unit_guid = user_guid;
+        state.gameobject_flags |= wow_entities::GO_FLAG_IN_USE;
         state.cooldown_until = (restore_time_ms != 0)
             .then_some(now + Duration::from_millis(u64::from(restore_time_ms)));
         self.represented_gameobject_use_effects.push(
@@ -10502,6 +10511,55 @@ impl WorldSession {
             },
         );
         true
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn reset_represented_gameobject_door_or_button_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+    ) -> bool {
+        let Some(state) = self
+            .represented_gameobject_use_states
+            .get_mut(&gameobject_guid)
+        else {
+            return false;
+        };
+        if matches!(
+            state.loot_state,
+            Some(wow_entities::LootState::Ready | wow_entities::LootState::JustDeactivated)
+        ) {
+            return false;
+        }
+
+        state.gameobject_flags &= !wow_entities::GO_FLAG_IN_USE;
+        let restored_go_state = state.prev_go_state.unwrap_or(wow_entities::GoState::Ready);
+        state.go_state = Some(restored_go_state);
+        state.loot_state = Some(wow_entities::LootState::JustDeactivated);
+        state.cooldown_until = None;
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::DoorOrButtonReset {
+                gameobject_guid,
+                go_state: restored_go_state,
+            },
+        );
+        true
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn tick_represented_gameobject_door_or_button_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+    ) -> bool {
+        let now = Instant::now();
+        let expired = self
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .and_then(|state| state.cooldown_until)
+            .is_some_and(|cooldown_until| cooldown_until <= now);
+        if !expired {
+            return false;
+        }
+        self.reset_represented_gameobject_door_or_button_like_cpp(gameobject_guid)
     }
 
     pub(crate) fn use_represented_gameobject_trap_like_cpp(
@@ -23991,8 +24049,13 @@ mod tests {
             .get(&gameobject_guid)
             .unwrap();
         assert_eq!(state.go_state, Some(wow_entities::GoState::Active));
+        assert_eq!(state.prev_go_state, Some(wow_entities::GoState::Ready));
         assert_eq!(state.loot_state, Some(wow_entities::LootState::Activated));
         assert_eq!(state.loot_state_unit_guid, player_guid);
+        assert_eq!(
+            state.gameobject_flags & wow_entities::GO_FLAG_IN_USE,
+            wow_entities::GO_FLAG_IN_USE
+        );
         assert!(state.cooldown_until.is_some());
         assert_eq!(
             session.represented_gameobject_use_effects,
@@ -24012,6 +24075,46 @@ mod tests {
         assert_eq!(
             session.represented_gameobject_use_effects.last(),
             Some(&RepresentedGameObjectUseEffect::DoorOrButtonRejectedNotReady { gameobject_guid })
+        );
+    }
+
+    #[test]
+    fn gameobject_door_or_button_tick_resets_after_cooldown_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 72);
+
+        assert!(session.use_represented_gameobject_door_or_button_like_cpp(
+            gameobject_guid,
+            player_guid,
+            3000,
+        ));
+        assert!(!session.tick_represented_gameobject_door_or_button_like_cpp(gameobject_guid));
+        session
+            .represented_gameobject_use_states
+            .get_mut(&gameobject_guid)
+            .unwrap()
+            .cooldown_until = Some(Instant::now() - Duration::from_millis(1));
+
+        assert!(session.tick_represented_gameobject_door_or_button_like_cpp(gameobject_guid));
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(state.go_state, Some(wow_entities::GoState::Ready));
+        assert_eq!(
+            state.loot_state,
+            Some(wow_entities::LootState::JustDeactivated)
+        );
+        assert_eq!(state.gameobject_flags & wow_entities::GO_FLAG_IN_USE, 0);
+        assert!(state.cooldown_until.is_none());
+        assert_eq!(
+            session.represented_gameobject_use_effects.last(),
+            Some(&RepresentedGameObjectUseEffect::DoorOrButtonReset {
+                gameobject_guid,
+                go_state: wow_entities::GoState::Ready,
+            })
         );
     }
 
