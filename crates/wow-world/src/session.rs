@@ -10439,6 +10439,7 @@ impl WorldSession {
         &mut self,
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
+        gameobject_entry: u32,
         source: wow_entities::NewFlagUseSource,
     ) -> bool {
         self.represented_gameobject_use_effects.push(
@@ -10453,6 +10454,16 @@ impl WorldSession {
                 world_state_id: source.world_state_id,
                 return_on_defender_interact: source.return_on_defender_interact,
             },
+        );
+
+        self.apply_represented_gameobject_post_use_spell_like_cpp(
+            gameobject_guid,
+            player_guid,
+            gameobject_entry,
+            wow_entities::GAMEOBJECT_TYPE_NEW_FLAG,
+            source.pickup_spell_id,
+            false,
+            RepresentedGameObjectSpellCaster::GameObject,
         );
 
         true
@@ -23422,6 +23433,7 @@ mod tests {
         assert!(session.use_represented_gameobject_new_flag_like_cpp(
             gameobject_guid,
             player_guid,
+            179_830,
             wow_entities::NewFlagUseSource {
                 pickup_spell_id: 11,
                 expire_duration_ms: 22,
@@ -23434,17 +23446,31 @@ mod tests {
         ));
         assert_eq!(
             session.represented_gameobject_use_effects,
-            vec![RepresentedGameObjectUseEffect::NewFlagPickupRequested {
-                gameobject_guid,
-                player_guid,
-                pickup_spell_id: 11,
-                expire_duration_ms: 22,
-                respawn_time_ms: 33,
-                flag_drop_entry: 44,
-                exclusive_category: -55,
-                world_state_id: 66,
-                return_on_defender_interact: true,
-            }]
+            vec![
+                RepresentedGameObjectUseEffect::NewFlagPickupRequested {
+                    gameobject_guid,
+                    player_guid,
+                    pickup_spell_id: 11,
+                    expire_duration_ms: 22,
+                    respawn_time_ms: 33,
+                    flag_drop_entry: 44,
+                    exclusive_category: -55,
+                    world_state_id: 66,
+                    return_on_defender_interact: true,
+                },
+                RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
+                    gameobject_guid,
+                    target_guid: player_guid,
+                    spell_id: 11,
+                    triggered: false,
+                    caster: RepresentedGameObjectSpellCaster::GameObject,
+                },
+                RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
+                    gameobject_guid,
+                    player_guid,
+                    state: RepresentedNewFlagStateRequest::Taken,
+                },
+            ]
         );
     }
 

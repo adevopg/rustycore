@@ -1346,6 +1346,7 @@ impl crate::session::WorldSession {
                     self.use_represented_gameobject_new_flag_like_cpp(
                         gameobject_guid,
                         player_guid,
+                        gameobject_access.entry,
                         source,
                     );
                 }
