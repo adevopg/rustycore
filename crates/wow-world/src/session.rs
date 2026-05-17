@@ -10637,6 +10637,14 @@ impl WorldSession {
             );
         }
 
+        if let Some(owner_guid) = owner_guid {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::FinishChanneledSpell {
+                    player_guid: owner_guid,
+                },
+            );
+        }
+
         if source.persistent {
             let state = self
                 .represented_gameobject_use_states
@@ -23947,6 +23955,40 @@ mod tests {
                 allow_unfriendly_cross_faction_party: false,
             },
         ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::FinishChanneledSpell {
+                    player_guid: owner_guid,
+                },
+                RepresentedGameObjectUseEffect::RitualCompleted {
+                    gameobject_guid,
+                    player_guid,
+                    final_spell_id: 100,
+                    triggered: false,
+                    persistent: true,
+                    unique_user_count: 2,
+                },
+                RepresentedGameObjectUseEffect::OutdoorPvpCustomSpellRequested {
+                    gameobject_guid,
+                    player_guid,
+                    gameobject_entry: 777,
+                    spell_id: 100,
+                    go_type: wow_entities::GAMEOBJECT_TYPE_RITUAL,
+                    spell_lookup_difficulty_id: 0,
+                    spell_info_missing: false,
+                },
+                RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
+                    gameobject_guid,
+                    target_guid: player_guid,
+                    caster_guid: owner_guid,
+                    spell_id: 100,
+                    triggered: false,
+                    caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
+                },
+            ]
+        );
         let state = session
             .represented_gameobject_use_states
             .get(&gameobject_guid)
