@@ -572,6 +572,8 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub new_flag_taken_from_base_game_time_ms: Option<u32>,
     pub new_flag_respawn_until: Option<Instant>,
     pub new_flag_return_on_defender_interact: Option<bool>,
+    pub new_flag_pickup_spell_id: Option<u32>,
+    pub new_flag_entry: Option<u32>,
     pub report_use_ai_returns_true: bool,
     pub gossip_hello_ai_returns_true: bool,
     pub cooldown_until: Option<Instant>,
@@ -750,6 +752,8 @@ impl Default for RepresentedGameObjectUseState {
             new_flag_taken_from_base_game_time_ms: None,
             new_flag_respawn_until: None,
             new_flag_return_on_defender_interact: None,
+            new_flag_pickup_spell_id: None,
+            new_flag_entry: None,
             report_use_ai_returns_true: false,
             gossip_hello_ai_returns_true: false,
             cooldown_until: None,
@@ -10889,10 +10893,15 @@ impl WorldSession {
         {
             return false;
         }
-        self.represented_gameobject_use_states
-            .entry(gameobject_guid)
-            .or_default()
-            .new_flag_return_on_defender_interact = Some(source.return_on_defender_interact);
+        {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.new_flag_return_on_defender_interact = Some(source.return_on_defender_interact);
+            state.new_flag_pickup_spell_id = Some(source.pickup_spell_id);
+            state.new_flag_entry = Some(gameobject_entry);
+        }
 
         self.represented_gameobject_use_effects.push(
             RepresentedGameObjectUseEffect::NewFlagPickupRequested {
@@ -10962,21 +10971,47 @@ impl WorldSession {
             let return_on_defender_interact = owner_state
                 .new_flag_return_on_defender_interact
                 .unwrap_or(false);
+            let owner_pickup_spell_id = owner_state.new_flag_pickup_spell_id.unwrap_or(0);
+            let owner_entry = owner_state.new_flag_entry.unwrap_or(0);
             let defender_interact = self
                 .represented_gameobject_is_friendly_to_player_like_cpp(owner_guid)
                 .map(|friendly| !friendly)
                 .unwrap_or(false);
-            let state = if defender_interact && return_on_defender_interact {
-                RepresentedNewFlagStateRequest::InBase
-            } else {
-                RepresentedNewFlagStateRequest::Taken
-            };
-            self.apply_represented_new_flag_state_command_like_cpp(
+            if defender_interact && return_on_defender_interact {
+                self.send_represented_gameobject_delete_packets_like_cpp(gameobject_guid);
+                self.represented_gameobject_use_effects
+                    .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
+                self.apply_represented_new_flag_state_command_like_cpp(
+                    owner_guid,
+                    Some(player_guid),
+                    RepresentedNewFlagStateRequest::InBase,
+                    0,
+                );
+                return true;
+            }
+
+            if self.apply_represented_gameobject_post_use_spell_like_cpp_internal(
                 owner_guid,
-                Some(player_guid),
-                state,
-                0,
-            );
+                player_guid,
+                owner_entry,
+                wow_entities::GAMEOBJECT_TYPE_NEW_FLAG,
+                owner_pickup_spell_id,
+                true,
+                RepresentedGameObjectSpellCaster::GameObject,
+                owner_guid,
+                false,
+            ) {
+                self.send_represented_gameobject_delete_packets_like_cpp(gameobject_guid);
+                self.represented_gameobject_use_effects
+                    .push(RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid });
+                self.apply_represented_new_flag_state_command_like_cpp(
+                    owner_guid,
+                    Some(player_guid),
+                    RepresentedNewFlagStateRequest::Taken,
+                    0,
+                );
+                return true;
+            }
         }
 
         self.send_represented_gameobject_delete_packets_like_cpp(gameobject_guid);
@@ -11257,6 +11292,31 @@ impl WorldSession {
         caster: RepresentedGameObjectSpellCaster,
         caster_guid: ObjectGuid,
     ) -> bool {
+        self.apply_represented_gameobject_post_use_spell_like_cpp_internal(
+            gameobject_guid,
+            player_guid,
+            gameobject_entry,
+            go_type,
+            spell_id,
+            triggered,
+            caster,
+            caster_guid,
+            true,
+        )
+    }
+
+    fn apply_represented_gameobject_post_use_spell_like_cpp_internal(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        gameobject_entry: u32,
+        go_type: u32,
+        spell_id: u32,
+        triggered: bool,
+        caster: RepresentedGameObjectSpellCaster,
+        caster_guid: ObjectGuid,
+        apply_new_flag_taken_state: bool,
+    ) -> bool {
         if spell_id == 0 {
             return false;
         }
@@ -11305,7 +11365,8 @@ impl WorldSession {
             },
         );
 
-        if go_type == wow_entities::GAMEOBJECT_TYPE_NEW_FLAG
+        if apply_new_flag_taken_state
+            && go_type == wow_entities::GAMEOBJECT_TYPE_NEW_FLAG
             && caster == RepresentedGameObjectSpellCaster::GameObject
         {
             self.apply_represented_new_flag_state_command_like_cpp(
@@ -24585,6 +24646,8 @@ mod tests {
             owner_state.go_type = Some(wow_entities::GAMEOBJECT_TYPE_NEW_FLAG as u8);
             owner_state.new_flag_state = Some(RepresentedNewFlagStateRequest::Dropped);
             owner_state.new_flag_return_on_defender_interact = Some(false);
+            owner_state.new_flag_pickup_spell_id = Some(33);
+            owner_state.new_flag_entry = Some(179_830);
         }
 
         assert!(session.use_represented_gameobject_new_flag_drop_like_cpp(
@@ -24615,12 +24678,30 @@ mod tests {
                     player_guid,
                     spawn_vignette_id: 222,
                 },
+                RepresentedGameObjectUseEffect::OutdoorPvpCustomSpellRequested {
+                    gameobject_guid: owner_guid,
+                    player_guid,
+                    gameobject_entry: 179_830,
+                    spell_id: 33,
+                    go_type: wow_entities::GAMEOBJECT_TYPE_NEW_FLAG,
+                    spell_lookup_difficulty_id: 0,
+                    spell_info_missing: false,
+                },
+                RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
+                    gameobject_guid: owner_guid,
+                    target_guid: player_guid,
+                    caster_guid: owner_guid,
+                    spell_id: 33,
+                    triggered: true,
+                    caster: RepresentedGameObjectSpellCaster::GameObject,
+                    spell_lookup_difficulty_id: 0,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
                 RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
                     gameobject_guid: owner_guid,
                     player_guid,
                     state: RepresentedNewFlagStateRequest::Taken,
                 },
-                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
             ]
         );
         let state = session
@@ -24660,6 +24741,8 @@ mod tests {
             owner_state.go_type = Some(wow_entities::GAMEOBJECT_TYPE_NEW_FLAG as u8);
             owner_state.new_flag_state = Some(RepresentedNewFlagStateRequest::Dropped);
             owner_state.new_flag_return_on_defender_interact = Some(true);
+            owner_state.new_flag_pickup_spell_id = Some(33);
+            owner_state.new_flag_entry = Some(179_830);
         }
 
         assert!(session.use_represented_gameobject_new_flag_drop_like_cpp(
@@ -24685,6 +24768,70 @@ mod tests {
             Some(RepresentedNewFlagStateRequest::InBase)
         );
         assert_eq!(state.new_flag_carrier_guid, None);
+    }
+
+    #[test]
+    fn gameobject_use_new_flag_drop_deletes_without_taken_when_owner_cast_fails_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 37);
+        let owner_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 36);
+        session.record_represented_gameobject_owner_guid_like_cpp(gameobject_guid, owner_guid);
+        session.set_spell_store(std::sync::Arc::new(wow_data::SpellStore::new()));
+        {
+            let owner_state = session
+                .represented_gameobject_use_states
+                .entry(owner_guid)
+                .or_default();
+            owner_state.go_type = Some(wow_entities::GAMEOBJECT_TYPE_NEW_FLAG as u8);
+            owner_state.new_flag_state = Some(RepresentedNewFlagStateRequest::Dropped);
+            owner_state.new_flag_return_on_defender_interact = Some(false);
+            owner_state.new_flag_pickup_spell_id = Some(33);
+            owner_state.new_flag_entry = Some(179_830);
+        }
+
+        assert!(session.use_represented_gameobject_new_flag_drop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::NewFlagDropUseSource {
+                spawn_vignette_id: 222,
+            }
+        ));
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::GameObjectPostUseSpellMissing {
+                gameobject_guid: owner_guid,
+                player_guid,
+                gameobject_entry: 179_830,
+                spell_id: 33,
+                go_type: wow_entities::GAMEOBJECT_TYPE_NEW_FLAG,
+                spell_lookup_difficulty_id: 0,
+            }
+        ));
+        assert!(
+            !session
+                .represented_gameobject_use_effects
+                .iter()
+                .any(|effect| {
+                    matches!(
+                        effect,
+                        RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
+                            gameobject_guid,
+                            state: RepresentedNewFlagStateRequest::Taken,
+                            ..
+                        } if *gameobject_guid == owner_guid
+                    )
+                })
+        );
+        let state = session
+            .represented_gameobject_use_states
+            .get(&owner_guid)
+            .unwrap();
+        assert_eq!(
+            state.new_flag_state,
+            Some(RepresentedNewFlagStateRequest::Dropped)
+        );
     }
 
     #[test]
