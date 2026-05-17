@@ -397,10 +397,16 @@ pub(crate) enum RepresentedGameObjectUseEffect {
     MeetingStoneSummonRequested {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
+        target_guid: ObjectGuid,
         gameobject_entry: u32,
         spell_id: u32,
         area_id: u32,
         prevent_unfriendly_outside_instances: bool,
+    },
+    MeetingStoneTargetRejected {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        target_guid: Option<ObjectGuid>,
     },
     GameObjectPostUseSpellMissing {
         gameobject_guid: ObjectGuid,
@@ -10691,6 +10697,21 @@ impl WorldSession {
         gameobject_entry: u32,
         source: wow_entities::MeetingStoneUseSource,
     ) -> bool {
+        let target_guid = self.selection_guid_like_cpp();
+        if !target_guid.is_some_and(|target_guid| {
+            target_guid != player_guid
+                && self.represented_player_is_same_raid_with_like_cpp(player_guid, target_guid)
+        }) {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::MeetingStoneTargetRejected {
+                    gameobject_guid,
+                    player_guid,
+                    target_guid,
+                },
+            );
+            return false;
+        }
+        let target_guid = target_guid.expect("checked above");
         let spell_id = if gameobject_entry == 194097 {
             61994
         } else {
@@ -10701,6 +10722,7 @@ impl WorldSession {
             RepresentedGameObjectUseEffect::MeetingStoneSummonRequested {
                 gameobject_guid,
                 player_guid,
+                target_guid,
                 gameobject_entry,
                 spell_id,
                 area_id: source.area_id,
@@ -24009,8 +24031,17 @@ mod tests {
     fn gameobject_use_meeting_stone_maps_spell_by_entry_like_cpp() {
         let (mut session, _pkt_tx, _send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 99);
+        let target_guid = ObjectGuid::create_player(1, 100);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 23);
+        session.set_selection_guid_like_cpp(Some(target_guid));
+        let group_registry = Arc::new(GroupRegistry::default());
+        let mut group = GroupInfo::new(player_guid);
+        group.add_member(target_guid);
+        let group_guid = group.group_guid;
+        group_registry.insert(group_guid, group);
+        session.group_guid = Some(group_guid);
+        session.set_group_registry(group_registry, Arc::new(PendingInvites::default()));
 
         assert!(session.use_represented_gameobject_meeting_stone_like_cpp(
             gameobject_guid,
@@ -24027,6 +24058,7 @@ mod tests {
                 RepresentedGameObjectUseEffect::MeetingStoneSummonRequested {
                     gameobject_guid,
                     player_guid,
+                    target_guid,
                     gameobject_entry: 194097,
                     spell_id: 61994,
                     area_id: 456,
@@ -24051,6 +24083,68 @@ mod tests {
                     spell_lookup_difficulty_id: 0,
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_meeting_stone_requires_selected_raid_target_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let target_guid = ObjectGuid::create_player(1, 100);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 23);
+        let source = wow_entities::MeetingStoneUseSource {
+            area_id: 456,
+            prevent_unfriendly_outside_instances: true,
+        };
+
+        assert!(!session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            source,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::MeetingStoneTargetRejected {
+                gameobject_guid,
+                player_guid,
+                target_guid: None,
+            }]
+        );
+        session.represented_gameobject_use_effects.clear();
+        session.set_selection_guid_like_cpp(Some(player_guid));
+
+        assert!(!session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            source,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::MeetingStoneTargetRejected {
+                gameobject_guid,
+                player_guid,
+                target_guid: Some(player_guid),
+            }]
+        );
+        session.represented_gameobject_use_effects.clear();
+        session.set_selection_guid_like_cpp(Some(target_guid));
+
+        assert!(!session.use_represented_gameobject_meeting_stone_like_cpp(
+            gameobject_guid,
+            player_guid,
+            194097,
+            source,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::MeetingStoneTargetRejected {
+                gameobject_guid,
+                player_guid,
+                target_guid: Some(target_guid),
+            }]
         );
     }
 
