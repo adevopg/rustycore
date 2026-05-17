@@ -499,9 +499,12 @@ pub(crate) enum BattlegroundFlagDropClickTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum RepresentedNewFlagStateRequest {
     InBase,
     Taken,
+    Dropped,
+    Respawning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -546,6 +549,10 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub interact_radius_override: Option<u32>,
     pub lock_id: Option<u32>,
     pub fishing_hole_max_opens: Option<u32>,
+    pub new_flag_state: Option<RepresentedNewFlagStateRequest>,
+    pub new_flag_carrier_guid: Option<wow_core::ObjectGuid>,
+    pub new_flag_taken_from_base_game_time_ms: Option<u32>,
+    pub new_flag_respawn_until: Option<Instant>,
     pub report_use_ai_returns_true: bool,
     pub gossip_hello_ai_returns_true: bool,
     pub cooldown_until: Option<Instant>,
@@ -718,6 +725,10 @@ impl Default for RepresentedGameObjectUseState {
             interact_radius_override: None,
             lock_id: None,
             fishing_hole_max_opens: None,
+            new_flag_state: None,
+            new_flag_carrier_guid: None,
+            new_flag_taken_from_base_game_time_ms: None,
+            new_flag_respawn_until: None,
             report_use_ai_returns_true: false,
             gossip_hello_ai_returns_true: false,
             cooldown_until: None,
@@ -10536,6 +10547,55 @@ impl WorldSession {
         true
     }
 
+    pub(crate) fn apply_represented_new_flag_state_command_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: Option<ObjectGuid>,
+        new_state: RepresentedNewFlagStateRequest,
+        respawn_time_ms: u32,
+    ) -> bool {
+        let state = self
+            .represented_gameobject_use_states
+            .entry(gameobject_guid)
+            .or_default();
+        let old_state = state
+            .new_flag_state
+            .unwrap_or(RepresentedNewFlagStateRequest::InBase);
+        if old_state == new_state {
+            return false;
+        }
+
+        state.new_flag_state = Some(new_state);
+        state.new_flag_carrier_guid = if new_state == RepresentedNewFlagStateRequest::Taken {
+            player_guid
+        } else {
+            None
+        };
+
+        if new_state == RepresentedNewFlagStateRequest::Taken
+            && old_state == RepresentedNewFlagStateRequest::InBase
+        {
+            state.new_flag_taken_from_base_game_time_ms = Some(Self::game_time_ms_like_cpp());
+        } else if matches!(
+            new_state,
+            RepresentedNewFlagStateRequest::InBase | RepresentedNewFlagStateRequest::Respawning
+        ) {
+            state.new_flag_taken_from_base_game_time_ms = None;
+        }
+
+        state.new_flag_respawn_until = (new_state == RepresentedNewFlagStateRequest::Respawning)
+            .then(|| Instant::now() + Duration::from_millis(u64::from(respawn_time_ms)));
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
+                gameobject_guid,
+                player_guid: player_guid.unwrap_or(ObjectGuid::EMPTY),
+                state: new_state,
+            },
+        );
+        true
+    }
+
     pub(crate) fn use_represented_gameobject_new_flag_like_cpp(
         &mut self,
         gameobject_guid: ObjectGuid,
@@ -10592,12 +10652,16 @@ impl WorldSession {
             } else {
                 RepresentedNewFlagStateRequest::Taken
             };
-            self.represented_gameobject_use_effects.push(
-                RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
-                    gameobject_guid,
-                    player_guid,
-                    state,
-                },
+            self.represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default()
+                .new_flag_state
+                .get_or_insert(RepresentedNewFlagStateRequest::Dropped);
+            self.apply_represented_new_flag_state_command_like_cpp(
+                gameobject_guid,
+                Some(player_guid),
+                state,
+                0,
             );
         }
 
@@ -10932,12 +10996,11 @@ impl WorldSession {
         if go_type == wow_entities::GAMEOBJECT_TYPE_NEW_FLAG
             && caster == RepresentedGameObjectSpellCaster::GameObject
         {
-            self.represented_gameobject_use_effects.push(
-                RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
-                    gameobject_guid,
-                    player_guid,
-                    state: RepresentedNewFlagStateRequest::Taken,
-                },
+            self.apply_represented_new_flag_state_command_like_cpp(
+                gameobject_guid,
+                Some(player_guid),
+                RepresentedNewFlagStateRequest::Taken,
+                0,
             );
         }
         true
@@ -23848,6 +23911,17 @@ mod tests {
                 },
             ]
         );
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(
+            state.new_flag_state,
+            Some(RepresentedNewFlagStateRequest::Taken)
+        );
+        assert_eq!(state.new_flag_carrier_guid, Some(player_guid));
+        assert!(state.new_flag_taken_from_base_game_time_ms.is_some());
+        assert!(state.new_flag_respawn_until.is_none());
     }
 
     #[test]
@@ -23886,6 +23960,16 @@ mod tests {
                 RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
             ]
         );
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(
+            state.new_flag_state,
+            Some(RepresentedNewFlagStateRequest::Taken)
+        );
+        assert_eq!(state.new_flag_carrier_guid, Some(player_guid));
+        assert_eq!(state.new_flag_taken_from_base_game_time_ms, None);
     }
 
     #[test]
@@ -23914,6 +23998,58 @@ mod tests {
                 RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
             ]
         );
+    }
+
+    #[test]
+    fn new_flag_state_command_tracks_cpp_state_carrier_and_respawn_timer() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 38);
+
+        assert!(session.apply_represented_new_flag_state_command_like_cpp(
+            gameobject_guid,
+            Some(player_guid),
+            RepresentedNewFlagStateRequest::Taken,
+            0,
+        ));
+        assert!(!session.apply_represented_new_flag_state_command_like_cpp(
+            gameobject_guid,
+            Some(player_guid),
+            RepresentedNewFlagStateRequest::Taken,
+            0,
+        ));
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .get(&gameobject_guid)
+                .unwrap();
+            assert_eq!(
+                state.new_flag_state,
+                Some(RepresentedNewFlagStateRequest::Taken)
+            );
+            assert_eq!(state.new_flag_carrier_guid, Some(player_guid));
+            assert!(state.new_flag_taken_from_base_game_time_ms.is_some());
+            assert!(state.new_flag_respawn_until.is_none());
+        }
+
+        assert!(session.apply_represented_new_flag_state_command_like_cpp(
+            gameobject_guid,
+            Some(player_guid),
+            RepresentedNewFlagStateRequest::Respawning,
+            5000,
+        ));
+        let state = session
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)
+            .unwrap();
+        assert_eq!(
+            state.new_flag_state,
+            Some(RepresentedNewFlagStateRequest::Respawning)
+        );
+        assert_eq!(state.new_flag_carrier_guid, None);
+        assert_eq!(state.new_flag_taken_from_base_game_time_ms, None);
+        assert!(state.new_flag_respawn_until.is_some());
     }
 
     #[test]
