@@ -476,6 +476,28 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
     },
+    FishingSkillUpdated {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    },
+    FishingLootRoll {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        player_fishing_level: i32,
+        area_fishing_level: i32,
+        chance: i32,
+        roll: i32,
+    },
+    FishingHoleDelegated {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        fishing_hole_guid: ObjectGuid,
+    },
+    FishingLootRequested {
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        loot_type: u8,
+    },
     FishNotHooked {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -588,6 +610,10 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub interact_radius_override: Option<u32>,
     pub lock_id: Option<u32>,
     pub fishing_hole_max_opens: Option<u32>,
+    pub fishing_area_level: Option<i32>,
+    pub player_fishing_level: Option<i32>,
+    pub fishing_roll: Option<i32>,
+    pub nearby_fishing_hole_guid: Option<wow_core::ObjectGuid>,
     pub capture_point_state: Option<RepresentedCapturePointStateLikeCpp>,
     pub new_flag_state: Option<RepresentedNewFlagStateRequest>,
     pub new_flag_carrier_guid: Option<wow_core::ObjectGuid>,
@@ -771,6 +797,10 @@ impl Default for RepresentedGameObjectUseState {
             interact_radius_override: None,
             lock_id: None,
             fishing_hole_max_opens: None,
+            fishing_area_level: None,
+            player_fishing_level: None,
+            fishing_roll: None,
+            nearby_fishing_hole_guid: None,
             capture_point_state: None,
             new_flag_state: None,
             new_flag_carrier_guid: None,
@@ -11548,20 +11578,83 @@ impl WorldSession {
 
         match current_loot_state {
             wow_entities::LootState::Ready => {
-                let state = self
-                    .represented_gameobject_use_states
-                    .entry(gameobject_guid)
-                    .or_default();
-                state.loot_state = Some(wow_entities::LootState::Activated);
-                state.loot_state_unit_guid = player_guid;
-                state.go_state = Some(wow_entities::GoState::Active);
-                state.gameobject_flags = wow_entities::GO_FLAG_IN_MULTI_USE;
+                let (area_fishing_level, player_fishing_level, fishing_roll, fishing_hole_guid) = {
+                    let state = self
+                        .represented_gameobject_use_states
+                        .entry(gameobject_guid)
+                        .or_default();
+                    state.loot_state = Some(wow_entities::LootState::Activated);
+                    state.loot_state_unit_guid = player_guid;
+                    state.go_state = Some(wow_entities::GoState::Active);
+                    state.gameobject_flags = wow_entities::GO_FLAG_IN_MULTI_USE;
+                    (
+                        state.fishing_area_level,
+                        state.player_fishing_level,
+                        state.fishing_roll,
+                        state.nearby_fishing_hole_guid,
+                    )
+                };
                 self.represented_gameobject_use_effects.push(
                     RepresentedGameObjectUseEffect::FishingNodeActivated {
                         gameobject_guid,
                         player_guid,
                     },
                 );
+                if let Some(area_fishing_level) = area_fishing_level {
+                    self.represented_gameobject_use_effects.push(
+                        RepresentedGameObjectUseEffect::FishingSkillUpdated {
+                            gameobject_guid,
+                            player_guid,
+                        },
+                    );
+                    let player_fishing_level = player_fishing_level.unwrap_or(0);
+                    let roll = fishing_roll.unwrap_or(100).clamp(1, 100);
+                    let chance =
+                        if area_fishing_level > 0 && player_fishing_level < area_fishing_level {
+                            (((player_fishing_level as f64 / area_fishing_level as f64).powi(2)
+                                * 100.0) as i32)
+                                .max(1)
+                        } else {
+                            100
+                        };
+                    self.represented_gameobject_use_effects.push(
+                        RepresentedGameObjectUseEffect::FishingLootRoll {
+                            gameobject_guid,
+                            player_guid,
+                            player_fishing_level,
+                            area_fishing_level,
+                            chance,
+                            roll,
+                        },
+                    );
+
+                    if let Some(fishing_hole_guid) = fishing_hole_guid {
+                        self.represented_gameobject_use_states
+                            .entry(gameobject_guid)
+                            .or_default()
+                            .loot_state = Some(wow_entities::LootState::JustDeactivated);
+                        self.represented_gameobject_use_effects.push(
+                            RepresentedGameObjectUseEffect::FishingHoleDelegated {
+                                gameobject_guid,
+                                player_guid,
+                                fishing_hole_guid,
+                            },
+                        );
+                    } else {
+                        let loot_type = if chance >= roll {
+                            wow_packet::packets::loot::LOOT_TYPE_FISHING_LIKE_CPP
+                        } else {
+                            wow_packet::packets::loot::LOOT_TYPE_FISHING_JUNK_LIKE_CPP
+                        };
+                        self.represented_gameobject_use_effects.push(
+                            RepresentedGameObjectUseEffect::FishingLootRequested {
+                                gameobject_guid,
+                                player_guid,
+                                loot_type,
+                            },
+                        );
+                    }
+                }
             }
             wow_entities::LootState::JustDeactivated => {}
             _ => {
@@ -25909,6 +26002,90 @@ mod tests {
         assert_eq!(state.loot_state, Some(wow_entities::LootState::Activated));
         assert_eq!(state.go_state, Some(wow_entities::GoState::Active));
         assert_eq!(state.gameobject_flags, wow_entities::GO_FLAG_IN_MULTI_USE);
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_records_skill_roll_and_loot_type_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 47);
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.owner_guid = Some(player_guid);
+            state.fishing_area_level = Some(200);
+            state.player_fishing_level = Some(100);
+            state.fishing_roll = Some(30);
+        }
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingSkillUpdated {
+                gameobject_guid,
+                player_guid,
+            },
+        ));
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingLootRoll {
+                gameobject_guid,
+                player_guid,
+                player_fishing_level: 100,
+                area_fishing_level: 200,
+                chance: 25,
+                roll: 30,
+            },
+        ));
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingLootRequested {
+                gameobject_guid,
+                player_guid,
+                loot_type: wow_packet::packets::loot::LOOT_TYPE_FISHING_JUNK_LIKE_CPP,
+            },
+        ));
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_delegates_to_known_fishing_hole_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 48);
+        let fishing_hole_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 49);
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.owner_guid = Some(player_guid);
+            state.fishing_area_level = Some(500);
+            state.player_fishing_level = Some(1);
+            state.fishing_roll = Some(100);
+            state.nearby_fishing_hole_guid = Some(fishing_hole_guid);
+        }
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingHoleDelegated {
+                gameobject_guid,
+                player_guid,
+                fishing_hole_guid,
+            },
+        ));
+        assert_eq!(
+            session
+                .represented_gameobject_use_states
+                .get(&gameobject_guid)
+                .and_then(|state| state.loot_state),
+            Some(wow_entities::LootState::JustDeactivated)
+        );
     }
 
     #[test]
