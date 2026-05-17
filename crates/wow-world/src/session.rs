@@ -9968,6 +9968,25 @@ impl WorldSession {
         true
     }
 
+    pub(crate) fn use_represented_gameobject_spell_focus_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+        linked_trap_entry: u32,
+    ) -> bool {
+        if linked_trap_entry != 0 {
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::TriggerLinkedTrap {
+                    gameobject_guid,
+                    player_guid,
+                    trap_entry: linked_trap_entry,
+                },
+            );
+        }
+
+        true
+    }
+
     fn send_active_player_transport_server_time_update_like_cpp(&self) {
         let Some(guid) = self.player_guid() else {
             return;
@@ -21928,6 +21947,36 @@ mod tests {
             session.represented_gameobject_use_effects.last(),
             Some(&RepresentedGameObjectUseEffect::CooldownRejected { gameobject_guid })
         );
+    }
+
+    #[test]
+    fn gameobject_use_spell_focus_triggers_linked_trap_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 8);
+
+        assert!(session.use_represented_gameobject_spell_focus_like_cpp(
+            gameobject_guid,
+            player_guid,
+            555,
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![RepresentedGameObjectUseEffect::TriggerLinkedTrap {
+                gameobject_guid,
+                player_guid,
+                trap_entry: 555,
+            }]
+        );
+
+        session.represented_gameobject_use_effects.clear();
+        assert!(session.use_represented_gameobject_spell_focus_like_cpp(
+            gameobject_guid,
+            player_guid,
+            0,
+        ));
+        assert!(session.represented_gameobject_use_effects.is_empty());
     }
 
     #[test]

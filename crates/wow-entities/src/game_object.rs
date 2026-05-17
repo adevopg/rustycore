@@ -307,6 +307,14 @@ impl GameObjectTemplateData {
         })
     }
 
+    pub const fn spell_focus_linked_trap_like_cpp(&self) -> u32 {
+        if self.go_type != GAMEOBJECT_TYPE_SPELL_FOCUS {
+            return 0;
+        }
+
+        self.data[2]
+    }
+
     pub const fn chest_loot_source_like_cpp(&self) -> Option<GameObjectLootSource> {
         if self.go_type != GAMEOBJECT_TYPE_CHEST {
             return None;
@@ -1171,6 +1179,23 @@ mod tests {
         assert_eq!(
             GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data).trap_use_source_like_cpp(),
             None
+        );
+    }
+
+    #[test]
+    fn spell_focus_linked_trap_uses_cpp_data_index() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[2] = 987;
+
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_SPELL_FOCUS, data)
+                .spell_focus_linked_trap_like_cpp(),
+            987
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+                .spell_focus_linked_trap_like_cpp(),
+            0
         );
     }
 
