@@ -445,6 +445,11 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_guid: ObjectGuid,
         use_count: u32,
     },
+    GameObjectChargesDepleted {
+        gameobject_guid: ObjectGuid,
+        max_charges: u32,
+        loot_state: wow_entities::LootState,
+    },
     CastSpell {
         gameobject_guid: ObjectGuid,
         player_guid: ObjectGuid,
@@ -10817,6 +10822,22 @@ impl WorldSession {
             false,
             RepresentedGameObjectSpellCaster::User,
         );
+
+        if source.charges != 0 && use_count >= source.charges {
+            let state = self
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.use_count = 0;
+            state.loot_state = Some(wow_entities::LootState::JustDeactivated);
+            self.represented_gameobject_use_effects.push(
+                RepresentedGameObjectUseEffect::GameObjectChargesDepleted {
+                    gameobject_guid,
+                    max_charges: source.charges,
+                    loot_state: wow_entities::LootState::JustDeactivated,
+                },
+            );
+        }
 
         true
     }
@@ -23873,6 +23894,11 @@ mod tests {
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::User,
                 },
+                RepresentedGameObjectUseEffect::GameObjectChargesDepleted {
+                    gameobject_guid,
+                    max_charges: 1,
+                    loot_state: wow_entities::LootState::JustDeactivated,
+                },
             ]
         );
         assert_eq!(
@@ -23881,7 +23907,15 @@ mod tests {
                 .get(&gameobject_guid)
                 .unwrap()
                 .use_count,
-            1
+            0
+        );
+        assert_eq!(
+            session
+                .represented_gameobject_use_states
+                .get(&gameobject_guid)
+                .unwrap()
+                .loot_state,
+            Some(wow_entities::LootState::JustDeactivated)
         );
     }
 
