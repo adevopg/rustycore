@@ -127,6 +127,8 @@ const TRANSFER_ABORT_MAP_NOT_ALLOWED_LIKE_CPP: u32 = 16;
 const MAP_BATTLEGROUND_LIKE_CPP: i8 = 3;
 const MAP_ARENA_LIKE_CPP: i8 = 4;
 const GROUP_XP_DISTANCE_LIKE_CPP: f32 = 74.0;
+const BATTLEGROUND_WS_LIKE_CPP: u32 = 2;
+const BATTLEGROUND_EY_LIKE_CPP: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMapRuntimeConfigLikeCpp {
@@ -509,6 +511,7 @@ pub(crate) enum RepresentedBattlegroundObjectUseRejection {
     RecentlyDroppedFlag,
     DamageImmune,
     Dead,
+    NotInBattleground,
     Vehicle,
 }
 
@@ -1465,6 +1468,8 @@ pub struct WorldSession {
     player_mount_vehicle_usable_seat_count_like_cpp: u8,
     /// Represented current `VehicleSeatEntry::Flags` for C++ `HandleAttackSwingOpcode`.
     player_vehicle_seat_flags_like_cpp: Option<i32>,
+    /// Represented `Player::GetBattleground()->GetTypeID()` for C++ battleground object use.
+    player_battleground_type_id_like_cpp: Option<u32>,
     /// Represented current pet GUID until player-owned pet runtime is canonical.
     represented_pet_guid_like_cpp: Option<ObjectGuid>,
     /// Represented current pet react state for C++ mount/dismount PetMode side effects.
@@ -2173,6 +2178,7 @@ impl WorldSession {
             player_mount_vehicle_seat_count_like_cpp: 0,
             player_mount_vehicle_usable_seat_count_like_cpp: 0,
             player_vehicle_seat_flags_like_cpp: None,
+            player_battleground_type_id_like_cpp: None,
             represented_pet_guid_like_cpp: None,
             represented_pet_react_state_like_cpp:
                 wow_packet::packets::pet::REACT_DEFENSIVE_LIKE_CPP,
@@ -9619,6 +9625,11 @@ impl WorldSession {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_player_battleground_type_id_like_cpp(&mut self, bg_type_id: u32) {
+        self.player_battleground_type_id_like_cpp = (bg_type_id != 0).then_some(bg_type_id);
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_player_game_master_like_cpp(&mut self, is_game_master: bool) {
         self.player_game_master_like_cpp = is_game_master;
     }
@@ -10235,6 +10246,25 @@ impl WorldSession {
         true
     }
 
+    fn represented_player_battleground_type_id_or_reject_like_cpp(
+        &mut self,
+        gameobject_guid: ObjectGuid,
+        player_guid: ObjectGuid,
+    ) -> Option<u32> {
+        if let Some(bg_type_id) = self.player_battleground_type_id_like_cpp {
+            return Some(bg_type_id);
+        }
+
+        self.represented_gameobject_use_effects.push(
+            RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                gameobject_guid,
+                player_guid,
+                reason: RepresentedBattlegroundObjectUseRejection::NotInBattleground,
+            },
+        );
+        None
+    }
+
     pub(crate) fn record_represented_gameobject_report_use_ai_like_cpp(
         &mut self,
         gameobject_guid: ObjectGuid,
@@ -10658,6 +10688,15 @@ impl WorldSession {
         {
             return false;
         }
+        if self
+            .represented_player_battleground_type_id_or_reject_like_cpp(
+                gameobject_guid,
+                player_guid,
+            )
+            .is_none()
+        {
+            return false;
+        }
         if self.represented_player_reject_battleground_object_vehicle_like_cpp(
             gameobject_guid,
             player_guid,
@@ -10697,6 +10736,12 @@ impl WorldSession {
         {
             return false;
         }
+        let Some(bg_type_id) = self.represented_player_battleground_type_id_or_reject_like_cpp(
+            gameobject_guid,
+            player_guid,
+        ) else {
+            return false;
+        };
         if self.represented_player_reject_battleground_object_vehicle_like_cpp(
             gameobject_guid,
             player_guid,
@@ -10705,8 +10750,12 @@ impl WorldSession {
         }
 
         let click_target = match gameobject_entry {
-            179785 | 179786 => BattlegroundFlagDropClickTarget::WarsongGulch,
-            184142 => BattlegroundFlagDropClickTarget::EyeOfTheStorm,
+            179785 | 179786 if bg_type_id == BATTLEGROUND_WS_LIKE_CPP => {
+                BattlegroundFlagDropClickTarget::WarsongGulch
+            }
+            184142 if bg_type_id == BATTLEGROUND_EY_LIKE_CPP => {
+                BattlegroundFlagDropClickTarget::EyeOfTheStorm
+            }
             _ => BattlegroundFlagDropClickTarget::None,
         };
 
@@ -24062,6 +24111,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 26);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
 
         assert!(session.use_represented_gameobject_flagstand_like_cpp(
             gameobject_guid,
@@ -24096,6 +24146,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 40);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
         session.player_vehicle_seat_flags_like_cpp = Some(0);
 
         assert!(!session.use_represented_gameobject_flagstand_like_cpp(
@@ -24120,11 +24171,40 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_use_flagstand_rejects_missing_battleground_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 42);
+
+        assert!(!session.use_represented_gameobject_flagstand_like_cpp(
+            gameobject_guid,
+            player_guid,
+            wow_entities::FlagStandUseSource {
+                pickup_spell_id: 11,
+                return_aura_id: 33,
+                return_spell_id: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                    gameobject_guid,
+                    player_guid,
+                    reason: RepresentedBattlegroundObjectUseRejection::NotInBattleground,
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn gameobject_use_flagstand_removes_stealth_and_invisibility_auras_like_cpp() {
         let (mut session, _pkt_tx, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 41);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
 
         session.apply_aura(1001, player_guid, 30_000, 0).unwrap();
         session.apply_aura(1002, player_guid, 30_000, 0).unwrap();
@@ -24165,6 +24245,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 27);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
 
         assert!(session.use_represented_gameobject_flagdrop_like_cpp(
             gameobject_guid,
@@ -24208,11 +24289,86 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_use_flagdrop_requires_matching_battleground_type_for_click_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 43);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_EY_LIKE_CPP);
+
+        assert!(session.use_represented_gameobject_flagdrop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            179785,
+            wow_entities::FlagDropUseSource {
+                event_id: 22,
+                pickup_spell_id: 33,
+                expire_duration_ms: 44,
+            },
+        ));
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::RemoveStealthOrInvisibilityAuras {
+                    gameobject_guid,
+                    player_guid,
+                },
+                RepresentedGameObjectUseEffect::BattlegroundFlagDropClicked {
+                    gameobject_guid,
+                    player_guid,
+                    gameobject_entry: 179785,
+                    click_target: BattlegroundFlagDropClickTarget::None,
+                    event_id: 22,
+                    pickup_spell_id: 33,
+                    expire_duration_ms: 44,
+                },
+                RepresentedGameObjectUseEffect::TriggerGameEvent {
+                    gameobject_guid,
+                    player_guid,
+                    event_id: 22,
+                },
+                RepresentedGameObjectUseEffect::GameObjectDeleted { gameobject_guid },
+            ]
+        );
+    }
+
+    #[test]
+    fn gameobject_use_flagdrop_rejects_missing_battleground_before_delete_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 44);
+
+        assert!(!session.use_represented_gameobject_flagdrop_like_cpp(
+            gameobject_guid,
+            player_guid,
+            179785,
+            wow_entities::FlagDropUseSource {
+                event_id: 22,
+                pickup_spell_id: 33,
+                expire_duration_ms: 44,
+            },
+        ));
+        assert!(send_rx.try_recv().is_err());
+        assert_eq!(
+            session.represented_gameobject_use_effects,
+            vec![
+                RepresentedGameObjectUseEffect::BattlegroundObjectUseRejected {
+                    gameobject_guid,
+                    player_guid,
+                    reason: RepresentedBattlegroundObjectUseRejection::NotInBattleground,
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn gameobject_use_flagdrop_rejects_vehicle_before_delete_like_cpp() {
         let (mut session, _pkt_tx, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 41);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
         session.player_vehicle_seat_flags_like_cpp = Some(0);
 
         assert!(!session.use_represented_gameobject_flagdrop_like_cpp(
@@ -24244,6 +24400,7 @@ mod tests {
         let player_guid = ObjectGuid::create_player(1, 99);
         let gameobject_guid =
             ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 27);
+        session.set_player_battleground_type_id_like_cpp(BATTLEGROUND_WS_LIKE_CPP);
 
         assert!(session.use_represented_gameobject_flagdrop_like_cpp(
             gameobject_guid,
