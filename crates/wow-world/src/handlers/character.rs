@@ -3783,6 +3783,7 @@ impl WorldSession {
                         data2
                     };
                     self.record_represented_fishing_hole_max_opens_like_cpp(guid, max_opens);
+                    self.record_represented_fishing_hole_radius_like_cpp(guid, template_data[0]);
                 }
                 self.record_represented_gameobject_interact_radius_override_like_cpp(
                     guid,
@@ -4450,6 +4451,7 @@ impl WorldSession {
                     data2
                 };
                 self.record_represented_fishing_hole_max_opens_like_cpp(guid, max_opens);
+                self.record_represented_fishing_hole_radius_like_cpp(guid, template_data[0]);
             }
             self.record_represented_gameobject_interact_radius_override_like_cpp(
                 guid,

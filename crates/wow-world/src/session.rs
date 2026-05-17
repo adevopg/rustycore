@@ -610,6 +610,7 @@ pub(crate) struct RepresentedGameObjectUseState {
     pub interact_radius_override: Option<u32>,
     pub lock_id: Option<u32>,
     pub fishing_hole_max_opens: Option<u32>,
+    pub fishing_hole_radius: Option<f32>,
     pub fishing_area_level: Option<i32>,
     pub player_fishing_level: Option<i32>,
     pub fishing_roll: Option<i32>,
@@ -797,6 +798,7 @@ impl Default for RepresentedGameObjectUseState {
             interact_radius_override: None,
             lock_id: None,
             fishing_hole_max_opens: None,
+            fishing_hole_radius: None,
             fishing_area_level: None,
             player_fishing_level: None,
             fishing_roll: None,
@@ -4014,6 +4016,17 @@ impl WorldSession {
             .entry(guid)
             .or_default()
             .fishing_hole_max_opens = Some(max_opens);
+    }
+
+    pub(crate) fn record_represented_fishing_hole_radius_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        radius: u32,
+    ) {
+        self.represented_gameobject_use_states
+            .entry(guid)
+            .or_default()
+            .fishing_hole_radius = Some(radius as f32);
     }
 
     fn upsert_canonical_gameobject_map_object_like_cpp(
@@ -11582,7 +11595,12 @@ impl WorldSession {
 
         match current_loot_state {
             wow_entities::LootState::Ready => {
-                let (area_fishing_level, player_fishing_level, fishing_roll, fishing_hole_guid) = {
+                let (
+                    area_fishing_level,
+                    player_fishing_level,
+                    fishing_roll,
+                    explicit_fishing_hole_guid,
+                ) = {
                     let state = self
                         .represented_gameobject_use_states
                         .entry(gameobject_guid)
@@ -11598,6 +11616,9 @@ impl WorldSession {
                         state.nearby_fishing_hole_guid,
                     )
                 };
+                let fishing_hole_guid = explicit_fishing_hole_guid.or_else(|| {
+                    self.lookup_represented_fishing_hole_around_like_cpp(gameobject_guid)
+                });
                 self.represented_gameobject_use_effects.push(
                     RepresentedGameObjectUseEffect::FishingNodeActivated {
                         gameobject_guid,
@@ -11680,6 +11701,58 @@ impl WorldSession {
             .push(RepresentedGameObjectUseEffect::FinishChanneledSpell { player_guid });
 
         true
+    }
+
+    fn lookup_represented_fishing_hole_around_like_cpp(
+        &self,
+        gameobject_guid: ObjectGuid,
+    ) -> Option<ObjectGuid> {
+        const FISHING_HOLE_SEARCH_RANGE_LIKE_CPP: f32 =
+            20.0 + wow_movement::CONTACT_DISTANCE_LIKE_CPP;
+
+        let source = self
+            .represented_gameobject_use_states
+            .get(&gameobject_guid)?;
+        let source_position = source.position?;
+        let source_map_id = source.map_id;
+        let now = Instant::now();
+        let mut nearest: Option<(ObjectGuid, f32)> = None;
+
+        for (candidate_guid, candidate) in &self.represented_gameobject_use_states {
+            if *candidate_guid == gameobject_guid {
+                continue;
+            }
+            if candidate.go_type != Some(wow_entities::GAMEOBJECT_TYPE_FISHING_HOLE as u8) {
+                continue;
+            }
+            if source_map_id.is_some() && candidate.map_id != source_map_id {
+                continue;
+            }
+            if candidate
+                .per_player_despawn_until
+                .is_some_and(|until| until > now)
+            {
+                continue;
+            }
+            let Some(candidate_position) = candidate.position else {
+                continue;
+            };
+            let Some(fishing_hole_radius) = candidate.fishing_hole_radius else {
+                continue;
+            };
+            if !source_position
+                .is_within_dist(&candidate_position, FISHING_HOLE_SEARCH_RANGE_LIKE_CPP)
+                || !source_position.is_within_dist(&candidate_position, fishing_hole_radius)
+            {
+                continue;
+            }
+            let distance = source_position.distance(&candidate_position);
+            if nearest.is_none_or(|(_, nearest_distance)| distance < nearest_distance) {
+                nearest = Some((*candidate_guid, distance));
+            }
+        }
+
+        nearest.map(|(guid, _)| guid)
     }
 
     fn represented_gameobject_spell_lookup_difficulty_id_like_cpp(&self) -> u8 {
@@ -26090,6 +26163,126 @@ mod tests {
                 .and_then(|state| state.loot_state),
             Some(wow_entities::LootState::JustDeactivated)
         );
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_finds_nearest_represented_fishing_hole_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 58);
+        let farther_hole_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 778, 59);
+        let nearest_hole_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 779, 60);
+
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            gameobject_guid,
+            gameobject_guid.entry(),
+            Position::ZERO,
+            wow_entities::GAMEOBJECT_TYPE_FISHING_NODE as u8,
+        );
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            farther_hole_guid,
+            farther_hole_guid.entry(),
+            Position::new(12.0, 0.0, 0.0, 0.0),
+            wow_entities::GAMEOBJECT_TYPE_FISHING_HOLE as u8,
+        );
+        session.record_represented_fishing_hole_radius_like_cpp(farther_hole_guid, 20);
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            nearest_hole_guid,
+            nearest_hole_guid.entry(),
+            Position::new(8.0, 0.0, 0.0, 0.0),
+            wow_entities::GAMEOBJECT_TYPE_FISHING_HOLE as u8,
+        );
+        session.record_represented_fishing_hole_radius_like_cpp(nearest_hole_guid, 20);
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.owner_guid = Some(player_guid);
+            state.fishing_area_level = Some(500);
+            state.player_fishing_level = Some(1);
+            state.fishing_roll = Some(100);
+        }
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingHoleDelegated {
+                gameobject_guid,
+                player_guid,
+                fishing_hole_guid: nearest_hole_guid,
+            },
+        ));
+        assert!(!session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingLootRequested {
+                gameobject_guid,
+                player_guid,
+                loot_type: wow_packet::packets::loot::LOOT_TYPE_FISHING_JUNK_LIKE_CPP,
+            },
+        ));
+    }
+
+    #[test]
+    fn gameobject_use_fishing_node_requires_fishing_hole_radius_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let gameobject_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 777, 61);
+        let fishing_hole_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 778, 62);
+
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            gameobject_guid,
+            gameobject_guid.entry(),
+            Position::ZERO,
+            wow_entities::GAMEOBJECT_TYPE_FISHING_NODE as u8,
+        );
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            fishing_hole_guid,
+            fishing_hole_guid.entry(),
+            Position::new(10.0, 0.0, 0.0, 0.0),
+            wow_entities::GAMEOBJECT_TYPE_FISHING_HOLE as u8,
+        );
+        session.record_represented_fishing_hole_radius_like_cpp(fishing_hole_guid, 5);
+        {
+            let state = session
+                .represented_gameobject_use_states
+                .entry(gameobject_guid)
+                .or_default();
+            state.owner_guid = Some(player_guid);
+            state.fishing_area_level = Some(500);
+            state.player_fishing_level = Some(1);
+            state.fishing_roll = Some(100);
+        }
+
+        assert!(
+            session.use_represented_gameobject_fishing_node_like_cpp(gameobject_guid, player_guid,)
+        );
+        assert!(
+            !session
+                .represented_gameobject_use_effects
+                .iter()
+                .any(|effect| matches!(
+                    effect,
+                    RepresentedGameObjectUseEffect::FishingHoleDelegated { .. }
+                ))
+        );
+        assert!(session.represented_gameobject_use_effects.contains(
+            &RepresentedGameObjectUseEffect::FishingLootRequested {
+                gameobject_guid,
+                player_guid,
+                loot_type: wow_packet::packets::loot::LOOT_TYPE_FISHING_JUNK_LIKE_CPP,
+            },
+        ));
     }
 
     #[test]
