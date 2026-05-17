@@ -8423,6 +8423,7 @@ mod tests {
                     gameobject_entry: 190_007,
                     spell_id: 777,
                     go_type: GAMEOBJECT_TYPE_GATHERING_NODE,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -8431,6 +8432,7 @@ mod tests {
                     spell_id: 777,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
                 },
             ]
         );

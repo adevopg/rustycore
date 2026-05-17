@@ -408,6 +408,7 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_entry: u32,
         spell_id: u32,
         go_type: u32,
+        spell_lookup_difficulty_id: u8,
     },
     OutdoorPvpCustomSpellRequested {
         gameobject_guid: ObjectGuid,
@@ -415,6 +416,7 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         gameobject_entry: u32,
         spell_id: u32,
         go_type: u32,
+        spell_lookup_difficulty_id: u8,
         spell_info_missing: bool,
     },
     GameObjectPostUseSpellCast {
@@ -423,6 +425,7 @@ pub(crate) enum RepresentedGameObjectUseEffect {
         spell_id: u32,
         triggered: bool,
         caster: RepresentedGameObjectSpellCaster,
+        spell_lookup_difficulty_id: u8,
     },
     FishingNodeOwnerRejected {
         gameobject_guid: ObjectGuid,
@@ -10658,6 +10661,8 @@ impl WorldSession {
             return false;
         }
 
+        let spell_lookup_difficulty_id =
+            self.represented_gameobject_spell_lookup_difficulty_id_like_cpp();
         let spell_info_missing = self
             .spell_store()
             .is_some_and(|store| store.get(spell_id as i32).is_none());
@@ -10669,6 +10674,7 @@ impl WorldSession {
                 gameobject_entry,
                 spell_id,
                 go_type,
+                spell_lookup_difficulty_id,
                 spell_info_missing,
             },
         );
@@ -10681,6 +10687,7 @@ impl WorldSession {
                     gameobject_entry,
                     spell_id,
                     go_type,
+                    spell_lookup_difficulty_id,
                 },
             );
             return false;
@@ -10693,6 +10700,7 @@ impl WorldSession {
                 spell_id,
                 triggered,
                 caster,
+                spell_lookup_difficulty_id,
             },
         );
 
@@ -10774,6 +10782,19 @@ impl WorldSession {
             .push(RepresentedGameObjectUseEffect::FinishChanneledSpell { player_guid });
 
         true
+    }
+
+    fn represented_gameobject_spell_lookup_difficulty_id_like_cpp(&self) -> u8 {
+        let map_id = u32::from(self.player_map_id_like_cpp());
+        self.canonical_map_manager
+            .as_ref()
+            .and_then(|manager| manager.lock().ok())
+            .and_then(|manager| {
+                manager
+                    .find_map(map_id, 0)
+                    .map(|managed| managed.map().spawn_mode())
+            })
+            .unwrap_or(0)
     }
 
     pub(crate) fn use_represented_gameobject_questgiver_like_cpp(
@@ -23516,6 +23537,7 @@ mod tests {
                     gameobject_entry: 179_830,
                     spell_id: 11,
                     go_type: wow_entities::GAMEOBJECT_TYPE_NEW_FLAG,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -23524,6 +23546,7 @@ mod tests {
                     spell_id: 11,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::GameObject,
+                    spell_lookup_difficulty_id: 0,
                 },
                 RepresentedGameObjectUseEffect::NewFlagOwnerStateRequested {
                     gameobject_guid,
@@ -23686,6 +23709,7 @@ mod tests {
                     gameobject_entry: 777,
                     spell_id: 61993,
                     go_type: wow_entities::GAMEOBJECT_TYPE_RITUAL,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -23694,6 +23718,7 @@ mod tests {
                     spell_id: 61993,
                     triggered: true,
                     caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
                 },
             ]
         );
@@ -23739,6 +23764,7 @@ mod tests {
                     gameobject_entry: 194097,
                     spell_id: 61994,
                     go_type: wow_entities::GAMEOBJECT_TYPE_MEETINGSTONE,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -23747,6 +23773,7 @@ mod tests {
                     spell_id: 61994,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
                 }
             ]
         );
@@ -23780,6 +23807,7 @@ mod tests {
                     gameobject_entry: 194097,
                     spell_id: 61994,
                     go_type: wow_entities::GAMEOBJECT_TYPE_MEETINGSTONE,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: true,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellMissing {
@@ -23788,6 +23816,7 @@ mod tests {
                     gameobject_entry: 194097,
                     spell_id: 61994,
                     go_type: wow_entities::GAMEOBJECT_TYPE_MEETINGSTONE,
+                    spell_lookup_difficulty_id: 0,
                 }
             ]
         );
@@ -23945,6 +23974,7 @@ mod tests {
                     gameobject_entry: 777,
                     spell_id: 3456,
                     go_type: wow_entities::GAMEOBJECT_TYPE_SPELLCASTER,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -23953,6 +23983,7 @@ mod tests {
                     spell_id: 3456,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
                 },
                 RepresentedGameObjectUseEffect::GameObjectChargesDepleted {
                     gameobject_guid,
@@ -24332,6 +24363,7 @@ mod tests {
                     gameobject_entry: 777,
                     spell_id: 7777,
                     go_type: wow_entities::GAMEOBJECT_TYPE_GOOBER,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -24340,6 +24372,7 @@ mod tests {
                     spell_id: 7777,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::User,
+                    spell_lookup_difficulty_id: 0,
                 },
             ]
         );
@@ -24385,6 +24418,7 @@ mod tests {
                     gameobject_entry: 777,
                     spell_id: 8888,
                     go_type: wow_entities::GAMEOBJECT_TYPE_GOOBER,
+                    spell_lookup_difficulty_id: 0,
                     spell_info_missing: false,
                 },
                 RepresentedGameObjectUseEffect::GameObjectPostUseSpellCast {
@@ -24393,6 +24427,7 @@ mod tests {
                     spell_id: 8888,
                     triggered: false,
                     caster: RepresentedGameObjectSpellCaster::GameObject,
+                    spell_lookup_difficulty_id: 0,
                 },
             ]
         );
