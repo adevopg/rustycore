@@ -152,6 +152,19 @@ pub enum CheckRespawnLinkedRespawnGuardOutcomeLikeCpp {
     UnsupportedSpawnType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckRespawnCompositeOutcomeLikeCpp {
+    Allowed,
+    InactiveSpawnGroupDeletedTimer,
+    AliveCreatureBlocksRespawn,
+    GameObjectBlocksRespawn,
+    LinkedInfinite,
+    LinkedSelfNeverRespawn,
+    LinkedDelayed,
+    MissingSpawnData,
+    UnsupportedSpawnType,
+}
+
 const WEEK_SECS_LIKE_CPP: i64 = 7 * 24 * 60 * 60;
 
 impl SpawnGroupConditionActionLikeCpp {
@@ -754,6 +767,87 @@ where
             }
             SpawnObjectType::AreaTrigger => {
                 CheckRespawnLiveObjectGuardOutcomeLikeCpp::UnsupportedSpawnType
+            }
+        }
+    }
+
+    /// Composite helper preserving represented C++ `Map::CheckRespawn` guard order.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:1950-2023` defines the full return/mutate contract.
+    /// - `Map.cpp:1956-1964` checks spawn-group activity first.
+    /// - `Map.cpp:1966-2002` checks live object blockers second.
+    /// - `Map.cpp:2004-2020` checks linked respawn only after earlier guards allow.
+    ///
+    /// Runtime timer source of truth is this map-owned `RespawnStoreLikeCpp` via
+    /// `RespawnInfoLikeCpp`; metadata stays caller-supplied `SpawnStore` until
+    /// ObjectMgr ownership moves into `Map`; live blockers come from `map_objects`;
+    /// linked metadata is read-only. This helper deliberately does not execute
+    /// PoolMgr, `DoRespawn`, DB save/delete, entity creation, fanout, or RNG.
+    pub fn check_respawn_like_cpp<F>(
+        &self,
+        info: &mut RespawnInfoLikeCpp,
+        spawn_store: &SpawnStore,
+        linked_store: &LinkedRespawnStoreLikeCpp,
+        now: i64,
+        jitter_secs: u32,
+        respawn_dynamic_escortnpc: bool,
+        mut is_creature_escorted: F,
+    ) -> CheckRespawnCompositeOutcomeLikeCpp
+    where
+        F: FnMut(ObjectGuid, &Creature) -> bool,
+    {
+        if matches!(info.object_type, SpawnObjectType::AreaTrigger) {
+            return CheckRespawnCompositeOutcomeLikeCpp::UnsupportedSpawnType;
+        }
+
+        match self.check_respawn_spawn_group_guard_like_cpp(info, spawn_store) {
+            CheckRespawnSpawnGroupGuardOutcomeLikeCpp::Allowed => {}
+            CheckRespawnSpawnGroupGuardOutcomeLikeCpp::InactiveSpawnGroupDeletedTimer => {
+                return CheckRespawnCompositeOutcomeLikeCpp::InactiveSpawnGroupDeletedTimer;
+            }
+            CheckRespawnSpawnGroupGuardOutcomeLikeCpp::MissingSpawnData => {
+                return CheckRespawnCompositeOutcomeLikeCpp::MissingSpawnData;
+            }
+        }
+
+        match self.check_respawn_live_object_guard_like_cpp(
+            info,
+            spawn_store,
+            respawn_dynamic_escortnpc,
+            &mut is_creature_escorted,
+        ) {
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed => {}
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::AliveCreatureBlocksRespawn => {
+                return CheckRespawnCompositeOutcomeLikeCpp::AliveCreatureBlocksRespawn;
+            }
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::GameObjectBlocksRespawn => {
+                return CheckRespawnCompositeOutcomeLikeCpp::GameObjectBlocksRespawn;
+            }
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::MissingSpawnData => {
+                return CheckRespawnCompositeOutcomeLikeCpp::MissingSpawnData;
+            }
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::UnsupportedSpawnType => {
+                return CheckRespawnCompositeOutcomeLikeCpp::UnsupportedSpawnType;
+            }
+        }
+
+        match self.check_respawn_linked_respawn_guard_like_cpp(info, linked_store, now, jitter_secs)
+        {
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::Allowed => {
+                CheckRespawnCompositeOutcomeLikeCpp::Allowed
+            }
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedInfinite => {
+                CheckRespawnCompositeOutcomeLikeCpp::LinkedInfinite
+            }
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedSelfNeverRespawn => {
+                CheckRespawnCompositeOutcomeLikeCpp::LinkedSelfNeverRespawn
+            }
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedDelayed => {
+                CheckRespawnCompositeOutcomeLikeCpp::LinkedDelayed
+            }
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::UnsupportedSpawnType => {
+                CheckRespawnCompositeOutcomeLikeCpp::UnsupportedSpawnType
             }
         }
     }
@@ -4256,6 +4350,191 @@ mod tests {
             CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedDelayed
         );
         assert_eq!(future.respawn_time, 1215);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_inactive_spawn_group_stops_before_live_and_linked_like_cpp() {
+        let map = test_map();
+        let mut store = SpawnStore::new();
+        let manual = spawn_group(61, SpawnGroupFlags::MANUAL_SPAWN);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 100, manual), |_| {
+            false
+        });
+        let this = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let master = linked_respawn_guid(HighGuid::Creature, 77, 200);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this, master);
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+        let mut escort_checked = false;
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, true, |_, _| {
+                escort_checked = true;
+                false
+            });
+
+        assert_eq!(
+            outcome,
+            CheckRespawnCompositeOutcomeLikeCpp::InactiveSpawnGroupDeletedTimer
+        );
+        assert_eq!(info.respawn_time, 0);
+        assert!(!escort_checked);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_live_blocker_stops_before_linked_reschedule_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(62, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 100, group), |_| {
+            false
+        });
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(100, 100, true)).unwrap(),
+        )
+        .unwrap();
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 200,
+            entry: 77,
+            respawn_time: 1200,
+            grid_id: 7,
+        });
+        let this = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let master = linked_respawn_guid(HighGuid::Creature, 77, 200);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this, master);
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, false, |_, _| false);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnCompositeOutcomeLikeCpp::AliveCreatureBlocksRespawn
+        );
+        assert_eq!(info.respawn_time, 0);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_linked_delayed_runs_after_allowed_guards_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(63, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 100, group), |_| {
+            false
+        });
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 200,
+            entry: 77,
+            respawn_time: 1200,
+            grid_id: 7,
+        });
+        let this = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let master = linked_respawn_guid(HighGuid::Creature, 77, 200);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this, master);
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 11, false, |_, _| false);
+
+        assert_eq!(outcome, CheckRespawnCompositeOutcomeLikeCpp::LinkedDelayed);
+        assert_eq!(info.respawn_time, 1211);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_allowed_path_preserves_timer_like_cpp() {
+        let map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(64, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::GameObject, 101, group), |_| {
+            false
+        });
+        let linked = LinkedRespawnStoreLikeCpp::new();
+        let mut info = respawn_info(SpawnObjectType::GameObject, 101, 55);
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, false, |_, _| false);
+
+        assert_eq!(outcome, CheckRespawnCompositeOutcomeLikeCpp::Allowed);
+        assert_eq!(info.respawn_time, 55);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_missing_metadata_preserves_timer_and_stops_like_cpp() {
+        let map = test_map();
+        let store = SpawnStore::new();
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(
+            linked_respawn_guid(HighGuid::Creature, 42, 100),
+            linked_respawn_guid(HighGuid::Creature, 77, 200),
+        );
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+        let mut escort_checked = false;
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, true, |_, _| {
+                escort_checked = true;
+                false
+            });
+
+        assert_eq!(
+            outcome,
+            CheckRespawnCompositeOutcomeLikeCpp::MissingSpawnData
+        );
+        assert_eq!(info.respawn_time, 55);
+        assert!(!escort_checked);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_unsupported_areatrigger_preserves_timer_like_cpp() {
+        let map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(65, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::AreaTrigger, 102, group),
+            |_| false,
+        );
+        let linked = LinkedRespawnStoreLikeCpp::new();
+        let mut info = respawn_info(SpawnObjectType::AreaTrigger, 102, 55);
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, false, |_, _| false);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnCompositeOutcomeLikeCpp::UnsupportedSpawnType
+        );
+        assert_eq!(info.respawn_time, 55);
+    }
+
+    #[test]
+    fn check_respawn_like_cpp_areatrigger_manual_inactive_group_preserves_timer_like_cpp() {
+        let map = test_map();
+        let mut store = SpawnStore::new();
+        let manual = spawn_group(66, SpawnGroupFlags::MANUAL_SPAWN);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::AreaTrigger, 103, manual),
+            |_| false,
+        );
+        let linked = LinkedRespawnStoreLikeCpp::new();
+        let mut info = respawn_info(SpawnObjectType::AreaTrigger, 103, 55);
+        let mut escort_checked = false;
+
+        let outcome =
+            map.check_respawn_like_cpp(&mut info, &store, &linked, 1000, 5, true, |_, _| {
+                escort_checked = true;
+                false
+            });
+
+        assert_eq!(
+            outcome,
+            CheckRespawnCompositeOutcomeLikeCpp::UnsupportedSpawnType
+        );
+        assert_eq!(info.respawn_time, 55);
+        assert!(!escort_checked);
     }
 
     #[test]

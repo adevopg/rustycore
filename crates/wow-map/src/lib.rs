@@ -34,10 +34,10 @@ pub use manager::{
 };
 pub use map::{
     AIRelocationPlan, ActiveObjectKind, AddToMapError, AddToMapOutcome,
-    CheckRespawnLinkedRespawnGuardOutcomeLikeCpp, CreatureDelayedRelocationVisibilityPlan,
-    CreatureRelocationVisibilityPlan, DelayedCreatureRelocationContext,
-    DelayedPlayerRelocationContext, DelayedUnitRelocationCellPlan,
-    DelayedUnitRelocationForCellsPlan, DelayedUnitRelocationPlan,
+    CheckRespawnCompositeOutcomeLikeCpp, CheckRespawnLinkedRespawnGuardOutcomeLikeCpp,
+    CreatureDelayedRelocationVisibilityPlan, CreatureRelocationVisibilityPlan,
+    DelayedCreatureRelocationContext, DelayedPlayerRelocationContext,
+    DelayedUnitRelocationCellPlan, DelayedUnitRelocationForCellsPlan, DelayedUnitRelocationPlan,
     DelayedUnitRelocationVisibilityPlans, GridLifecycle, Map, MapObjectCellMoveState,
     MapObjectMoveListEntry, MapObjectMoveListPlan, MapObjectRelocationError,
     MapObjectRelocationOutcome, MapObjectStoreError, MapUpdatePlayerSources, MapUpdateVisitPlan,

@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.372** `Map::CheckRespawn` composite helper over represented guards.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1950-2023`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1956-1964`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1966-2002`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620`.
+  Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`.
+  Acceptance: `Map::check_respawn_like_cpp` composes the represented `CheckRespawn` guards in the required C++ order (spawn-group guard -> live-object guard -> linked-respawn guard -> Allowed), preserving early-return mutations and non-effects. This is complete only for the helper composition over existing represented guards; it is not full live `CheckRespawn`, `ProcessRespawns`, `PoolMgr`, `DoRespawn`, DB save/delete, entity creation, real escort runtime ownership, optimized by-spawn indexes, or grid/session fanout.
+
 - [x] **#NEXT.R8.ENTITIES.371** Linked respawn metadata/load/store + pure `CheckRespawn` linked-time guard dependency.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:1811-1997`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/SpawnData.h:120-126`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h:1503-1508`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h:2611-2614`.
   Rust targets: `crates/wow-map/src/spawn.rs`, `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`, `crates/wow-database/src/statements/world.rs`, `crates/world-server/src/spawn_store_loader.rs`.

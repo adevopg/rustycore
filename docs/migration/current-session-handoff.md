@@ -7,10 +7,10 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 ## Repository State
 
 - Branch: `develop`
-- Base before this slice: `7665922 #NEXT.R8.ENTITIES.370 Map::CheckRespawn live by-spawn blocker`
-- Local branch relation before committing #371: `develop...origin/develop [ahead 24]`
-- Most recent completed slice after committing this slice: `#NEXT.R8.ENTITIES.371 — Linked respawn metadata/load/store + pure CheckRespawn linked-time guard dependency`
-- Expected tree after committing #371: clean, ahead 25. No push/install/restart performed.
+- Base before #372: `b4eee0b #NEXT.R8.ENTITIES.371 Linked respawn metadata/load/store`
+- Local branch relation before committing #372: `develop...origin/develop [ahead 25]`
+- Most recent completed slice after committing #372: `#NEXT.R8.ENTITIES.372 — Map::CheckRespawn composite helper over represented guards`
+- Expected tree after committing #372: clean, ahead 26. No push/install/restart performed.
 
 ## Critical Rules
 
@@ -22,20 +22,53 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #371 linked-respawn metadata and linked-time `CheckRespawn` guard dependency: `~85.4%`.
+Overall core migration estimate after #372 `Map::CheckRespawn` composite helper over represented guards: `~85.5%`.
 
 This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `CheckRespawn`/`ProcessRespawns` integration beyond represented helpers, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, DB respawn persistence/delete, optimized map-local by-spawn indexes, wiring linked-respawn metadata into the live map process, real escort runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #371; this is a map-owned respawn/check-respawn dependency validated with focused unit checks.
+Manual test point: no new client-facing manual milestone from #372; this is a map-owned respawn/check-respawn helper dependency validated with focused unit checks.
 
 ## Most Recent Completed Slices
 
 Current completed local slice:
 
+- `#NEXT.R8.ENTITIES.372`
+  - Adds `Map::check_respawn_like_cpp` and `CheckRespawnCompositeOutcomeLikeCpp` to compose the already represented C++ guards in strict order: spawn-group guard, live-object blocker, linked-respawn guard, then `Allowed`.
+  - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; metadata remains the explicit `SpawnStore` bridge; live blockers read `Map::map_objects`; linked respawn metadata remains read-only `LinkedRespawnStoreLikeCpp`.
+  - Preserves early-return non-effects: unsupported `AreaTrigger` returns `UnsupportedSpawnType` before mutable guards and keeps `respawn_time` unchanged; earlier blockers prevent linked reschedule.
+  - Does not implement full live `CheckRespawn`/`ProcessRespawns`, PoolMgr, `DoRespawn`/`LoadFromDB`, DB save/delete, entity creation, real escort runtime ownership, optimized by-spawn indexes or grid/session fanout.
+
+Previous completed local slice:
+
 - `#NEXT.R8.ENTITIES.371`
   - Adds linked respawn metadata/load/store and the pure linked-time guard dependency for `Map::CheckRespawn`.
   - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; linked respawn metadata is loaded DB -> validated canonical metadata -> read-only linked store.
   - Does not implement full `CheckRespawn`/`ProcessRespawns`, PoolMgr, `DoRespawn`, DB save/delete, live entity creation or fanout.
+
+## C++ Anchors for #372
+
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1950-2023` — `Map::CheckRespawn` contract and branch order.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1956-1964` — spawn-group inactive branch clears `respawnTime` and returns false.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1966-2002` — live creature/gameobject blocker and dynamic escort exception.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1994-1996` — unsupported/default spawn type abort branch represented defensively as explicit unsupported outcome without timer mutation.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020` — linked respawn branch after earlier guards allow.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620` — `Map::GetLinkedRespawnTime` reads map-owned timers via linked GUID.
+
+## Validation for #372
+
+Independent review:
+
+- Initial `wow-reviewer`: `CAMBIOS NECESARIOS` for AreaTrigger + inactive spawn group mutating `respawn_time` before unsupported outcome.
+- Correction applied: `AreaTrigger` is rejected at the start of the composite helper before mutable guards; regression test added.
+- Final `wow-reviewer`: `APROBADO`.
+
+Final observed results before local commit:
+
+- `cargo test -p wow-map check_respawn_like_cpp`: OK, 8 passed.
+- `cargo test -p wow-map linked_respawn`: OK, 6 passed.
+- `cargo fmt --check`: OK.
+- `cargo check -p world-server`: OK (warnings only; no errors).
+- `git diff --check`: OK.
 
 ## C++ Anchors for #371
 
