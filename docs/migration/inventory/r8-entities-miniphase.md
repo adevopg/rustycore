@@ -1507,3 +1507,17 @@ Files touched: `crates/wow-map/src/spawn.rs`; `crates/wow-map/src/lib.rs`; `docs
 Checks expected: `cargo fmt --check`; `cargo test -p wow-map respawn_info`; `cargo test -p wow-map process_respawns`; `git diff --check`.
 
 Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021`. Still missing: live `ProcessRespawns` scheduler execution, real `PoolMgr`, real `DoRespawn` entity creation/`LoadFromDB`, DB persistence/delete, linked-respawn `CheckRespawn` implementation, real creature/gameobject by-spawn stores, grid/session fanout, and connection from session/world-server fallback state into the map-owned canonical store.
+
+### #NEXT.R8.ENTITIES.367 — Integrar RespawnStoreLikeCpp como estado canónico de Map
+
+Status: complete for the Map-owned respawn store integration dependency only. This does not wire live scheduler execution or perform runtime respawn side effects.
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:472-480` (`Map::GetRespawnTime` reads the map-owned respawn map and returns `0` when missing/no map), `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:748-777` (`Map` owns `_respawnTimes`, `_creatureRespawnTimesBySpawnId`, `_gameObjectRespawnTimesBySpawnId`; AreaTrigger returns nullptr; invalid types abort), `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2057-2090` (`AddRespawnInfo` rejects spawnId 0/no map, replaces earlier/equal timers, rejects later duplicates, inserts heap+map), `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2107-2150` (`GetRespawnInfo`, `UnloadAllRespawnInfos`, `DeleteRespawnInfo` maintain heap/map coherency; DB delete is external), `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240` (`ProcessRespawns` consumes the map-owned store while PoolMgr/DoRespawn/DB side effects remain external), and `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2286-2305` (`ShouldBeSpawnedOnGridLoad` checks `GetRespawnTime(type, spawnId) != 0` before group/pool checks).
+
+Implemented Rust dependency: `wow-map::Map` now owns a private `RespawnStoreLikeCpp` next to map-owned `SpawnGroupRuntimeState`, initializes it in `Map::with_hooks`, and exposes C++-shaped map wrappers for read-only/mutable store access, add/get time/get info/remove/unload/timer-key iteration, and planned due-respawn processing. `Map::spawn_grid_load_state_like_cpp(&SpawnStore)` now feeds `SpawnGridLoadStateLikeCpp` from the map-owned respawn timer keys plus map-owned spawn-group state while preserving caller-supplied `SpawnStore` metadata as the allowed bridge until ObjectMgr/SpawnStore ownership moves into `Map`.
+
+Files touched: `crates/wow-map/src/map.rs`; `docs/migration/inventory/r8-entities-miniphase.md`; `docs/migration/inventory/r8-entities-miniphase.tsv`.
+
+Checks expected: `cargo test -p wow-map map_owned_respawn`; `cargo fmt --check`; `git diff --check`.
+
+Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021` or live `ProcessRespawns`. Still missing: live scheduler execution, real `PoolMgr`, real `DoRespawn` entity creation/`LoadFromDB`, DB persistence/delete, linked-respawn `CheckRespawn`, real creature/gameobject by-spawn stores, ObjectAccessor/map-local entity ownership, and grid/session fanout.

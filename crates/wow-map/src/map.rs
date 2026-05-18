@@ -15,8 +15,10 @@ use crate::grid::{GridStateKind, MapGridHost, NGrid, update_grid_state};
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
 use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
 use crate::spawn::{
-    Difficulty, SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange, SpawnGroupFlags,
-    SpawnGroupRuntimeState, SpawnGroupTemplateData, SpawnObjectType, SpawnStore,
+    AddRespawnInfoOutcomeLikeCpp, CheckRespawnOutcomeLikeCpp, Difficulty,
+    ProcessRespawnActionLikeCpp, RespawnInfoLikeCpp, RespawnStoreLikeCpp,
+    SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange, SpawnGroupFlags, SpawnGroupRuntimeState,
+    SpawnGroupTemplateData, SpawnId, SpawnObjectType, SpawnStore,
 };
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
@@ -308,6 +310,7 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     active_cells: HashSet<CellCoord>,
     personal_phase_tracker: MultiPersonalPhaseTracker,
     spawn_group_state: SpawnGroupRuntimeState,
+    respawn_store: RespawnStoreLikeCpp,
     grid_state_unloaded: bool,
     map_objects: HashMap<ObjectGuid, MapObjectRecord>,
 }
@@ -358,6 +361,7 @@ where
             active_cells: HashSet::new(),
             personal_phase_tracker: MultiPersonalPhaseTracker::default(),
             spawn_group_state: SpawnGroupRuntimeState::new(),
+            respawn_store: RespawnStoreLikeCpp::new(),
             grid_state_unloaded: false,
             map_objects: HashMap::new(),
         }
@@ -399,6 +403,82 @@ where
         &self.personal_phase_tracker
     }
 
+    /// Map-owned bridge for C++ `Map::_respawnTimes` and the per-type respawn maps.
+    ///
+    /// C++ anchors:
+    /// - `Map.h:472-480` returns zero when a respawn time is missing or the type has no map.
+    /// - `Map.h:748-777` stores respawn queues/maps on `Map`; AreaTrigger has no respawn map.
+    /// - `Map.cpp:2057-2150` adds, replaces, gets, removes, and unloads respawn info coherently.
+    pub const fn respawn_store_like_cpp(&self) -> &RespawnStoreLikeCpp {
+        &self.respawn_store
+    }
+
+    /// Mutable access to the map-owned respawn store for bounded tests/bridges.
+    ///
+    /// Future runtime callers must treat `Map` as the owner/source of truth and
+    /// must not keep external respawn stores that later overwrite this state.
+    pub fn respawn_store_like_cpp_mut(&mut self) -> &mut RespawnStoreLikeCpp {
+        &mut self.respawn_store
+    }
+
+    pub fn add_respawn_info_like_cpp(
+        &mut self,
+        info: RespawnInfoLikeCpp,
+    ) -> AddRespawnInfoOutcomeLikeCpp {
+        self.respawn_store.add_respawn_info_like_cpp(info)
+    }
+
+    pub fn get_respawn_time_like_cpp(
+        &self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> i64 {
+        self.respawn_store
+            .get_respawn_time_like_cpp(object_type, spawn_id)
+    }
+
+    pub fn get_respawn_info_like_cpp(
+        &self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> Option<&RespawnInfoLikeCpp> {
+        self.respawn_store
+            .get_respawn_info_like_cpp(object_type, spawn_id)
+    }
+
+    pub fn remove_respawn_time_like_cpp(
+        &mut self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> Option<RespawnInfoLikeCpp> {
+        self.respawn_store
+            .remove_respawn_time_like_cpp(object_type, spawn_id)
+    }
+
+    pub fn unload_all_respawn_infos_like_cpp(&mut self) {
+        self.respawn_store.unload_all_respawn_infos_like_cpp();
+    }
+
+    pub fn respawn_timer_keys_like_cpp(
+        &self,
+    ) -> impl Iterator<Item = (SpawnObjectType, SpawnId)> + '_ {
+        self.respawn_store.respawn_timer_keys_like_cpp()
+    }
+
+    /// Delegates the C++ `Map::ProcessRespawns` action planner to the map-owned store.
+    ///
+    /// This only plans side effects. It does not execute PoolMgr, DoRespawn,
+    /// DB persistence/delete, linked-respawn checks, entity creation, or fanout.
+    pub fn process_due_respawns_like_cpp(
+        &mut self,
+        now: i64,
+        is_part_of_pool: impl FnMut(SpawnObjectType, SpawnId) -> Option<u32>,
+        check_respawn: impl FnMut(&mut RespawnInfoLikeCpp) -> CheckRespawnOutcomeLikeCpp,
+    ) -> Vec<ProcessRespawnActionLikeCpp> {
+        self.respawn_store
+            .process_due_respawns_like_cpp(now, is_part_of_pool, check_respawn)
+    }
+
     /// Map-owned bridge for C++ `Map::_toggledSpawnGroupIds`.
     ///
     /// C++ anchors:
@@ -433,13 +513,14 @@ where
     }
 
     /// Bridge for C++ `Map::ShouldBeSpawnedOnGridLoad` callers while `Map` does
-    /// not yet own the ObjectMgr spawn metadata. The canonical toggle state is
-    /// still map-owned; spawn metadata remains caller-supplied.
+    /// not yet own the ObjectMgr spawn metadata. The canonical toggle state and
+    /// respawn timers are map-owned; spawn metadata remains caller-supplied.
     pub fn spawn_grid_load_state_like_cpp<'a>(
         &'a self,
         spawn_store: &'a SpawnStore,
     ) -> SpawnGridLoadStateLikeCpp<'a> {
         SpawnGridLoadStateLikeCpp::new(spawn_store, &self.spawn_group_state)
+            .with_respawn_timers(self.respawn_store.respawn_timer_keys_like_cpp())
     }
 
     /// Pure bridge for C++ `Map::InitSpawnGroupState` over pre-resolved group
@@ -2688,6 +2769,214 @@ mod tests {
 
     const fn spawn_group_flags(left: SpawnGroupFlags, right: SpawnGroupFlags) -> SpawnGroupFlags {
         SpawnGroupFlags(left.0 | right.0)
+    }
+
+    fn spawn_data(
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+        spawn_group: SpawnGroupTemplateData,
+    ) -> crate::spawn::SpawnData {
+        crate::spawn::SpawnData {
+            object_type,
+            spawn_id,
+            map_id: 571,
+            db_data: true,
+            spawn_group,
+            id: 99,
+            spawn_point: crate::spawn::SpawnPosition::new(0.0, 0.0, 0.0, 0.0),
+            phase_use_flags: 0,
+            phase_id: 0,
+            phase_group: 0,
+            terrain_swap_map: 0,
+            pool_id: 0,
+            spawn_time_secs: 0,
+            spawn_difficulties: vec![1],
+            script_id: 0,
+            string_id: String::new(),
+        }
+    }
+
+    fn respawn_info(
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+        respawn_time: i64,
+    ) -> RespawnInfoLikeCpp {
+        RespawnInfoLikeCpp {
+            object_type,
+            spawn_id,
+            entry: 42,
+            respawn_time,
+            grid_id: 7,
+        }
+    }
+
+    #[test]
+    fn map_owned_respawn_get_time_zero_area_trigger_and_inserted_timers_like_cpp() {
+        let mut map = test_map();
+
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::AreaTrigger, 10),
+            0
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::AreaTrigger, 10, 100)),
+            AddRespawnInfoOutcomeLikeCpp::RejectedUnsupportedType
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 100)),
+            AddRespawnInfoOutcomeLikeCpp::Inserted
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 20, 200)),
+            AddRespawnInfoOutcomeLikeCpp::Inserted
+        );
+
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            100
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 20),
+            200
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::AreaTrigger, 10),
+            0
+        );
+    }
+
+    #[test]
+    fn map_owned_respawn_add_replace_remove_unload_and_timer_keys_like_cpp() {
+        let mut map = test_map();
+
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 100)),
+            AddRespawnInfoOutcomeLikeCpp::Inserted
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 150)),
+            AddRespawnInfoOutcomeLikeCpp::RejectedExistingSoonerOrEqual
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            100
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 90)),
+            AddRespawnInfoOutcomeLikeCpp::ReplacedExisting
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            90
+        );
+        assert_eq!(
+            map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 20, 80)),
+            AddRespawnInfoOutcomeLikeCpp::Inserted
+        );
+
+        let timer_keys = map.respawn_timer_keys_like_cpp().collect::<Vec<_>>();
+        assert_eq!(
+            timer_keys,
+            vec![
+                (SpawnObjectType::GameObject, 20),
+                (SpawnObjectType::Creature, 10)
+            ]
+        );
+
+        let removed = map.remove_respawn_time_like_cpp(SpawnObjectType::Creature, 10);
+        assert_eq!(removed.map(|info| info.respawn_time), Some(90));
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            0
+        );
+        assert_eq!(
+            map.respawn_timer_keys_like_cpp().collect::<Vec<_>>(),
+            vec![(SpawnObjectType::GameObject, 20)]
+        );
+
+        map.unload_all_respawn_infos_like_cpp();
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 20),
+            0
+        );
+        assert!(map.respawn_timer_keys_like_cpp().next().is_none());
+    }
+
+    #[test]
+    fn map_owned_respawn_grid_load_state_uses_map_timer_and_group_sources_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let manual = spawn_group(12, SpawnGroupFlags::MANUAL_SPAWN);
+        let spawn = spawn_data(SpawnObjectType::Creature, 42, manual.clone());
+        store.add_object_spawn(&spawn, |_| false);
+
+        assert!(
+            !map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+
+        map.set_spawn_group_active_like_cpp(Some(&manual), true);
+        assert!(
+            map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 42, 100));
+        assert!(
+            !map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+
+        map.remove_respawn_time_like_cpp(SpawnObjectType::Creature, 42);
+        assert!(
+            map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+    }
+
+    #[test]
+    fn map_owned_respawn_process_due_respawns_delegates_to_owned_store_like_cpp() {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 100));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 20, 200));
+
+        let actions = map.process_due_respawns_like_cpp(
+            100,
+            |_, _| None,
+            |_| CheckRespawnOutcomeLikeCpp::Allowed,
+        );
+
+        assert_eq!(
+            actions,
+            vec![ProcessRespawnActionLikeCpp::DoRespawn {
+                object_type: SpawnObjectType::Creature,
+                spawn_id: 10,
+                grid_id: 7,
+            }]
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 20),
+            200
+        );
+
+        let future_actions = map.process_due_respawns_like_cpp(
+            150,
+            |_, _| None,
+            |_| CheckRespawnOutcomeLikeCpp::Allowed,
+        );
+        assert!(future_actions.is_empty());
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 20),
+            200
+        );
     }
 
     #[test]
