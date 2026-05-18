@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+
+- [x] **#NEXT.R8.ENTITIES.400** Creature template classification/rate wiring for C++-normalized creature difficulty/base-stat runtime stores.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:349-400`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:403-482`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:940-1040`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1675-1695`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:9976-10062`.
+  Rust targets: `crates/wow-data/src/creature_template.rs`, `crates/wow-data/src/lib.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `wow-data` now exposes a pure minimal creature-template classification store and C++ `Creature::GetDamageMod` rate mapping; `world-server` loads template classifications before `creature_template_difficulty`, derives damage modifiers from `WorldConfigSet` rates, then loads `creature_classlevelstats` and logs counts. Complete only for data wiring needed by future live Creature `LoadFromDB`/loaded-grid `DoRespawn`; it does not create `Creature`, `MapObjectRecord`, AddToMap, fanout, PoolMgr runtime, scripts, or full Creature runtime. Missing classification rows use the C++ default elite modifier fallback without inventing a template.
 - [x] **#NEXT.R8.ENTITIES.399** Creature base stats/difficulty lifecycle data store dependency for live Creature `LoadFromDB`.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:940-1040`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h:481-485`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h:582-608`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:9976-10060`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:87-105`.
   Rust targets: `crates/wow-data/src/creature_template.rs`, `crates/wow-data/src/lib.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.

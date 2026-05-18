@@ -566,6 +566,47 @@ async fn main() -> Result<()> {
         creature_template_store.len(),
         gameobject_template_store.len()
     );
+    let creature_template_classification_store = Arc::new(
+        wow_data::CreatureTemplateClassificationStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load creature_template classifications for C++ creature difficulty damage rates")?,
+    );
+    let creature_damage_rates = wow_data::CreatureClassificationDamageRatesLikeCpp {
+        normal: world_config_f32(&world_configs, "Rate.Creature.Damage.Normal", 1.0),
+        elite: world_config_f32(&world_configs, "Rate.Creature.Damage.Elite", 1.0),
+        rare_elite: world_config_f32(&world_configs, "Rate.Creature.Damage.RareElite", 1.0),
+        obsolete: world_config_f32(&world_configs, "Rate.Creature.Damage.Obsolete", 1.0),
+        rare: world_config_f32(&world_configs, "Rate.Creature.Damage.Rare", 1.0),
+        trivial: world_config_f32(&world_configs, "Rate.Creature.Damage.Trivial", 1.0),
+        minus_mob: world_config_f32(&world_configs, "Rate.Creature.Damage.MinusMob", 1.0),
+    };
+    let creature_difficulty_store = Arc::new(
+        wow_data::CreatureDifficultyStoreLikeCpp::load_like_cpp(world_db.as_ref(), |entry| {
+            // C++ missing-template rows are skipped before insertion. This data-wiring
+            // slice does not invent full templates; if the minimal classification row is
+            // absent, fall back to classification 1 (elite), matching
+            // Creature::GetDamageMod's default switch rate.
+            let classification = creature_template_classification_store
+                .classification_for_entry(entry)
+                .unwrap_or(1);
+            creature_damage_rates.modifier_for_classification_like_cpp(classification)
+        })
+        .await
+        .context(
+            "Failed to load creature_template_difficulty rows with C++ classification damage rates",
+        )?,
+    );
+    let creature_base_stats_store = Arc::new(
+        wow_data::CreatureBaseStatsStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load creature_classlevelstats rows")?,
+    );
+    info!(
+        "Loaded C++ creature runtime data stores: {} template classifications, {} difficulty rows, {} base stat rows",
+        creature_template_classification_store.len(),
+        creature_difficulty_store.len(),
+        creature_base_stats_store.len()
+    );
     let creature_template_mount_store = Arc::new(
         wow_data::CreatureTemplateMountStoreLikeCpp::load_like_cpp(world_db.as_ref())
             .await

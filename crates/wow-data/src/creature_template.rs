@@ -4,6 +4,107 @@ use anyhow::Result;
 use rand::Rng;
 use wow_database::WorldDatabase;
 
+#[derive(Debug, Clone, Default)]
+pub struct CreatureTemplateClassificationStoreLikeCpp {
+    classifications: HashMap<u32, u32>,
+}
+
+impl CreatureTemplateClassificationStoreLikeCpp {
+    pub fn from_entries(entries: impl IntoIterator<Item = (u32, u32)>) -> Self {
+        Self {
+            classifications: entries.into_iter().collect(),
+        }
+    }
+
+    /// Loads the minimal `creature_template` classification dependency in the same
+    /// order shape as C++ `ObjectMgr::LoadCreatureTemplates`/`LoadCreatureTemplate`.
+    ///
+    /// C++ anchors:
+    /// - `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:349-400`
+    /// - `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:403-482`
+    ///
+    /// The full template is intentionally not materialized in this data-only store;
+    /// C++ field[0] is `entry` and field[15] is `Classification`.
+    pub async fn load_like_cpp(db: &WorldDatabase) -> Result<Self> {
+        let mut result = db
+            .direct_query("SELECT entry, Classification FROM creature_template")
+            .await?;
+
+        if result.is_empty() {
+            return Ok(Self::default());
+        }
+
+        let mut classifications = HashMap::new();
+        loop {
+            let entry = result.try_read::<u32>(0).unwrap_or(0);
+            let classification = result.try_read::<u32>(1).unwrap_or(0);
+            classifications.insert(entry, classification);
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        Ok(Self { classifications })
+    }
+
+    pub fn classification_for_entry(&self, entry: u32) -> Option<u32> {
+        self.classifications.get(&entry).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.classifications.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.classifications.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CreatureClassificationDamageRatesLikeCpp {
+    pub normal: f32,
+    pub elite: f32,
+    pub rare_elite: f32,
+    pub obsolete: f32,
+    pub rare: f32,
+    pub trivial: f32,
+    pub minus_mob: f32,
+}
+
+impl Default for CreatureClassificationDamageRatesLikeCpp {
+    fn default() -> Self {
+        Self {
+            normal: 1.0,
+            elite: 1.0,
+            rare_elite: 1.0,
+            obsolete: 1.0,
+            rare: 1.0,
+            trivial: 1.0,
+            minus_mob: 1.0,
+        }
+    }
+}
+
+impl CreatureClassificationDamageRatesLikeCpp {
+    /// C++ `Creature::GetDamageMod(CreatureClassifications)` switch. Unknown
+    /// classifications fall through to the elite rate, matching the C++ default.
+    ///
+    /// C++ anchor: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1675-1695`.
+    pub fn modifier_for_classification_like_cpp(&self, classification: u32) -> f32 {
+        match classification {
+            0 => self.normal,
+            1 => self.elite,
+            2 => self.rare_elite,
+            3 => self.obsolete,
+            4 => self.rare,
+            5 => self.trivial,
+            6 => self.minus_mob,
+            _ => self.elite,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CreatureTemplateMountModelLikeCpp {
     pub display_id: u32,
@@ -441,6 +542,38 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
+
+    #[test]
+    fn creature_classification_store_maps_template_entries_like_cpp() {
+        let store = CreatureTemplateClassificationStoreLikeCpp::from_entries([(100, 0), (101, 4)]);
+        assert_eq!(store.len(), 2);
+        assert!(!store.is_empty());
+        assert_eq!(store.classification_for_entry(100), Some(0));
+        assert_eq!(store.classification_for_entry(101), Some(4));
+        assert_eq!(store.classification_for_entry(999), None);
+    }
+
+    #[test]
+    fn creature_classification_damage_rates_match_cpp_switch_and_default_elite() {
+        let rates = CreatureClassificationDamageRatesLikeCpp {
+            normal: 1.0,
+            elite: 2.0,
+            rare_elite: 3.0,
+            obsolete: 4.0,
+            rare: 5.0,
+            trivial: 6.0,
+            minus_mob: 7.0,
+        };
+
+        assert_eq!(rates.modifier_for_classification_like_cpp(0), 1.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(1), 2.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(2), 3.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(3), 4.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(4), 5.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(5), 6.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(6), 7.0);
+        assert_eq!(rates.modifier_for_classification_like_cpp(99), 2.0);
+    }
 
     fn base_difficulty_record() -> CreatureDifficultyRecordLikeCpp {
         CreatureDifficultyRecordLikeCpp {
