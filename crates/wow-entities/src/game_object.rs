@@ -992,6 +992,7 @@ impl GameObject {
     }
 
     pub fn add_unique_use_like_cpp(&mut self, guid: ObjectGuid) -> bool {
+        self.add_use_like_cpp();
         self.unique_users.insert(guid)
     }
 
@@ -2223,7 +2224,7 @@ mod tests {
         );
         assert_eq!(go.personal_loot_count_like_cpp(), 1);
         assert_eq!(go.unique_user_count_like_cpp(), 2);
-        assert_eq!(go.use_times(), 2);
+        assert_eq!(go.use_times(), 5);
         assert!(!go.is_fully_looted_like_cpp());
 
         go.clear_loot_like_cpp();
@@ -2233,6 +2234,23 @@ mod tests {
         assert_eq!(go.unique_user_count_like_cpp(), 0);
         assert_eq!(go.use_times(), 0);
         assert!(go.is_fully_looted_like_cpp());
+    }
+
+    #[test]
+    fn gameobject_add_unique_use_increments_use_times_before_unique_insert_like_cpp() {
+        let mut go = GameObject::new();
+        let player = ObjectGuid::new(1, 100);
+
+        assert_eq!(go.use_times(), 0);
+        assert_eq!(go.unique_user_count_like_cpp(), 0);
+
+        assert!(go.add_unique_use_like_cpp(player));
+        assert_eq!(go.use_times(), 1);
+        assert_eq!(go.unique_user_count_like_cpp(), 1);
+
+        assert!(!go.add_unique_use_like_cpp(player));
+        assert_eq!(go.use_times(), 2);
+        assert_eq!(go.unique_user_count_like_cpp(), 1);
     }
 
     #[test]

@@ -2934,6 +2934,28 @@ impl WorldSession {
         Some(f(creature))
     }
 
+    pub(crate) fn mutate_canonical_gameobject_by_guid_like_cpp<R>(
+        &mut self,
+        guid: ObjectGuid,
+        f: impl FnOnce(&mut wow_entities::GameObject) -> R,
+    ) -> Option<R> {
+        let map_id = u32::from(self.player_map_id_like_cpp());
+        let manager = Arc::clone(self.canonical_map_manager.as_ref()?);
+        let mut manager = manager.lock().ok()?;
+        let managed = manager.find_map_mut(map_id, 0)?;
+        let gameobject = managed.map_mut().get_typed_game_object_mut(guid)?;
+        Some(f(gameobject))
+    }
+
+    pub(crate) fn canonical_gameobject_is_fully_looted_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> Option<bool> {
+        self.mutate_canonical_gameobject_by_guid_like_cpp(guid, |gameobject| {
+            gameobject.is_fully_looted_like_cpp()
+        })
+    }
+
     fn object_id_visibility_conditions_met_like_cpp(
         &self,
         target: &WorldObject,
