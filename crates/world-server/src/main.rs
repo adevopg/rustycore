@@ -2317,15 +2317,19 @@ fn apply_canonical_spawn_group_condition_update_set_inactive_like_cpp(
     };
     let outcomes = managed_map
         .map_mut()
-        .apply_update_spawn_group_conditions_set_inactive_like_cpp(group_templates, |group| {
-            is_spawn_group_meeting_map_conditions_like_cpp(
-                condition_store,
-                group.group_id,
-                map_ref,
-                Some(map_state),
-                &[],
-            )
-        });
+        .apply_update_spawn_group_conditions_represented_like_cpp(
+            group_templates,
+            canonical_spawn_metadata.spawn_store(),
+            |group| {
+                is_spawn_group_meeting_map_conditions_like_cpp(
+                    condition_store,
+                    group.group_id,
+                    map_ref,
+                    Some(map_state),
+                    &[],
+                )
+            },
+        );
     let applied_set_inactive = outcomes
         .iter()
         .filter(|outcome| outcome.applied_change.is_some())
@@ -2577,6 +2581,15 @@ struct CanonicalSpawnGroupConditionTickSummaryLikeCpp {
     applied_set_inactive: usize,
     planned_spawn: usize,
     planned_despawn: usize,
+    despawn_executed: usize,
+    despawn_objects_removed: usize,
+    despawn_respawn_timers_removed: usize,
+    despawn_blocked_missing_group: usize,
+    despawn_blocked_system_group: usize,
+    despawn_unsupported_live_types: usize,
+    despawn_respawn_timer_unsupported_types: usize,
+    despawn_stale_index_entries: usize,
+    despawn_remove_errors: usize,
     respawn_deleted_inactive_spawn_group: usize,
     respawn_deleted_live_object_blocker: usize,
     respawn_processed_pool_timers: usize,
@@ -2652,10 +2665,6 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 |_, _| 0.0,
                 |_candidates, count| (0..count).collect(),
             );
-        let after_respawn_keys = managed_map
-            .map()
-            .respawn_timer_keys_like_cpp()
-            .collect::<BTreeSet<_>>();
         summary.respawn_deleted_inactive_spawn_group +=
             respawn_summary.deleted_inactive_spawn_group;
         summary.respawn_deleted_live_object_blocker += respawn_summary.deleted_live_object_blocker;
@@ -2670,26 +2679,6 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 }
                 RespawnDbSaveQueueOutcomeLikeCpp::SkippedInvalidMapId => {
                     summary.respawn_db_save_skipped_invalid_map_id += 1;
-                }
-            }
-        }
-        for &(object_type, spawn_id) in before_respawn_keys.difference(&after_respawn_keys) {
-            match queue_respawn_db_delete_like_cpp(
-                map_kind,
-                map_id,
-                instance_id,
-                object_type,
-                spawn_id,
-            ) {
-                RespawnDbDeleteQueueOutcomeLikeCpp::Queued(delete) => {
-                    summary.respawn_db_delete_queued += 1;
-                    summary.respawn_db_deletes.push(delete);
-                }
-                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedNonWorldMap => {
-                    summary.respawn_db_delete_skipped_non_world_map += 1;
-                }
-                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedInvalidMapId => {
-                    summary.respawn_db_delete_skipped_invalid_map_id += 1;
                 }
             }
         }
@@ -2732,6 +2721,47 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 )
             })
             .count();
+        for despawn in outcomes
+            .iter()
+            .filter_map(|outcome| outcome.despawn_outcome)
+        {
+            if despawn.blocked_missing_group == 0 && despawn.blocked_system_group == 0 {
+                summary.despawn_executed += 1;
+            }
+            summary.despawn_objects_removed += despawn.objects_removed;
+            summary.despawn_respawn_timers_removed += despawn.respawn_timers_removed;
+            summary.despawn_blocked_missing_group += despawn.blocked_missing_group;
+            summary.despawn_blocked_system_group += despawn.blocked_system_group;
+            summary.despawn_unsupported_live_types += despawn.unsupported_live_despawn_types;
+            summary.despawn_respawn_timer_unsupported_types +=
+                despawn.respawn_timer_unsupported_types;
+            summary.despawn_stale_index_entries += despawn.stale_index_entries;
+            summary.despawn_remove_errors += despawn.remove_errors;
+        }
+        let after_respawn_keys = managed_map
+            .map()
+            .respawn_timer_keys_like_cpp()
+            .collect::<BTreeSet<_>>();
+        for &(object_type, spawn_id) in before_respawn_keys.difference(&after_respawn_keys) {
+            match queue_respawn_db_delete_like_cpp(
+                map_kind,
+                map_id,
+                instance_id,
+                object_type,
+                spawn_id,
+            ) {
+                RespawnDbDeleteQueueOutcomeLikeCpp::Queued(delete) => {
+                    summary.respawn_db_delete_queued += 1;
+                    summary.respawn_db_deletes.push(delete);
+                }
+                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedNonWorldMap => {
+                    summary.respawn_db_delete_skipped_non_world_map += 1;
+                }
+                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedInvalidMapId => {
+                    summary.respawn_db_delete_skipped_invalid_map_id += 1;
+                }
+            }
+        }
     });
 
     Some(summary)
@@ -2834,6 +2864,16 @@ fn spawn_canonical_map_update_loop(
                     applied_set_inactive = summary.applied_set_inactive,
                     planned_spawn = summary.planned_spawn,
                     planned_despawn = summary.planned_despawn,
+                    despawn_executed = summary.despawn_executed,
+                    despawn_objects_removed = summary.despawn_objects_removed,
+                    despawn_respawn_timers_removed = summary.despawn_respawn_timers_removed,
+                    despawn_blocked_missing_group = summary.despawn_blocked_missing_group,
+                    despawn_blocked_system_group = summary.despawn_blocked_system_group,
+                    despawn_unsupported_live_types = summary.despawn_unsupported_live_types,
+                    despawn_respawn_timer_unsupported_types =
+                        summary.despawn_respawn_timer_unsupported_types,
+                    despawn_stale_index_entries = summary.despawn_stale_index_entries,
+                    despawn_remove_errors = summary.despawn_remove_errors,
                     respawn_deleted_inactive_spawn_group =
                         summary.respawn_deleted_inactive_spawn_group,
                     respawn_deleted_live_object_blocker =
@@ -2862,7 +2902,7 @@ fn spawn_canonical_map_update_loop(
                         summary.respawn_db_save_skipped_non_world_map,
                     respawn_db_save_skipped_invalid_map_id =
                         summary.respawn_db_save_skipped_invalid_map_id,
-                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules and represented pooled timer UpdatePool plans, queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock, then applied UpdateSpawnGroupConditions SetInactive seam; live Spawn1Object/ReSpawn1Object/DespawnObject, DoRespawn/entity creation/fanout remain pending"
+                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules, represented pooled timer UpdatePool plans, and map-local SpawnGroupDespawn condition-failure side effects; queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock; live SpawnGroupSpawn, Spawn1Object/ReSpawn1Object full entity creation/fanout remain pending"
                 );
             }
         }
@@ -3883,7 +3923,7 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
-    fn spawn_group_condition_update_set_inactive_planned_spawn_despawn_do_not_mutate_toggles() {
+    fn spawn_group_condition_update_set_inactive_planned_spawn_and_executes_despawn_toggles() {
         let metadata = test_spawn_metadata_with_flags([
             (40, 571, SpawnGroupFlags::NONE),
             (41, 571, SpawnGroupFlags::DESPAWN_ON_CONDITION_FAILURE),
@@ -3934,9 +3974,18 @@ mmap.enablePathFinding = 0
             wow_map::map::SpawnGroupConditionActionLikeCpp::condition_failure_despawn()
         );
         assert_eq!(despawn_outcome.applied_change, None);
+        let despawn = despawn_outcome
+            .despawn_outcome
+            .expect("condition-failure despawn executes");
+        assert_eq!(despawn.blocked_missing_group, 0);
+        assert_eq!(despawn.blocked_system_group, 0);
+        assert_eq!(
+            despawn.applied_inactive_change,
+            Some(wow_map::SpawnGroupActiveChange::Toggled)
+        );
         assert!(!map.map().is_spawn_group_active_like_cpp(Some(spawn_group)));
         assert!(
-            map.map()
+            !map.map()
                 .is_spawn_group_active_like_cpp(Some(despawn_group))
         );
     }

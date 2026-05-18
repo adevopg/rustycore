@@ -262,10 +262,90 @@ pub enum SpawnGroupConditionActionLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DespawnAllBySpawnIdOutcomeLikeCpp {
+    pub object_type: SpawnObjectType,
+    pub spawn_id: SpawnId,
+    pub removed: usize,
+    pub stale_index_entries: usize,
+    pub remove_errors: usize,
+    pub unsupported_live_despawn_type: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnGroupDespawnOutcomeLikeCpp {
+    pub group_id: u32,
+    pub blocked_missing_group: usize,
+    pub blocked_system_group: usize,
+    pub metadata_entries: usize,
+    pub respawn_timers_removed: usize,
+    pub respawn_timers_missing: usize,
+    pub respawn_timer_unsupported_types: usize,
+    pub objects_removed: usize,
+    pub stale_index_entries: usize,
+    pub remove_errors: usize,
+    pub unsupported_live_despawn_types: usize,
+    pub applied_inactive_change: Option<SpawnGroupActiveChange>,
+}
+
+impl SpawnGroupDespawnOutcomeLikeCpp {
+    pub const fn blocked_missing_group(group_id: u32) -> Self {
+        Self {
+            group_id,
+            blocked_missing_group: 1,
+            blocked_system_group: 0,
+            metadata_entries: 0,
+            respawn_timers_removed: 0,
+            respawn_timers_missing: 0,
+            respawn_timer_unsupported_types: 0,
+            objects_removed: 0,
+            stale_index_entries: 0,
+            remove_errors: 0,
+            unsupported_live_despawn_types: 0,
+            applied_inactive_change: None,
+        }
+    }
+
+    pub const fn blocked_system_group(group_id: u32) -> Self {
+        Self {
+            group_id,
+            blocked_missing_group: 0,
+            blocked_system_group: 1,
+            metadata_entries: 0,
+            respawn_timers_removed: 0,
+            respawn_timers_missing: 0,
+            respawn_timer_unsupported_types: 0,
+            objects_removed: 0,
+            stale_index_entries: 0,
+            remove_errors: 0,
+            unsupported_live_despawn_types: 0,
+            applied_inactive_change: None,
+        }
+    }
+
+    pub const fn executed(group_id: u32) -> Self {
+        Self {
+            group_id,
+            blocked_missing_group: 0,
+            blocked_system_group: 0,
+            metadata_entries: 0,
+            respawn_timers_removed: 0,
+            respawn_timers_missing: 0,
+            respawn_timer_unsupported_types: 0,
+            objects_removed: 0,
+            stale_index_entries: 0,
+            remove_errors: 0,
+            unsupported_live_despawn_types: 0,
+            applied_inactive_change: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpawnGroupConditionUpdateOutcomeLikeCpp {
     pub group_id: u32,
     pub action: SpawnGroupConditionActionLikeCpp,
     pub applied_change: Option<SpawnGroupActiveChange>,
+    pub despawn_outcome: Option<SpawnGroupDespawnOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1374,13 +1454,187 @@ where
         actions
     }
 
-    /// C++-shaped `Map::UpdateSpawnGroupConditions` bridge over pre-resolved
-    /// templates that only executes the complete `SetSpawnGroupInactive` branch.
+    /// C++ `Map::DespawnAll` represented over map-local by-spawn indexes.
     ///
-    /// `SpawnGroupSpawn` and `SpawnGroupDespawn` remain planned actions in the
-    /// returned evidence; this method deliberately does not fake live spawns,
-    /// despawns, pools, respawn persistence, DB writes, entity creation, timers,
-    /// or grid/session fanout. The closure only substitutes C++ `ConditionMgr`.
+    /// C++ anchors:
+    /// - `Map.cpp:2034-2055` snapshots Creature/GameObject by-spawn stores and
+    ///   queues each object through `AddObjectToRemoveList`.
+    /// - `Map.cpp:2574-2646` later drains the remove list through
+    ///   `RemoveFromMap(..., true)`. Rust has no safe deferred remove list here,
+    ///   so this bounded seam executes the already-owned
+    ///   `remove_from_map_like_cpp(guid, true)` immediately for live
+    ///   Creature/GameObject records present in `map_objects`.
+    pub fn despawn_all_by_spawn_id_like_cpp(
+        &mut self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> DespawnAllBySpawnIdOutcomeLikeCpp {
+        let mut outcome = DespawnAllBySpawnIdOutcomeLikeCpp {
+            object_type,
+            spawn_id,
+            removed: 0,
+            stale_index_entries: 0,
+            remove_errors: 0,
+            unsupported_live_despawn_type: 0,
+        };
+
+        let guids = match object_type {
+            SpawnObjectType::Creature => self.creature_spawn_id_store_guids_like_cpp(spawn_id),
+            SpawnObjectType::GameObject => self.gameobject_spawn_id_store_guids_like_cpp(spawn_id),
+            SpawnObjectType::AreaTrigger => {
+                outcome.unsupported_live_despawn_type = 1;
+                return outcome;
+            }
+        };
+
+        for guid in guids {
+            let still_matches = match object_type {
+                SpawnObjectType::Creature => self
+                    .map_object_record(guid)
+                    .and_then(MapObjectRecord::creature)
+                    .is_some_and(|creature| creature.spawn_id() == spawn_id),
+                SpawnObjectType::GameObject => self
+                    .map_object_record(guid)
+                    .and_then(MapObjectRecord::game_object)
+                    .is_some_and(|gameobject| gameobject.spawn_id() == spawn_id),
+                SpawnObjectType::AreaTrigger => false,
+            };
+            if !still_matches {
+                outcome.stale_index_entries += 1;
+                continue;
+            }
+
+            match self.remove_from_map_like_cpp(guid, true) {
+                Ok(_) => outcome.removed += 1,
+                Err(_) => outcome.remove_errors += 1,
+            }
+        }
+
+        outcome
+    }
+
+    /// C++ `Map::SpawnGroupDespawn(groupId, deleteRespawnTimes)` represented over
+    /// map-owned runtime state and caller-supplied ObjectMgr-like `SpawnStore`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:2404-2425` validates existing/non-system group, iterates
+    ///   `sObjectMgr->GetSpawnMetadataForGroup`, optionally calls
+    ///   `RemoveRespawnTime`, calls `DespawnAll`, then marks the group inactive.
+    /// - `Map.cpp:2140-2163` DB delete is owned by callers; this helper only
+    ///   mutates map-owned respawn timers so world-server can derive before/after
+    ///   `CHAR_DEL_RESPAWN` work outside the lock.
+    pub fn spawn_group_despawn_like_cpp(
+        &mut self,
+        group: Option<&SpawnGroupTemplateData>,
+        delete_respawn_times: bool,
+        spawn_store: &SpawnStore,
+    ) -> SpawnGroupDespawnOutcomeLikeCpp {
+        let Some(group) = group else {
+            return SpawnGroupDespawnOutcomeLikeCpp::blocked_missing_group(0);
+        };
+        if group.is_system() {
+            return SpawnGroupDespawnOutcomeLikeCpp::blocked_system_group(group.group_id);
+        }
+
+        let mut outcome = SpawnGroupDespawnOutcomeLikeCpp::executed(group.group_id);
+        if let Some(members) = spawn_store.spawn_group_members(group.group_id) {
+            let members = members.iter().copied().collect::<Vec<_>>();
+            for member in members {
+                let Some(spawn_data) = spawn_store.spawn_data(member.object_type, member.spawn_id)
+                else {
+                    outcome.metadata_entries += 1;
+                    outcome.stale_index_entries += 1;
+                    continue;
+                };
+                if spawn_data.map_id != self.map_id {
+                    continue;
+                }
+
+                outcome.metadata_entries += 1;
+                if delete_respawn_times {
+                    match member.object_type {
+                        SpawnObjectType::Creature | SpawnObjectType::GameObject => {
+                            if self
+                                .remove_respawn_time_like_cpp(member.object_type, member.spawn_id)
+                                .is_some()
+                            {
+                                outcome.respawn_timers_removed += 1;
+                            } else {
+                                outcome.respawn_timers_missing += 1;
+                            }
+                        }
+                        SpawnObjectType::AreaTrigger => {
+                            outcome.respawn_timer_unsupported_types += 1;
+                        }
+                    }
+                }
+
+                let despawn =
+                    self.despawn_all_by_spawn_id_like_cpp(member.object_type, member.spawn_id);
+                outcome.objects_removed += despawn.removed;
+                outcome.stale_index_entries += despawn.stale_index_entries;
+                outcome.remove_errors += despawn.remove_errors;
+                outcome.unsupported_live_despawn_types += despawn.unsupported_live_despawn_type;
+            }
+        }
+        outcome.applied_inactive_change =
+            Some(self.set_spawn_group_active_like_cpp(Some(group), false));
+        outcome
+    }
+
+    /// C++-shaped `Map::UpdateSpawnGroupConditions` bridge over pre-resolved
+    /// templates that executes the complete represented `SetSpawnGroupInactive`
+    /// branch and the map-local `SpawnGroupDespawn(..., true)` condition-failure
+    /// branch. `SpawnGroupSpawn` remains a planned action.
+    pub fn apply_update_spawn_group_conditions_represented_like_cpp<'a, I, F>(
+        &mut self,
+        groups: I,
+        spawn_store: &SpawnStore,
+        meets_conditions: F,
+    ) -> Vec<SpawnGroupConditionUpdateOutcomeLikeCpp>
+    where
+        I: IntoIterator<Item = &'a SpawnGroupTemplateData>,
+        F: FnMut(&SpawnGroupTemplateData) -> bool,
+    {
+        let groups = groups.into_iter().collect::<Vec<_>>();
+        let planned_actions = self
+            .plan_update_spawn_group_conditions_like_cpp(groups.iter().copied(), meets_conditions);
+
+        planned_actions
+            .into_iter()
+            .zip(groups)
+            .map(|((group_id, action), group)| {
+                let mut applied_change = None;
+                let mut despawn_outcome = None;
+                match action {
+                    SpawnGroupConditionActionLikeCpp::SetInactive => {
+                        applied_change = Some(self.set_spawn_group_inactive_like_cpp(Some(group)));
+                    }
+                    SpawnGroupConditionActionLikeCpp::Despawn {
+                        delete_respawn_times,
+                    } => {
+                        despawn_outcome = Some(self.spawn_group_despawn_like_cpp(
+                            Some(group),
+                            delete_respawn_times,
+                            spawn_store,
+                        ));
+                    }
+                    SpawnGroupConditionActionLikeCpp::Noop
+                    | SpawnGroupConditionActionLikeCpp::Spawn { .. } => {}
+                }
+
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id,
+                    action,
+                    applied_change,
+                    despawn_outcome,
+                }
+            })
+            .collect()
+    }
+
+    /// Legacy wrapper preserving the pre-#391 SetInactive-only seam for focused
+    /// tests/callers that explicitly require planned-only despawn evidence.
     pub fn apply_update_spawn_group_conditions_set_inactive_like_cpp<'a, I, F>(
         &mut self,
         groups: I,
@@ -1408,6 +1662,7 @@ where
                     group_id,
                     action,
                     applied_change,
+                    despawn_outcome: None,
                 }
             })
             .collect()
@@ -3711,6 +3966,7 @@ mod tests {
     use super::*;
     use crate::pool::{PoolGroupLikeCpp, PoolTemplateDataLikeCpp};
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
@@ -5588,6 +5844,7 @@ mod tests {
                 group_id: 38,
                 action: SpawnGroupConditionActionLikeCpp::SetInactive,
                 applied_change: Some(SpawnGroupActiveChange::Toggled),
+                despawn_outcome: None,
             }]
         );
         assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
@@ -5611,6 +5868,7 @@ mod tests {
                     delete_respawn_times: true
                 },
                 applied_change: None,
+                despawn_outcome: None,
             }]
         );
         assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
@@ -5638,10 +5896,131 @@ mod tests {
                     force: false,
                 },
                 applied_change: None,
+                despawn_outcome: None,
             }]
         );
         assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
         assert!(map.spawn_group_state().is_toggled(automatic.group_id));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_condition_failure_despawns_live_objects_and_timers_like_cpp() {
+        let group = spawn_group(391, SpawnGroupFlags::DESPAWN_ON_CONDITION_FAILURE);
+        let mut store = SpawnStore::new();
+        let mut templates = BTreeMap::from([(group.group_id, group.clone())]);
+        let creature_spawn = spawn_data(
+            SpawnObjectType::Creature,
+            10,
+            SpawnGroupTemplateData::default_group(),
+        );
+        let gameobject_spawn = spawn_data(
+            SpawnObjectType::GameObject,
+            20,
+            SpawnGroupTemplateData::default_group(),
+        );
+        store.add_object_spawn(&creature_spawn, |_| false);
+        store.add_object_spawn(&gameobject_spawn, |_| false);
+        store.apply_spawn_groups_like_cpp(
+            &mut templates,
+            [
+                crate::spawn::SpawnGroupMemberRow {
+                    group_id: group.group_id,
+                    spawn_type: SpawnObjectType::Creature as u8,
+                    spawn_id: 10,
+                },
+                crate::spawn::SpawnGroupMemberRow {
+                    group_id: group.group_id,
+                    spawn_type: SpawnObjectType::GameObject as u8,
+                    spawn_id: 20,
+                },
+            ],
+        );
+        let group = templates.get(&391).expect("group resolved").clone();
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(10, 10, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(20, 20)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(10), 1);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(20), 1);
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 10, 100));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 20, 100));
+
+        let outcomes =
+            map.apply_update_spawn_group_conditions_represented_like_cpp([&group], &store, |_| {
+                false
+            });
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].action,
+            SpawnGroupConditionActionLikeCpp::condition_failure_despawn()
+        );
+        let despawn = outcomes[0].despawn_outcome.expect("despawn executed");
+        assert_eq!(despawn.objects_removed, 2);
+        assert_eq!(despawn.respawn_timers_removed, 2);
+        assert_eq!(despawn.blocked_missing_group, 0);
+        assert_eq!(despawn.blocked_system_group, 0);
+        assert_eq!(despawn.unsupported_live_despawn_types, 0);
+        assert_eq!(
+            despawn.applied_inactive_change,
+            Some(SpawnGroupActiveChange::Toggled)
+        );
+        assert_eq!(map.map_object_count(), 0);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(10), 0);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(20), 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 10),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 20),
+            0
+        );
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&group)));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_spawn_branch_remains_planned_only_like_cpp() {
+        let group = spawn_group(392, SpawnGroupFlags::NONE);
+        let mut store = SpawnStore::new();
+        let mut templates = BTreeMap::from([(group.group_id, group.clone())]);
+        let creature_spawn = spawn_data(
+            SpawnObjectType::Creature,
+            30,
+            SpawnGroupTemplateData::default_group(),
+        );
+        store.add_object_spawn(&creature_spawn, |_| false);
+        store.apply_spawn_groups_like_cpp(
+            &mut templates,
+            [crate::spawn::SpawnGroupMemberRow {
+                group_id: group.group_id,
+                spawn_type: SpawnObjectType::Creature as u8,
+                spawn_id: 30,
+            }],
+        );
+        let group = templates.get(&392).expect("group resolved").clone();
+        let mut map = test_map();
+        map.set_spawn_group_inactive_like_cpp(Some(&group));
+
+        let outcomes =
+            map.apply_update_spawn_group_conditions_represented_like_cpp([&group], &store, |_| {
+                true
+            });
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].action,
+            SpawnGroupConditionActionLikeCpp::spawn_group_spawn_default()
+        );
+        assert_eq!(outcomes[0].applied_change, None);
+        assert_eq!(outcomes[0].despawn_outcome, None);
+        assert_eq!(map.map_object_count(), 0);
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&group)));
     }
 
     #[test]
@@ -5672,11 +6051,13 @@ mod tests {
                         delete_respawn_times: true
                     },
                     applied_change: None,
+                    despawn_outcome: None,
                 },
                 SpawnGroupConditionUpdateOutcomeLikeCpp {
                     group_id: 42,
                     action: SpawnGroupConditionActionLikeCpp::Noop,
                     applied_change: None,
+                    despawn_outcome: None,
                 },
             ]
         );
@@ -5710,11 +6091,13 @@ mod tests {
                     group_id: 43,
                     action: SpawnGroupConditionActionLikeCpp::Noop,
                     applied_change: None,
+                    despawn_outcome: None,
                 },
                 SpawnGroupConditionUpdateOutcomeLikeCpp {
                     group_id: 44,
                     action: SpawnGroupConditionActionLikeCpp::Noop,
                     applied_change: None,
+                    despawn_outcome: None,
                 },
             ]
         );
