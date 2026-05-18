@@ -1273,7 +1273,7 @@ where
         F: FnMut(ObjectGuid, &Creature) -> bool,
         R: FnMut(PoolMemberKindLikeCpp, u32) -> f32,
         C: FnMut(&[PoolObjectLikeCpp], usize) -> Vec<usize>,
-        L: FnMut(SpawnObjectType, SpawnId) -> Option<MapObjectRecord>,
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<MapObjectRecord>,
     {
         let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
 
@@ -1361,7 +1361,7 @@ where
                 }
                 CheckRespawnCompositeOutcomeLikeCpp::Allowed => {
                     if is_grid_id_loaded(self, checked_info.grid_id) {
-                        let Some(record) = load_record(object_type, spawn_id) else {
+                        let Some(record) = load_record(self, object_type, spawn_id) else {
                             summary.blocked_loaded_grid_respawn_loads += 1;
                             summary.blocked_do_respawn_runtime += 1;
                             break;
@@ -1445,7 +1445,7 @@ where
             is_creature_escorted,
             explicit_roll_for,
             choose_equal,
-            |_object_type, _spawn_id| None,
+            |_map, _object_type, _spawn_id| None,
         )
     }
 
@@ -5495,10 +5495,14 @@ mod tests {
             |_, _| false,
             |_, _| 0.0,
             |_candidates, count| (0..count).collect(),
-            |object_type, spawn_id| {
+            |map, object_type, spawn_id| {
                 loader_calls += 1;
                 assert_eq!(object_type, SpawnObjectType::Creature);
                 assert_eq!(spawn_id, 39701);
+                let low = map
+                    .generate_low_guid_like_cpp(HighGuid::Creature)
+                    .expect("map-owned Creature low-guid allocator");
+                assert_eq!(low, 1);
                 let mut creature = test_creature_for_spawn(39701, 3970101, true);
                 creature
                     .unit_mut()
@@ -5556,7 +5560,7 @@ mod tests {
             |_, _| false,
             |_, _| 0.0,
             |_candidates, count| (0..count).collect(),
-            |object_type, spawn_id| {
+            |_map, object_type, spawn_id| {
                 assert_eq!(object_type, SpawnObjectType::GameObject);
                 assert_eq!(spawn_id, 39801);
                 let mut gameobject = test_gameobject_for_spawn(39801, 3980101);
@@ -5614,7 +5618,7 @@ mod tests {
             |_, _| false,
             |_, _| 0.0,
             |_candidates, count| (0..count).collect(),
-            |_object_type, _spawn_id| None,
+            |_map, _object_type, _spawn_id| None,
         );
 
         assert_eq!(summary.executed_loaded_grid_respawns, 0);
@@ -5651,7 +5655,7 @@ mod tests {
             |_, _| false,
             |_, _| 0.0,
             |_candidates, count| (0..count).collect(),
-            |_object_type, _spawn_id| {
+            |_map, _object_type, _spawn_id| {
                 loader_calls += 1;
                 None
             },
@@ -5689,7 +5693,7 @@ mod tests {
             |_, _| false,
             |_, _| 0.0,
             |_candidates, count| (0..count).collect(),
-            |_object_type, _spawn_id| {
+            |_map, _object_type, _spawn_id| {
                 let mut creature = test_creature_for_spawn(40101, 4010101, true);
                 creature
                     .unit_mut()

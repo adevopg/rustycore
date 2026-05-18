@@ -27,6 +27,7 @@
 
 use std::collections::BTreeMap;
 
+use anyhow::Result;
 use wow_core::{ObjectGuid, Position, guid::HighGuid};
 use wow_entities::{
     Creature, CreatureCreateLifecycleRecord, CreatureLifecycleStats,
@@ -63,12 +64,6 @@ pub struct ResolvedCreatureTemplateLikeCpp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedCreatureSpawnLikeCpp {
-    /// Caller-resolved map-generated object GUID.
-    ///
-    /// C++ `Creature::LoadFromDB` calls `map->GenerateLowGuid<HighGuid::Creature>()`, while
-    /// `Creature::CreateFromProto` chooses `HighGuid::Vehicle` when a vehicle kit exists. This
-    /// identity must therefore come from the future Map-owned caller, not from `spawn_id`.
-    pub map_object_guid: ObjectGuid,
     pub spawn_id: u64,
     pub entry: u32,
     pub map_id: u32,
@@ -130,8 +125,13 @@ pub enum CreatureLoadedGridResolveErrorLikeCpp {
         guid: ObjectGuid,
         expected_high: HighGuid,
         expected_map_id: u32,
+        expected_entry: u32,
     },
     MapObjectRecord(String),
+    UnsupportedVehicle {
+        entry: u32,
+        vehicle_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -163,6 +163,7 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
     pub fn resolve_loaded_grid_creature_like_cpp(
         &self,
         spawn_id: u64,
+        map_object_guid: ObjectGuid,
     ) -> Result<CreatureLoadedGridResolvedLikeCpp, CreatureLoadedGridResolveErrorLikeCpp> {
         let spawn = self
             .spawns
@@ -172,14 +173,20 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
             .templates
             .get(&spawn.entry)
             .ok_or(CreatureLoadedGridResolveErrorLikeCpp::MissingTemplate { entry: spawn.entry })?;
+        if let Some(vehicle_id) = template.vehicle_id {
+            return Err(CreatureLoadedGridResolveErrorLikeCpp::UnsupportedVehicle {
+                entry: template.entry,
+                vehicle_id,
+            });
+        }
         let selection = self.runtime_selections.get(&spawn.entry).ok_or(
             CreatureLoadedGridResolveErrorLikeCpp::MissingRuntimeSelection { entry: spawn.entry },
         )?;
-        validate_map_object_guid_like_cpp(spawn, template)?;
+        validate_map_object_guid_like_cpp(spawn, template, map_object_guid)?;
 
         let lifecycle_record = CreatureLoadFromDbLifecycleRecord {
             create: CreatureCreateLifecycleRecord {
-                guid: spawn.map_object_guid,
+                guid: map_object_guid,
                 entry: template.entry,
                 map_id: spawn.map_id,
                 instance_id: spawn.instance_id,
@@ -224,6 +231,7 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
 fn validate_map_object_guid_like_cpp(
     spawn: &ResolvedCreatureSpawnLikeCpp,
     template: &ResolvedCreatureTemplateLikeCpp,
+    map_object_guid: ObjectGuid,
 ) -> Result<(), CreatureLoadedGridResolveErrorLikeCpp> {
     let expected_high = if template.vehicle_id.is_some() {
         HighGuid::Vehicle
@@ -231,14 +239,16 @@ fn validate_map_object_guid_like_cpp(
         HighGuid::Creature
     };
 
-    if spawn.map_object_guid.high_type() != expected_high
-        || u32::from(spawn.map_object_guid.map_id()) != spawn.map_id
+    if map_object_guid.high_type() != expected_high
+        || u32::from(map_object_guid.map_id()) != spawn.map_id
+        || map_object_guid.entry() != template.entry
     {
         return Err(
             CreatureLoadedGridResolveErrorLikeCpp::InvalidMapObjectGuid {
-                guid: spawn.map_object_guid,
+                guid: map_object_guid,
                 expected_high,
                 expected_map_id: spawn.map_id,
+                expected_entry: template.entry,
             },
         );
     }
@@ -340,23 +350,25 @@ mod tests {
             max_level: 20,
             equipment_id: 3,
             original_equipment_id: -2,
-            vehicle_id: Some(77),
+            vehicle_id: None,
             corpse_delay: 61,
             ignore_corpse_decay_ratio: true,
         }
     }
 
+    fn vehicle_template(entry: u32, vehicle_id: u32) -> ResolvedCreatureTemplateLikeCpp {
+        ResolvedCreatureTemplateLikeCpp {
+            vehicle_id: Some(vehicle_id),
+            ..template(entry)
+        }
+    }
+
+    fn map_creature_guid(entry: u32, map_id: u16, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, map_id, 1, entry, counter)
+    }
+
     fn spawn(spawn_id: u64, entry: u32, add_to_map: bool) -> ResolvedCreatureSpawnLikeCpp {
         ResolvedCreatureSpawnLikeCpp {
-            map_object_guid: ObjectGuid::create_world_object(
-                HighGuid::Vehicle,
-                0,
-                1,
-                571,
-                1,
-                entry,
-                spawn_id as i64,
-            ),
             spawn_id,
             entry,
             map_id: 571,
@@ -415,14 +427,18 @@ mod tests {
             [selection(entry)],
         );
 
+        let map_object_guid = map_creature_guid(entry, 571, 99_001);
         let resolved = resolver
-            .resolve_loaded_grid_creature_like_cpp(55)
+            .resolve_loaded_grid_creature_like_cpp(55, map_object_guid)
             .expect("resolver should build lifecycle record");
         let record = &resolved.lifecycle_record;
         let creature = &resolved.creature;
         let metadata = creature.lifecycle_metadata();
 
         assert_eq!(record.create.entry, entry);
+        assert_eq!(record.create.guid, map_object_guid);
+        assert_eq!(record.create.guid.high_type(), HighGuid::Creature);
+        assert_eq!(u32::from(record.create.guid.map_id()), 571);
         assert_eq!(record.create.template.original_entry, entry - 1);
         assert_eq!(record.create.map_id, 571);
         assert_eq!(record.create.instance_id, 9);
@@ -482,6 +498,33 @@ mod tests {
     }
 
     #[test]
+    fn loaded_grid_creature_lifecycle_resolver_uses_caller_map_guid_not_spawn_id_low() {
+        let entry = 12_349;
+        let spawn_id = 61;
+        let caller_low_guid = 345_678;
+        let map_object_guid = map_creature_guid(entry, 571, caller_low_guid);
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [template(entry)],
+            [spawn(spawn_id, entry, true)],
+            [selection(entry)],
+        );
+
+        let resolved = resolver
+            .resolve_loaded_grid_creature_like_cpp(spawn_id, map_object_guid)
+            .expect("caller-owned map guid should be preserved");
+
+        assert_ne!(spawn_id as i64, caller_low_guid);
+        assert_eq!(resolved.lifecycle_record.create.guid, map_object_guid);
+        assert_eq!(resolved.creature.guid(), map_object_guid);
+        let recorded = resolved
+            .map_object_record
+            .as_ref()
+            .and_then(MapObjectRecord::creature)
+            .expect("map insertion record should contain the created creature");
+        assert_eq!(recorded.guid(), map_object_guid);
+    }
+
+    #[test]
     fn loaded_grid_creature_lifecycle_resolver_respects_add_to_map_request_flag() {
         let entry = 12_346;
         let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
@@ -490,8 +533,9 @@ mod tests {
             [selection(entry)],
         );
 
+        let map_object_guid = map_creature_guid(entry, 571, 99_002);
         let resolved = resolver
-            .resolve_loaded_grid_creature_like_cpp(56)
+            .resolve_loaded_grid_creature_like_cpp(56, map_object_guid)
             .expect("resolver should build creature without insertion request");
 
         assert!(!resolved.map_insertion_requested);
@@ -508,13 +552,14 @@ mod tests {
     #[test]
     fn loaded_grid_creature_lifecycle_resolver_errors_without_dummy_for_missing_inputs() {
         let entry = 12_347;
+        let map_object_guid = map_creature_guid(entry, 571, 99_003);
         let missing_spawn = CreatureLoadedGridLifecycleResolverLikeCpp::new(
             [template(entry)],
             [],
             [selection(entry)],
         );
         assert_eq!(
-            missing_spawn.resolve_loaded_grid_creature_like_cpp(57),
+            missing_spawn.resolve_loaded_grid_creature_like_cpp(57, map_object_guid),
             Err(CreatureLoadedGridResolveErrorLikeCpp::MissingSpawnData { spawn_id: 57 })
         );
 
@@ -524,7 +569,7 @@ mod tests {
             [selection(entry)],
         );
         assert_eq!(
-            missing_template.resolve_loaded_grid_creature_like_cpp(58),
+            missing_template.resolve_loaded_grid_creature_like_cpp(58, map_object_guid),
             Err(CreatureLoadedGridResolveErrorLikeCpp::MissingTemplate { entry })
         );
 
@@ -534,8 +579,87 @@ mod tests {
             [],
         );
         assert_eq!(
-            missing_selection.resolve_loaded_grid_creature_like_cpp(59),
+            missing_selection.resolve_loaded_grid_creature_like_cpp(59, map_object_guid),
             Err(CreatureLoadedGridResolveErrorLikeCpp::MissingRuntimeSelection { entry })
+        );
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_rejects_wrong_map_or_high_guid() {
+        let entry = 12_350;
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [template(entry)],
+            [spawn(62, entry, true)],
+            [selection(entry)],
+        );
+        let wrong_map_guid = map_creature_guid(entry, 530, 99_004);
+        assert_eq!(
+            resolver.resolve_loaded_grid_creature_like_cpp(62, wrong_map_guid),
+            Err(
+                CreatureLoadedGridResolveErrorLikeCpp::InvalidMapObjectGuid {
+                    guid: wrong_map_guid,
+                    expected_high: HighGuid::Creature,
+                    expected_map_id: 571,
+                    expected_entry: entry,
+                }
+            )
+        );
+
+        let wrong_high_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, entry, 99_005);
+        assert_eq!(
+            resolver.resolve_loaded_grid_creature_like_cpp(62, wrong_high_guid),
+            Err(
+                CreatureLoadedGridResolveErrorLikeCpp::InvalidMapObjectGuid {
+                    guid: wrong_high_guid,
+                    expected_high: HighGuid::Creature,
+                    expected_map_id: 571,
+                    expected_entry: entry,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_rejects_same_map_wrong_entry_guid() {
+        let entry = 12_352;
+        let wrong_entry = entry + 1;
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [template(entry)],
+            [spawn(64, entry, true)],
+            [selection(entry)],
+        );
+        let wrong_entry_guid = map_creature_guid(wrong_entry, 571, 99_008);
+
+        assert_eq!(
+            resolver.resolve_loaded_grid_creature_like_cpp(64, wrong_entry_guid),
+            Err(
+                CreatureLoadedGridResolveErrorLikeCpp::InvalidMapObjectGuid {
+                    guid: wrong_entry_guid,
+                    expected_high: HighGuid::Creature,
+                    expected_map_id: 571,
+                    expected_entry: entry,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_rejects_vehicle_templates_for_now() {
+        let entry = 12_351;
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [vehicle_template(entry, 77)],
+            [spawn(63, entry, true)],
+            [selection(entry)],
+        );
+
+        assert_eq!(
+            resolver
+                .resolve_loaded_grid_creature_like_cpp(63, map_creature_guid(entry, 571, 99_006)),
+            Err(CreatureLoadedGridResolveErrorLikeCpp::UnsupportedVehicle {
+                entry,
+                vehicle_id: 77,
+            })
         );
     }
 
@@ -557,8 +681,13 @@ mod tests {
             [spawn(60, entry, true)],
             [selection(entry)],
         );
-        let first = resolver.resolve_loaded_grid_creature_like_cpp(60).unwrap();
-        let second = resolver.resolve_loaded_grid_creature_like_cpp(60).unwrap();
+        let map_object_guid = map_creature_guid(entry, 571, 99_007);
+        let first = resolver
+            .resolve_loaded_grid_creature_like_cpp(60, map_object_guid)
+            .unwrap();
+        let second = resolver
+            .resolve_loaded_grid_creature_like_cpp(60, map_object_guid)
+            .unwrap();
 
         assert_eq!(first.lifecycle_record, second.lifecycle_record);
         assert_eq!(
