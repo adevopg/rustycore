@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.392** `Map::ProcessRespawns` `DoRespawn` unloaded-grid early-return + DB-delete bridge.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:666-688`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2188`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2286-2305`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3549-3560`.
+  Rust targets: `crates/wow-map/src/map.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Map::process_due_respawns_composite_safe_side_effects_like_cpp` now executes only the safe C++ `CheckRespawn == Allowed` + unloaded-grid branch: removes the map-owned respawn timer after pool precedence and represented `CheckRespawn`, counts `processed_unloaded_grid_respawns`, continues later due timers, and lets `world-server` derive `CHAR_DEL_RESPAWN` from the before/after respawn timer diff outside the map lock. Loaded-grid `DoRespawn` still blocks as `blocked_do_respawn_runtime`; no entity creation, `LoadFromDB`, AddToMap/fanout, full ProcessRespawns, PoolMgr live runtime, or DB writes inside `wow-map` are claimed complete.
+
 - [x] **#NEXT.R8.ENTITIES.391** `SpawnGroupDespawn` condition-failure map-local side effects + respawn DB-delete bridge.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2471-2502`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2404-2425`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2034-2055`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2574-2646`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2140-2146`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2152-2163`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3549-3560`.
   Rust targets: `crates/wow-map/src/map.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.

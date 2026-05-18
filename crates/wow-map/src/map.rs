@@ -354,6 +354,10 @@ pub struct ProcessRespawnsSafeSideEffectsSummaryLikeCpp {
     pub deleted_live_object_blocker: usize,
     pub rescheduled_linked_respawns: Vec<RespawnInfoLikeCpp>,
     pub processed_pool_timers: usize,
+    /// C++ `DoRespawn` removes the timer before calling into `DoRespawn`; when
+    /// the target grid is unloaded, `DoRespawn` returns immediately and grid
+    /// load can create the object later because no respawn timer remains.
+    pub processed_unloaded_grid_respawns: usize,
     pub pool_update_plans: Vec<PoolTypedSpawnPlanLikeCpp>,
     pub blocked_pool_plan_errors: Vec<PoolMgrPlanErrorLikeCpp>,
     pub blocked_missing_spawn_data: usize,
@@ -911,10 +915,11 @@ where
     ///
     /// This helper executes only safe map-owned in-memory effects represented so
     /// far: pooled timer -> deterministic `UpdatePool` plan + map-owned
-    /// `SpawnedPoolDataLikeCpp` mutation + timer removal, zero-delete for inactive
-    /// spawn-groups/live-object blockers, and linked-respawn future reschedule by
-    /// replacing the same map-owned respawn timer. DB effects, `DoRespawn`, live
-    /// entity creation and grid/session fanout stay outside this lock-owned helper.
+    /// `SpawnedPoolDataLikeCpp` mutation + timer removal, `DoRespawn`'s unloaded-grid
+    /// early return after timer removal, zero-delete for inactive spawn-groups/live-object
+    /// blockers, and linked-respawn future reschedule by replacing the same map-owned
+    /// respawn timer. DB effects, loaded-grid `DoRespawn`, live entity creation and
+    /// grid/session fanout stay outside this lock-owned helper.
     /// If the oldest due timer needs an unavailable/error branch, it is left intact
     /// and processing stops to preserve C++ queue order.
     pub fn process_due_respawns_composite_safe_side_effects_like_cpp<F, R, C>(
@@ -1009,10 +1014,19 @@ where
                 }
                 CheckRespawnCompositeOutcomeLikeCpp::InactiveSpawnGroupDeletedTimer
                 | CheckRespawnCompositeOutcomeLikeCpp::AliveCreatureBlocksRespawn
-                | CheckRespawnCompositeOutcomeLikeCpp::GameObjectBlocksRespawn
-                | CheckRespawnCompositeOutcomeLikeCpp::Allowed => {
+                | CheckRespawnCompositeOutcomeLikeCpp::GameObjectBlocksRespawn => {
                     summary.blocked_do_respawn_runtime += 1;
                     break;
+                }
+                CheckRespawnCompositeOutcomeLikeCpp::Allowed => {
+                    if is_grid_id_loaded(self, checked_info.grid_id) {
+                        summary.blocked_do_respawn_runtime += 1;
+                        break;
+                    }
+
+                    self.remove_respawn_time_like_cpp(object_type, spawn_id);
+                    summary.processed_unloaded_grid_respawns += 1;
+                    continue;
                 }
                 CheckRespawnCompositeOutcomeLikeCpp::LinkedInfinite
                 | CheckRespawnCompositeOutcomeLikeCpp::LinkedSelfNeverRespawn
@@ -4709,7 +4723,7 @@ mod tests {
     }
 
     #[test]
-    fn process_respawns_delete_only_active_due_timer_blocks_do_respawn_and_preserves_timer_like_cpp()
+    fn process_respawns_delete_only_active_due_timer_loaded_grid_blocks_do_respawn_and_preserves_timer_like_cpp()
      {
         let mut map = test_map();
         let mut store = SpawnStore::new();
@@ -4717,15 +4731,61 @@ mod tests {
         store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 43, active), |_| {
             false
         });
+        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 43, 100));
 
         let summary = map.process_due_respawns_spawn_group_delete_only_like_cpp(100, &store);
 
         assert_eq!(summary.deleted_inactive_spawn_group, 0);
+        assert_eq!(summary.processed_unloaded_grid_respawns, 0);
         assert_eq!(summary.blocked_do_respawn_runtime, 1);
         assert_eq!(
             map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 43),
             100
+        );
+    }
+
+    #[test]
+    fn process_respawns_allowed_unloaded_grid_removes_timer_and_continues_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(16, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 47, active.clone()),
+            |_| false,
+        );
+        store.add_object_spawn(&spawn_data(SpawnObjectType::GameObject, 48, active), |_| {
+            false
+        });
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 47, 90));
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id: 48,
+            entry: 42,
+            respawn_time: 100,
+            grid_id: 8,
+        });
+
+        let summary = map.process_due_respawns_spawn_group_delete_only_like_cpp(100, &store);
+
+        assert_eq!(summary.processed_unloaded_grid_respawns, 2);
+        assert_eq!(summary.blocked_do_respawn_runtime, 0);
+        assert_eq!(summary.deleted_inactive_spawn_group, 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 47),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 48),
+            0
+        );
+        assert!(
+            map.get_respawn_info_like_cpp(SpawnObjectType::Creature, 47)
+                .is_none()
+        );
+        assert!(
+            map.get_respawn_info_like_cpp(SpawnObjectType::GameObject, 48)
+                .is_none()
         );
     }
 
@@ -4784,6 +4844,7 @@ mod tests {
         );
 
         assert_eq!(summary.processed_pool_timers, 1);
+        assert_eq!(summary.processed_unloaded_grid_respawns, 0);
         assert_eq!(summary.pool_update_plans.len(), 1);
         assert_eq!(summary.blocked_pool_plan_errors, Vec::new());
         assert_eq!(summary.blocked_pool_runtime, 0);
@@ -4855,7 +4916,8 @@ mod tests {
         store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 40, manual), |_| {
             false
         });
-        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 50, 100));
+        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 50, 90));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 40, 100));
 
         let summary = map.process_due_respawns_spawn_group_delete_only_like_cpp(100, &store);
@@ -4864,7 +4926,7 @@ mod tests {
         assert_eq!(summary.blocked_do_respawn_runtime, 1);
         assert_eq!(
             map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 50),
-            100
+            90
         );
         assert_eq!(
             map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 40),

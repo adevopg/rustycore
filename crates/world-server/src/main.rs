@@ -2593,6 +2593,7 @@ struct CanonicalSpawnGroupConditionTickSummaryLikeCpp {
     respawn_deleted_inactive_spawn_group: usize,
     respawn_deleted_live_object_blocker: usize,
     respawn_processed_pool_timers: usize,
+    respawn_processed_unloaded_grid_respawns: usize,
     respawn_pool_update_plans: usize,
     respawn_blocked_pool_plan_errors: usize,
     respawn_blocked_missing_spawn_data: usize,
@@ -2632,10 +2633,11 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
     // `UpdateSpawnGroupConditions()` when `_respawnCheckTimer` expires.
     // This tick executes the safe in-memory ProcessRespawns side effects produced
     // by represented composite CheckRespawn guards: zero-delete for inactive
-    // spawn-group/live-object blockers and linked-respawn future reschedules. DB
-    // delete/save effects are queued for async execution after releasing the
-    // MapManager lock. PoolMgr, DoRespawn, entity creation and fanout remain
-    // blocked gaps. RustyCore does not yet expose CONFIG_RESPAWN_DYNAMIC_ESCORTNPC
+    // spawn-group/live-object blockers, linked-respawn future reschedules, pooled
+    // timer UpdatePool plans, and the safe `DoRespawn` unloaded-grid early-return
+    // branch after timer removal. DB delete/save effects are queued for async
+    // execution after releasing the MapManager lock. Loaded-grid `DoRespawn`, live
+    // entity creation and fanout remain blocked gaps. RustyCore does not yet expose CONFIG_RESPAWN_DYNAMIC_ESCORTNPC
     // or Creature::IsEscorted ownership here, so the bridge passes false/false.
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2683,6 +2685,8 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
             }
         }
         summary.respawn_processed_pool_timers += respawn_summary.processed_pool_timers;
+        summary.respawn_processed_unloaded_grid_respawns +=
+            respawn_summary.processed_unloaded_grid_respawns;
         summary.respawn_pool_update_plans += respawn_summary.pool_update_plans.len();
         summary.respawn_blocked_pool_plan_errors += respawn_summary.blocked_pool_plan_errors.len();
         summary.respawn_blocked_missing_spawn_data += respawn_summary.blocked_missing_spawn_data;
@@ -2879,6 +2883,8 @@ fn spawn_canonical_map_update_loop(
                     respawn_deleted_live_object_blocker =
                         summary.respawn_deleted_live_object_blocker,
                     respawn_processed_pool_timers = summary.respawn_processed_pool_timers,
+                    respawn_processed_unloaded_grid_respawns =
+                        summary.respawn_processed_unloaded_grid_respawns,
                     respawn_pool_update_plans = summary.respawn_pool_update_plans,
                     respawn_blocked_pool_plan_errors = summary.respawn_blocked_pool_plan_errors,
                     respawn_blocked_missing_spawn_data = summary.respawn_blocked_missing_spawn_data,
@@ -2902,7 +2908,7 @@ fn spawn_canonical_map_update_loop(
                         summary.respawn_db_save_skipped_non_world_map,
                     respawn_db_save_skipped_invalid_map_id =
                         summary.respawn_db_save_skipped_invalid_map_id,
-                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules, represented pooled timer UpdatePool plans, and map-local SpawnGroupDespawn condition-failure side effects; queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock; live SpawnGroupSpawn, Spawn1Object/ReSpawn1Object full entity creation/fanout remain pending"
+                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules, represented pooled timer UpdatePool plans, safe DoRespawn unloaded-grid early-return timer removals, and map-local SpawnGroupDespawn condition-failure side effects; queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock; loaded-grid DoRespawn, live SpawnGroupSpawn, Spawn1Object/ReSpawn1Object full entity creation/fanout remain pending"
                 );
             }
         }
@@ -4427,6 +4433,7 @@ mmap.enablePathFinding = 0
 
         assert_eq!(summary.maps_evaluated, 1);
         assert_eq!(summary.respawn_processed_pool_timers, 1);
+        assert_eq!(summary.respawn_processed_unloaded_grid_respawns, 0);
         assert_eq!(summary.respawn_pool_update_plans, 1);
         assert_eq!(summary.respawn_blocked_pool_plan_errors, 0);
         assert_eq!(summary.respawn_blocked_pool_runtime, 0);
@@ -4458,8 +4465,8 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
-    fn spawn_group_condition_update_tick_process_respawns_active_due_timer_blocks_do_respawn_fake()
-    {
+    fn spawn_group_condition_update_tick_process_respawns_unloaded_grid_queues_delete_without_spawn()
+     {
         let metadata = test_spawn_metadata_with_flags([(61, 571, SpawnGroupFlags::NONE)]);
         let condition_store = ConditionEntriesByTypeStore::default();
         let mut manager = wow_map::MapManager::new(60_000, 1);
@@ -4484,7 +4491,16 @@ mmap.enablePathFinding = 0
 
         assert_eq!(summary.maps_evaluated, 1);
         assert_eq!(summary.respawn_deleted_inactive_spawn_group, 0);
-        assert_eq!(summary.respawn_blocked_do_respawn_runtime, 1);
+        assert_eq!(summary.respawn_processed_unloaded_grid_respawns, 1);
+        assert_eq!(summary.respawn_blocked_do_respawn_runtime, 0);
+        assert_eq!(summary.respawn_db_delete_queued, 1);
+        assert_eq!(summary.respawn_db_deletes.len(), 1);
+        let delete = &summary.respawn_db_deletes[0];
+        assert_eq!(delete.object_type, SpawnObjectType::Creature);
+        assert_eq!(delete.spawn_id, 1);
+        assert_eq!(delete.map_id, 571);
+        assert_eq!(delete.instance_id, 0);
+        assert_del_respawn_params_like_cpp(&delete.statement, 0, 1, 571, 0);
         assert_eq!(
             manager
                 .find_map(571, 0)
@@ -4499,7 +4515,7 @@ mmap.enablePathFinding = 0
                 .unwrap()
                 .map()
                 .get_respawn_info_like_cpp(SpawnObjectType::Creature, 1)
-                .is_some()
+                .is_none()
         );
     }
 
