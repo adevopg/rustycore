@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.375** `Map::ProcessRespawns` safe zero-delete DB delete side effect.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:682-688`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2140-2146`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2152-2163`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3549-3560`.
+  Rust targets: `crates/world-server/src/main.rs`.
+  Acceptance: after `Map::process_due_respawns_composite_delete_only_like_cpp` removes due timers for the already-safe inactive spawn-group/live-object zero-delete branches, `world-server` derives exact removed `(type, spawnId)` keys via per-map before/after snapshots, queues `CharStatements::DEL_RESPAWN(type, spawnId, mapId, instanceId)` only for `ManagedMapKind::World`, skips non-world and invalid `map_id > u16::MAX` without truncation, and executes deletes asynchronously after releasing the `MapManager` lock. This does not implement full `ProcessRespawns`, future `SaveRespawnInfoDB` reschedules, `DoRespawn`/`LoadFromDB`, PoolMgr, linked-respawn persistence, corpse load, entity creation/fanout or ObjectAccessor/grid ownership.
+
 - [x] **#NEXT.R8.ENTITIES.374** Startup `Map::LoadRespawnTimes` into map-owned respawn store.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/MapManager.cpp:71-76`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/MapManager.cpp:100-110`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3516-3546`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3563-3594`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2057-2090`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:748-777`.
   Rust targets: `crates/world-server/src/main.rs`, `crates/wow-database/src/statements/character.rs`.

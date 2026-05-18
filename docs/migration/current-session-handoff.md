@@ -7,9 +7,9 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 ## Repository State
 
 - Branch: `develop`
-- Base before #374: clean `develop...origin/develop [ahead 27]` after `#NEXT.R8.ENTITIES.373`.
-- Most recent completed slice: `#NEXT.R8.ENTITIES.374 — startup LoadRespawnTimes -> map-owned respawn store`.
-- Expected tree after committing #374: clean, ahead 28. No push/install/restart performed.
+- Base before #375: clean `develop...origin/develop [ahead 28]` after `#NEXT.R8.ENTITIES.374`.
+- Most recent completed slice: `#NEXT.R8.ENTITIES.375 — ProcessRespawns safe zero-delete DB delete side effect`.
+- Expected tree after committing #375: clean, ahead 29. No push/install/restart performed.
 
 ## Critical Rules
 
@@ -21,15 +21,23 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #374 `startup LoadRespawnTimes -> map-owned respawn store`: `~86.2%`.
+Overall core migration estimate after #375 `ProcessRespawns safe zero-delete DB delete side effect`: `~86.5%`.
 
-This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `CheckRespawn`/`ProcessRespawns` side effects beyond represented safe zero-delete branches, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, DB respawn persistence/delete during tick, corpse load, optimized map-local by-spawn indexes, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, and broader Unit/Player inventory/auras/threat/motion/update-field work.
+This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `CheckRespawn`/`ProcessRespawns` side effects beyond represented safe zero-delete branches, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, future `SaveRespawnInfoDB` reschedule persistence, linked-respawn reschedule/persistence, corpse load, optimized map-local by-spawn indexes, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #374; this is a startup map-owned respawn timer load dependency validated with focused unit checks.
+Manual test point: no new client-facing manual milestone from #375; this is a DB side-effect completion for already-safe scheduler zero-delete branches, validated with focused unit checks.
 
 ## Most Recent Completed Slices
 
 Current completed local slice:
+
+- `#NEXT.R8.ENTITIES.375`
+  - Adds the C++ `RemoveRespawnTime(..., true)` / `DeleteRespawnInfoFromDB` side effect for the already-executed safe `ProcessRespawns` zero-delete branches: inactive spawn-group and live object blocker.
+  - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; `world-server` only observes before/after timer keys for the same map tick and composes `CharStatements::DEL_RESPAWN` because it owns `CharacterDatabase` and async execution.
+  - Synchronization direction is strictly map timer removal -> queued DB delete -> async execute outside the `MapManager` lock. DB failures are logged and do not reinsert timers; non-world maps skip like C++ `Instanceable()`, and invalid `map_id > u16::MAX` skips without truncation.
+  - Does not implement future `SaveRespawnInfoDB` reschedules, `DoRespawn`/`LoadFromDB`, PoolMgr, linked-respawn reschedule/persistence, corpse load, entity creation/fanout, ObjectAccessor/grid ownership or optimized by-spawn indexes.
+
+Previous completed local slice:
 
 - `#NEXT.R8.ENTITIES.374`
   - Loads `characters.respawn` once at startup into a read-only snapshot indexed by `MapKey`, validates rows through canonical spawn metadata (`SpawnStore`), computes C++ grid ids from spawn metadata, and applies only Creature/GameObject timers to `ManagedMapKind::World` maps before `InitSpawnGroupState`.
@@ -61,6 +69,28 @@ Previous completed local slice:
   - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; linked respawn metadata is loaded DB -> validated canonical metadata -> read-only linked store.
   - Does not implement full `CheckRespawn`/`ProcessRespawns`, PoolMgr, `DoRespawn`, DB save/delete, live entity creation or fanout.
 
+## C++ Anchors for #375
+
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:682-688` — `Map::Update` calls `ProcessRespawns(); UpdateSpawnGroupConditions();` when `_respawnCheckTimer` fires.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240` — `ProcessRespawns` processes due timers in heap order; zero-delete branches remove timer then call `RemoveRespawnTime(..., true)`.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2140-2146` — `RemoveRespawnTime` erases timer maps/heap and calls `DeleteRespawnInfoFromDB`.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2152-2163` — `DeleteRespawnInfoFromDB` no-ops for `Instanceable()`, otherwise executes `CHAR_DEL_RESPAWN(type, spawnId, GetId(), GetInstanceId())`.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3549-3560` — future `SaveRespawnInfoDB` reschedule persistence remains a gap.
+
+## Expected Validation for #375
+
+```bash
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo fmt --check
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo test -p world-server respawn_db_delete
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo test -p world-server spawn_group_condition_update
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo test -p wow-map process_respawns
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo check -p world-server
+git diff --check
+git status --short --branch
+```
+
+Expected remaining gaps: `SaveRespawnInfoDB` future reschedule, `DoRespawn`/`LoadFromDB`, real `PoolMgr`, linked-respawn reschedule/persistence, corpse load, entity creation/fanout, ObjectAccessor/grid ownership, optimized by-spawn indexes and broader canonical object ownership.
+
 ## C++ Anchors for #374
 
 - `/home/server/woltk-trinity-legacy/src/server/game/Maps/MapManager.cpp:71-76` — `CreateWorldMap` calls `LoadRespawnTimes(); LoadCorpseData(); InitSpawnGroupState();` in that order.
@@ -79,7 +109,7 @@ cargo check -p world-server
 git diff --check
 ```
 
-Expected remaining gaps: DB respawn save/delete during tick, full `DoRespawn`/`LoadFromDB`, real `PoolMgr`, linked-respawn persistence/reschedule, corpse load, entity creation/fanout, optimized by-spawn indexes and broader canonical object ownership.
+Expected remaining gaps after #374: DB respawn save/delete during tick, full `DoRespawn`/`LoadFromDB`, real `PoolMgr`, linked-respawn persistence/reschedule, corpse load, entity creation/fanout, optimized by-spawn indexes and broader canonical object ownership.
 
 ## C++ Anchors for #373
 

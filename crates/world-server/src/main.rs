@@ -9,7 +9,7 @@
 //! world-server handshake (challenge → auth → encryption), creates a
 //! WorldSession for each client, and dispatches packets to handlers.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -22,7 +22,7 @@ use wow_config::{DatabaseInfo, LoadReport, WorldConfigSet};
 use wow_core::{ObjectGuidGenerator, guid::HighGuid};
 use wow_database::{
     CharStatements, CharacterDatabase, HotfixDatabase, LoginDatabase, LoginStatements,
-    WorldDatabase, WorldStatements, build_connection_string,
+    PreparedStatement, StatementDef, WorldDatabase, WorldStatements, build_connection_string,
 };
 use wow_instances::{InstanceLockMgr, MapDb2Entries, MapDifficultyResetInterval};
 use wow_loot::{
@@ -1532,6 +1532,7 @@ async fn main() -> Result<()> {
         respawn_condition_interval_ms,
         Arc::clone(&canonical_spawn_metadata),
         Arc::clone(&condition_store),
+        Arc::clone(&char_db),
     );
 
     set_realm_online(&login_db, realm_id).await?;
@@ -2429,7 +2430,52 @@ impl CanonicalRespawnConditionSchedulerLikeCpp {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+struct RespawnDbDeleteLikeCpp {
+    object_type: wow_map::SpawnObjectType,
+    spawn_id: wow_map::SpawnId,
+    map_id: u16,
+    instance_id: u32,
+    statement: PreparedStatement,
+}
+
+#[derive(Debug, Clone)]
+enum RespawnDbDeleteQueueOutcomeLikeCpp {
+    Queued(RespawnDbDeleteLikeCpp),
+    SkippedNonWorldMap,
+    SkippedInvalidMapId,
+}
+
+fn queue_respawn_db_delete_like_cpp(
+    map_kind: wow_map::ManagedMapKind,
+    map_id: u32,
+    instance_id: u32,
+    object_type: wow_map::SpawnObjectType,
+    spawn_id: wow_map::SpawnId,
+) -> RespawnDbDeleteQueueOutcomeLikeCpp {
+    if !matches!(map_kind, wow_map::ManagedMapKind::World) {
+        return RespawnDbDeleteQueueOutcomeLikeCpp::SkippedNonWorldMap;
+    }
+
+    let Ok(map_id) = u16::try_from(map_id) else {
+        return RespawnDbDeleteQueueOutcomeLikeCpp::SkippedInvalidMapId;
+    };
+
+    let mut statement = PreparedStatement::new(CharStatements::DEL_RESPAWN.sql());
+    statement.set_u16(0, u16::from(object_type as u8));
+    statement.set_u64(1, spawn_id);
+    statement.set_u16(2, map_id);
+    statement.set_u32(3, instance_id);
+    RespawnDbDeleteQueueOutcomeLikeCpp::Queued(RespawnDbDeleteLikeCpp {
+        object_type,
+        spawn_id,
+        map_id,
+        instance_id,
+        statement,
+    })
+}
+
+#[derive(Debug, Default, Clone)]
 struct CanonicalSpawnGroupConditionTickSummaryLikeCpp {
     maps_evaluated: usize,
     outcomes: usize,
@@ -2443,6 +2489,12 @@ struct CanonicalSpawnGroupConditionTickSummaryLikeCpp {
     respawn_blocked_do_respawn_runtime: usize,
     respawn_blocked_linked_respawn_persistence: usize,
     respawn_blocked_unsupported_spawn_type: usize,
+    respawn_db_delete_queued: usize,
+    respawn_db_delete_executed: usize,
+    respawn_db_delete_failed: usize,
+    respawn_db_delete_skipped_non_world_map: usize,
+    respawn_db_delete_skipped_invalid_map_id: usize,
+    respawn_db_deletes: Vec<RespawnDbDeleteLikeCpp>,
 }
 
 fn canonical_map_update_tick_set_inactive_like_cpp(
@@ -2477,6 +2529,13 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
     let mut summary = CanonicalSpawnGroupConditionTickSummaryLikeCpp::default();
     manager.do_for_all_maps_mut(|managed_map| {
         summary.maps_evaluated += 1;
+        let map_kind = managed_map.kind();
+        let map_id = managed_map.map_id();
+        let instance_id = managed_map.instance_id();
+        let before_respawn_keys = managed_map
+            .map()
+            .respawn_timer_keys_like_cpp()
+            .collect::<BTreeSet<_>>();
         let respawn_summary = managed_map
             .map_mut()
             .process_due_respawns_composite_delete_only_like_cpp(
@@ -2487,9 +2546,33 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 false,
                 |_, _| false,
             );
+        let after_respawn_keys = managed_map
+            .map()
+            .respawn_timer_keys_like_cpp()
+            .collect::<BTreeSet<_>>();
         summary.respawn_deleted_inactive_spawn_group +=
             respawn_summary.deleted_inactive_spawn_group;
         summary.respawn_deleted_live_object_blocker += respawn_summary.deleted_live_object_blocker;
+        for &(object_type, spawn_id) in before_respawn_keys.difference(&after_respawn_keys) {
+            match queue_respawn_db_delete_like_cpp(
+                map_kind,
+                map_id,
+                instance_id,
+                object_type,
+                spawn_id,
+            ) {
+                RespawnDbDeleteQueueOutcomeLikeCpp::Queued(delete) => {
+                    summary.respawn_db_delete_queued += 1;
+                    summary.respawn_db_deletes.push(delete);
+                }
+                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedNonWorldMap => {
+                    summary.respawn_db_delete_skipped_non_world_map += 1;
+                }
+                RespawnDbDeleteQueueOutcomeLikeCpp::SkippedInvalidMapId => {
+                    summary.respawn_db_delete_skipped_invalid_map_id += 1;
+                }
+            }
+        }
         summary.respawn_blocked_missing_spawn_data += respawn_summary.blocked_missing_spawn_data;
         summary.respawn_blocked_pool_runtime += respawn_summary.blocked_pool_runtime;
         summary.respawn_blocked_do_respawn_runtime += respawn_summary.blocked_do_respawn_runtime;
@@ -2537,6 +2620,7 @@ fn spawn_canonical_map_update_loop(
     respawn_condition_interval_ms: u32,
     canonical_spawn_metadata: Arc<spawn_store_loader::CanonicalSpawnMetadataLikeCpp>,
     condition_store: Arc<wow_data::ConditionEntriesByTypeStore>,
+    character_db: Arc<CharacterDatabase>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval =
@@ -2560,17 +2644,45 @@ fn spawn_canonical_map_update_loop(
                 continue;
             }
 
-            let Ok(mut manager) = map_manager.lock() else {
-                tracing::error!("Canonical MapManager mutex poisoned; stopping map update loop");
-                break;
+            let tick_summary = {
+                let Ok(mut manager) = map_manager.lock() else {
+                    tracing::error!(
+                        "Canonical MapManager mutex poisoned; stopping map update loop"
+                    );
+                    break;
+                };
+                canonical_map_update_tick_set_inactive_like_cpp(
+                    &mut manager,
+                    diff_ms,
+                    &mut respawn_condition_scheduler,
+                    canonical_spawn_metadata.as_ref(),
+                    condition_store.as_ref(),
+                )
             };
-            if let Some(summary) = canonical_map_update_tick_set_inactive_like_cpp(
-                &mut manager,
-                diff_ms,
-                &mut respawn_condition_scheduler,
-                canonical_spawn_metadata.as_ref(),
-                condition_store.as_ref(),
-            ) {
+
+            if let Some(mut summary) = tick_summary {
+                let db_delete_total = summary.respawn_db_deletes.len();
+                for (db_delete_index, db_delete) in summary.respawn_db_deletes.drain(..).enumerate()
+                {
+                    match character_db.execute(&db_delete.statement).await {
+                        Ok(_) => {
+                            summary.respawn_db_delete_executed += 1;
+                        }
+                        Err(error) => {
+                            summary.respawn_db_delete_failed += 1;
+                            tracing::error!(
+                                error = %error,
+                                db_delete_index = db_delete_index + 1,
+                                db_delete_total,
+                                map_id = db_delete.map_id,
+                                instance_id = db_delete.instance_id,
+                                respawn_type = db_delete.object_type as u8,
+                                spawn_id = db_delete.spawn_id,
+                                "Failed to execute C++ Map::RemoveRespawnTime CHAR_DEL_RESPAWN side effect; continuing canonical map update loop"
+                            );
+                        }
+                    }
+                }
                 debug!(
                     maps_evaluated = summary.maps_evaluated,
                     outcomes = summary.outcomes,
@@ -2588,7 +2700,14 @@ fn spawn_canonical_map_update_loop(
                         summary.respawn_blocked_linked_respawn_persistence,
                     respawn_blocked_unsupported_spawn_type =
                         summary.respawn_blocked_unsupported_spawn_type,
-                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches, then applied UpdateSpawnGroupConditions SetInactive seam; PoolMgr/DoRespawn/DB linked persistence/entity creation/fanout remain pending"
+                    respawn_db_delete_queued = summary.respawn_db_delete_queued,
+                    respawn_db_delete_executed = summary.respawn_db_delete_executed,
+                    respawn_db_delete_failed = summary.respawn_db_delete_failed,
+                    respawn_db_delete_skipped_non_world_map =
+                        summary.respawn_db_delete_skipped_non_world_map,
+                    respawn_db_delete_skipped_invalid_map_id =
+                        summary.respawn_db_delete_skipped_invalid_map_id,
+                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches and queued/executed DEL_RESPAWN DB deletes outside the MapManager lock, then applied UpdateSpawnGroupConditions SetInactive seam; PoolMgr/DoRespawn/DB linked persistence/entity creation/fanout remain pending"
                 );
             }
         }
@@ -3043,12 +3162,13 @@ mod tests {
     use super::{
         CanonicalRespawnConditionSchedulerLikeCpp, PersistedRespawnLoadReportLikeCpp,
         PersistedRespawnRowLikeCpp, PersistedRespawnTimesLikeCpp,
+        RespawnDbDeleteQueueOutcomeLikeCpp,
         apply_canonical_spawn_group_condition_update_set_inactive_like_cpp,
         canonical_map_update_tick_set_inactive_like_cpp,
         install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
         loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
-        persisted_respawn_info_from_row_like_cpp, world_config_bool, world_config_u8,
-        world_config_u16,
+        persisted_respawn_info_from_row_like_cpp, queue_respawn_db_delete_like_cpp,
+        world_config_bool, world_config_u8, world_config_u16,
     };
     use std::collections::{BTreeMap, HashSet};
     use std::env;
@@ -3057,10 +3177,36 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use wow_constants::{ConditionSourceType, ConditionType};
     use wow_data::{Condition, ConditionEntriesByTypeStore};
+    use wow_database::{CharStatements, SqlParam, StatementDef};
     use wow_map::{
         RespawnInfoLikeCpp, SpawnData, SpawnGroupFlags, SpawnGroupTemplateData, SpawnObjectType,
         SpawnPosition, SpawnStore, spawn::SpawnGroupMemberRow,
     };
+
+    fn assert_del_respawn_params_like_cpp(
+        statement: &wow_database::PreparedStatement,
+        object_type: u16,
+        spawn_id: u64,
+        map_id: u16,
+        instance_id: u32,
+    ) {
+        let [
+            SqlParam::U16(actual_object_type),
+            SqlParam::U64(actual_spawn_id),
+            SqlParam::U16(actual_map_id),
+            SqlParam::U32(actual_instance_id),
+        ] = statement.params()
+        else {
+            panic!(
+                "expected DEL_RESPAWN params [U16, U64, U16, U32], got {:?}",
+                statement.params()
+            );
+        };
+        assert_eq!(*actual_object_type, object_type);
+        assert_eq!(*actual_spawn_id, spawn_id);
+        assert_eq!(*actual_map_id, map_id);
+        assert_eq!(*actual_instance_id, instance_id);
+    }
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -3604,7 +3750,7 @@ mmap.enablePathFinding = 0
             &metadata,
             &condition_store,
         );
-        assert_eq!(early, None);
+        assert!(early.is_none());
         assert_eq!(scheduler.timer_ms(), 10);
         assert!(
             manager
@@ -3665,7 +3811,7 @@ mmap.enablePathFinding = 0
             &metadata,
             &condition_store,
         );
-        assert_eq!(early, None);
+        assert!(early.is_none());
         assert!(
             manager
                 .find_map(571, 0)
@@ -3698,6 +3844,56 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
+    fn respawn_db_delete_statement_like_cpp_uses_char_del_respawn_params_without_truncation() {
+        let outcome = queue_respawn_db_delete_like_cpp(
+            wow_map::ManagedMapKind::World,
+            571,
+            0,
+            SpawnObjectType::Creature,
+            1,
+        );
+        let RespawnDbDeleteQueueOutcomeLikeCpp::Queued(delete) = outcome else {
+            panic!("world map delete should queue");
+        };
+
+        assert_eq!(delete.object_type, SpawnObjectType::Creature);
+        assert_eq!(delete.spawn_id, 1);
+        assert_eq!(delete.map_id, 571);
+        assert_eq!(delete.instance_id, 0);
+        assert_eq!(delete.statement.sql(), CharStatements::DEL_RESPAWN.sql());
+        assert_del_respawn_params_like_cpp(&delete.statement, 0, 1, 571, 0);
+    }
+
+    #[test]
+    fn respawn_db_delete_statement_like_cpp_skips_non_world_and_invalid_map_id() {
+        let non_world = queue_respawn_db_delete_like_cpp(
+            wow_map::ManagedMapKind::Dungeon {
+                has_reset_schedule: false,
+            },
+            571,
+            1,
+            SpawnObjectType::GameObject,
+            2,
+        );
+        assert!(matches!(
+            non_world,
+            RespawnDbDeleteQueueOutcomeLikeCpp::SkippedNonWorldMap
+        ));
+
+        let invalid_map_id = queue_respawn_db_delete_like_cpp(
+            wow_map::ManagedMapKind::World,
+            u32::from(u16::MAX) + 1,
+            0,
+            SpawnObjectType::Creature,
+            1,
+        );
+        assert!(matches!(
+            invalid_map_id,
+            RespawnDbDeleteQueueOutcomeLikeCpp::SkippedInvalidMapId
+        ));
+    }
+
+    #[test]
     fn spawn_group_condition_update_tick_process_respawns_delete_only_removes_inactive_due_timer() {
         let metadata = test_spawn_metadata_with_flags([(60, 571, SpawnGroupFlags::MANUAL_SPAWN)]);
         let condition_store = ConditionEntriesByTypeStore::default();
@@ -3724,6 +3920,17 @@ mmap.enablePathFinding = 0
         assert_eq!(summary.maps_evaluated, 1);
         assert_eq!(summary.respawn_deleted_inactive_spawn_group, 1);
         assert_eq!(summary.respawn_blocked_do_respawn_runtime, 0);
+        assert_eq!(summary.respawn_db_delete_queued, 1);
+        assert_eq!(summary.respawn_db_delete_skipped_non_world_map, 0);
+        assert_eq!(summary.respawn_db_delete_skipped_invalid_map_id, 0);
+        assert_eq!(summary.respawn_db_deletes.len(), 1);
+        let delete = &summary.respawn_db_deletes[0];
+        assert_eq!(delete.object_type, SpawnObjectType::Creature);
+        assert_eq!(delete.spawn_id, 1);
+        assert_eq!(delete.map_id, 571);
+        assert_eq!(delete.instance_id, 0);
+        assert_eq!(delete.statement.sql(), CharStatements::DEL_RESPAWN.sql());
+        assert_del_respawn_params_like_cpp(&delete.statement, 0, 1, 571, 0);
         assert_eq!(
             manager
                 .find_map(571, 0)
