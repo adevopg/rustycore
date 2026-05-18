@@ -348,6 +348,13 @@ pub struct SpawnGroupSpawnLoadPlanLikeCpp {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolSpawnActionLoadPlanLikeCpp {
+    pub object_type: SpawnObjectType,
+    pub spawn_id: SpawnId,
+    pub respawn: bool,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SpawnGroupSpawnOutcomeLikeCpp {
     pub group_id: u32,
@@ -420,6 +427,7 @@ pub struct ProcessRespawnsSafeSideEffectsSummaryLikeCpp {
     pub pool_remove_errors: usize,
     pub pool_spawn_actions_skipped_unloaded_grid: usize,
     pub pool_spawn_actions_blocked_loaded_grid: usize,
+    pub pool_spawn_action_load_plans: Vec<PoolSpawnActionLoadPlanLikeCpp>,
     pub pool_spawn_actions_missing_spawn_data: usize,
     pub pool_unsupported_action_kind: usize,
     pub blocked_pool_plan_errors: Vec<PoolMgrPlanErrorLikeCpp>,
@@ -1014,7 +1022,7 @@ where
             }
             PoolSpawnObjectActionLikeCpp::RespawnOne { kind, guid } => {
                 self.apply_pool_despawn_one_safe_map_action_like_cpp(kind, guid, summary);
-                self.report_pool_spawn_one_action_like_cpp(kind, guid, spawn_store, summary);
+                self.report_pool_spawn_one_action_like_cpp(kind, guid, true, spawn_store, summary);
             }
             PoolSpawnObjectActionLikeCpp::RemoveRespawnTime { kind, guid } => {
                 let Some(object_type) = pool_member_kind_to_spawn_object_type_like_cpp(kind) else {
@@ -1031,7 +1039,7 @@ where
                 }
             }
             PoolSpawnObjectActionLikeCpp::SpawnOne { kind, guid } => {
-                self.report_pool_spawn_one_action_like_cpp(kind, guid, spawn_store, summary);
+                self.report_pool_spawn_one_action_like_cpp(kind, guid, false, spawn_store, summary);
             }
         }
     }
@@ -1072,6 +1080,7 @@ where
         &self,
         kind: PoolMemberKindLikeCpp,
         spawn_id: u64,
+        respawn: bool,
         spawn_store: &SpawnStore,
         summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
     ) {
@@ -1087,6 +1096,13 @@ where
         let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
         if self.is_grid_loaded(grid) {
             summary.pool_spawn_actions_blocked_loaded_grid += 1;
+            summary
+                .pool_spawn_action_load_plans
+                .push(PoolSpawnActionLoadPlanLikeCpp {
+                    object_type,
+                    spawn_id: spawn_id as SpawnId,
+                    respawn,
+                });
         } else {
             summary.pool_spawn_actions_skipped_unloaded_grid += 1;
         }
@@ -5342,6 +5358,7 @@ mod tests {
             MapObjectRecord::new_creature(test_creature_for_spawn(73, 7301, true)).unwrap(),
         )
         .unwrap();
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 74, 150));
         let plan = PoolTypedSpawnPlanLikeCpp {
             kind: PoolMemberKindLikeCpp::Creature,
@@ -5364,7 +5381,16 @@ mod tests {
         map.apply_pool_typed_spawn_plan_safe_map_actions_like_cpp(&plan, &store, &mut summary);
 
         assert_eq!(summary.pool_objects_removed, 1);
-        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 1);
+        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 0);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 1);
+        assert_eq!(
+            summary.pool_spawn_action_load_plans,
+            vec![PoolSpawnActionLoadPlanLikeCpp {
+                object_type: SpawnObjectType::Creature,
+                spawn_id: 73,
+                respawn: true,
+            }]
+        );
         assert_eq!(summary.pool_respawn_timers_removed, 0);
         assert_eq!(map.map_object_count(), 0);
         assert_eq!(
@@ -5465,6 +5491,14 @@ mod tests {
         assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 1);
         assert_eq!(summary.pool_spawn_actions_missing_spawn_data, 1);
         assert_eq!(summary.pool_unsupported_action_kind, 1);
+        assert_eq!(
+            summary.pool_spawn_action_load_plans,
+            vec![PoolSpawnActionLoadPlanLikeCpp {
+                object_type: SpawnObjectType::Creature,
+                spawn_id: 76,
+                respawn: false,
+            }]
+        );
     }
 
     #[test]

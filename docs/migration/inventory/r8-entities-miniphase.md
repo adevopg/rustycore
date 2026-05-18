@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.395** PoolMgr `Spawn1Object`/`ReSpawn1Object` loaded-grid load-plan evidence seam.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:288-350`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:353-363`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:366-379`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:382-407`, and parity relation to `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2356-2395`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `ProcessRespawnsSafeSideEffectsSummaryLikeCpp` now carries explicit `PoolSpawnActionLoadPlanLikeCpp` evidence for loaded-grid Creature/GameObject PoolMgr `Spawn1Object`/`ReSpawn1Object` work that remains blocked: `SpawnOne` records `respawn=false`; `RespawnOne` still performs only the safe map-local `Despawn1Object(..., false, false)` half before recording `respawn=true` for the spawn half. Unloaded grids still increment the skipped counter with no plan; missing spawn metadata and unsupported Pool member kinds preserve existing fallback counters. Complete only for honest map-local planning/evidence; remaining gaps: real `CreateFromDB`/`LoadFromDB`/`AddToMap`, loaded-grid entity creation, recursive live child-pool execution, DB/fanout/scripts, full `DoRespawn`, and full PoolMgr runtime.
+
 - [x] **#NEXT.R8.ENTITIES.394** `Map::SpawnGroupSpawn` safe map-local planning/execution seam.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2315-2401`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2471-2502`.
   Rust targets: `crates/wow-map/src/map.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
