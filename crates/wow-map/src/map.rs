@@ -116,6 +116,13 @@ pub enum SpawnGroupConditionActionLikeCpp {
     SetInactive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnGroupConditionUpdateOutcomeLikeCpp {
+    pub group_id: u32,
+    pub action: SpawnGroupConditionActionLikeCpp,
+    pub applied_change: Option<SpawnGroupActiveChange>,
+}
+
 impl SpawnGroupConditionActionLikeCpp {
     pub const fn spawn_group_spawn_default() -> Self {
         Self::Spawn {
@@ -526,6 +533,45 @@ where
             actions.push((group.group_id, action));
         }
         actions
+    }
+
+    /// C++-shaped `Map::UpdateSpawnGroupConditions` bridge over pre-resolved
+    /// templates that only executes the complete `SetSpawnGroupInactive` branch.
+    ///
+    /// `SpawnGroupSpawn` and `SpawnGroupDespawn` remain planned actions in the
+    /// returned evidence; this method deliberately does not fake live spawns,
+    /// despawns, pools, respawn persistence, DB writes, entity creation, timers,
+    /// or grid/session fanout. The closure only substitutes C++ `ConditionMgr`.
+    pub fn apply_update_spawn_group_conditions_set_inactive_like_cpp<'a, I, F>(
+        &mut self,
+        groups: I,
+        meets_conditions: F,
+    ) -> Vec<SpawnGroupConditionUpdateOutcomeLikeCpp>
+    where
+        I: IntoIterator<Item = &'a SpawnGroupTemplateData>,
+        F: FnMut(&SpawnGroupTemplateData) -> bool,
+    {
+        let groups = groups.into_iter().collect::<Vec<_>>();
+        let planned_actions = self
+            .plan_update_spawn_group_conditions_like_cpp(groups.iter().copied(), meets_conditions);
+
+        planned_actions
+            .into_iter()
+            .zip(groups)
+            .map(|((group_id, action), group)| {
+                let applied_change = if action == SpawnGroupConditionActionLikeCpp::SetInactive {
+                    Some(self.set_spawn_group_inactive_like_cpp(Some(group)))
+                } else {
+                    None
+                };
+
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id,
+                    action,
+                    applied_change,
+                }
+            })
+            .collect()
     }
 
     pub fn map_object_count(&self) -> usize {
@@ -2927,6 +2973,156 @@ mod tests {
         assert_eq!(after, before);
         assert!(map.is_spawn_group_active_like_cpp(Some(&manual)));
         assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_apply_automatic_condition_failure_without_despawn_sets_inactive()
+     {
+        let mut map = test_map();
+        let automatic = spawn_group(38, SpawnGroupFlags::NONE);
+
+        let outcomes =
+            map.apply_update_spawn_group_conditions_set_inactive_like_cpp([&automatic], |_| false);
+
+        assert_eq!(
+            outcomes,
+            vec![SpawnGroupConditionUpdateOutcomeLikeCpp {
+                group_id: 38,
+                action: SpawnGroupConditionActionLikeCpp::SetInactive,
+                applied_change: Some(SpawnGroupActiveChange::Toggled),
+            }]
+        );
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
+        assert!(map.spawn_group_state().is_toggled(automatic.group_id));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_apply_automatic_condition_failure_with_despawn_only_plans_despawn()
+     {
+        let mut map = test_map();
+        let automatic = spawn_group(39, SpawnGroupFlags::DESPAWN_ON_CONDITION_FAILURE);
+
+        let outcomes =
+            map.apply_update_spawn_group_conditions_set_inactive_like_cpp([&automatic], |_| false);
+
+        assert_eq!(
+            outcomes,
+            vec![SpawnGroupConditionUpdateOutcomeLikeCpp {
+                group_id: 39,
+                action: SpawnGroupConditionActionLikeCpp::Despawn {
+                    delete_respawn_times: true
+                },
+                applied_change: None,
+            }]
+        );
+        assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
+        assert!(map.spawn_group_state().toggled_spawn_group_ids().is_empty());
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_apply_automatic_inactive_condition_true_only_plans_spawn() {
+        let mut map = test_map();
+        let automatic = spawn_group(40, SpawnGroupFlags::NONE);
+        assert_eq!(
+            map.set_spawn_group_inactive_like_cpp(Some(&automatic)),
+            SpawnGroupActiveChange::Toggled
+        );
+
+        let outcomes =
+            map.apply_update_spawn_group_conditions_set_inactive_like_cpp([&automatic], |_| true);
+
+        assert_eq!(
+            outcomes,
+            vec![SpawnGroupConditionUpdateOutcomeLikeCpp {
+                group_id: 40,
+                action: SpawnGroupConditionActionLikeCpp::Spawn {
+                    ignore_respawn: false,
+                    force: false,
+                },
+                applied_change: None,
+            }]
+        );
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
+        assert!(map.spawn_group_state().is_toggled(automatic.group_id));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_apply_manual_condition_failure_never_sets_inactive() {
+        let mut map = test_map();
+        let manual_with_despawn = spawn_group(
+            41,
+            spawn_group_flags(
+                SpawnGroupFlags::MANUAL_SPAWN,
+                SpawnGroupFlags::DESPAWN_ON_CONDITION_FAILURE,
+            ),
+        );
+        let manual_without_despawn = spawn_group(42, SpawnGroupFlags::MANUAL_SPAWN);
+        map.set_spawn_group_active_like_cpp(Some(&manual_with_despawn), true);
+        map.set_spawn_group_active_like_cpp(Some(&manual_without_despawn), true);
+
+        let outcomes = map.apply_update_spawn_group_conditions_set_inactive_like_cpp(
+            [&manual_with_despawn, &manual_without_despawn],
+            |_| false,
+        );
+
+        assert_eq!(
+            outcomes,
+            vec![
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id: 41,
+                    action: SpawnGroupConditionActionLikeCpp::Despawn {
+                        delete_respawn_times: true
+                    },
+                    applied_change: None,
+                },
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id: 42,
+                    action: SpawnGroupConditionActionLikeCpp::Noop,
+                    applied_change: None,
+                },
+            ]
+        );
+        assert!(map.is_spawn_group_active_like_cpp(Some(&manual_with_despawn)));
+        assert!(map.is_spawn_group_active_like_cpp(Some(&manual_without_despawn)));
+        assert!(
+            map.spawn_group_state()
+                .is_toggled(manual_with_despawn.group_id)
+        );
+        assert!(
+            map.spawn_group_state()
+                .is_toggled(manual_without_despawn.group_id)
+        );
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_apply_active_equals_should_is_noop_without_change() {
+        let mut map = test_map();
+        let automatic = spawn_group(43, SpawnGroupFlags::NONE);
+        let manual = spawn_group(44, SpawnGroupFlags::MANUAL_SPAWN);
+
+        let outcomes = map.apply_update_spawn_group_conditions_set_inactive_like_cpp(
+            [&automatic, &manual],
+            |group| group.group_id == automatic.group_id,
+        );
+
+        assert_eq!(
+            outcomes,
+            vec![
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id: 43,
+                    action: SpawnGroupConditionActionLikeCpp::Noop,
+                    applied_change: None,
+                },
+                SpawnGroupConditionUpdateOutcomeLikeCpp {
+                    group_id: 44,
+                    action: SpawnGroupConditionActionLikeCpp::Noop,
+                    applied_change: None,
+                },
+            ]
+        );
+        assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&manual)));
+        assert!(map.spawn_group_state().toggled_spawn_group_ids().is_empty());
     }
 
     fn dynamic_respawn_context(

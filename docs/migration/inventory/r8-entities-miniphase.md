@@ -1447,3 +1447,17 @@ Files touched: `crates/world-server/src/main.rs`; `docs/migration/inventory/r8-e
 Checks expected: `cargo fmt --check`; `cargo test -p world-server canonical_spawn_group_initializer`; `cargo check -p world-server`; `git diff --check`.
 
 Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021`. Still missing: live `SpawnGroupSpawn`/`SpawnGroupDespawn`, pools, respawn persistence, live entity creation, grid/session fanout, DB/runtime side effects, and runtime map-state sources beyond the explicitly empty arrays used by this wiring slice.
+
+### #NEXT.R8.ENTITIES.363 — Apply only the SetSpawnGroupInactive branch of UpdateSpawnGroupConditions
+
+Status: complete for the `SetSpawnGroupInactive` branch of `Map::UpdateSpawnGroupConditions` only; planned `SpawnGroupSpawn` / `SpawnGroupDespawn` actions remain explicit runtime gaps.
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2471-2502` (`Map::UpdateSpawnGroupConditions`: returns when no map groups exist; resolves each template, reads `IsSpawnGroupActive`, evaluates map conditions; manual groups only plan/despawn on active + failed condition + `SPAWNGROUP_FLAG_DESPAWN_ON_CONDITION_FAILURE`; `active == should` is a no-op; live `SpawnGroupSpawn` / `SpawnGroupDespawn` branches are separate runtime side effects; automatic active groups failing conditions without the despawn-on-failure flag call `SetSpawnGroupInactive`), and `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2427-2453` (`SetSpawnGroupActive`, `SetSpawnGroupInactive`, and `IsSpawnGroupActive` are map-owned `_toggledSpawnGroupIds` semantics already represented in Rust).
+
+Implemented Rust bridge: `wow-map` now exposes `apply_update_spawn_group_conditions_set_inactive_like_cpp(...)`, which accepts the same pre-resolved spawn-group templates and condition closure as the existing planner, records the planned action per group, and applies only `SpawnGroupConditionActionLikeCpp::SetInactive` through `Map::set_spawn_group_inactive_like_cpp(Some(group))`. The returned `SpawnGroupConditionUpdateOutcomeLikeCpp` carries `group_id`, planned `action`, and `Option<SpawnGroupActiveChange>` evidence only when the inactive branch was actually applied. `Noop`, `Spawn { .. }`, and `Despawn { .. }` are returned as planned actions without mutating toggles or pretending live runtime exists.
+
+Files touched: `crates/wow-map/src/map.rs`; `docs/migration/inventory/r8-entities-miniphase.md`; `docs/migration/inventory/r8-entities-miniphase.tsv`.
+
+Checks expected: `cargo fmt --check`; `cargo test -p wow-map update_spawn_group_conditions`; `git diff --check`.
+
+Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021`. `SpawnGroupSpawn`, `SpawnGroupDespawn`, pools, respawn persistence, live entity creation, grid/session fanout, DB/runtime side effects, and scheduler/respawn timer wiring remain pending.
