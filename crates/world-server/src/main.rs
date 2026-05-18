@@ -2579,6 +2579,9 @@ struct CanonicalSpawnGroupConditionTickSummaryLikeCpp {
     planned_despawn: usize,
     respawn_deleted_inactive_spawn_group: usize,
     respawn_deleted_live_object_blocker: usize,
+    respawn_processed_pool_timers: usize,
+    respawn_pool_update_plans: usize,
+    respawn_blocked_pool_plan_errors: usize,
     respawn_blocked_missing_spawn_data: usize,
     respawn_blocked_pool_runtime: usize,
     respawn_blocked_do_respawn_runtime: usize,
@@ -2642,9 +2645,12 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 now_secs,
                 canonical_spawn_metadata.spawn_store(),
                 canonical_spawn_metadata.linked_respawns_like_cpp(),
+                canonical_spawn_metadata.pool_mgr_like_cpp(),
                 5,
                 false,
                 |_, _| false,
+                |_, _| 0.0,
+                |_candidates, count| (0..count).collect(),
             );
         let after_respawn_keys = managed_map
             .map()
@@ -2687,6 +2693,9 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 }
             }
         }
+        summary.respawn_processed_pool_timers += respawn_summary.processed_pool_timers;
+        summary.respawn_pool_update_plans += respawn_summary.pool_update_plans.len();
+        summary.respawn_blocked_pool_plan_errors += respawn_summary.blocked_pool_plan_errors.len();
         summary.respawn_blocked_missing_spawn_data += respawn_summary.blocked_missing_spawn_data;
         summary.respawn_blocked_pool_runtime += respawn_summary.blocked_pool_runtime;
         summary.respawn_blocked_do_respawn_runtime += respawn_summary.blocked_do_respawn_runtime;
@@ -2829,6 +2838,9 @@ fn spawn_canonical_map_update_loop(
                         summary.respawn_deleted_inactive_spawn_group,
                     respawn_deleted_live_object_blocker =
                         summary.respawn_deleted_live_object_blocker,
+                    respawn_processed_pool_timers = summary.respawn_processed_pool_timers,
+                    respawn_pool_update_plans = summary.respawn_pool_update_plans,
+                    respawn_blocked_pool_plan_errors = summary.respawn_blocked_pool_plan_errors,
                     respawn_blocked_missing_spawn_data = summary.respawn_blocked_missing_spawn_data,
                     respawn_blocked_pool_runtime = summary.respawn_blocked_pool_runtime,
                     respawn_blocked_do_respawn_runtime = summary.respawn_blocked_do_respawn_runtime,
@@ -2850,7 +2862,7 @@ fn spawn_canonical_map_update_loop(
                         summary.respawn_db_save_skipped_non_world_map,
                     respawn_db_save_skipped_invalid_map_id =
                         summary.respawn_db_save_skipped_invalid_map_id,
-                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules, queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock, then applied UpdateSpawnGroupConditions SetInactive seam; PoolMgr/DoRespawn/entity creation/fanout remain pending"
+                    "C++ respawn-check timer fired; executed safe ProcessRespawns composite zero-delete branches plus linked future reschedules and represented pooled timer UpdatePool plans, queued/executed DEL_RESPAWN/REP_RESPAWN DB side effects outside the MapManager lock, then applied UpdateSpawnGroupConditions SetInactive seam; live Spawn1Object/ReSpawn1Object/DespawnObject, DoRespawn/entity creation/fanout remain pending"
                 );
             }
         }
@@ -4325,6 +4337,74 @@ mmap.enablePathFinding = 0
             map.map()
                 .get_respawn_time_like_cpp(SpawnObjectType::Creature, 1)
                 > now
+        );
+    }
+
+    #[test]
+    fn spawn_group_condition_update_tick_pool_timer_uses_canonical_pool_mgr_and_queues_delete() {
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(70, PoolTemplateDataLikeCpp::new(1, 571));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 70);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(1, 0.0), 1);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(101, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 70, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::Creature, 1, 70)
+            .expect("test spawn pool relation");
+        let metadata = test_spawn_metadata_with_flags([(64, 571, SpawnGroupFlags::NONE)])
+            .with_pool_mgr_like_cpp(pool_mgr);
+        let condition_store = ConditionEntriesByTypeStore::default();
+        let mut manager = wow_map::MapManager::new(60_000, 1);
+        let map = manager.create_world_map(571, 0);
+        map.map_mut().add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 1,
+            entry: 42,
+            respawn_time: 0,
+            grid_id: 7,
+        });
+        let mut scheduler = CanonicalRespawnConditionSchedulerLikeCpp::new(1);
+
+        let summary = canonical_map_update_tick_set_inactive_like_cpp(
+            &mut manager,
+            1,
+            &mut scheduler,
+            &metadata,
+            &condition_store,
+        )
+        .expect("scheduler fires");
+
+        assert_eq!(summary.maps_evaluated, 1);
+        assert_eq!(summary.respawn_processed_pool_timers, 1);
+        assert_eq!(summary.respawn_pool_update_plans, 1);
+        assert_eq!(summary.respawn_blocked_pool_plan_errors, 0);
+        assert_eq!(summary.respawn_blocked_pool_runtime, 0);
+        assert_eq!(summary.respawn_blocked_do_respawn_runtime, 0);
+        assert_eq!(summary.respawn_db_delete_queued, 1);
+        assert_eq!(summary.respawn_db_deletes.len(), 1);
+        let delete = &summary.respawn_db_deletes[0];
+        assert_eq!(delete.object_type, SpawnObjectType::Creature);
+        assert_eq!(delete.spawn_id, 1);
+        assert_eq!(delete.map_id, 571);
+        assert_eq!(delete.instance_id, 0);
+        assert_del_respawn_params_like_cpp(&delete.statement, 0, 1, 571, 0);
+        let map = manager.find_map(571, 0).expect("world map");
+        assert!(
+            map.map()
+                .pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(101)
+        );
+        assert_eq!(
+            map.map()
+                .get_respawn_time_like_cpp(SpawnObjectType::Creature, 1),
+            0
+        );
+        assert!(
+            map.map()
+                .get_respawn_info_like_cpp(SpawnObjectType::Creature, 1)
+                .is_none()
         );
     }
 

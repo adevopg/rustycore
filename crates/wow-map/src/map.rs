@@ -15,7 +15,8 @@ use crate::grid::{GridStateKind, MapGridHost, NGrid, update_grid_state};
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
 use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
 use crate::pool::{
-    PoolInitForMapPlanLikeCpp, PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolObjectLikeCpp,
+    PoolInitForMapPlanLikeCpp, PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolMgrPlanErrorLikeCpp,
+    PoolObjectLikeCpp, PoolTypedSpawnPlanLikeCpp,
 };
 use crate::spawn::{
     AddRespawnInfoOutcomeLikeCpp, CheckRespawnOutcomeLikeCpp,
@@ -267,12 +268,19 @@ pub struct SpawnGroupConditionUpdateOutcomeLikeCpp {
     pub applied_change: Option<SpawnGroupActiveChange>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProcessRespawnsSafeSideEffectsSummaryLikeCpp {
     pub deleted_inactive_spawn_group: usize,
     pub deleted_live_object_blocker: usize,
     pub rescheduled_linked_respawns: Vec<RespawnInfoLikeCpp>,
+    pub processed_pool_timers: usize,
+    pub pool_update_plans: Vec<PoolTypedSpawnPlanLikeCpp>,
+    pub blocked_pool_plan_errors: Vec<PoolMgrPlanErrorLikeCpp>,
     pub blocked_missing_spawn_data: usize,
+    /// Legacy compatibility counter for the pre-#390 seam where any pooled timer
+    /// blocked `ProcessRespawns`. New pooled-timer planner errors are reported in
+    /// `blocked_pool_plan_errors`; successful pooled timers increment
+    /// `processed_pool_timers` and remove the map-owned respawn timer.
     pub blocked_pool_runtime: usize,
     pub blocked_do_respawn_runtime: usize,
     pub blocked_linked_respawn_non_future: usize,
@@ -812,29 +820,39 @@ where
     ///
     /// C++ anchors:
     /// - `Map.cpp:2191-2198` processes only due respawn timers in queue order.
-    /// - `Map.cpp:2200-2211` pool runtime removes+delegates to PoolMgr; blocked here.
+    /// - `Map.cpp:2200-2211` detects `PoolMgr::IsPartOfAPool` before
+    ///   `CheckRespawn`, updates map-owned `SpawnedPoolData` through
+    ///   `PoolMgr::UpdatePool`, then removes the respawn timer with DB-delete
+    ///   ownership left to the caller bridge.
     /// - `Map.cpp:2213-2224` allowed respawn removes+calls `DoRespawn`; blocked here.
     /// - `Map.cpp:2226-2231` removes a timer when `CheckRespawn` set respawnTime=0.
     /// - `Map.cpp:2233-2238` updates the heap position and persists a future
     ///   `respawnTime` when `CheckRespawn` rescheduled the timer.
     ///
-    /// This helper executes the safe map-owned in-memory effects represented so far:
-    /// zero-delete for inactive spawn-groups/live-object blockers and linked-respawn
-    /// future reschedule by replacing the same map-owned respawn timer. DB effects,
-    /// PoolMgr, `DoRespawn`, entity creation and grid/session fanout stay outside this
-    /// lock-owned helper. If the oldest due timer needs an unavailable branch, it is
-    /// left intact and processing stops to preserve C++ queue order.
-    pub fn process_due_respawns_composite_safe_side_effects_like_cpp<F>(
+    /// This helper executes only safe map-owned in-memory effects represented so
+    /// far: pooled timer -> deterministic `UpdatePool` plan + map-owned
+    /// `SpawnedPoolDataLikeCpp` mutation + timer removal, zero-delete for inactive
+    /// spawn-groups/live-object blockers, and linked-respawn future reschedule by
+    /// replacing the same map-owned respawn timer. DB effects, `DoRespawn`, live
+    /// entity creation and grid/session fanout stay outside this lock-owned helper.
+    /// If the oldest due timer needs an unavailable/error branch, it is left intact
+    /// and processing stops to preserve C++ queue order.
+    pub fn process_due_respawns_composite_safe_side_effects_like_cpp<F, R, C>(
         &mut self,
         now: i64,
         spawn_store: &SpawnStore,
         linked_store: &LinkedRespawnStoreLikeCpp,
+        pool_mgr: &PoolMgrLikeCpp,
         jitter_secs: u32,
         respawn_dynamic_escortnpc: bool,
         mut is_creature_escorted: F,
+        mut explicit_roll_for: R,
+        mut choose_equal: C,
     ) -> ProcessRespawnsSafeSideEffectsSummaryLikeCpp
     where
         F: FnMut(ObjectGuid, &Creature) -> bool,
+        R: FnMut(PoolMemberKindLikeCpp, u32) -> f32,
+        C: FnMut(&[PoolObjectLikeCpp], usize) -> Vec<usize>,
     {
         let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
 
@@ -854,13 +872,35 @@ where
                 break;
             }
 
-            let Some(spawn_data) = spawn_store.spawn_data(object_type, spawn_id) else {
-                summary.blocked_missing_spawn_data += 1;
-                break;
-            };
+            match pool_mgr.is_part_of_a_pool_like_cpp(object_type, spawn_id) {
+                Ok(0) => {}
+                Ok(pool_id) => match pool_mgr.update_pool_plan_like_cpp(
+                    &mut self.pool_data,
+                    pool_id,
+                    object_type,
+                    spawn_id,
+                    &mut explicit_roll_for,
+                    &mut choose_equal,
+                ) {
+                    Ok(plan) => {
+                        self.remove_respawn_time_like_cpp(object_type, spawn_id);
+                        summary.processed_pool_timers += 1;
+                        summary.pool_update_plans.push(plan);
+                        continue;
+                    }
+                    Err(error) => {
+                        summary.blocked_pool_plan_errors.push(error);
+                        break;
+                    }
+                },
+                Err(error) => {
+                    summary.blocked_pool_plan_errors.push(error);
+                    break;
+                }
+            }
 
-            if spawn_data.pool_id != 0 {
-                summary.blocked_pool_runtime += 1;
+            if spawn_store.spawn_data(object_type, spawn_id).is_none() {
+                summary.blocked_missing_spawn_data += 1;
                 break;
             }
 
@@ -934,13 +974,17 @@ where
     where
         F: FnMut(ObjectGuid, &Creature) -> bool,
     {
+        let pool_mgr = PoolMgrLikeCpp::new();
         self.process_due_respawns_composite_safe_side_effects_like_cpp(
             now,
             spawn_store,
             linked_store,
+            &pool_mgr,
             jitter_secs,
             respawn_dynamic_escortnpc,
             is_creature_escorted,
+            |_, _| 0.0,
+            |_candidates, count| (0..count).collect(),
         )
     }
 
@@ -955,9 +999,12 @@ where
             now,
             spawn_store,
             &linked_store,
+            &PoolMgrLikeCpp::new(),
             5,
             false,
             |_, _| false,
+            |_, _| 0.0,
+            |_candidates, count| (0..count).collect(),
         )
     }
 
@@ -4443,23 +4490,101 @@ mod tests {
     }
 
     #[test]
-    fn process_respawns_delete_only_pool_timer_blocks_pool_runtime_and_preserves_timer_like_cpp() {
+    fn process_respawns_pool_timer_updates_pool_plan_removes_timer_and_continues_like_cpp() {
         let mut map = test_map();
         let mut store = SpawnStore::new();
-        let manual = spawn_group(14, SpawnGroupFlags::MANUAL_SPAWN);
-        let mut pooled = spawn_data(SpawnObjectType::GameObject, 45, manual);
-        pooled.pool_id = 55;
-        store.add_object_spawn(&pooled, |_| false);
-        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 45, 100));
+        let active = spawn_group(14, SpawnGroupFlags::NONE);
+        let inactive = spawn_group(15, SpawnGroupFlags::MANUAL_SPAWN);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::GameObject, 45, active), |_| {
+            false
+        });
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 46, inactive), |_| {
+            false
+        });
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 45, 90));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 46, 100));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(55, PoolTemplateDataLikeCpp::new(1, 571));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::GameObject, 55);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(45, 0.0), 1);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(145, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::GameObject, 55, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::GameObject, 45, 55)
+            .expect("test spawn pool relation");
 
-        let summary = map.process_due_respawns_spawn_group_delete_only_like_cpp(100, &store);
+        let summary = map.process_due_respawns_composite_safe_side_effects_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &pool_mgr,
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, count| (0..count).collect(),
+        );
 
-        assert_eq!(summary.deleted_inactive_spawn_group, 0);
-        assert_eq!(summary.blocked_pool_runtime, 1);
+        assert_eq!(summary.processed_pool_timers, 1);
+        assert_eq!(summary.pool_update_plans.len(), 1);
+        assert_eq!(summary.blocked_pool_plan_errors, Vec::new());
+        assert_eq!(summary.blocked_pool_runtime, 0);
+        assert_eq!(summary.deleted_inactive_spawn_group, 1);
+        assert!(map.pool_data_like_cpp().is_spawned_gameobject_like_cpp(145));
+        assert_eq!(map.pool_data_like_cpp().get_spawned_objects_like_cpp(55), 1);
         assert_eq!(
             map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 45),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 46),
+            0
+        );
+    }
+
+    #[test]
+    fn process_respawns_pool_plan_error_preserves_timer_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(14, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 47, active), |_| {
+            false
+        });
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 47, 100));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 55);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(47, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 55, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::Creature, 47, 55)
+            .expect("test spawn pool relation");
+
+        let summary = map.process_due_respawns_composite_safe_side_effects_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &pool_mgr,
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, count| (0..count).collect(),
+        );
+
+        assert_eq!(summary.processed_pool_timers, 0);
+        assert_eq!(
+            summary.blocked_pool_plan_errors,
+            vec![PoolMgrPlanErrorLikeCpp::MissingTemplate { pool_id: 55 }]
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 47),
             100
         );
+        assert!(!map.pool_data_like_cpp().is_spawned_creature_like_cpp(47));
     }
 
     #[test]
@@ -6071,7 +6196,7 @@ mod tests {
             linked_respawn_guid(HighGuid::Creature, 77, 200),
         );
 
-        let summary = map.process_due_respawns_composite_safe_side_effects_like_cpp(
+        let summary = map.process_due_respawns_composite_delete_only_like_cpp(
             10,
             &store,
             &linked,
@@ -6123,7 +6248,7 @@ mod tests {
             linked_respawn_guid(HighGuid::Creature, 77, 200),
         );
 
-        let summary = map.process_due_respawns_composite_safe_side_effects_like_cpp(
+        let summary = map.process_due_respawns_composite_delete_only_like_cpp(
             10,
             &store,
             &linked,
