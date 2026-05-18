@@ -1206,10 +1206,84 @@ where
             .unwrap_or_default()
     }
 
+    pub fn get_creature_by_spawn_id_like_cpp(&self, spawn_id: SpawnId) -> Option<&Creature> {
+        let mut fallback_guid = None;
+        let mut alive_guid = None;
+        for guid in self.creature_spawn_id_store_guids_like_cpp(spawn_id) {
+            let Some(creature) = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+            else {
+                continue;
+            };
+            if creature.spawn_id() != spawn_id {
+                continue;
+            }
+            fallback_guid.get_or_insert(guid);
+            if creature.is_alive() {
+                alive_guid = Some(guid);
+                break;
+            }
+        }
+
+        alive_guid
+            .or(fallback_guid)
+            .and_then(|guid| self.map_object_record(guid)?.creature())
+    }
+
+    pub fn get_gameobject_by_spawn_id_like_cpp(&self, spawn_id: SpawnId) -> Option<&GameObject> {
+        let mut fallback_guid = None;
+        let mut spawned_guid = None;
+        for guid in self.gameobject_spawn_id_store_guids_like_cpp(spawn_id) {
+            let Some(gameobject) = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+            else {
+                continue;
+            };
+            if gameobject.spawn_id() != spawn_id {
+                continue;
+            }
+            fallback_guid.get_or_insert(guid);
+            if Self::gameobject_is_spawned_like_cpp(gameobject) {
+                spawned_guid = Some(guid);
+                break;
+            }
+        }
+
+        spawned_guid
+            .or(fallback_guid)
+            .and_then(|guid| self.map_object_record(guid)?.game_object())
+    }
+
+    fn gameobject_is_spawned_like_cpp(gameobject: &GameObject) -> bool {
+        gameobject.respawn_delay_time() == 0
+            || (gameobject.respawn_time() > 0 && !gameobject.spawned_by_default())
+            || (gameobject.respawn_time() == 0 && gameobject.spawned_by_default())
+    }
+
     pub fn get_area_trigger_by_spawn_id_like_cpp(&self, spawn_id: SpawnId) -> Option<&AreaTrigger> {
         self.area_trigger_spawn_id_store_guids_like_cpp(spawn_id)
             .into_iter()
             .find_map(|guid| self.map_object_record(guid)?.area_trigger())
+    }
+
+    pub fn get_world_object_by_spawn_id_like_cpp(
+        &self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> Option<&WorldObject> {
+        match object_type {
+            SpawnObjectType::Creature => self
+                .get_creature_by_spawn_id_like_cpp(spawn_id)
+                .map(|creature| creature.unit().world()),
+            SpawnObjectType::GameObject => self
+                .get_gameobject_by_spawn_id_like_cpp(spawn_id)
+                .map(GameObject::world),
+            SpawnObjectType::AreaTrigger => self
+                .get_area_trigger_by_spawn_id_like_cpp(spawn_id)
+                .map(AreaTrigger::world),
+        }
     }
 
     pub fn insert_map_object(
@@ -4096,8 +4170,77 @@ mod tests {
     }
 
     #[test]
-    fn spawn_id_store_zero_spawn_id_is_not_indexed_like_cpp() {
+    fn world_object_by_spawn_id_typed_getters_return_indexed_objects_like_cpp() {
         let mut map = test_map();
+        let creature = test_creature_for_spawn(67, 6701, true);
+        let creature_guid = creature.unit().world().guid();
+        let gameobject = test_gameobject_for_spawn(68, 6801);
+        let gameobject_guid = gameobject.world().guid();
+        let area_trigger = test_area_trigger_for_spawn(69, 6901);
+        let area_trigger_guid = area_trigger.world().guid();
+
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+
+        let creature = map.get_creature_by_spawn_id_like_cpp(67).unwrap();
+        assert_eq!(creature.unit().world().guid(), creature_guid);
+        assert_eq!(
+            creature.unit().world().position(),
+            Position::xyz(1.0, 2.0, 3.0)
+        );
+        let gameobject = map.get_gameobject_by_spawn_id_like_cpp(68).unwrap();
+        assert_eq!(gameobject.world().guid(), gameobject_guid);
+        assert_eq!(gameobject.world().position(), Position::xyz(1.0, 2.0, 3.0));
+        let area_trigger = map.get_area_trigger_by_spawn_id_like_cpp(69).unwrap();
+        assert_eq!(area_trigger.world().guid(), area_trigger_guid);
+        assert_eq!(
+            area_trigger.world().position(),
+            Position::xyz(1.0, 2.0, 3.0)
+        );
+
+        assert_eq!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::Creature, 67)
+                .unwrap()
+                .guid(),
+            creature_guid
+        );
+        assert_eq!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::GameObject, 68)
+                .unwrap()
+                .guid(),
+            gameobject_guid
+        );
+        assert_eq!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::AreaTrigger, 69)
+                .unwrap()
+                .guid(),
+            area_trigger_guid
+        );
+    }
+
+    #[test]
+    fn world_object_by_spawn_id_absent_and_zero_spawn_return_none_like_cpp() {
+        let mut map = test_map();
+
+        assert!(map.get_creature_by_spawn_id_like_cpp(75).is_none());
+        assert!(map.get_gameobject_by_spawn_id_like_cpp(75).is_none());
+        assert!(map.get_area_trigger_by_spawn_id_like_cpp(75).is_none());
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::Creature, 75)
+                .is_none()
+        );
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::GameObject, 75)
+                .is_none()
+        );
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::AreaTrigger, 75)
+                .is_none()
+        );
 
         map.insert_map_object_record(
             MapObjectRecord::new_creature(test_creature_for_spawn(0, 6001, true)).unwrap(),
@@ -4116,6 +4259,113 @@ mod tests {
         assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(0), 0);
         assert_eq!(map.area_trigger_spawn_id_store_count_like_cpp(0), 0);
         assert_eq!(map.map_object_count(), 3);
+        assert!(map.get_creature_by_spawn_id_like_cpp(0).is_none());
+        assert!(map.get_gameobject_by_spawn_id_like_cpp(0).is_none());
+        assert!(map.get_area_trigger_by_spawn_id_like_cpp(0).is_none());
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::Creature, 0)
+                .is_none()
+        );
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::GameObject, 0)
+                .is_none()
+        );
+        assert!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::AreaTrigger, 0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn world_object_by_spawn_id_creature_prefers_alive_then_fallback_like_cpp() {
+        let mut map = test_map();
+        let dead_guid = guid(HighGuid::Creature, 7601);
+        let alive_guid = guid(HighGuid::Creature, 7602);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(76, 7601, false)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(76, 7602, true)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            map.creature_spawn_id_store_guids_like_cpp(76),
+            vec![dead_guid, alive_guid]
+        );
+        assert_eq!(
+            map.get_creature_by_spawn_id_like_cpp(76)
+                .unwrap()
+                .unit()
+                .world()
+                .guid(),
+            alive_guid
+        );
+        assert_eq!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::Creature, 76)
+                .unwrap()
+                .guid(),
+            alive_guid
+        );
+
+        assert!(map.remove_map_object(alive_guid).is_some());
+        assert_eq!(
+            map.get_creature_by_spawn_id_like_cpp(76)
+                .unwrap()
+                .unit()
+                .world()
+                .guid(),
+            dead_guid
+        );
+    }
+
+    #[test]
+    fn world_object_by_spawn_id_gameobject_prefers_spawned_then_fallback_like_cpp() {
+        let mut map = test_map();
+        let despawned_guid = guid(HighGuid::GameObject, 7801);
+        let spawned_guid = guid(HighGuid::GameObject, 7802);
+        let mut despawned = test_gameobject_for_spawn(78, 7801);
+        despawned.set_respawn_delay_time(30);
+        despawned.set_respawn_time(100);
+        despawned.set_spawned_by_default(true);
+        let mut spawned = test_gameobject_for_spawn(78, 7802);
+        spawned.set_respawn_delay_time(30);
+        spawned.set_respawn_time(100);
+        spawned.set_spawned_by_default(false);
+
+        map.insert_map_object_record(MapObjectRecord::new_game_object(despawned).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(spawned).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            map.gameobject_spawn_id_store_guids_like_cpp(78),
+            vec![despawned_guid, spawned_guid]
+        );
+        assert_eq!(
+            map.get_gameobject_by_spawn_id_like_cpp(78)
+                .unwrap()
+                .world()
+                .guid(),
+            spawned_guid
+        );
+        assert_eq!(
+            map.get_world_object_by_spawn_id_like_cpp(SpawnObjectType::GameObject, 78)
+                .unwrap()
+                .guid(),
+            spawned_guid
+        );
+
+        assert!(map.remove_map_object(spawned_guid).is_some());
+        assert_eq!(
+            map.get_gameobject_by_spawn_id_like_cpp(78)
+                .unwrap()
+                .world()
+                .guid(),
+            despawned_guid
+        );
     }
 
     #[test]

@@ -7,9 +7,9 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 ## Repository State
 
 - Branch: `develop`
-- Base before #378: clean `develop...origin/develop [ahead 31]` after `#NEXT.R8.ENTITIES.377`.
-- Latest completed local slice: `#NEXT.R8.ENTITIES.378 — AreaTrigger by-spawn store en Map`.
-- Expected tree after #378 commit: clean local worktree, `develop` ahead of origin by 32 commits. No push/install/restart performed.
+- Base before #379: clean `develop...origin/develop [ahead 32]` after `#NEXT.R8.ENTITIES.378`.
+- Latest completed local slice: `#NEXT.R8.ENTITIES.379 — Map::GetWorldObjectBySpawnId parity over map-local spawn-id stores`.
+- Expected tree after #379 local edits: dirty with this slice only unless Foreman commits after review/validation. No push/install/restart performed.
 
 ## Critical Rules
 
@@ -21,13 +21,18 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate during #378 `AreaTrigger by-spawn store en Map`: `~87.0%`.
+Overall core migration estimate during #379 `Map::GetWorldObjectBySpawnId parity over map-local spawn-id stores`: `~87.2%`.
 
 This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `ProcessRespawns` branches beyond represented safe zero-delete/reschedule branches, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete coverage beyond current seams, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #378; this is a map-owned AreaTrigger by-spawn indexing slice, validated with focused unit checks.
+Manual test point: no new client-facing manual milestone from #379; this is a map-owned by-spawn lookup helper slice, validated with focused unit checks.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.379` (completed locally; pending independent review/commit by Foreman)
+  - Adds C++-shaped `Map::get_creature_by_spawn_id_like_cpp`, `Map::get_gameobject_by_spawn_id_like_cpp`, and `Map::get_world_object_by_spawn_id_like_cpp(type, spawn_id)` over the existing map-local Creature/GameObject/AreaTrigger by-spawn GUID-set indexes.
+  - Source-of-truth runtime store remains `Map::map_objects`; the by-spawn maps remain derived indexes maintained only by `insert_map_object_record`/`remove_map_object`. Getters read the index, deterministically choose an indexed GUID for Rust tests, prefer alive Creature / spawned GameObject like C++, and resolve back through `map_objects`, returning `None` for absent/stale/type-mismatched records or spawn id zero.
+  - Matches the C++ switch shape for Creature, GameObject, and AreaTrigger without adding DB load, object creation, respawn timers, `AreaTrigger` respawn support, `PoolMgr`, `DoRespawn`, Create/Load/Update runtime, AddToWorld/RemoveFromWorld side effects, ObjectAccessor/grid/session fanout, or broader Unit/Player systems.
 
 - `#NEXT.R8.ENTITIES.378` (completed; review `APROBADO`; focused validation passed; committed locally by Foreman after validation)
   - Adds typed `MapObjectRecord::AreaTrigger` and `MapObjectRecord::new_area_trigger` while preserving generic `MapObjectRecord::new(AccessorObjectKind::AreaTrigger, WorldObject)` bridge behavior.
@@ -87,6 +92,27 @@ Previous completed local slice:
   - Adds linked respawn metadata/load/store and the pure linked-time guard dependency for `Map::CheckRespawn`.
   - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; linked respawn metadata is loaded DB -> validated canonical metadata -> read-only linked store.
   - Does not implement full `CheckRespawn`/`ProcessRespawns`, PoolMgr, `DoRespawn`, DB save/delete, live entity creation or fanout.
+
+## C++ Anchors for #379
+
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:400-430` — typed `GetCreatureBySpawnId`, `GetGameObjectBySpawnId`, `GetAreaTriggerBySpawnId`, and inline `GetWorldObjectBySpawnId` switch over Creature/GameObject/AreaTrigger stores.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3473-3499` — Creature lookup prefers `IsAlive()` then falls back to the first store entry; GameObject lookup prefers `isSpawned()` then falls back to the first store entry.
+- `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h:251-256` — `isSpawned()` formula: zero respawn delay, positive respawn time for non-default spawned objects, or zero respawn time for default-spawned objects.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3501-3508` — `Map::GetAreaTriggerBySpawnId` uses `equal_range`, returns null if empty, otherwise first store pointer; Rust resolves the indexed GUID through canonical `map_objects` and returns `None` for missing/stale/type-mismatched entries.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:748-777` and `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1954-2023`, `2165-2240` — respawn timers remain Creature/GameObject-only for represented respawn support; this helper does not add AreaTrigger respawn support.
+
+## Expected Validation for #379
+
+```bash
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo fmt --check
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo test -p wow-map world_object_by_spawn_id
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo test -p wow-map spawn_id_store
+RUSTUP_HOME=/home/cdmonio/.rustup CARGO_HOME=/home/cdmonio/.cargo cargo check -p world-server
+git diff --check
+git status --short --branch
+```
+
+Expected remaining gaps: AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, full entity-specific AddToWorld/RemoveFromWorld side effects outside the store, ObjectAccessor/grid/session fanout, PoolMgr/DoRespawn, broader Unit/Player systems.
 
 ## C++ Anchors for #378
 

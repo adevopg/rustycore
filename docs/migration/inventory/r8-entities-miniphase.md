@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.379** `Map::GetWorldObjectBySpawnId` parity over map-local spawn-id stores.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:400-430`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3473-3508`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.h:251-256`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:748-777`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1954-2023`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2240`.
+  Rust targets: `crates/wow-map/src/map.rs`.
+  Acceptance: `Map` exposes C++-shaped typed getters for Creature/GameObject by spawn id plus `get_world_object_by_spawn_id_like_cpp(type, spawn_id)` over Creature/GameObject/AreaTrigger. The helpers read only the derived map-local spawn-id GUID indexes, prefer alive Creature / spawned GameObject before deterministic fallback, resolve back through canonical `map_objects`, return `None` for absent/stale/type-mismatched/zero-spawn cases, and do not scan the full object store. Complete only for map-local lookup parity; remaining gaps include AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, respawn support for AreaTrigger, PoolMgr/DoRespawn, entity creation/fanout, ObjectAccessor/grid/session ownership, full AddToWorld/RemoveFromWorld side effects, and broader Unit/Player systems.
+
 - [x] **#NEXT.R8.ENTITIES.378** `AreaTrigger` by-spawn store en `Map`.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:418-430`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:793-796`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/AreaTrigger/AreaTrigger.cpp:62-76`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/AreaTrigger/AreaTrigger.cpp:78-102`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3501-3508`.
   Rust targets: `crates/wow-entities/src/object_accessor.rs`, `crates/wow-map/src/map.rs`.
