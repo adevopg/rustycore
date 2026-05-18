@@ -14,7 +14,7 @@ use crate::coords::{
 use crate::grid::{GridStateKind, MapGridHost, NGrid, update_grid_state};
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
 use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
-use crate::spawn::Difficulty;
+use crate::spawn::{Difficulty, SpawnGroupFlags, SpawnObjectType};
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
     AccessorObjectKind, CombatBeginContextLikeCpp, CombatSubsystem, Creature, GameObject,
@@ -44,6 +44,189 @@ impl From<AccessorObjectKind> for ActiveObjectKind {
             _ => Self::NonPlayer,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicRespawnScalingConfig {
+    pub creature_rate: f64,
+    pub creature_minimum_secs: u32,
+    pub gameobject_rate: f64,
+    pub gameobject_minimum_secs: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicRespawnScalingNoopReason {
+    DynamicModeDisabled,
+    UnsupportedMode,
+    BattlegroundOrArena,
+    UnsupportedSpawnType,
+    MissingSpawnMetadata,
+    MissingDynamicSpawnRateFlag,
+    MissingZonePlayerCount,
+    ZeroZonePlayers,
+    AdjustFactorAtLeastOne,
+    DelayAtOrBelowMinimum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DynamicRespawnScalingOutcome {
+    pub delay_secs: u32,
+    pub noop_reason: Option<DynamicRespawnScalingNoopReason>,
+}
+
+impl DynamicRespawnScalingOutcome {
+    pub const fn unchanged(delay_secs: u32, reason: DynamicRespawnScalingNoopReason) -> Self {
+        Self {
+            delay_secs,
+            noop_reason: Some(reason),
+        }
+    }
+
+    pub const fn scaled(delay_secs: u32) -> Self {
+        Self {
+            delay_secs,
+            noop_reason: None,
+        }
+    }
+
+    pub const fn was_scaled(self) -> bool {
+        self.noop_reason.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicRespawnScalingContext {
+    pub mode: u32,
+    pub spawn_type: Option<SpawnObjectType>,
+    pub spawn_metadata_present: bool,
+    pub spawn_group_flags: Option<SpawnGroupFlags>,
+    pub is_battleground_or_arena: bool,
+    pub zone_player_count: Option<u32>,
+    pub config: DynamicRespawnScalingConfig,
+}
+
+/// Rust equivalent of C++ `Map::ApplyDynamicModeRespawnScaling`.
+///
+/// C++ anchors:
+/// - `GameObject.cpp:1665-1672` calls this before persisting GO respawn time.
+/// - `Map.cpp:2242-2284` contains the dynamic respawn guards and formula.
+/// - `Map.h:657-660` declares the map helper.
+///
+/// This helper is pure because RustyCore does not yet own the canonical map
+/// spawn-metadata and zone-player-count stores needed by a `Map` method. Future
+/// GameObject runtime wiring must pass canonical metadata/counts into this
+/// function; this function must not read or mutate session-local fallback state.
+pub fn apply_dynamic_mode_respawn_scaling_like_cpp(
+    respawn_delay_secs: u32,
+    context: DynamicRespawnScalingContext,
+) -> DynamicRespawnScalingOutcome {
+    if context.mode == 0 {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::DynamicModeDisabled,
+        );
+    }
+
+    if context.mode != 1 {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::UnsupportedMode,
+        );
+    }
+
+    if context.is_battleground_or_arena {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::BattlegroundOrArena,
+        );
+    }
+
+    let Some(spawn_type) = context.spawn_type else {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::UnsupportedSpawnType,
+        );
+    };
+
+    if !matches!(
+        spawn_type,
+        SpawnObjectType::Creature | SpawnObjectType::GameObject
+    ) {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::UnsupportedSpawnType,
+        );
+    }
+
+    if !context.spawn_metadata_present {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::MissingSpawnMetadata,
+        );
+    }
+
+    let Some(spawn_group_flags) = context.spawn_group_flags else {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::MissingSpawnMetadata,
+        );
+    };
+
+    if !spawn_group_flags.contains(SpawnGroupFlags::DYNAMIC_SPAWN_RATE) {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::MissingDynamicSpawnRateFlag,
+        );
+    }
+
+    let Some(player_count) = context.zone_player_count else {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::MissingZonePlayerCount,
+        );
+    };
+
+    if player_count == 0 {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::ZeroZonePlayers,
+        );
+    }
+
+    let (rate, time_minimum) = match spawn_type {
+        SpawnObjectType::Creature => (
+            context.config.creature_rate,
+            context.config.creature_minimum_secs,
+        ),
+        SpawnObjectType::GameObject => (
+            context.config.gameobject_rate,
+            context.config.gameobject_minimum_secs,
+        ),
+        SpawnObjectType::AreaTrigger => {
+            return DynamicRespawnScalingOutcome::unchanged(
+                respawn_delay_secs,
+                DynamicRespawnScalingNoopReason::UnsupportedSpawnType,
+            );
+        }
+    };
+
+    let adjust_factor = rate / f64::from(player_count);
+    if adjust_factor >= 1.0 {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::AdjustFactorAtLeastOne,
+        );
+    }
+
+    if respawn_delay_secs <= time_minimum {
+        return DynamicRespawnScalingOutcome::unchanged(
+            respawn_delay_secs,
+            DynamicRespawnScalingNoopReason::DelayAtOrBelowMinimum,
+        );
+    }
+
+    let scaled = (f64::from(respawn_delay_secs) * adjust_factor).ceil() as u32;
+    DynamicRespawnScalingOutcome::scaled(scaled.max(time_minimum))
 }
 
 pub trait TerrainGridLoader {
@@ -2282,6 +2465,140 @@ mod tests {
             RecordingTerrain::default(),
             RecordingLifecycle::default(),
         )
+    }
+
+    fn dynamic_respawn_context(
+        spawn_type: Option<SpawnObjectType>,
+    ) -> DynamicRespawnScalingContext {
+        DynamicRespawnScalingContext {
+            mode: 1,
+            spawn_type,
+            spawn_metadata_present: true,
+            spawn_group_flags: Some(SpawnGroupFlags::DYNAMIC_SPAWN_RATE),
+            is_battleground_or_arena: false,
+            zone_player_count: Some(4),
+            config: DynamicRespawnScalingConfig {
+                creature_rate: 1.0,
+                creature_minimum_secs: 30,
+                gameobject_rate: 1.5,
+                gameobject_minimum_secs: 60,
+            },
+        }
+    }
+
+    fn assert_dynamic_respawn_noop(
+        context: DynamicRespawnScalingContext,
+        reason: DynamicRespawnScalingNoopReason,
+    ) {
+        let outcome = apply_dynamic_mode_respawn_scaling_like_cpp(120, context);
+        assert_eq!(outcome.delay_secs, 120);
+        assert_eq!(outcome.noop_reason, Some(reason));
+        assert!(!outcome.was_scaled());
+    }
+
+    #[test]
+    fn dynamic_respawn_bg_or_arena_does_not_scale() {
+        let mut context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        context.is_battleground_or_arena = true;
+
+        assert_dynamic_respawn_noop(
+            context,
+            DynamicRespawnScalingNoopReason::BattlegroundOrArena,
+        );
+    }
+
+    #[test]
+    fn dynamic_respawn_unsupported_type_and_missing_metadata_do_not_scale() {
+        assert_dynamic_respawn_noop(
+            dynamic_respawn_context(Some(SpawnObjectType::AreaTrigger)),
+            DynamicRespawnScalingNoopReason::UnsupportedSpawnType,
+        );
+
+        let mut context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        context.spawn_metadata_present = false;
+        assert_dynamic_respawn_noop(
+            context,
+            DynamicRespawnScalingNoopReason::MissingSpawnMetadata,
+        );
+    }
+
+    #[test]
+    fn dynamic_respawn_without_dynamic_spawn_rate_flag_does_not_scale() {
+        let mut context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        context.spawn_group_flags = Some(SpawnGroupFlags::NONE);
+
+        assert_dynamic_respawn_noop(
+            context,
+            DynamicRespawnScalingNoopReason::MissingDynamicSpawnRateFlag,
+        );
+    }
+
+    #[test]
+    fn dynamic_respawn_missing_or_zero_players_do_not_scale() {
+        let mut missing = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        missing.zone_player_count = None;
+        assert_dynamic_respawn_noop(
+            missing,
+            DynamicRespawnScalingNoopReason::MissingZonePlayerCount,
+        );
+
+        let mut zero = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        zero.zone_player_count = Some(0);
+        assert_dynamic_respawn_noop(zero, DynamicRespawnScalingNoopReason::ZeroZonePlayers);
+    }
+
+    #[test]
+    fn dynamic_respawn_adjust_factor_at_least_one_does_not_scale() {
+        let mut context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        context.zone_player_count = Some(1);
+        context.config.gameobject_rate = 1.0;
+
+        assert_dynamic_respawn_noop(
+            context,
+            DynamicRespawnScalingNoopReason::AdjustFactorAtLeastOne,
+        );
+    }
+
+    #[test]
+    fn dynamic_respawn_delay_at_or_below_minimum_does_not_scale() {
+        let context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        let outcome = apply_dynamic_mode_respawn_scaling_like_cpp(60, context);
+
+        assert_eq!(outcome.delay_secs, 60);
+        assert_eq!(
+            outcome.noop_reason,
+            Some(DynamicRespawnScalingNoopReason::DelayAtOrBelowMinimum)
+        );
+    }
+
+    #[test]
+    fn dynamic_respawn_gameobject_ceil_scales_and_clamps_to_minimum() {
+        let context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        let scaled = apply_dynamic_mode_respawn_scaling_like_cpp(241, context);
+
+        assert_eq!(scaled.delay_secs, 91);
+        assert!(scaled.was_scaled());
+
+        let clamped = apply_dynamic_mode_respawn_scaling_like_cpp(120, context);
+        assert_eq!(clamped.delay_secs, 60);
+        assert!(clamped.was_scaled());
+    }
+
+    #[test]
+    fn dynamic_respawn_creature_uses_creature_rate_and_minimum() {
+        let context = dynamic_respawn_context(Some(SpawnObjectType::Creature));
+        let scaled = apply_dynamic_mode_respawn_scaling_like_cpp(120, context);
+
+        assert_eq!(scaled.delay_secs, 30);
+        assert!(scaled.was_scaled());
+    }
+
+    #[test]
+    fn dynamic_respawn_unsupported_mode_is_safe_noop() {
+        let mut context = dynamic_respawn_context(Some(SpawnObjectType::GameObject));
+        context.mode = 2;
+
+        assert_dynamic_respawn_noop(context, DynamicRespawnScalingNoopReason::UnsupportedMode);
     }
 
     fn guid(high: HighGuid, counter: i64) -> ObjectGuid {

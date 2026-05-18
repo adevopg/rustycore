@@ -1319,3 +1319,13 @@ C++ anchors: `GameObjectOverride` / `GameObjectTemplateAddon` shape in `GameObje
 Implemented Rust dependency: `SEL_GAMEOBJECTS_IN_RANGE` now appends effective flags/faction selected with C++ priority (`gameobject_overrides.spawnId` over `gameobject_template_addon.entry` over zero), visibility spawn paths propagate them into `GameObjectCreateData` and represented session state, and represented `GO_JUST_DEACTIVATED`/delete cleanup restores known override/template-addon flags after visual despawn instead of preserving contaminated mutable flags such as `GO_FLAG_IN_USE`.
 
 Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021`; canonical ObjectMgr/map ownership, cross-session values update/fanout, full template-addon artkit/worldEffect/AIAnimKit validation/consumption, canonical map removal, and complete UpdateObject values delta remain open.
+
+### #NEXT.R8.ENTITIES.352 — Map dynamic respawn scaling helper dependency
+
+Status: complete (helper dependency only).
+
+C++ anchors: `GameObject::Update` spawned-by-default respawn branch in `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1665-1672`, `Map::ApplyDynamicModeRespawnScaling` in `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2242-2284`, declaration in `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:657-660`, and spawn-group dynamic-rate flag source in `/home/server/woltk-trinity-legacy/src/server/game/Maps/SpawnData.h` / Rust `SpawnGroupFlags::DYNAMIC_SPAWN_RATE`.
+
+Implemented Rust dependency: `wow-map::map::apply_dynamic_mode_respawn_scaling_like_cpp` is a pure helper for `SpawnObjectType::GameObject` and `SpawnObjectType::Creature`. It preserves the C++ early returns for BG/arena maps, unsupported spawn types, missing spawn metadata, missing `DYNAMIC_SPAWN_RATE`, missing or zero zone-player count, `adjustFactor >= 1.0`, and `respawnDelay <= minimum`. Rust mode `0` and unsupported modes are safe no-ops instead of runtime panics. Successful scaling uses `ceil(respawnDelay * rate / playerCount)` clamped to the type-specific minimum, with separate creature vs gameobject rate/minimum config inputs.
+
+Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021` and does not close GameObject respawn runtime. Still missing: wiring from canonical `GameObject::Update` / represented fallback into the helper, real `SaveRespawnTime`, canonical spawn metadata and zone-player-count ownership, map remove-list/cross-session ownership, visibility fanout, and persistence.
