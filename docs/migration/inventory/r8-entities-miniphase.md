@@ -6,6 +6,12 @@
 ## Closed Tasks
 
 
+- [x] **#NEXT.R8.ENTITIES.401** Creature loaded-grid lifecycle resolver for real Map insertion path.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1770-1813`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1815-1923`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.cpp:44-78`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:519-542`.
+  Rust targets: `crates/world-server/src/creature_loaded_grid.rs`, `crates/world-server/src/main.rs`, `crates/world-server/Cargo.toml`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: adds pure `CreatureLoadedGridLifecycleResolverLikeCpp` in `world-server` over caller-resolved template/spawn/runtime-selection inputs; it performs no DB/async work and no map mutation, rejects missing spawn/template/stats-selection inputs instead of fabricating dummies, maps canonical fields into `CreatureLoadFromDbLifecycleRecord`, builds `Creature::load_from_db_lifecycle`, and produces a typed `MapObjectRecord::Creature` only when `add_to_map` requests insertion metadata. Complete only for resolver/lifecycle bridge; loaded-grid fanout, ObjectAccessor/AddToWorld side effects, world-server DB loader wiring, PoolMgr live execution, scripts/AI/vehicle/zonescript initialization and actual Map::AddToMap caller plumbing remain pending.
+
+
 - [x] **#NEXT.R8.ENTITIES.400** Creature template classification/rate wiring for C++-normalized creature difficulty/base-stat runtime stores.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:349-400`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:403-482`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:940-1040`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1675-1695`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:9976-10062`.
   Rust targets: `crates/wow-data/src/creature_template.rs`, `crates/wow-data/src/lib.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.

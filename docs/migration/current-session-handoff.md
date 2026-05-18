@@ -27,10 +27,12 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 - Current branch state after #398 review/validation/local commit: `develop...origin/develop [ahead 53]` with a clean tree.
 - Current branch state after #399 review/validation/local commit: `develop...origin/develop [ahead 54]` with a clean tree; no push/install/restart.
 - Current branch state after #400 review/validation/local commit: `develop...origin/develop [ahead 55]` with a clean tree; no push/install/restart.
-- Latest completed committed slice in this handoff: `#NEXT.R8.ENTITIES.400 — Creature template classification/rate wiring for C++-normalized creature difficulty/base-stat runtime stores` (review `APROBADO`; focused checks passed; committed locally in the current #400 HEAD).
+- Current branch state after #401 review/validation/local commit: `develop...origin/develop [ahead 56]` with a clean tree; no push/install/restart.
+- Latest completed committed slice in this handoff: `#NEXT.R8.ENTITIES.401 — Creature loaded-grid lifecycle resolver for real Map insertion path` (review `APROBADO`; focused checks passed; committed locally in the current #401 HEAD).
+- Previous completed committed slice: `#NEXT.R8.ENTITIES.400 — Creature template classification/rate wiring for C++-normalized creature difficulty/base-stat runtime stores` (review `APROBADO`; focused checks passed; committed locally in the current #400 HEAD).
 - Previous completed committed slice: `#NEXT.R8.ENTITIES.399 — Creature base stats/difficulty lifecycle data store dependency for live Creature LoadFromDB` (review `APROBADO`; focused checks passed; committed locally in the current #399 HEAD).
 - Previous completed slice: `#NEXT.R8.ENTITIES.398 — GameObject resolved lifecycle record seam for Create/LoadFromDB intrinsic entity state` (review `APROBADO`; focused checks passed; committed locally in the current #398 HEAD).
-- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, #395, #396, #397, #398, #399, or #400.
+- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, #395, #396, #397, #398, #399, #400, or #401.
 
 ## Critical Rules
 
@@ -42,13 +44,20 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #400 `Creature classification/rate world-server data wiring`: `~87.9%` (was `~87.5%` after #398; do not claim >95%).
+Overall core migration estimate after #401 `Creature loaded-grid lifecycle resolver`: `~88.2%` (was `~87.9%` after #400; do not claim >95%).
 
-This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr` runtime execution, live `SpawnPool`/`DespawnPool` RNG/chance execution beyond deterministic planning/report, recursive subpool live integration beyond returned action records, loaded-grid/full live `ProcessRespawns` non-pooled `DoRespawn` branch beyond the map-owned typed seam, DB-backed entity creation / `LoadFromDB`, world-server caller loader wiring/fanout beyond the new map seam, `RemoveFromMap` side-effect completeness, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete execution for runtime branches, and broader Unit/Player inventory/auras/threat/motion/update-field work.
+This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr` runtime execution, live `SpawnPool`/`DespawnPool` RNG/chance execution beyond deterministic planning/report, recursive subpool live integration beyond returned action records, loaded-grid/full live `ProcessRespawns` non-pooled `DoRespawn` branch beyond the map-owned typed seam, world-server DB-backed loader wiring from `creature`/`creature_template` rows into the new resolver, actual `AddToMap` caller execution/fanout beyond typed record construction, `RemoveFromMap` side-effect completeness, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete execution for runtime branches, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #400; this closes only startup data wiring for creature template classification, C++ creature damage rate selection, `creature_template_difficulty`, and `creature_classlevelstats` stores. It still does not implement live `Creature::LoadFromDB`, `CreateCreatureFromDB`, AddToMap/fanout/scripts, PoolMgr live spawn execution, full DoRespawn, AreaTrigger runtime, CleanupsBeforeDelete, dynamic tree/session fanout, or server install/restart.
+Manual test point: no new client-facing manual milestone from #401; this closes only the pure Creature loaded-grid lifecycle resolver bridge needed by future DB-backed `Creature::LoadFromDB`/loaded-grid `DoRespawn` wiring. It still does not wire the world-server DB loader into `Map::process_due_respawns`, execute AddToMap/fanout/scripts/AI/vehicle/zonescript initialization, run PoolMgr live spawn execution, complete AreaTrigger runtime, CleanupsBeforeDelete, dynamic tree/session fanout, or install/restart the server.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.401` (review `APROBADO`; focused checks passed; committed locally in the current #401 HEAD; no push/install/restart)
+  - Adds a pure `world-server` Creature loaded-grid lifecycle resolver bridge for the future C++ `Creature::CreateCreatureFromDB` / `Creature::LoadFromDB` path. The resolver consumes caller-resolved template, spawn and runtime-selection records, performs no DB/async work and no Map/MapManager mutation, rejects missing spawn/template/runtime selection with typed errors instead of dummies, builds `CreatureLoadFromDbLifecycleRecord`, calls `Creature::load_from_db_lifecycle`, and returns a typed `MapObjectRecord::Creature` only when the caller requested insertion metadata.
+  - C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1770-1813`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1815-1923`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.cpp:44-78`, and `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:519-542`.
+  - Rust targets: `crates/world-server/src/creature_loaded_grid.rs`, `crates/world-server/src/main.rs`, `crates/world-server/Cargo.toml`, `Cargo.lock`, docs/inventory/handoff.
+  - Acceptance: complete only for resolver/lifecycle bridge toward loaded-grid Creature insertion. It does not wire the world-server DB loader into `Map::process_due_respawns`, does not mutate live maps, and does not implement AddToWorld/ObjectAccessor fanout, scripts/AI/vehicle/zonescript initialization, PoolMgr live execution, install/restart, or push.
+  - Checks executed by foreman after review: `cargo fmt --check`, `cargo test -p world-server loaded_grid_creature_lifecycle_resolver` (4 passed), `cargo check -p world-server`, `git diff --check`, and `git status --short --branch` passed. New `dead_code` warnings from the seam are accepted by reviewer for this bounded stage, alongside existing workspace warnings.
 
 
 - `#NEXT.R8.ENTITIES.400` (review `APROBADO`; focused checks passed; committed locally in the current #400 HEAD; no push/install/restart)
@@ -711,13 +720,12 @@ Warnings observed are pre-existing workspace warnings (for example `unsafe` in `
 
 ## Remaining Gaps / Next Dependency
 
-`#NEXT.R8.ENTITIES.388` adds only canonical C++-shaped `PoolMgr::LoadFromDB` metadata/planning plus autospawn candidate metadata; it does **not** complete full live respawn/runtime ownership. Remaining heavy dependencies toward >95% core include:
+`#NEXT.R8.ENTITIES.401` adds only the pure Creature loaded-grid resolver/lifecycle bridge; it does **not** complete full live respawn/runtime ownership. Remaining heavy dependencies toward >95% core include:
 
-1. Wire real live `PoolMgr` ownership/execution from the metadata/planning seam: auto-spawn map init, live `SpawnPool`/`DespawnPool`, recursive subpool execution, and map-owned chance/RNG integration.
-2. Expand live `ProcessRespawns` beyond represented/delete-only branches without faking PoolMgr/DB/entity side effects.
-3. Complete C++-shaped `CheckRespawn` beyond the represented spawn-group guard: real map-local creature/gameobject by-spawn stores, escort exceptions, and linked respawn data.
-4. Implement `DoRespawn` entity creation/`LoadFromDB`, `AddToMap`/`RemoveFromMap`, DB respawn persistence/delete, and grid/session fanout.
-5. Add real map-local creature/gameobject by-spawn stores and ObjectAccessor-like ownership instead of session-local fallback state.
-6. Continue reducing Player/Unit/Creature/GameObject lifecycle, UpdateFields, inventory/equipment, auras, threat, motion, spawn/despawn/respawn gaps.
+1. Wire world-server DB-backed Creature loader data (`creature`, `creature_template`, template difficulty/base stats/model/runtime selection) into `CreatureLoadedGridLifecycleResolverLikeCpp` and pass it as the loaded-grid loader for `Map::process_due_respawns_composite_loaded_grid_respawns_like_cpp` without holding map locks across DB/async work.
+2. Add the equivalent GameObject DB-backed loader bridge/wiring into the same loaded-grid `DoRespawn` seam, preserving #398 lifecycle validation and no fake transport/template fallbacks.
+3. Execute real live `PoolMgr` Spawn1Object/ReSpawn1Object/Despawn1Object from the existing action records, including loaded-grid loader invocation, DB respawn save/delete ownership, recursive subpool execution, and deterministic/true RNG integration where required.
+4. Complete `AddToWorld`/`RemoveFromWorld`, ObjectAccessor map-local ownership, grid/session fanout, dynamic tree/collision hooks, scripts/AI/vehicle/zonescript initialization, and cleanup side effects after typed records enter/leave `Map`.
+5. Continue reducing Player/Unit/Creature/GameObject lifecycle, UpdateFields, inventory/equipment, auras, threat, motion, spawn/despawn/respawn and AreaTrigger runtime gaps.
 
-Recommended next slice: use #386 as the seam and implement the next bounded live `PoolMgr`/`DoRespawn` ownership dependency only where the source-of-truth owner exists (for example map-owned by-spawn stores or explicit live `Spawn1Object`/`ReSpawn1Object`/`Despawn1Object` action execution). Do not turn blocked Allowed/pool/reschedule branches into timer deletion without real side effects.
+Recommended next slice: `#NEXT.R8.ENTITIES.402` should wire the real DB/template/stat/model data source for Creature loaded-grid `DoRespawn` into the existing map loader seam, or mark a precise blocker if template/model/runtime-selection data is insufficient. Do not fake missing template/runtime selection with defaults; either implement the dependency first or return a typed blocked/error path that preserves timers in C++ order.

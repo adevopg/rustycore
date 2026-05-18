@@ -44,6 +44,7 @@ use wow_world::{
     },
 };
 
+mod creature_loaded_grid;
 mod spawn_store_loader;
 
 const WORLD_CONFIG_CANDIDATES: &[&str] = &[
