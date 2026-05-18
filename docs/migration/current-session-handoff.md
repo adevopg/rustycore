@@ -8,9 +8,9 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 - Branch: `develop`
 - Current branch state before #380 finalization: `develop...origin/develop [ahead 34]` with a clean tree.
-- Current branch state after #381 local commit: `develop...origin/develop [ahead 36]`.
-- Latest completed local slice: `#NEXT.R8.ENTITIES.381 — WorldObject LOS endpoints: collision-height + hit-sphere parity` (review `APROBADO`, focused validation passed, committed locally at current HEAD).
-- No push/install/restart performed.
+- Current branch state after #382 local commit: `develop...origin/develop [ahead 37]`.
+- Latest completed committed slice: `#NEXT.R8.ENTITIES.382 — canonical player display/mount/collision-height sync from represented WorldSession shape` (review `APROBADO`, focused validation passed, committed locally at current HEAD).
+- No push/install/restart performed for #382.
 
 ## Critical Rules
 
@@ -22,13 +22,18 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #381 `WorldObject LOS endpoints: collision-height + hit-sphere parity`: `~87.7%`.
+Overall core migration estimate after #382 `canonical player display/mount/collision-height sync`: `~87.8%`.
 
 This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `ProcessRespawns` branches beyond represented safe zero-delete/reschedule branches, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete coverage beyond current seams, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #381; this is a canonical LOS endpoint-construction slice in `wow-entities`, validated with focused unit checks.
+Manual test point: no new client-facing manual milestone from #382; this is a canonical player shape synchronization dependency for map-local/ObjectAccessor consumers, validated with focused `wow-world` unit checks.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.382` (completed; review `APROBADO`; focused validation passed; committed locally at current HEAD)
+  - `WorldSession::canonical_player_entity_snapshot_like_cpp` now copies represented player shape into the canonical `Player` before map insertion/replacement: default display/native display from race/gender, mount display id, object scale, and current collision height.
+  - `update_player_collision_height_like_cpp` recomputes height when DB2 stores are available, but always propagates current represented mount display id plus collision height to an existing canonical player, preserving the allowed session -> canonical sync direction and fallback height behavior.
+  - This closes only the canonical player shape dependency for map-local/ObjectAccessor consumers. It does not close full Maps/ObjectAccessor/LOS ownership, real terrain/vmap/dynamic-tree collision, or full Player Create/Load/login lifecycle.
 
 - `#NEXT.R8.ENTITIES.381` (completed; review `APROBADO`; focused validation passed; committed locally at current HEAD)
   - Adds resolved runtime `WorldObject::collision_height_like_cpp` state (base default `0.0`) plus C++-shaped LOS endpoint construction for `IsWithinLOS`, `IsWithinLOSInMap`, and `GetHitSpherePointFor`.

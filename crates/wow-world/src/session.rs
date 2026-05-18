@@ -2495,7 +2495,23 @@ impl WorldSession {
         if let Some(selection) = self.selection_guid_like_cpp() {
             player.set_selection(selection);
         }
+        self.apply_represented_player_unit_shape_to_canonical_like_cpp(&mut player);
         Some(player)
+    }
+
+    fn apply_represented_player_unit_shape_to_canonical_like_cpp(&self, player: &mut Player) {
+        let display_id = crate::handlers::character::default_display_id(
+            self.player_race_like_cpp(),
+            self.player_gender_like_cpp(),
+        );
+        let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp).unwrap_or(0);
+        let unit = player.unit_mut();
+        unit.set_display_id(display_id, true);
+        unit.set_mount_display_id(mount_display_id);
+        unit.set_collision_height_like_cpp(self.player_collision_height_like_cpp);
+        unit.world_mut()
+            .object_mut()
+            .set_scale(self.player_object_scale_like_cpp);
     }
 
     fn player_session_never_visible_for_seer_like_cpp(&self, guid: ObjectGuid) -> bool {
@@ -7417,29 +7433,35 @@ impl WorldSession {
     }
 
     fn update_player_collision_height_like_cpp(&mut self) {
-        let (Some(display_store), Some(model_store)) = (
+        if let (Some(display_store), Some(model_store)) = (
             self.creature_display_info_store.as_ref(),
             self.creature_model_data_store.as_ref(),
-        ) else {
-            return;
-        };
-
-        let native_display_id = crate::handlers::character::default_display_id(
-            self.player_race_like_cpp(),
-            self.player_gender_like_cpp(),
-        );
-        let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp)
-            .ok()
-            .filter(|id| *id != 0);
-        if let Some(height) = wow_data::unit_collision_height_like_cpp(
-            self.player_object_scale_like_cpp,
-            native_display_id,
-            mount_display_id,
-            display_store,
-            model_store,
         ) {
-            self.player_collision_height_like_cpp = height;
+            let native_display_id = crate::handlers::character::default_display_id(
+                self.player_race_like_cpp(),
+                self.player_gender_like_cpp(),
+            );
+            let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp)
+                .ok()
+                .filter(|id| *id != 0);
+            if let Some(height) = wow_data::unit_collision_height_like_cpp(
+                self.player_object_scale_like_cpp,
+                native_display_id,
+                mount_display_id,
+                display_store,
+                model_store,
+            ) {
+                self.player_collision_height_like_cpp = height;
+            }
         }
+
+        let mount_display_id = u32::try_from(self.player_mount_display_id_like_cpp).unwrap_or(0);
+        let collision_height = self.player_collision_height_like_cpp;
+        let _ = self.mutate_canonical_player_like_cpp(|player| {
+            let unit = player.unit_mut();
+            unit.set_mount_display_id(mount_display_id);
+            unit.set_collision_height_like_cpp(collision_height);
+        });
     }
 
     fn send_movement_set_collision_height_like_cpp(&mut self, reason: u8) {
@@ -16656,6 +16678,56 @@ mod tests {
         Arc::new(Mutex::new(wow_map::MapManager::default()))
     }
 
+    fn configure_player_shape_mount_collision_stores_like_cpp(session: &mut WorldSession) {
+        let native_display_id = crate::handlers::character::default_display_id(
+            session.player_race_like_cpp(),
+            session.player_gender_like_cpp(),
+        );
+        session.set_creature_template_mount_store(Arc::new(
+            wow_data::CreatureTemplateMountStoreLikeCpp::from_entries([
+                wow_data::CreatureTemplateMountEntryLikeCpp {
+                    entry: 1234,
+                    vehicle_id: 55,
+                    models: vec![wow_data::CreatureTemplateMountModelLikeCpp {
+                        display_id: 4321,
+                        display_scale: 1.0,
+                        probability: 0.0,
+                    }],
+                },
+            ]),
+        ));
+        session.set_creature_display_info_store(Arc::new(
+            wow_data::CreatureDisplayInfoStore::from_entries([
+                wow_data::CreatureDisplayInfoEntry {
+                    id: native_display_id,
+                    model_id: 100,
+                    creature_model_scale: 1.2,
+                },
+                wow_data::CreatureDisplayInfoEntry {
+                    id: 4321,
+                    model_id: 200,
+                    creature_model_scale: 1.5,
+                },
+            ]),
+        ));
+        session.set_creature_model_data_store(Arc::new(
+            wow_data::CreatureModelDataStore::from_entries([
+                wow_data::CreatureModelDataEntry {
+                    id: 100,
+                    collision_height: 2.0,
+                    model_scale: 1.1,
+                    mount_height: 0.0,
+                },
+                wow_data::CreatureModelDataEntry {
+                    id: 200,
+                    collision_height: 0.0,
+                    model_scale: 1.0,
+                    mount_height: 4.0,
+                },
+            ]),
+        ));
+    }
+
     fn test_creature_guid(counter: i64) -> ObjectGuid {
         ObjectGuid::create_world_object(wow_core::guid::HighGuid::Creature, 0, 1, 0, 0, 1, counter)
     }
@@ -17098,6 +17170,130 @@ mod tests {
             }
         );
         assert!(canonical.lock().unwrap().find_map(609, 1).is_some());
+    }
+
+    #[test]
+    fn canonical_player_snapshot_syncs_display_mount_collision_shape_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let guid = ObjectGuid::create_player(1, 42);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            guid,
+            "Tester".to_string(),
+            Position::new(1.0, 2.0, 3.0, 0.0),
+            571,
+            1,
+            1,
+            10,
+            0,
+        ));
+        configure_player_shape_mount_collision_stores_like_cpp(&mut session);
+        session.update_player_collision_height_like_cpp();
+        session.player_mount_display_id_like_cpp = 4321;
+        session.update_player_collision_height_like_cpp();
+        session
+            .ensure_canonical_world_map_for_current_player_like_cpp()
+            .expect("canonical map");
+
+        let native_display_id = crate::handlers::character::default_display_id(
+            session.player_race_like_cpp(),
+            session.player_gender_like_cpp(),
+        );
+        let manager = canonical.lock().unwrap();
+        let player = manager
+            .find_map(571, 0)
+            .unwrap()
+            .map()
+            .get_typed_player(guid)
+            .unwrap();
+        assert_eq!(player.unit().data().display_id, native_display_id as i32);
+        assert_eq!(
+            player.unit().data().native_display_id,
+            native_display_id as i32
+        );
+        assert_eq!(player.unit().data().mount_display_id, 4321);
+        assert!(
+            (player.unit().collision_height_like_cpp() - session.player_collision_height_like_cpp)
+                .abs()
+                < 0.0001
+        );
+        assert!(
+            (player.unit().world().collision_height_like_cpp()
+                - session.player_collision_height_like_cpp)
+                .abs()
+                < 0.0001
+        );
+        assert!(
+            (player.unit().world().object().scale() - session.player_object_scale_like_cpp).abs()
+                < 0.0001
+        );
+    }
+
+    #[test]
+    fn canonical_player_existing_sync_receives_mount_collision_update_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let guid = ObjectGuid::create_player(1, 42);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            guid,
+            "Tester".to_string(),
+            Position::new(1.0, 2.0, 3.0, 0.0),
+            571,
+            1,
+            1,
+            10,
+            0,
+        ));
+        configure_player_shape_mount_collision_stores_like_cpp(&mut session);
+        session
+            .ensure_canonical_world_map_for_current_player_like_cpp()
+            .expect("canonical map");
+
+        let effect = wow_data::SpellEffectInfo {
+            effect: wow_data::spell::spell_effect_types::SPELL_EFFECT_APPLY_AURA,
+            effect_aura: wow_data::spell::aura_types::SPELL_AURA_MOUNTED,
+            effect_base_points: 77,
+            effect_misc_value_1: 1234,
+            ..Default::default()
+        };
+        session
+            .apply_represented_mounted_aura_like_cpp(100, ObjectGuid::EMPTY, &effect)
+            .unwrap();
+
+        assert_eq!(session.player_mount_display_id_like_cpp, 4321);
+        assert!((session.player_collision_height_like_cpp - 7.32).abs() < 0.0001);
+        let manager = canonical.lock().unwrap();
+        let player = manager
+            .find_map(571, 0)
+            .unwrap()
+            .map()
+            .get_typed_player(guid)
+            .unwrap();
+        assert_eq!(player.unit().data().mount_display_id, 4321);
+        assert!((player.unit().collision_height_like_cpp() - 7.32).abs() < 0.0001);
+        assert!((player.unit().world().collision_height_like_cpp() - 7.32).abs() < 0.0001);
     }
 
     #[test]
