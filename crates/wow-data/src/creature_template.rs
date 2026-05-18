@@ -120,11 +120,487 @@ impl CreatureTemplateMountEntryLikeCpp {
     }
 }
 
+/// C++ `CURRENT_EXPANSION` for this 3.4.3/TDB442 port.
+///
+/// Anchor: `SharedDefines.h:87-105` defines Wrath of the Lich King as 2 and
+/// `CURRENT_EXPANSION` as `EXPANSION_WRATH_OF_THE_LICH_KING`.
+pub const CREATURE_CURRENT_EXPANSION_LIKE_CPP: usize = 2;
+
+/// C++ sentinel `EXPANSION_LEVEL_CURRENT` used by `CreatureDifficulty`.
+pub const CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP: i32 = -1;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreatureDifficultyRecordLikeCpp {
+    pub entry: u32,
+    pub difficulty_id: u8,
+    pub min_level: u8,
+    pub max_level: u8,
+    pub health_scaling_expansion: i32,
+    pub health_modifier: f32,
+    pub mana_modifier: f32,
+    pub armor_modifier: f32,
+    pub damage_modifier: f32,
+    pub creature_difficulty_id: i32,
+    pub type_flags: u32,
+    pub type_flags2: u32,
+    pub loot_id: u32,
+    pub pickpocket_loot_id: u32,
+    pub skin_loot_id: u32,
+    pub gold_min: u32,
+    pub gold_max: u32,
+    pub static_flags: [u32; 8],
+}
+
+impl CreatureDifficultyRecordLikeCpp {
+    /// Applies the C++ `ObjectMgr::LoadCreatureTemplateDifficulty` row fixes.
+    ///
+    /// `classification_damage_modifier` represents
+    /// `Creature::GetDamageMod(template.Classification)`. The full creature
+    /// template classification lookup remains a future integration slice; this
+    /// pure data normalizer only applies the caller-provided multiplier.
+    pub fn normalize_like_cpp(mut self, classification_damage_modifier: f32) -> Self {
+        self.damage_modifier *= classification_damage_modifier;
+
+        if self.min_level == 0 {
+            self.min_level = 1;
+        }
+        if self.max_level == 0 {
+            self.max_level = 1;
+        }
+        if self.min_level > self.max_level {
+            self.min_level = self.max_level;
+        }
+        if self.health_scaling_expansion < CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP
+            || self.health_scaling_expansion > CREATURE_CURRENT_EXPANSION_LIKE_CPP as i32
+        {
+            self.health_scaling_expansion = 0;
+        }
+        if self.gold_min > self.gold_max {
+            self.gold_max = self.gold_min;
+        }
+
+        self
+    }
+
+    /// Matches `CreatureDifficulty::GetHealthScalingExpansion`: `-1` maps to
+    /// C++ `CURRENT_EXPANSION`, otherwise the normalized DB value is used.
+    pub fn health_scaling_expansion_index_like_cpp(&self) -> usize {
+        if self.health_scaling_expansion == CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP {
+            CREATURE_CURRENT_EXPANSION_LIKE_CPP
+        } else {
+            self.health_scaling_expansion as usize
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreatureBaseStatsRecordLikeCpp {
+    pub base_health: [u32; CREATURE_CURRENT_EXPANSION_LIKE_CPP + 1],
+    pub base_mana: u32,
+    pub base_armor: u32,
+    pub attack_power: u32,
+    pub ranged_attack_power: u32,
+    pub base_damage: [f32; CREATURE_CURRENT_EXPANSION_LIKE_CPP + 1],
+}
+
+impl Default for CreatureBaseStatsRecordLikeCpp {
+    fn default() -> Self {
+        Self {
+            base_health: [0; CREATURE_CURRENT_EXPANSION_LIKE_CPP + 1],
+            base_mana: 0,
+            base_armor: 0,
+            attack_power: 0,
+            ranged_attack_power: 0,
+            base_damage: [0.0; CREATURE_CURRENT_EXPANSION_LIKE_CPP + 1],
+        }
+    }
+}
+
+impl CreatureBaseStatsRecordLikeCpp {
+    /// Applies C++ `LoadCreatureClassLevelStats` fixes: loaded row HP zero -> 1,
+    /// negative base damage -> 0. Missing rows are handled by the store default
+    /// and intentionally retain all-zero health/damage arrays like C++ static
+    /// zero-initialized fallback stats.
+    pub fn normalize_loaded_row_like_cpp(mut self) -> Self {
+        for hp in &mut self.base_health {
+            if *hp == 0 {
+                *hp = 1;
+            }
+        }
+        for damage in &mut self.base_damage {
+            if *damage < 0.0 {
+                *damage = 0.0;
+            }
+        }
+        self
+    }
+
+    pub fn generate_health_like_cpp(&self, difficulty: &CreatureDifficultyRecordLikeCpp) -> u32 {
+        (self.base_health[difficulty.health_scaling_expansion_index_like_cpp()] as f32
+            * difficulty.health_modifier)
+            .ceil() as u32
+    }
+
+    pub fn generate_mana_like_cpp(&self, difficulty: &CreatureDifficultyRecordLikeCpp) -> u32 {
+        if self.base_mana == 0 {
+            return 0;
+        }
+
+        (self.base_mana as f32 * difficulty.mana_modifier).ceil() as u32
+    }
+
+    pub fn generate_armor_like_cpp(&self, difficulty: &CreatureDifficultyRecordLikeCpp) -> u32 {
+        (self.base_armor as f32 * difficulty.armor_modifier).ceil() as u32
+    }
+
+    pub fn generate_base_damage_like_cpp(
+        &self,
+        difficulty: &CreatureDifficultyRecordLikeCpp,
+    ) -> f32 {
+        self.base_damage[difficulty.health_scaling_expansion_index_like_cpp()]
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CreatureBaseStatsStoreLikeCpp {
+    records: HashMap<(u8, u8), CreatureBaseStatsRecordLikeCpp>,
+    default_record: CreatureBaseStatsRecordLikeCpp,
+}
+
+impl CreatureBaseStatsStoreLikeCpp {
+    pub fn from_records(
+        records: impl IntoIterator<Item = (u8, u8, CreatureBaseStatsRecordLikeCpp)>,
+    ) -> Self {
+        Self {
+            records: records
+                .into_iter()
+                .map(|(level, unit_class, record)| {
+                    ((level, unit_class), record.normalize_loaded_row_like_cpp())
+                })
+                .collect(),
+            default_record: CreatureBaseStatsRecordLikeCpp::default(),
+        }
+    }
+
+    pub async fn load_like_cpp(db: &WorldDatabase) -> Result<Self> {
+        let mut result = db
+            .direct_query(
+                "SELECT level, class, basehp0, basehp1, basehp2, basemana, basearmor, attackpower, rangedattackpower, damage_base, damage_exp1, damage_exp2 FROM creature_classlevelstats",
+            )
+            .await?;
+
+        if result.is_empty() {
+            return Ok(Self::default());
+        }
+
+        let mut records = Vec::new();
+        loop {
+            let level = result.try_read::<u8>(0).unwrap_or(0);
+            let unit_class = result.try_read::<u8>(1).unwrap_or(0);
+            let record = CreatureBaseStatsRecordLikeCpp {
+                base_health: [
+                    result.try_read::<u16>(2).map(u32::from).unwrap_or(0),
+                    result.try_read::<u16>(3).map(u32::from).unwrap_or(0),
+                    result.try_read::<u16>(4).map(u32::from).unwrap_or(0),
+                ],
+                base_mana: result.try_read::<u16>(5).map(u32::from).unwrap_or(0),
+                base_armor: result.try_read::<u16>(6).map(u32::from).unwrap_or(0),
+                attack_power: result.try_read::<u16>(7).map(u32::from).unwrap_or(0),
+                ranged_attack_power: result.try_read::<u16>(8).map(u32::from).unwrap_or(0),
+                base_damage: [
+                    result.try_read::<f32>(9).unwrap_or(0.0),
+                    result.try_read::<f32>(10).unwrap_or(0.0),
+                    result.try_read::<f32>(11).unwrap_or(0.0),
+                ],
+            };
+            records.push((level, unit_class, record));
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        Ok(Self::from_records(records))
+    }
+
+    pub fn get_like_cpp(&self, level: u8, unit_class: u8) -> &CreatureBaseStatsRecordLikeCpp {
+        self.records
+            .get(&(level, unit_class))
+            .unwrap_or(&self.default_record)
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CreatureDifficultyStoreLikeCpp {
+    records: HashMap<(u32, u8), CreatureDifficultyRecordLikeCpp>,
+}
+
+impl CreatureDifficultyStoreLikeCpp {
+    pub fn from_records(
+        records: impl IntoIterator<Item = CreatureDifficultyRecordLikeCpp>,
+        classification_damage_modifier_for_entry: impl Fn(u32) -> f32,
+    ) -> Self {
+        Self {
+            records: records
+                .into_iter()
+                .map(|record| {
+                    let key = (record.entry, record.difficulty_id);
+                    let classification_damage_modifier =
+                        classification_damage_modifier_for_entry(record.entry);
+                    let normalized = record.normalize_like_cpp(classification_damage_modifier);
+                    (key, normalized)
+                })
+                .collect(),
+        }
+    }
+
+    pub async fn load_like_cpp(
+        db: &WorldDatabase,
+        classification_damage_modifier_for_entry: impl Fn(u32) -> f32,
+    ) -> Result<Self> {
+        let mut result = db
+            .direct_query(
+                "SELECT Entry, DifficultyID, MinLevel, MaxLevel, HealthScalingExpansion, HealthModifier, ManaModifier, ArmorModifier, DamageModifier, CreatureDifficultyID, TypeFlags, TypeFlags2, LootID, PickPocketLootID, SkinLootID, GoldMin, GoldMax, StaticFlags1, StaticFlags2, StaticFlags3, StaticFlags4, StaticFlags5, StaticFlags6, StaticFlags7, StaticFlags8 FROM creature_template_difficulty ORDER BY Entry",
+            )
+            .await?;
+
+        if result.is_empty() {
+            return Ok(Self::default());
+        }
+
+        let mut records = Vec::new();
+        loop {
+            records.push(CreatureDifficultyRecordLikeCpp {
+                entry: result.try_read::<u32>(0).unwrap_or(0),
+                difficulty_id: result.try_read::<u8>(1).unwrap_or(0),
+                min_level: result.try_read::<u8>(2).unwrap_or(0),
+                max_level: result.try_read::<u8>(3).unwrap_or(0),
+                health_scaling_expansion: result.try_read::<i32>(4).unwrap_or(0),
+                health_modifier: result.try_read::<f32>(5).unwrap_or(0.0),
+                mana_modifier: result.try_read::<f32>(6).unwrap_or(0.0),
+                armor_modifier: result.try_read::<f32>(7).unwrap_or(0.0),
+                damage_modifier: result.try_read::<f32>(8).unwrap_or(0.0),
+                creature_difficulty_id: result.try_read::<i32>(9).unwrap_or(0),
+                type_flags: result.try_read::<u32>(10).unwrap_or(0),
+                type_flags2: result.try_read::<u32>(11).unwrap_or(0),
+                loot_id: result.try_read::<u32>(12).unwrap_or(0),
+                pickpocket_loot_id: result.try_read::<u32>(13).unwrap_or(0),
+                skin_loot_id: result.try_read::<u32>(14).unwrap_or(0),
+                gold_min: result.try_read::<u32>(15).unwrap_or(0),
+                gold_max: result.try_read::<u32>(16).unwrap_or(0),
+                static_flags: [
+                    result.try_read::<u32>(17).unwrap_or(0),
+                    result.try_read::<u32>(18).unwrap_or(0),
+                    result.try_read::<u32>(19).unwrap_or(0),
+                    result.try_read::<u32>(20).unwrap_or(0),
+                    result.try_read::<u32>(21).unwrap_or(0),
+                    result.try_read::<u32>(22).unwrap_or(0),
+                    result.try_read::<u32>(23).unwrap_or(0),
+                    result.try_read::<u32>(24).unwrap_or(0),
+                ],
+            });
+
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        Ok(Self::from_records(
+            records,
+            classification_damage_modifier_for_entry,
+        ))
+    }
+
+    pub fn get_like_cpp(
+        &self,
+        entry: u32,
+        difficulty_id: u8,
+    ) -> Option<&CreatureDifficultyRecordLikeCpp> {
+        self.records.get(&(entry, difficulty_id))
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
+
+    fn base_difficulty_record() -> CreatureDifficultyRecordLikeCpp {
+        CreatureDifficultyRecordLikeCpp {
+            entry: 1,
+            difficulty_id: 0,
+            min_level: 1,
+            max_level: 1,
+            health_scaling_expansion: 0,
+            health_modifier: 1.0,
+            mana_modifier: 1.0,
+            armor_modifier: 1.0,
+            damage_modifier: 1.0,
+            creature_difficulty_id: 0,
+            type_flags: 0,
+            type_flags2: 0,
+            loot_id: 0,
+            pickpocket_loot_id: 0,
+            skin_loot_id: 0,
+            gold_min: 0,
+            gold_max: 0,
+            static_flags: [0; 8],
+        }
+    }
+
+    #[test]
+    fn creature_difficulty_health_scaling_current_and_invalid_match_cpp() {
+        let current = CreatureDifficultyRecordLikeCpp {
+            health_scaling_expansion: CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(1.0);
+        assert_eq!(
+            current.health_scaling_expansion_index_like_cpp(),
+            CREATURE_CURRENT_EXPANSION_LIKE_CPP
+        );
+
+        let invalid_low = CreatureDifficultyRecordLikeCpp {
+            health_scaling_expansion: CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP - 1,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(1.0);
+        assert_eq!(invalid_low.health_scaling_expansion, 0);
+        assert_eq!(invalid_low.health_scaling_expansion_index_like_cpp(), 0);
+
+        let invalid_high = CreatureDifficultyRecordLikeCpp {
+            health_scaling_expansion: CREATURE_CURRENT_EXPANSION_LIKE_CPP as i32 + 1,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(1.0);
+        assert_eq!(invalid_high.health_scaling_expansion, 0);
+    }
+
+    #[test]
+    fn creature_difficulty_normalizes_min_max_gold_and_damage_modifier_like_cpp() {
+        let normalized = CreatureDifficultyRecordLikeCpp {
+            min_level: 0,
+            max_level: 0,
+            health_scaling_expansion: 1,
+            damage_modifier: 3.0,
+            gold_min: 50,
+            gold_max: 10,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(2.0);
+        assert_eq!(normalized.min_level, 1);
+        assert_eq!(normalized.max_level, 1);
+        assert_eq!(normalized.gold_max, 50);
+        assert_eq!(normalized.damage_modifier, 6.0);
+
+        let inverted = CreatureDifficultyRecordLikeCpp {
+            min_level: 60,
+            max_level: 55,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(1.0);
+        assert_eq!(inverted.min_level, 55);
+        assert_eq!(inverted.max_level, 55);
+    }
+
+    #[test]
+    fn creature_base_stats_normalize_loaded_rows_but_missing_fallback_stays_zero_like_cpp() {
+        let store = CreatureBaseStatsStoreLikeCpp::from_records([(
+            10,
+            2,
+            CreatureBaseStatsRecordLikeCpp {
+                base_health: [0, 25, 0],
+                base_mana: 30,
+                base_armor: 40,
+                attack_power: 50,
+                ranged_attack_power: 60,
+                base_damage: [-1.0, 2.5, -0.25],
+            },
+        )]);
+
+        let loaded = store.get_like_cpp(10, 2);
+        assert_eq!(loaded.base_health, [1, 25, 1]);
+        assert_eq!(loaded.base_damage, [0.0, 2.5, 0.0]);
+        assert_eq!(loaded.base_mana, 30);
+        assert_eq!(loaded.attack_power, 50);
+        assert_eq!(loaded.ranged_attack_power, 60);
+
+        let missing = store.get_like_cpp(99, 2);
+        assert_eq!(missing.base_health, [0, 0, 0]);
+        assert_eq!(missing.base_damage, [0.0, 0.0, 0.0]);
+        assert_eq!(missing.base_mana, 0);
+        assert_eq!(missing.attack_power, 0);
+        assert_eq!(missing.ranged_attack_power, 0);
+    }
+
+    #[test]
+    fn creature_base_stats_generate_helpers_match_cpp_ceil_and_expansion_index() {
+        let stats = CreatureBaseStatsRecordLikeCpp {
+            base_health: [100, 200, 300],
+            base_mana: 50,
+            base_armor: 80,
+            attack_power: 0,
+            ranged_attack_power: 0,
+            base_damage: [1.25, 2.5, 3.75],
+        };
+        let difficulty = CreatureDifficultyRecordLikeCpp {
+            health_scaling_expansion: CREATURE_EXPANSION_LEVEL_CURRENT_LIKE_CPP,
+            health_modifier: 1.25,
+            mana_modifier: 1.01,
+            armor_modifier: 1.1,
+            ..base_difficulty_record()
+        }
+        .normalize_like_cpp(1.0);
+
+        assert_eq!(stats.generate_health_like_cpp(&difficulty), 375);
+        assert_eq!(stats.generate_mana_like_cpp(&difficulty), 51);
+        assert_eq!(stats.generate_armor_like_cpp(&difficulty), 88);
+        assert_eq!(stats.generate_base_damage_like_cpp(&difficulty), 3.75);
+
+        let no_mana = CreatureBaseStatsRecordLikeCpp {
+            base_mana: 0,
+            ..stats
+        };
+        assert_eq!(no_mana.generate_mana_like_cpp(&difficulty), 0);
+    }
+
+    #[test]
+    fn creature_difficulty_store_keys_by_entry_and_difficulty_after_normalization() {
+        let store = CreatureDifficultyStoreLikeCpp::from_records(
+            [CreatureDifficultyRecordLikeCpp {
+                entry: 7,
+                difficulty_id: 3,
+                min_level: 4,
+                max_level: 5,
+                damage_modifier: 2.0,
+                ..base_difficulty_record()
+            }],
+            |entry| if entry == 7 { 1.5 } else { 1.0 },
+        );
+
+        let record = store.get_like_cpp(7, 3).expect("difficulty row exists");
+        assert_eq!(record.min_level, 4);
+        assert_eq!(record.max_level, 5);
+        assert_eq!(record.damage_modifier, 3.0);
+        assert!(store.get_like_cpp(7, 0).is_none());
+    }
 
     #[test]
     fn creature_template_mount_model_selection_matches_cpp_shape() {

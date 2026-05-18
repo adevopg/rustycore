@@ -24,10 +24,11 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 - Current branch state after #395 review/validation/local commit: `develop...origin/develop [ahead 50]` with a clean tree; no push/install/restart.
 - Current branch state after #396 review/validation/local commit: `develop...origin/develop [ahead 51]` with a clean tree; no push/install/restart.
 - Current branch state after #397 review/validation/local commit: `develop...origin/develop [ahead 52]` with a clean tree; no push/install/restart.
-- Current branch state after #398 review/validation/local commit: `develop...origin/develop [ahead 53]` with a clean tree; no push/install/restart.
-- Latest completed committed slice in this handoff: `#NEXT.R8.ENTITIES.398 — GameObject resolved lifecycle record seam for Create/LoadFromDB intrinsic entity state` (review `APROBADO`; focused checks passed; committed locally in the current #398 HEAD).
-- Previous completed slice: `#NEXT.R8.ENTITIES.396 — typed MapObjectRecord AddToMap seam for loaded-grid LoadFromDB/respawn work` (review `APROBADO`; focused checks passed; committed locally in the current #396 HEAD).
-- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, #395, #396, #397, or #398.
+- Current branch state after #398 review/validation/local commit: `develop...origin/develop [ahead 53]` with a clean tree.
+- Current branch state after #399 review/validation/local commit: `develop...origin/develop [ahead 54]` with a clean tree; no push/install/restart.
+- Latest completed committed slice in this handoff: `#NEXT.R8.ENTITIES.399 — Creature base stats/difficulty lifecycle data store dependency for live Creature LoadFromDB` (review `APROBADO`; focused checks passed; committed locally in the current #399 HEAD).
+- Previous completed slice: `#NEXT.R8.ENTITIES.398 — GameObject resolved lifecycle record seam for Create/LoadFromDB intrinsic entity state` (review `APROBADO`; focused checks passed; committed locally in the current #398 HEAD).
+- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, #395, #396, #397, #398, or #399.
 
 ## Critical Rules
 
@@ -39,13 +40,19 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #398 `GameObject resolved lifecycle record seam correction`: `~87.5%` (was `~87.3%` after #397; do not claim >95%).
+Overall core migration estimate after #399 `Creature base stats/difficulty lifecycle data store`: `~87.7%` (was `~87.5%` after #398; do not claim >95%).
 
 This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr` runtime execution, live `SpawnPool`/`DespawnPool` RNG/chance execution beyond deterministic planning/report, recursive subpool live integration beyond returned action records, loaded-grid/full live `ProcessRespawns` non-pooled `DoRespawn` branch beyond the map-owned typed seam, DB-backed entity creation / `LoadFromDB`, world-server caller loader wiring/fanout beyond the new map seam, `RemoveFromMap` side-effect completeness, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete execution for runtime branches, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
 Manual test point: no new client-facing manual milestone from #397; this closes only the map-owned loaded-grid non-pooled `DoRespawn` execution seam when the caller supplies a fully constructed typed `MapObjectRecord`. It still does not implement DB-backed `Creature::CreateCreatureFromDB`/`GameObject::CreateGameObjectFromDB` record construction, world-server DB loader wiring, fanout/scripts, PoolMgr live spawn execution, AreaTrigger runtime, CleanupsBeforeDelete, dynamic tree/session fanout, full DoRespawn, or server install/restart.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.399` (review `APROBADO`; focused checks passed; committed locally in the current #399 HEAD; no push/install/restart)
+  - Adds `wow-data` C++-anchored stores for `creature_template_difficulty` and `creature_classlevelstats`, including C++ row normalization for MinLevel/MaxLevel, HealthScalingExpansion, GoldMin/GoldMax, classification damage modifier application, HP zero and negative base damage fixes, current-expansion sentinel handling, and pure CreatureBaseStats generate helpers.
+  - C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:940-1040`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h:481-485`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h:582-608`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:9976-10060`, and `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:87-105`.
+  - Rust targets: `crates/wow-data/src/creature_template.rs`, `crates/wow-data/src/lib.rs`, docs/inventory.
+  - Acceptance: complete only as data-store/calculation dependency for future live Creature `LoadFromDB`/`DoRespawn`; it does not create entities, generate GUIDs, mutate MapManager, wire world-server loaders, or mark live spawn complete.
 
 - `#NEXT.R8.ENTITIES.398` (review `APROBADO`; focused checks passed; committed locally in the current #398 HEAD; no push/install/restart)
   - Corrects the bounded GameObject resolved lifecycle record seam for `GameObject::Create`/`LoadFromDB` intrinsic entity state only. It rejects invalid `MAX_GAMEOBJECT_TYPE`, rejects unsupported `GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT`, validates C++ map coordinates before mutation, propagates map binding errors without public panic APIs, applies represented `GO_FLAG_NODESPAWN`, preserves pre-normalized effective respawn time `0`, and keeps packed local rotation represented.
