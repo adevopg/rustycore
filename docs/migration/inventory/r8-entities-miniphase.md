@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.377** `Map` spawn-id live-object indexes like Trinity multimap.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:414-493`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:793-796` (foreman spec also cited nearby respawn fields at `Map.h:748-777`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:330-419`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:899-968`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:1966-2002`.
+  Rust targets: `crates/wow-map/src/map.rs`.
+  Acceptance: `Map` now owns typed multimap-like by-spawn-id indexes for live Creature and GameObject records beside the primary GUID `map_objects` store; insert/remove/replace paths keep indexes coherent, skip spawn id zero, and `Map::check_respawn_live_object_guard_like_cpp` resolves spawn-id index GUIDs back through `map_objects` instead of scanning the full object store. Complete only for map-owned Creature/GameObject by-spawn indexes plus guard usage; remaining gaps include AreaTrigger by-spawn store, real AddToWorld/RemoveFromWorld entity-specific side effects beyond `MapObjectRecord`, PoolMgr, DoRespawn/LoadFromDB, DB save/delete, entity creation/fanout, broader ObjectAccessor ownership, and real escort runtime.
+
 - [x] **#NEXT.R8.ENTITIES.376** `Map::ProcessRespawns` linked future reschedule + `CHAR_REP_RESPAWN` side effect.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:682-688`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3549-3560`.
   Rust targets: `crates/wow-map/src/map.rs`, `crates/world-server/src/main.rs`.

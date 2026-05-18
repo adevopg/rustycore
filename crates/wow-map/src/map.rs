@@ -360,6 +360,26 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     spawn_group_state: SpawnGroupRuntimeState,
     respawn_store: RespawnStoreLikeCpp,
     grid_state_unloaded: bool,
+    /// Map-local typed by-spawn-id live creature store, matching C++
+    /// `Map::_creatureBySpawnIdStore` (`Map.h:414-493`, private field at
+    /// `Map.h:793-796` in this checkout; foreman spec referenced nearby
+    /// respawn-store fields at `Map.h:748-777`).
+    ///
+    /// Trinity keeps this beside `_objectsStore` and updates it from
+    /// `Creature::AddToWorld`/`RemoveFromWorld` (`Creature.cpp:330-419`). Rust
+    /// uses GUID sets as the multimap-like values because `map_objects` remains
+    /// the primary object store. Spawn id zero is not indexed, matching C++
+    /// `if (m_spawnId)`.
+    creatures_by_spawn_id: HashMap<SpawnId, HashSet<ObjectGuid>>,
+    /// Map-local typed by-spawn-id live gameobject store, matching C++
+    /// `Map::_gameobjectBySpawnIdStore` (`Map.h:414-493`, private field at
+    /// `Map.h:793-796` in this checkout; foreman spec referenced nearby
+    /// respawn-store fields at `Map.h:748-777`).
+    ///
+    /// Trinity also has `_areaTriggerBySpawnIdStore`, but `MapObjectRecord` has
+    /// no AreaTrigger variant in this slice, so AreaTrigger indexing remains a
+    /// documented future gap.
+    gameobjects_by_spawn_id: HashMap<SpawnId, HashSet<ObjectGuid>>,
     map_objects: HashMap<ObjectGuid, MapObjectRecord>,
 }
 
@@ -411,6 +431,8 @@ where
             spawn_group_state: SpawnGroupRuntimeState::new(),
             respawn_store: RespawnStoreLikeCpp::new(),
             grid_state_unloaded: false,
+            creatures_by_spawn_id: HashMap::new(),
+            gameobjects_by_spawn_id: HashMap::new(),
             map_objects: HashMap::new(),
         }
     }
@@ -794,7 +816,8 @@ where
     /// - `Map.cpp:1972-1983` allows dynamic escort NPC respawn only when the
     ///   matching live creature is already escorting.
     ///
-    /// Source of truth for this slice is canonical map-owned `map_objects`.
+    /// Source of truth for this slice is canonical map-owned `map_objects`, with
+    /// typed map-local by-spawn-id indexes mirroring Trinity's multimap stores.
     /// Callers must provide the `CONFIG_RESPAWN_DYNAMIC_ESCORTNPC` value and the
     /// real escort runtime predicate; this helper does not invent
     /// `Creature::IsEscorted`, PoolMgr, linked respawn, `DoRespawn`, DB writes, or
@@ -821,7 +844,14 @@ where
                         .flags
                         .contains(SpawnGroupFlags::ESCORTQUESTNPC);
 
-                for record in self.map_objects.values() {
+                let Some(creature_guids) = self.creatures_by_spawn_id.get(&info.spawn_id) else {
+                    return CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed;
+                };
+
+                for guid in creature_guids {
+                    let Some(record) = self.map_objects.get(guid) else {
+                        continue;
+                    };
                     let Some(creature) = record.creature() else {
                         continue;
                     };
@@ -839,11 +869,19 @@ where
                 CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed
             }
             SpawnObjectType::GameObject => {
-                if self.map_objects.values().any(|record| {
-                    record
-                        .game_object()
-                        .is_some_and(|gameobject| gameobject.spawn_id() == info.spawn_id)
-                }) {
+                if self
+                    .gameobjects_by_spawn_id
+                    .get(&info.spawn_id)
+                    .is_some_and(|gameobject_guids| {
+                        gameobject_guids.iter().any(|guid| {
+                            self.map_objects.get(guid).is_some_and(|record| {
+                                record.game_object().is_some_and(|gameobject| {
+                                    gameobject.spawn_id() == info.spawn_id
+                                })
+                            })
+                        })
+                    })
+                {
                     info.respawn_time = 0;
                     return CheckRespawnLiveObjectGuardOutcomeLikeCpp::GameObjectBlocksRespawn;
                 }
@@ -1117,6 +1155,32 @@ where
         self.map_objects.len()
     }
 
+    pub fn creature_spawn_id_store_count_like_cpp(&self, spawn_id: SpawnId) -> usize {
+        self.creatures_by_spawn_id
+            .get(&spawn_id)
+            .map_or(0, HashSet::len)
+    }
+
+    pub fn gameobject_spawn_id_store_count_like_cpp(&self, spawn_id: SpawnId) -> usize {
+        self.gameobjects_by_spawn_id
+            .get(&spawn_id)
+            .map_or(0, HashSet::len)
+    }
+
+    pub fn creature_spawn_id_store_guids_like_cpp(&self, spawn_id: SpawnId) -> Vec<ObjectGuid> {
+        self.creatures_by_spawn_id
+            .get(&spawn_id)
+            .map(|guids| guids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn gameobject_spawn_id_store_guids_like_cpp(&self, spawn_id: SpawnId) -> Vec<ObjectGuid> {
+        self.gameobjects_by_spawn_id
+            .get(&spawn_id)
+            .map(|guids| guids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub fn insert_map_object(
         &mut self,
         kind: AccessorObjectKind,
@@ -1131,7 +1195,73 @@ where
         record: MapObjectRecord,
     ) -> Result<Option<MapObjectRecord>, MapObjectStoreError> {
         self.validate_map_object(record.object())?;
-        Ok(self.map_objects.insert(record.object().guid(), record))
+        let guid = record.object().guid();
+        let previous = self.map_objects.remove(&guid);
+        if let Some(previous_record) = previous.as_ref() {
+            self.unindex_map_object_record_by_spawn_id_like_cpp(previous_record);
+        }
+        self.index_map_object_record_by_spawn_id_like_cpp(&record);
+        self.map_objects.insert(guid, record);
+        Ok(previous)
+    }
+
+    fn index_map_object_record_by_spawn_id_like_cpp(&mut self, record: &MapObjectRecord) {
+        if let Some(creature) = record.creature() {
+            let spawn_id = creature.spawn_id();
+            if spawn_id != 0 {
+                self.creatures_by_spawn_id
+                    .entry(spawn_id)
+                    .or_default()
+                    .insert(creature.guid());
+            }
+            return;
+        }
+
+        if let Some(gameobject) = record.game_object() {
+            let spawn_id = gameobject.spawn_id();
+            if spawn_id != 0 {
+                self.gameobjects_by_spawn_id
+                    .entry(spawn_id)
+                    .or_default()
+                    .insert(gameobject.world().guid());
+            }
+        }
+    }
+
+    fn unindex_map_object_record_by_spawn_id_like_cpp(&mut self, record: &MapObjectRecord) {
+        if let Some(creature) = record.creature() {
+            Self::remove_spawn_id_index_entry_like_cpp(
+                &mut self.creatures_by_spawn_id,
+                creature.spawn_id(),
+                creature.guid(),
+            );
+            return;
+        }
+
+        if let Some(gameobject) = record.game_object() {
+            Self::remove_spawn_id_index_entry_like_cpp(
+                &mut self.gameobjects_by_spawn_id,
+                gameobject.spawn_id(),
+                gameobject.world().guid(),
+            );
+        }
+    }
+
+    fn remove_spawn_id_index_entry_like_cpp(
+        index: &mut HashMap<SpawnId, HashSet<ObjectGuid>>,
+        spawn_id: SpawnId,
+        guid: ObjectGuid,
+    ) {
+        if spawn_id == 0 {
+            return;
+        }
+
+        if let Some(guids) = index.get_mut(&spawn_id) {
+            guids.remove(&guid);
+            if guids.is_empty() {
+                index.remove(&spawn_id);
+            }
+        }
     }
 
     pub fn add_to_map_like_cpp(
@@ -1214,7 +1344,9 @@ where
     }
 
     pub fn remove_map_object(&mut self, guid: ObjectGuid) -> Option<MapObjectRecord> {
-        self.map_objects.remove(&guid)
+        let record = self.map_objects.remove(&guid)?;
+        self.unindex_map_object_record_by_spawn_id_like_cpp(&record);
+        Some(record)
     }
 
     pub fn remove_from_map_like_cpp(
@@ -3795,6 +3927,186 @@ mod tests {
             outcome,
             CheckRespawnLiveObjectGuardOutcomeLikeCpp::UnsupportedSpawnType
         );
+        assert_eq!(info.respawn_time, 100);
+    }
+
+    #[test]
+    fn spawn_id_store_two_live_creatures_same_spawn_blocks_respawn_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(26, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 57, group), |_| false);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(57, 5701, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(57, 5702, true)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(57), 2);
+        let mut info = respawn_info(SpawnObjectType::Creature, 57, 100);
+        let outcome =
+            map.check_respawn_live_object_guard_like_cpp(&mut info, &store, false, |_, _| false);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::AliveCreatureBlocksRespawn
+        );
+        assert_eq!(info.respawn_time, 0);
+    }
+
+    #[test]
+    fn spawn_id_store_removing_creatures_prunes_index_and_guard_allows_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(27, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 58, group), |_| false);
+        let first_guid = guid(HighGuid::Creature, 5801);
+        let second_guid = guid(HighGuid::Creature, 5802);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(58, 5801, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(58, 5802, true)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(58), 2);
+        assert!(map.remove_map_object(first_guid).is_some());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(58), 1);
+
+        let mut blocked_info = respawn_info(SpawnObjectType::Creature, 58, 100);
+        let blocked = map.check_respawn_live_object_guard_like_cpp(
+            &mut blocked_info,
+            &store,
+            false,
+            |_, _| false,
+        );
+        assert_eq!(
+            blocked,
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::AliveCreatureBlocksRespawn
+        );
+        assert_eq!(blocked_info.respawn_time, 0);
+
+        assert!(map.remove_map_object(second_guid).is_some());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(58), 0);
+
+        let mut allowed_info = respawn_info(SpawnObjectType::Creature, 58, 100);
+        let allowed = map.check_respawn_live_object_guard_like_cpp(
+            &mut allowed_info,
+            &store,
+            false,
+            |_, _| false,
+        );
+        assert_eq!(allowed, CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed);
+        assert_eq!(allowed_info.respawn_time, 100);
+    }
+
+    #[test]
+    fn spawn_id_store_replacing_same_guid_moves_creature_spawn_id_like_cpp() {
+        let mut map = test_map();
+        let guid = guid(HighGuid::Creature, 5901);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(59, 5901, true)).unwrap(),
+        )
+        .unwrap();
+        let previous = map
+            .insert_map_object_record(
+                MapObjectRecord::new_creature(test_creature_for_spawn(60, 5901, true)).unwrap(),
+            )
+            .unwrap();
+
+        assert!(previous.is_some());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(59), 0);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(60), 1);
+        assert_eq!(map.creature_spawn_id_store_guids_like_cpp(60), vec![guid]);
+    }
+
+    #[test]
+    fn spawn_id_store_zero_spawn_id_is_not_indexed_like_cpp() {
+        let mut map = test_map();
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(0, 6001, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(0, 6002)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(0), 0);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(0), 0);
+        assert_eq!(map.map_object_count(), 2);
+    }
+
+    #[test]
+    fn spawn_id_store_gameobject_same_spawn_blocks_until_removed_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(28, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::GameObject, 61, group), |_| {
+            false
+        });
+        let gameobject_guid = guid(HighGuid::GameObject, 6101);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(61, 6101)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(61), 1);
+
+        let mut blocked_info = respawn_info(SpawnObjectType::GameObject, 61, 100);
+        let blocked = map.check_respawn_live_object_guard_like_cpp(
+            &mut blocked_info,
+            &store,
+            false,
+            |_, _| false,
+        );
+        assert_eq!(
+            blocked,
+            CheckRespawnLiveObjectGuardOutcomeLikeCpp::GameObjectBlocksRespawn
+        );
+        assert_eq!(blocked_info.respawn_time, 0);
+
+        assert!(map.remove_map_object(gameobject_guid).is_some());
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(61), 0);
+
+        let mut allowed_info = respawn_info(SpawnObjectType::GameObject, 61, 100);
+        let allowed = map.check_respawn_live_object_guard_like_cpp(
+            &mut allowed_info,
+            &store,
+            false,
+            |_, _| false,
+        );
+        assert_eq!(allowed, CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed);
+        assert_eq!(allowed_info.respawn_time, 100);
+    }
+
+    #[test]
+    fn spawn_id_store_dead_creature_indexed_but_does_not_block_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let group = spawn_group(29, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 62, group), |_| false);
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(62, 6201, false)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(62), 1);
+        let mut info = respawn_info(SpawnObjectType::Creature, 62, 100);
+        let outcome =
+            map.check_respawn_live_object_guard_like_cpp(&mut info, &store, false, |_, _| false);
+
+        assert_eq!(outcome, CheckRespawnLiveObjectGuardOutcomeLikeCpp::Allowed);
         assert_eq!(info.respawn_time, 100);
     }
 
