@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.396** Typed `MapObjectRecord` `AddToMap` seam for loaded-grid `LoadFromDB`/respawn work.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:529-577`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.cpp:91-128`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2189`, and `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:355-379`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Map::add_to_map_like_cpp(kind, WorldObject)` is now a compatibility wrapper over new `Map::add_map_object_record_to_map_like_cpp(MapObjectRecord)`, and the new seam runs the same C++-shaped AddToMap validation/grid/cell/world-flag lifecycle while preserving the caller-provided typed `MapObjectRecord` body through `insert_map_object_record`. Focused tests prove typed Creature/GameObject records survive AddToMap and populate by-spawn indexes for loaded-grid future `LoadFromDB`/`DoRespawn`/PoolMgr work. Complete only for the typed AddToMap ownership seam; it does not implement DB-backed `Creature::CreateCreatureFromDB`, `GameObject::CreateGameObjectFromDB`, loaded-grid `DoRespawn`, PoolMgr live spawn execution, scripts/fanout, or persistence side effects.
+
 - [x] **#NEXT.R8.ENTITIES.395** PoolMgr `Spawn1Object`/`ReSpawn1Object` loaded-grid load-plan evidence seam.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:288-350`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:353-363`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:366-379`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:382-407`, and parity relation to `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2356-2395`.
   Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.

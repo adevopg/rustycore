@@ -2268,12 +2268,24 @@ where
     pub fn add_to_map_like_cpp(
         &mut self,
         kind: AccessorObjectKind,
-        mut object: WorldObject,
+        object: WorldObject,
     ) -> Result<AddToMapOutcome, AddToMapError> {
-        if object.object().is_in_world() {
-            let guid = object.guid();
-            let cell = Cell::from_world(object.position().x, object.position().y);
-            let previous = self.insert_map_object(kind, object)?;
+        let record = MapObjectRecord::new(kind, object).map_err(MapObjectStoreError::from)?;
+        self.add_map_object_record_to_map_like_cpp(record)
+    }
+
+    pub fn add_map_object_record_to_map_like_cpp(
+        &mut self,
+        mut record: MapObjectRecord,
+    ) -> Result<AddToMapOutcome, AddToMapError> {
+        let kind = record.kind();
+        let guid = record.object().guid();
+        let position = record.object().position();
+        let is_world_object = record.object().is_world_object();
+
+        if record.object().object().is_in_world() {
+            let cell = Cell::from_world(position.x, position.y);
+            let previous = self.insert_map_object_record(record)?;
             return Ok(AddToMapOutcome {
                 guid,
                 cell: cell.cell_coord(),
@@ -2286,14 +2298,11 @@ where
             });
         }
 
-        let prevalidated_record =
-            MapObjectRecord::new(kind, object.clone()).map_err(MapObjectStoreError::from)?;
-        self.validate_map_object(prevalidated_record.object())?;
+        self.validate_map_object(record.object())?;
 
-        let position = object.position();
         if !is_valid_map_coord_2d(position.x, position.y) {
             return Err(AddToMapError::InvalidCoordinates {
-                guid: object.guid(),
+                guid,
                 x: position.x,
                 y: position.y,
             });
@@ -2301,8 +2310,7 @@ where
 
         let cell = Cell::from_world(position.x, position.y);
         let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
-        let guid = object.guid();
-        let active_object = is_active_object_like_cpp(kind, &object);
+        let active_object = is_active_object_like_cpp(kind, record.object());
         let grid_loaded = if active_object {
             self.ensure_grid_loaded_for_active_object(&cell, kind.into())
         } else {
@@ -2321,17 +2329,20 @@ where
             let local_cell = ngrid
                 .get_grid_type_mut(cell.cell_x(), cell.cell_y())
                 .expect("cell coordinates must be local to target grid");
-            insert_object_guid_in_cell_like_cpp(local_cell, kind, object.is_world_object(), guid);
+            insert_object_guid_in_cell_like_cpp(local_cell, kind, is_world_object, guid);
         }
 
-        object.set_current_cell(cell.cell_x(), cell.cell_y());
-        object.object_mut().add_to_world();
-        object.object_mut().set_is_new_object(true);
-        // Rust does not emit visibility here yet; keep the flag lifecycle identical to
-        // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
-        object.object_mut().set_is_new_object(false);
+        {
+            let object = record.object_mut();
+            object.set_current_cell(cell.cell_x(), cell.cell_y());
+            object.object_mut().add_to_world();
+            object.object_mut().set_is_new_object(true);
+            // Rust does not emit visibility here yet; keep the flag lifecycle identical to
+            // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
+            object.object_mut().set_is_new_object(false);
+        }
 
-        let previous = self.insert_map_object(kind, object)?;
+        let previous = self.insert_map_object_record(record)?;
         Ok(AddToMapOutcome {
             guid,
             cell: cell.cell_coord(),
@@ -8143,6 +8154,77 @@ mod tests {
             .unwrap();
         assert!(cell.grid_objects.creatures.contains(&guid));
         assert!(!cell.world_objects.creatures.contains(&guid));
+    }
+
+    #[test]
+    fn add_map_object_record_to_map_like_cpp_preserves_typed_creature_spawn_index() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(396, 39601, false);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert_eq!(outcome.guid, guid);
+        assert!(outcome.inserted);
+        assert!(!outcome.already_in_world);
+        assert!(outcome.inserted_into_cell);
+        assert!(map.get_creature_by_spawn_id_like_cpp(396).is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some()
+        );
+
+        let grid = map.get_ngrid(outcome.grid).unwrap();
+        let cell = grid
+            .get_grid_type(
+                outcome.cell.x_coord % MAX_NUMBER_OF_CELLS,
+                outcome.cell.y_coord % MAX_NUMBER_OF_CELLS,
+            )
+            .unwrap();
+        assert!(cell.grid_objects.creatures.contains(&guid));
+        assert!(!cell.world_objects.creatures.contains(&guid));
+    }
+
+    #[test]
+    fn add_map_object_record_to_map_like_cpp_preserves_typed_gameobject_spawn_index() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(396, 39602);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let guid = gameobject.world().guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(outcome.guid, guid);
+        assert!(outcome.inserted);
+        assert!(!outcome.already_in_world);
+        assert!(outcome.inserted_into_cell);
+        assert!(map.get_gameobject_by_spawn_id_like_cpp(396).is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some()
+        );
+
+        let grid = map.get_ngrid(outcome.grid).unwrap();
+        let cell = grid
+            .get_grid_type(
+                outcome.cell.x_coord % MAX_NUMBER_OF_CELLS,
+                outcome.cell.y_coord % MAX_NUMBER_OF_CELLS,
+            )
+            .unwrap();
+        assert!(cell.grid_objects.gameobjects.contains(&guid));
     }
 
     #[test]

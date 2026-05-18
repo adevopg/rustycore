@@ -22,9 +22,10 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 - Current branch state after #393 review/validation/local commit: `develop...origin/develop [ahead 48]` with a clean tree; no push/install/restart.
 - Current branch state after #394 review/validation/local commit: `develop...origin/develop [ahead 49]` with a clean tree; no push/install/restart.
 - Current branch state after #395 review/validation/local commit: `develop...origin/develop [ahead 50]` with a clean tree; no push/install/restart.
-- Latest completed slice in this handoff: `#NEXT.R8.ENTITIES.395 — PoolMgr Spawn1Object/ReSpawn1Object loaded-grid load-plan evidence seam` (review `APROBADO`; focused checks passed; committed locally in the current #395 HEAD).
-- Previous completed slice: `#NEXT.R8.ENTITIES.394 — Map::SpawnGroupSpawn safe map-local planning/execution seam` (review `APROBADO`; focused checks passed; committed locally in the current #394 HEAD).
-- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, or #395.
+- Current branch state after #396 review/validation/local commit: `develop...origin/develop [ahead 51]` with a clean tree; no push/install/restart.
+- Latest completed slice in this handoff: `#NEXT.R8.ENTITIES.396 — typed MapObjectRecord AddToMap seam for loaded-grid LoadFromDB/respawn work` (review `APROBADO`; focused checks passed; committed locally in the current #396 HEAD).
+- Previous completed slice: `#NEXT.R8.ENTITIES.395 — PoolMgr Spawn1Object/ReSpawn1Object loaded-grid load-plan evidence seam` (review `APROBADO`; focused checks passed; committed locally in the current #395 HEAD).
+- No push/install/restart performed for #383, #384, #385, #386, #387, #388, #389, #390, #391, #392, #393, #394, #395, or #396.
 
 ## Critical Rules
 
@@ -36,13 +37,21 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #395 `PoolMgr Spawn1Object/ReSpawn1Object loaded-grid load-plan evidence seam`: `~86.9%` (was `~86.7%` after #394; do not claim >95%).
+Overall core migration estimate after #396 `typed MapObjectRecord AddToMap seam`: `~87.1%` (was `~86.9%` after #395; do not claim >95%).
 
-This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr` runtime execution, live `SpawnPool`/`DespawnPool` RNG/chance execution beyond deterministic planning/report, recursive subpool live integration beyond returned action records, loaded-grid/full live `ProcessRespawns` non-pooled `DoRespawn` branch, real entity creation / `LoadFromDB`, `AddToMap`/`RemoveFromMap`, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete execution for runtime branches, and broader Unit/Player inventory/auras/threat/motion/update-field work.
+This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr` runtime execution, live `SpawnPool`/`DespawnPool` RNG/chance execution beyond deterministic planning/report, recursive subpool live integration beyond returned action records, loaded-grid/full live `ProcessRespawns` non-pooled `DoRespawn` branch, DB-backed entity creation / `LoadFromDB`, typed AddToMap caller wiring/fanout beyond the new map seam, `RemoveFromMap` side-effect completeness, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete execution for runtime branches, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #395; this closes only explicit evidence/planning for loaded-grid PoolMgr `Spawn1Object`/`ReSpawn1Object` in safe map-local ProcessRespawns action execution. It still does not execute CreateFromDB/LoadFromDB/AddToMap, loaded-grid entity creation, recursive live child-pool execution, DB persistence/fanout/scripts, AreaTrigger creation, CleanupsBeforeDelete, dynamic tree/session fanout, full DoRespawn, PoolMgr live runtime, or server install/restart.
+Manual test point: no new client-facing manual milestone from #396; this closes only the typed `MapObjectRecord` AddToMap ownership seam needed by future loaded-grid `LoadFromDB`/`DoRespawn`/PoolMgr execution. It still does not execute DB-backed CreateFromDB/LoadFromDB, loaded-grid entity creation, recursive live child-pool execution, DB persistence/fanout/scripts, AreaTrigger creation, CleanupsBeforeDelete, dynamic tree/session fanout, full DoRespawn, PoolMgr live runtime, or server install/restart.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.396` (review `APROBADO`; focused checks passed; committed locally in the current #396 HEAD; no push/install/restart)
+  - Adds a public typed AddToMap seam: `Map::add_map_object_record_to_map_like_cpp(MapObjectRecord)` runs the C++-shaped AddToMap validation/grid/cell/world-flag lifecycle while preserving caller-provided typed `Creature`/`GameObject` bodies through `insert_map_object_record`; existing `add_to_map_like_cpp(kind, WorldObject)` is a compatible wrapper.
+  - C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:529-577`, `/home/server/woltk-trinity-legacy/src/server/game/Grids/ObjectGridLoader.cpp:91-128`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2189`, and `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:355-379`.
+  - Rust targets: `crates/wow-map/src/map.rs`, docs/inventory.
+  - Acceptance: focused tests prove typed Creature/GameObject records survive AddToMap and populate by-spawn indexes, enabling future loaded-grid DB-created records to enter canonical `Map` ownership without degrading to generic `WorldObject`.
+  - Checks executed by foreman after review: `cargo fmt --check`, `cargo test -p wow-map add_map_object_record_to_map_like_cpp`, `cargo test -p wow-map add_to_map_like_cpp`, `PROTOC=/home/cdmonio/.local/protoc/bin/protoc cargo check -p world-server`, `git diff --check`, and `git status --short --branch` passed with pre-existing warnings only.
+  - Remaining gaps: no DB-backed `Creature::CreateCreatureFromDB`/`GameObject::CreateGameObjectFromDB`, no loaded-grid non-pooled `DoRespawn` execution, no PoolMgr live spawn execution, no scripts/fanout/persistence, no AreaTrigger live create/load/update, and no server install/restart.
 
 - `#NEXT.R8.ENTITIES.395` (review `APROBADO`; focused checks passed; committed locally in the current #395 HEAD; no push/install/restart)
   - Adds explicit C++-anchored loaded-grid plan evidence for PoolMgr `Spawn1Object`/`ReSpawn1Object` in the safe map-local `ProcessRespawns` action seam: `ProcessRespawnsSafeSideEffectsSummaryLikeCpp::pool_spawn_action_load_plans` records `object_type`, `spawn_id`, and `respawn` for loaded-grid Creature/GameObject `SpawnOne`/`RespawnOne`; `RespawnOne` still performs the safe `Despawn1Object(..., false, false)` half first.
