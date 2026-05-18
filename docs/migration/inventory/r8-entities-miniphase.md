@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.384** `PoolGroup` pure data/chance foundation.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h:34-45`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h:86-117`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:139-181`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:266-286`.
+  Rust targets: `crates/wow-map/src/pool.rs`, `crates/wow-map/src/lib.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: adds public C++-shaped `PoolTemplateDataLikeCpp`, `PoolObjectLikeCpp`, `PoolMemberKindLikeCpp`, `PoolGroupLikeCpp` and `PoolRelationRemovalLikeCpp` with pure helpers for `SetPoolId`/getters, `isEmpty`, `isEmptyDeepCheck` normal and Pool-of-Pools closure fallback, `AddEntry` explicit/equal bucket choice, `CheckPool` explicit chance validation, and Pool-only `RemoveOneRelation` removing the first matching explicit and then first matching equal entry. Complete only as in-memory foundation data for future `PoolMgr`; this does not implement live `PoolMgr`, `SpawnPool`/`DespawnPool`, RNG/chance rolling, DB load, entity creation/AddToMap/RemoveFromMap, `Map::pool_data` synchronization, `ProcessRespawns` pool branch, or grid/session fanout.
+
 - [x] **#NEXT.R8.ENTITIES.383** Map-owned `SpawnedPoolData` state + grid-load seam.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:167`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:710-711`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:792`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.h:51-83`, `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:39-125`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2286-2305`.
   Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.

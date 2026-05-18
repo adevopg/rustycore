@@ -6,6 +6,7 @@ pub mod manager;
 pub mod map;
 pub mod object_grid_loader;
 pub mod personal_phase;
+pub mod pool;
 pub mod spawn;
 
 use std::fmt;
@@ -55,6 +56,10 @@ pub use object_grid_loader::{
 pub use personal_phase::{
     MultiPersonalPhaseTracker, PERSONAL_PHASE_DELETE_TIME_DEFAULT_MS, PersonalPhaseSpawns,
     PhaseRef, PhaseShift, PlayerPersonalPhasesTracker,
+};
+pub use pool::{
+    PoolGroupLikeCpp, PoolMemberKindLikeCpp, PoolObjectLikeCpp, PoolRelationRemovalLikeCpp,
+    PoolTemplateDataLikeCpp,
 };
 pub use spawn::{
     AddRespawnInfoOutcomeLikeCpp, CellSpawnGuids, CheckRespawnOutcomeLikeCpp,
