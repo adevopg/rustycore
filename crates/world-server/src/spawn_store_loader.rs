@@ -32,12 +32,16 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use wow_core::Position;
+use wow_core::{ObjectGuid, Position, guid::HighGuid};
 use wow_database::{WorldDatabase, WorldStatements};
-use wow_map::spawn::{SPAWNGROUP_MAP_UNSET, SpawnGroupApplyReport, SpawnGroupMemberRow};
+use wow_map::spawn::{
+    LinkedRespawnLoadIssueKindLikeCpp, LinkedRespawnLoadIssueLikeCpp,
+    LinkedRespawnLoadReportLikeCpp, LinkedRespawnRowLikeCpp, LinkedRespawnTypeLikeCpp,
+    SPAWNGROUP_MAP_UNSET, SpawnGroupApplyReport, SpawnGroupMemberRow,
+};
 use wow_map::{
-    Difficulty, SpawnData, SpawnGroupFlags, SpawnGroupTemplateData, SpawnId, SpawnObjectType,
-    SpawnPosition, SpawnStore,
+    Difficulty, LinkedRespawnStoreLikeCpp, SpawnData, SpawnGroupFlags, SpawnGroupTemplateData,
+    SpawnId, SpawnObjectType, SpawnPosition, SpawnStore,
 };
 
 const DIFFICULTY_NONE_LIKE_CPP: Difficulty = 0;
@@ -63,12 +67,14 @@ pub struct CanonicalSpawnStoreLoadReport {
     pub area_trigger: SpawnKindLoadReport,
     pub spawn_group_rows: usize,
     pub spawn_group_apply: SpawnGroupApplyReport,
+    pub linked_respawn: LinkedRespawnLoadReportLikeCpp,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct CanonicalSpawnMetadataLikeCpp {
     spawn_store: SpawnStore,
     spawn_group_templates: BTreeMap<u32, SpawnGroupTemplateData>,
+    linked_respawns: LinkedRespawnStoreLikeCpp,
 }
 
 impl CanonicalSpawnMetadataLikeCpp {
@@ -79,6 +85,7 @@ impl CanonicalSpawnMetadataLikeCpp {
         Self {
             spawn_store,
             spawn_group_templates,
+            linked_respawns: LinkedRespawnStoreLikeCpp::new(),
         }
     }
 
@@ -88,6 +95,18 @@ impl CanonicalSpawnMetadataLikeCpp {
 
     pub fn spawn_group_templates(&self) -> &BTreeMap<u32, SpawnGroupTemplateData> {
         &self.spawn_group_templates
+    }
+
+    pub fn with_linked_respawns_like_cpp(
+        mut self,
+        linked_respawns: LinkedRespawnStoreLikeCpp,
+    ) -> Self {
+        self.linked_respawns = linked_respawns;
+        self
+    }
+
+    pub fn linked_respawns_like_cpp(&self) -> &LinkedRespawnStoreLikeCpp {
+        &self.linked_respawns
     }
 
     /// C++ shaped dependency for future `Map::InitSpawnGroupState` wiring.
@@ -187,6 +206,23 @@ struct AreaTriggerSpawnRow {
     script_name: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LinkedRespawnDbRow {
+    guid: SpawnId,
+    linked_guid: SpawnId,
+    link_type: u8,
+}
+
+impl From<LinkedRespawnDbRow> for LinkedRespawnRowLikeCpp {
+    fn from(row: LinkedRespawnDbRow) -> Self {
+        Self {
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+        }
+    }
+}
+
 pub async fn load_canonical_spawn_store_like_cpp(
     db: &WorldDatabase,
     map_store: &wow_data::MapStore,
@@ -203,12 +239,19 @@ pub async fn load_canonical_spawn_store_like_cpp(
     load_area_trigger_spawns_like_cpp(db, map_store, map_difficulty_store, &mut store, &mut report)
         .await?;
 
+    // C++ `ObjectMgr::LoadLinkedRespawn` runs after creature/gameobject data is canonical.
+    let linked_respawns = load_linked_respawns_like_cpp(db, &store, map_store, &mut report).await?;
+
     let mut templates = spawn_group_templates_for_spawn_store(spawn_group_store);
     let members = load_spawn_group_members_like_cpp(db).await?;
     report.spawn_group_rows = members.len();
     report.spawn_group_apply = store.apply_spawn_groups_like_cpp(&mut templates, members);
 
-    Ok((CanonicalSpawnMetadataLikeCpp::new(store, templates), report))
+    Ok((
+        CanonicalSpawnMetadataLikeCpp::new(store, templates)
+            .with_linked_respawns_like_cpp(linked_respawns),
+        report,
+    ))
 }
 
 pub fn spawn_group_templates_for_spawn_store(
@@ -399,6 +442,165 @@ async fn load_area_trigger_spawns_like_cpp(
     }
 
     Ok(())
+}
+
+async fn load_linked_respawns_like_cpp(
+    db: &WorldDatabase,
+    store: &SpawnStore,
+    map_store: &wow_data::MapStore,
+    report: &mut CanonicalSpawnStoreLoadReport,
+) -> Result<LinkedRespawnStoreLikeCpp> {
+    let stmt = db.prepare(WorldStatements::SEL_LINKED_RESPAWNS);
+    let mut result = db.query(&stmt).await?;
+    let mut linked_store = LinkedRespawnStoreLikeCpp::new();
+    if result.is_empty() {
+        return Ok(linked_store);
+    }
+
+    loop {
+        let row = LinkedRespawnDbRow {
+            guid: result.read(0),
+            linked_guid: result.read(1),
+            link_type: result.read(2),
+        };
+        apply_linked_respawn_row_like_cpp(
+            row.into(),
+            store,
+            map_store,
+            &mut linked_store,
+            &mut report.linked_respawn,
+        );
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(linked_store)
+}
+
+fn apply_linked_respawn_row_like_cpp(
+    row: LinkedRespawnRowLikeCpp,
+    store: &SpawnStore,
+    map_store: &wow_data::MapStore,
+    linked_store: &mut LinkedRespawnStoreLikeCpp,
+    report: &mut LinkedRespawnLoadReportLikeCpp,
+) {
+    report.rows += 1;
+    let Some(link_type) = LinkedRespawnTypeLikeCpp::from_raw(row.link_type) else {
+        report.push(LinkedRespawnLoadIssueLikeCpp {
+            kind: LinkedRespawnLoadIssueKindLikeCpp::InvalidType,
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+            slave_type: None,
+            master_type: None,
+            slave_map_id: None,
+            master_map_id: None,
+        });
+        return;
+    };
+
+    let slave_type = link_type.slave_type();
+    let master_type = link_type.master_type();
+    let Some(slave) = store.spawn_data(slave_type, row.guid) else {
+        report.push(LinkedRespawnLoadIssueLikeCpp {
+            kind: LinkedRespawnLoadIssueKindLikeCpp::MissingSlave,
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+            slave_type: Some(slave_type),
+            master_type: Some(master_type),
+            slave_map_id: None,
+            master_map_id: None,
+        });
+        return;
+    };
+    let Some(master) = store.spawn_data(master_type, row.linked_guid) else {
+        report.push(LinkedRespawnLoadIssueLikeCpp {
+            kind: LinkedRespawnLoadIssueKindLikeCpp::MissingMaster,
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+            slave_type: Some(slave_type),
+            master_type: Some(master_type),
+            slave_map_id: Some(slave.map_id),
+            master_map_id: None,
+        });
+        return;
+    };
+
+    if map_store
+        .get(master.map_id)
+        .is_none_or(|map| !map_entry_instanceable_like_cpp(*map))
+        || master.map_id != slave.map_id
+    {
+        report.push(LinkedRespawnLoadIssueLikeCpp {
+            kind: LinkedRespawnLoadIssueKindLikeCpp::NotInstanceableOrMapMismatch,
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+            slave_type: Some(slave_type),
+            master_type: Some(master_type),
+            slave_map_id: Some(slave.map_id),
+            master_map_id: Some(master.map_id),
+        });
+        return;
+    }
+
+    if !spawn_difficulties_intersect_like_cpp(slave, master) {
+        report.push(LinkedRespawnLoadIssueLikeCpp {
+            kind: LinkedRespawnLoadIssueKindLikeCpp::DifficultyMismatch,
+            guid: row.guid,
+            linked_guid: row.linked_guid,
+            link_type: row.link_type,
+            slave_type: Some(slave_type),
+            master_type: Some(master_type),
+            slave_map_id: Some(slave.map_id),
+            master_map_id: Some(master.map_id),
+        });
+        return;
+    }
+
+    linked_store.insert_like_cpp(
+        spawn_data_guid_like_cpp(slave),
+        spawn_data_guid_like_cpp(master),
+    );
+    report.inserted += 1;
+}
+
+fn spawn_difficulties_intersect_like_cpp(left: &SpawnData, right: &SpawnData) -> bool {
+    left.spawn_difficulties
+        .iter()
+        .any(|difficulty| right.spawn_difficulties.contains(difficulty))
+}
+
+fn spawn_data_guid_like_cpp(spawn: &SpawnData) -> ObjectGuid {
+    let high = match spawn.object_type {
+        SpawnObjectType::Creature => HighGuid::Creature,
+        SpawnObjectType::GameObject => HighGuid::GameObject,
+        SpawnObjectType::AreaTrigger => HighGuid::AreaTrigger,
+    };
+    ObjectGuid::create_world_object(
+        high,
+        0,
+        0,
+        spawn.map_id as u16,
+        0,
+        spawn.id,
+        spawn.spawn_id as i64,
+    )
+}
+
+fn map_entry_instanceable_like_cpp(map: wow_data::MapEntry) -> bool {
+    matches!(
+        map.instance_type,
+        wow_data::map::MAP_INSTANCE
+            | wow_data::map::MAP_RAID
+            | wow_data::map::MAP_BATTLEGROUND
+            | wow_data::map::MAP_ARENA
+            | wow_data::map::MAP_SCENARIO
+    )
 }
 
 async fn load_spawn_group_members_like_cpp(db: &WorldDatabase) -> Result<Vec<SpawnGroupMemberRow>> {
@@ -683,6 +885,16 @@ mod tests {
         }))
     }
 
+    fn instanceable_map_store(ids: &[u32]) -> wow_data::MapStore {
+        wow_data::MapStore::from_entries(ids.iter().copied().map(|id| wow_data::MapEntry {
+            id,
+            instance_type: wow_data::map::MAP_INSTANCE,
+            parent_map_id: -1,
+            cosmetic_parent_map_id: -1,
+            flags1: 0,
+        }))
+    }
+
     fn map_difficulty_store(entries: &[(u32, Difficulty)]) -> wow_data::MapDifficultyStore {
         wow_data::MapDifficultyStore::from_entries(entries.iter().enumerate().map(
             |(idx, (map_id, difficulty_id))| wow_data::MapDifficultyEntry {
@@ -759,6 +971,140 @@ mod tests {
             phase_group: 0,
             script_name: String::new(),
         }
+    }
+
+    #[test]
+    fn linked_respawn_loader_validation_invalid_type_and_missing_master_like_cpp() {
+        let maps = instanceable_map_store(&[1]);
+        let difficulties = map_difficulty_store(&[(1, 0)]);
+        let mut kind_report = SpawnKindLoadReport::default();
+        let mut store = SpawnStore::new();
+        let creature = creature_row_to_spawn_data_like_cpp(
+            &creature_row(100, 0, "0"),
+            &maps,
+            &difficulties,
+            &mut kind_report,
+        )
+        .unwrap();
+        store.add_object_spawn(&creature, is_personal_phase_like_cpp_represented);
+        let mut linked_store = LinkedRespawnStoreLikeCpp::new();
+        let mut report = LinkedRespawnLoadReportLikeCpp::default();
+
+        apply_linked_respawn_row_like_cpp(
+            LinkedRespawnRowLikeCpp {
+                guid: 100,
+                linked_guid: 200,
+                link_type: 99,
+            },
+            &store,
+            &maps,
+            &mut linked_store,
+            &mut report,
+        );
+        apply_linked_respawn_row_like_cpp(
+            LinkedRespawnRowLikeCpp {
+                guid: 100,
+                linked_guid: 200,
+                link_type: LinkedRespawnTypeLikeCpp::CreatureToCreature as u8,
+            },
+            &store,
+            &maps,
+            &mut linked_store,
+            &mut report,
+        );
+
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.invalid_type, 1);
+        assert_eq!(report.missing_master, 1);
+        assert!(linked_store.is_empty());
+    }
+
+    #[test]
+    fn linked_respawn_loader_validation_difficulty_mismatch_like_cpp() {
+        let maps = instanceable_map_store(&[1]);
+        let difficulties = map_difficulty_store(&[(1, 0), (1, 1)]);
+        let mut kind_report = SpawnKindLoadReport::default();
+        let mut store = SpawnStore::new();
+        let slave = creature_row_to_spawn_data_like_cpp(
+            &creature_row(100, 0, "0"),
+            &maps,
+            &difficulties,
+            &mut kind_report,
+        )
+        .unwrap();
+        let master = creature_row_to_spawn_data_like_cpp(
+            &creature_row(200, 0, "1"),
+            &maps,
+            &difficulties,
+            &mut kind_report,
+        )
+        .unwrap();
+        store.add_object_spawn(&slave, is_personal_phase_like_cpp_represented);
+        store.add_object_spawn(&master, is_personal_phase_like_cpp_represented);
+        let mut linked_store = LinkedRespawnStoreLikeCpp::new();
+        let mut report = LinkedRespawnLoadReportLikeCpp::default();
+
+        apply_linked_respawn_row_like_cpp(
+            LinkedRespawnRowLikeCpp {
+                guid: 100,
+                linked_guid: 200,
+                link_type: LinkedRespawnTypeLikeCpp::CreatureToCreature as u8,
+            },
+            &store,
+            &maps,
+            &mut linked_store,
+            &mut report,
+        );
+
+        assert_eq!(report.difficulty_mismatch, 1);
+        assert!(linked_store.is_empty());
+    }
+
+    #[test]
+    fn linked_respawn_loader_validation_valid_creature_to_gameobject_inserts_like_cpp() {
+        let maps = instanceable_map_store(&[1]);
+        let difficulties = map_difficulty_store(&[(1, 0)]);
+        let mut kind_report = SpawnKindLoadReport::default();
+        let mut store = SpawnStore::new();
+        let slave = creature_row_to_spawn_data_like_cpp(
+            &creature_row(100, 0, "0"),
+            &maps,
+            &difficulties,
+            &mut kind_report,
+        )
+        .unwrap();
+        let master = gameobject_row_to_spawn_data_like_cpp(
+            &gameobject_row(200, 0, "0"),
+            &maps,
+            &difficulties,
+            &mut kind_report,
+        )
+        .unwrap();
+        store.add_object_spawn(&slave, is_personal_phase_like_cpp_represented);
+        store.add_object_spawn(&master, is_personal_phase_like_cpp_represented);
+        let mut linked_store = LinkedRespawnStoreLikeCpp::new();
+        let mut report = LinkedRespawnLoadReportLikeCpp::default();
+
+        apply_linked_respawn_row_like_cpp(
+            LinkedRespawnRowLikeCpp {
+                guid: 100,
+                linked_guid: 200,
+                link_type: LinkedRespawnTypeLikeCpp::CreatureToGameObject as u8,
+            },
+            &store,
+            &maps,
+            &mut linked_store,
+            &mut report,
+        );
+
+        assert_eq!(report.inserted, 1);
+        assert_eq!(linked_store.len(), 1);
+        let slave_guid = spawn_data_guid_like_cpp(&slave);
+        let master_guid = spawn_data_guid_like_cpp(&master);
+        assert_eq!(
+            linked_store.get_linked_respawn_guid_like_cpp(slave_guid),
+            master_guid
+        );
     }
 
     #[test]

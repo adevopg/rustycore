@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::coords::compute_cell_coord;
+use wow_core::ObjectGuid;
 
 pub type SpawnId = u64;
 pub type Difficulty = u8;
@@ -36,6 +37,134 @@ impl SpawnObjectType {
             2 => Some(Self::AreaTrigger),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LinkedRespawnTypeLikeCpp {
+    CreatureToCreature = 0,
+    CreatureToGameObject = 1,
+    GameObjectToGameObject = 2,
+    GameObjectToCreature = 3,
+}
+
+impl LinkedRespawnTypeLikeCpp {
+    pub const fn from_raw(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Self::CreatureToCreature),
+            1 => Some(Self::CreatureToGameObject),
+            2 => Some(Self::GameObjectToGameObject),
+            3 => Some(Self::GameObjectToCreature),
+            _ => None,
+        }
+    }
+
+    pub const fn slave_type(self) -> SpawnObjectType {
+        match self {
+            Self::CreatureToCreature | Self::CreatureToGameObject => SpawnObjectType::Creature,
+            Self::GameObjectToGameObject | Self::GameObjectToCreature => {
+                SpawnObjectType::GameObject
+            }
+        }
+    }
+
+    pub const fn master_type(self) -> SpawnObjectType {
+        match self {
+            Self::CreatureToCreature | Self::GameObjectToCreature => SpawnObjectType::Creature,
+            Self::CreatureToGameObject | Self::GameObjectToGameObject => {
+                SpawnObjectType::GameObject
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkedRespawnRowLikeCpp {
+    pub guid: SpawnId,
+    pub linked_guid: SpawnId,
+    pub link_type: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkedRespawnLoadIssueKindLikeCpp {
+    InvalidType,
+    MissingSlave,
+    MissingMaster,
+    NotInstanceableOrMapMismatch,
+    DifficultyMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedRespawnLoadIssueLikeCpp {
+    pub kind: LinkedRespawnLoadIssueKindLikeCpp,
+    pub guid: SpawnId,
+    pub linked_guid: SpawnId,
+    pub link_type: u8,
+    pub slave_type: Option<SpawnObjectType>,
+    pub master_type: Option<SpawnObjectType>,
+    pub slave_map_id: Option<u32>,
+    pub master_map_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkedRespawnLoadReportLikeCpp {
+    pub rows: usize,
+    pub inserted: usize,
+    pub invalid_type: usize,
+    pub missing_slave: usize,
+    pub missing_master: usize,
+    pub not_instanceable_or_map_mismatch: usize,
+    pub difficulty_mismatch: usize,
+    pub issues: Vec<LinkedRespawnLoadIssueLikeCpp>,
+}
+
+impl LinkedRespawnLoadReportLikeCpp {
+    pub fn push(&mut self, issue: LinkedRespawnLoadIssueLikeCpp) {
+        match issue.kind {
+            LinkedRespawnLoadIssueKindLikeCpp::InvalidType => self.invalid_type += 1,
+            LinkedRespawnLoadIssueKindLikeCpp::MissingSlave => self.missing_slave += 1,
+            LinkedRespawnLoadIssueKindLikeCpp::MissingMaster => self.missing_master += 1,
+            LinkedRespawnLoadIssueKindLikeCpp::NotInstanceableOrMapMismatch => {
+                self.not_instanceable_or_map_mismatch += 1;
+            }
+            LinkedRespawnLoadIssueKindLikeCpp::DifficultyMismatch => self.difficulty_mismatch += 1,
+        }
+        self.issues.push(issue);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkedRespawnStoreLikeCpp {
+    linked_respawns: BTreeMap<ObjectGuid, ObjectGuid>,
+}
+
+impl LinkedRespawnStoreLikeCpp {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        linked_guid: ObjectGuid,
+    ) -> Option<ObjectGuid> {
+        self.linked_respawns.insert(guid, linked_guid)
+    }
+
+    pub fn get_linked_respawn_guid_like_cpp(&self, guid: ObjectGuid) -> ObjectGuid {
+        self.linked_respawns
+            .get(&guid)
+            .copied()
+            .unwrap_or(ObjectGuid::EMPTY)
+    }
+
+    pub fn len(&self) -> usize {
+        self.linked_respawns.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.linked_respawns.is_empty()
     }
 }
 

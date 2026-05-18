@@ -16,12 +16,12 @@ use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
 use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
 use crate::spawn::{
     AddRespawnInfoOutcomeLikeCpp, CheckRespawnOutcomeLikeCpp,
-    CheckRespawnSpawnGroupGuardOutcomeLikeCpp, Difficulty, ProcessRespawnActionLikeCpp,
-    RespawnInfoLikeCpp, RespawnStoreLikeCpp, SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange,
-    SpawnGroupFlags, SpawnGroupRuntimeState, SpawnGroupTemplateData, SpawnId, SpawnObjectType,
-    SpawnStore,
+    CheckRespawnSpawnGroupGuardOutcomeLikeCpp, Difficulty, LinkedRespawnStoreLikeCpp,
+    ProcessRespawnActionLikeCpp, RespawnInfoLikeCpp, RespawnStoreLikeCpp,
+    SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange, SpawnGroupFlags, SpawnGroupRuntimeState,
+    SpawnGroupTemplateData, SpawnId, SpawnObjectType, SpawnStore,
 };
-use wow_core::{ObjectGuid, Position};
+use wow_core::{ObjectGuid, Position, guid::HighGuid};
 use wow_entities::{
     AccessorObjectKind, CombatBeginContextLikeCpp, CombatSubsystem, Creature, GameObject,
     MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord, ObjectAccessorError,
@@ -142,6 +142,17 @@ pub enum CheckRespawnLiveObjectGuardOutcomeLikeCpp {
     MissingSpawnData,
     UnsupportedSpawnType,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckRespawnLinkedRespawnGuardOutcomeLikeCpp {
+    Allowed,
+    LinkedInfinite,
+    LinkedSelfNeverRespawn,
+    LinkedDelayed,
+    UnsupportedSpawnType,
+}
+
+const WEEK_SECS_LIKE_CPP: i64 = 7 * 24 * 60 * 60;
 
 impl SpawnGroupConditionActionLikeCpp {
     pub const fn spawn_group_spawn_default() -> Self {
@@ -462,6 +473,80 @@ where
     ) -> Option<&RespawnInfoLikeCpp> {
         self.respawn_store
             .get_respawn_info_like_cpp(object_type, spawn_id)
+    }
+
+    /// C++ `Map::GetLinkedRespawnTime` dependency slice.
+    ///
+    /// C++ anchor: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620`.
+    /// The linked respawn store is read-only ObjectMgr-style metadata; the timer
+    /// source of truth remains this `Map`'s map-owned `RespawnStoreLikeCpp`.
+    pub fn get_linked_respawn_time_like_cpp(
+        &self,
+        guid: ObjectGuid,
+        linked_store: &LinkedRespawnStoreLikeCpp,
+    ) -> i64 {
+        let linked_guid = linked_store.get_linked_respawn_guid_like_cpp(guid);
+        match linked_guid.high_type() {
+            HighGuid::Creature => self.get_respawn_time_like_cpp(
+                SpawnObjectType::Creature,
+                linked_guid.counter() as SpawnId,
+            ),
+            HighGuid::GameObject => self.get_respawn_time_like_cpp(
+                SpawnObjectType::GameObject,
+                linked_guid.counter() as SpawnId,
+            ),
+            _ => 0,
+        }
+    }
+
+    /// Linked-respawn branch from C++ `Map::CheckRespawn`.
+    ///
+    /// C++ anchor: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020`.
+    /// This implements only the linked-time guard after earlier live-object
+    /// blockers have already cleared. It never runs PoolMgr, DoRespawn, DB
+    /// save/delete, entity creation, fanout, or RNG; the caller supplies the
+    /// explicit jitter that represents C++ `urand(5, 15)`.
+    pub fn check_respawn_linked_respawn_guard_like_cpp(
+        &self,
+        info: &mut RespawnInfoLikeCpp,
+        linked_store: &LinkedRespawnStoreLikeCpp,
+        now: i64,
+        jitter_secs: u32,
+    ) -> CheckRespawnLinkedRespawnGuardOutcomeLikeCpp {
+        let Some(guid_high) = (match info.object_type {
+            SpawnObjectType::Creature => Some(HighGuid::Creature),
+            SpawnObjectType::GameObject => Some(HighGuid::GameObject),
+            SpawnObjectType::AreaTrigger => None,
+        }) else {
+            return CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::UnsupportedSpawnType;
+        };
+
+        let this_guid = ObjectGuid::create_world_object(
+            guid_high,
+            0,
+            0,
+            self.map_id as u16,
+            0,
+            info.entry,
+            info.spawn_id as i64,
+        );
+        let linked_time = self.get_linked_respawn_time_like_cpp(this_guid, linked_store);
+        if linked_time == 0 {
+            return CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::Allowed;
+        }
+
+        if linked_time == i64::MAX {
+            info.respawn_time = linked_time;
+            return CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedInfinite;
+        }
+
+        if linked_store.get_linked_respawn_guid_like_cpp(this_guid) == this_guid {
+            info.respawn_time = now + WEEK_SECS_LIKE_CPP;
+            return CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedSelfNeverRespawn;
+        }
+
+        info.respawn_time = now.max(linked_time) + i64::from(jitter_secs);
+        CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedDelayed
     }
 
     pub fn remove_respawn_time_like_cpp(
@@ -4007,6 +4092,170 @@ mod tests {
             context,
             DynamicRespawnScalingNoopReason::BattlegroundOrArena,
         );
+    }
+
+    fn linked_respawn_guid(high: HighGuid, entry: u32, spawn_id: SpawnId) -> ObjectGuid {
+        ObjectGuid::create_world_object(high, 0, 0, 571, 0, entry, spawn_id as i64)
+    }
+
+    #[test]
+    fn linked_respawn_time_missing_link_returns_zero_like_cpp() {
+        let map = test_map();
+        let store = LinkedRespawnStoreLikeCpp::new();
+
+        assert_eq!(
+            map.get_linked_respawn_time_like_cpp(
+                linked_respawn_guid(HighGuid::Creature, 42, 100),
+                &store,
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn linked_respawn_time_reads_creature_and_gameobject_timers_like_cpp() {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 200,
+            entry: 77,
+            respawn_time: 1234,
+            grid_id: 7,
+        });
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id: 300,
+            entry: 88,
+            respawn_time: 5678,
+            grid_id: 7,
+        });
+        let slave_creature = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let master_creature = linked_respawn_guid(HighGuid::Creature, 77, 200);
+        let slave_go = linked_respawn_guid(HighGuid::GameObject, 43, 101);
+        let master_go = linked_respawn_guid(HighGuid::GameObject, 88, 300);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(slave_creature, master_creature);
+        linked.insert_like_cpp(slave_go, master_go);
+
+        assert_eq!(
+            map.get_linked_respawn_time_like_cpp(slave_creature, &linked),
+            1234
+        );
+        assert_eq!(
+            map.get_linked_respawn_time_like_cpp(slave_go, &linked),
+            5678
+        );
+    }
+
+    #[test]
+    fn check_respawn_linked_respawn_guard_no_linked_time_leaves_info_unchanged_like_cpp() {
+        let map = test_map();
+        let linked = LinkedRespawnStoreLikeCpp::new();
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+        let original = info.clone();
+
+        let outcome = map.check_respawn_linked_respawn_guard_like_cpp(&mut info, &linked, 1000, 5);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::Allowed
+        );
+        assert_eq!(info, original);
+    }
+
+    #[test]
+    fn check_respawn_linked_respawn_guard_self_link_sets_week_like_cpp() {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 100,
+            entry: 42,
+            respawn_time: 1200,
+            grid_id: 7,
+        });
+        let this = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this, this);
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+
+        let outcome = map.check_respawn_linked_respawn_guard_like_cpp(&mut info, &linked, 1000, 5);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedSelfNeverRespawn
+        );
+        assert_eq!(info.respawn_time, 1000 + WEEK_SECS_LIKE_CPP);
+    }
+
+    #[test]
+    fn check_respawn_linked_respawn_guard_infinite_time_sets_i64_max_like_cpp() {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id: 200,
+            entry: 77,
+            respawn_time: i64::MAX,
+            grid_id: 7,
+        });
+        let this = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let master = linked_respawn_guid(HighGuid::GameObject, 77, 200);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this, master);
+        let mut info = respawn_info(SpawnObjectType::Creature, 100, 55);
+
+        let outcome = map.check_respawn_linked_respawn_guard_like_cpp(&mut info, &linked, 1000, 15);
+
+        assert_eq!(
+            outcome,
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedInfinite
+        );
+        assert_eq!(info.respawn_time, i64::MAX);
+    }
+
+    #[test]
+    fn check_respawn_linked_respawn_guard_delays_by_max_now_or_linked_plus_jitter_like_cpp() {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 200,
+            entry: 77,
+            respawn_time: 900,
+            grid_id: 7,
+        });
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id: 300,
+            entry: 88,
+            respawn_time: 1200,
+            grid_id: 7,
+        });
+        let this_past = linked_respawn_guid(HighGuid::Creature, 42, 100);
+        let this_future = linked_respawn_guid(HighGuid::GameObject, 43, 101);
+        let mut linked = LinkedRespawnStoreLikeCpp::new();
+        linked.insert_like_cpp(this_past, linked_respawn_guid(HighGuid::Creature, 77, 200));
+        linked.insert_like_cpp(
+            this_future,
+            linked_respawn_guid(HighGuid::GameObject, 88, 300),
+        );
+
+        let mut past = respawn_info(SpawnObjectType::Creature, 100, 55);
+        let past_outcome =
+            map.check_respawn_linked_respawn_guard_like_cpp(&mut past, &linked, 1000, 5);
+        assert_eq!(
+            past_outcome,
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedDelayed
+        );
+        assert_eq!(past.respawn_time, 1005);
+
+        let mut future = respawn_info(SpawnObjectType::GameObject, 101, 55);
+        future.entry = 43;
+        let future_outcome =
+            map.check_respawn_linked_respawn_guard_like_cpp(&mut future, &linked, 1000, 15);
+        assert_eq!(
+            future_outcome,
+            CheckRespawnLinkedRespawnGuardOutcomeLikeCpp::LinkedDelayed
+        );
+        assert_eq!(future.respawn_time, 1215);
     }
 
     #[test]

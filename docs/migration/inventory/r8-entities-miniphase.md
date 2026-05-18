@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.371** Linked respawn metadata/load/store + pure `CheckRespawn` linked-time guard dependency.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:1811-1997`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/SpawnData.h:120-126`, `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h:1503-1508`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620`, `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h:2611-2614`.
+  Rust targets: `crates/wow-map/src/spawn.rs`, `crates/wow-map/src/map.rs`, `crates/wow-map/src/lib.rs`, `crates/wow-database/src/statements/world.rs`, `crates/world-server/src/spawn_store_loader.rs`.
+  Acceptance: `linked_respawn` rows are loaded via the C++ SQL, validated against canonical creature/gameobject spawn metadata, instanceable map, same-map and difficulty-intersection guards, then stored in a read-only ObjectMgr-like linked respawn store; `Map` can read linked creature/GO respawn timers from its map-owned respawn store and apply only the C++ linked-time guard with caller-supplied jitter. This is not full `CheckRespawn`, `ProcessRespawns`, PoolMgr, `DoRespawn`, DB save/delete, live entity creation or fanout.
+
 - [x] **#NEXT.R8.ENTITIES.001** Create `wow-entities` crate and base `EntityObject`.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.h`, `Object.cpp`, `ObjectGuid.h`, `Object/Updates/UpdateFields.h`.
   Rust targets: `crates/wow-entities/src/lib.rs`, `crates/wow-entities/src/object.rs`, `Cargo.toml`.

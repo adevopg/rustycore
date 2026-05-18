@@ -7,10 +7,10 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 ## Repository State
 
 - Branch: `develop`
-- Base before this slice: `64d42b1 #NEXT.R8.ENTITIES.367 map owned respawn store integration`
-- Local branch relation before committing #368: `develop...origin/develop [ahead 21]`
-- Most recent completed slice after committing this slice: `#NEXT.R8.ENTITIES.370 — Map::CheckRespawn live by-spawn blocker`
-- Expected tree after committing #370: clean, ahead 24. No push/install/restart performed.
+- Base before this slice: `7665922 #NEXT.R8.ENTITIES.370 Map::CheckRespawn live by-spawn blocker`
+- Local branch relation before committing #371: `develop...origin/develop [ahead 24]`
+- Most recent completed slice after committing this slice: `#NEXT.R8.ENTITIES.371 — Linked respawn metadata/load/store + pure CheckRespawn linked-time guard dependency`
+- Expected tree after committing #371: clean, ahead 25. No push/install/restart performed.
 
 ## Critical Rules
 
@@ -22,13 +22,47 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #370 live-object `CheckRespawn` guard: `~85.0%`.
+Overall core migration estimate after #371 linked-respawn metadata and linked-time `CheckRespawn` guard dependency: `~85.4%`.
 
-This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `CheckRespawn`/`ProcessRespawns` integration beyond represented helpers, linked respawn checks, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, DB respawn persistence/delete, optimized map-local by-spawn indexes, real escort runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, and broader Unit/Player inventory/auras/threat/motion/update-field work.
+This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `CheckRespawn`/`ProcessRespawns` integration beyond represented helpers, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, DB respawn persistence/delete, optimized map-local by-spawn indexes, wiring linked-respawn metadata into the live map process, real escort runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #370; this is a map-owned respawn/check-respawn dependency validated with focused unit checks.
+Manual test point: no new client-facing manual milestone from #371; this is a map-owned respawn/check-respawn dependency validated with focused unit checks.
 
 ## Most Recent Completed Slices
+
+Current completed local slice:
+
+- `#NEXT.R8.ENTITIES.371`
+  - Adds linked respawn metadata/load/store and the pure linked-time guard dependency for `Map::CheckRespawn`.
+  - Source-of-truth runtime timers remain map-owned `wow_map::Map` / `RespawnStoreLikeCpp`; linked respawn metadata is loaded DB -> validated canonical metadata -> read-only linked store.
+  - Does not implement full `CheckRespawn`/`ProcessRespawns`, PoolMgr, `DoRespawn`, DB save/delete, live entity creation or fanout.
+
+## C++ Anchors for #371
+
+- `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:1811-1997` — `ObjectMgr::LoadLinkedRespawn` SQL, validation and `_linkedRespawnStore` insert.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/SpawnData.h:120-126` — `LinkedRespawnType` values 0..3.
+- `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.h:1503-1508` — missing linked GUID returns empty.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:3607-3620` — `Map::GetLinkedRespawnTime`.
+- `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2004-2020` — linked respawn branch in `Map::CheckRespawn`.
+- `/home/server/woltk-trinity-legacy/src/server/game/DataStores/DB2Structure.h:2611-2614` — instanceable map types.
+
+## Validation for #371
+
+Developer/Foreman validation during slice:
+
+```bash
+cargo test -p wow-map linked_respawn
+cargo test -p world-server linked_respawn
+```
+
+Final observed results before local commit:
+
+- `cargo test -p wow-map linked_respawn`: OK, 6 passed.
+- `cargo test -p world-server linked_respawn`: OK, 3 passed.
+- `cargo fmt --check`: OK.
+- `cargo check -p world-server`: OK (warnings only; no errors).
+- `git diff --check`: OK.
+- Independent `wow-reviewer`: APROBADO.
 
 Recent committed baseline before this slice:
 

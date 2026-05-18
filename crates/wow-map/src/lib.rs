@@ -34,9 +34,10 @@ pub use manager::{
 };
 pub use map::{
     AIRelocationPlan, ActiveObjectKind, AddToMapError, AddToMapOutcome,
-    CreatureDelayedRelocationVisibilityPlan, CreatureRelocationVisibilityPlan,
-    DelayedCreatureRelocationContext, DelayedPlayerRelocationContext,
-    DelayedUnitRelocationCellPlan, DelayedUnitRelocationForCellsPlan, DelayedUnitRelocationPlan,
+    CheckRespawnLinkedRespawnGuardOutcomeLikeCpp, CreatureDelayedRelocationVisibilityPlan,
+    CreatureRelocationVisibilityPlan, DelayedCreatureRelocationContext,
+    DelayedPlayerRelocationContext, DelayedUnitRelocationCellPlan,
+    DelayedUnitRelocationForCellsPlan, DelayedUnitRelocationPlan,
     DelayedUnitRelocationVisibilityPlans, GridLifecycle, Map, MapObjectCellMoveState,
     MapObjectMoveListEntry, MapObjectMoveListPlan, MapObjectRelocationError,
     MapObjectRelocationOutcome, MapObjectStoreError, MapUpdatePlayerSources, MapUpdateVisitPlan,
@@ -56,7 +57,9 @@ pub use personal_phase::{
 };
 pub use spawn::{
     AddRespawnInfoOutcomeLikeCpp, CellSpawnGuids, CheckRespawnOutcomeLikeCpp,
-    CheckRespawnSpawnGroupGuardOutcomeLikeCpp, Difficulty, PersonalSpawnMapKey,
+    CheckRespawnSpawnGroupGuardOutcomeLikeCpp, Difficulty, LinkedRespawnLoadIssueKindLikeCpp,
+    LinkedRespawnLoadIssueLikeCpp, LinkedRespawnLoadReportLikeCpp, LinkedRespawnRowLikeCpp,
+    LinkedRespawnStoreLikeCpp, LinkedRespawnTypeLikeCpp, PersonalSpawnMapKey,
     ProcessRespawnActionLikeCpp, RespawnInfoLikeCpp, RespawnStoreLikeCpp, SpawnData,
     SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange, SpawnGroupFlags, SpawnGroupRuntimeState,
     SpawnGroupTemplateData, SpawnId, SpawnMapKey, SpawnObjectType, SpawnPosition, SpawnStore,

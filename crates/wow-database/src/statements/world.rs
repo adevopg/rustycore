@@ -11,6 +11,7 @@ pub enum WorldStatements {
     DEL_LINKED_RESPAWN,
     DEL_LINKED_RESPAWN_MASTER,
     REP_LINKED_RESPAWN,
+    SEL_LINKED_RESPAWNS,
     SEL_CREATURE_TEXT,
     SEL_SMART_SCRIPTS,
     DEL_GAMEOBJECT,
@@ -265,6 +266,9 @@ impl StatementDef for WorldStatements {
             }
             Self::REP_LINKED_RESPAWN => {
                 "REPLACE INTO linked_respawn (guid, linkedGuid, linkType) VALUES (?, ?, ?)"
+            }
+            Self::SEL_LINKED_RESPAWNS => {
+                "SELECT guid, linkedGuid, linkType FROM linked_respawn ORDER BY guid ASC"
             }
             Self::SEL_CREATURE_TEXT => {
                 "SELECT CreatureID, GroupID, ID, Text, Type, Language, Probability, Emote, Duration, Sound, SoundPlayType, BroadcastTextId, TextRange FROM creature_text"
