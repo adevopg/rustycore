@@ -14,7 +14,10 @@ use crate::coords::{
 use crate::grid::{GridStateKind, MapGridHost, NGrid, update_grid_state};
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
 use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
-use crate::spawn::{Difficulty, SpawnGroupFlags, SpawnObjectType};
+use crate::spawn::{
+    Difficulty, SpawnGridLoadStateLikeCpp, SpawnGroupActiveChange, SpawnGroupFlags,
+    SpawnGroupRuntimeState, SpawnGroupTemplateData, SpawnObjectType, SpawnStore,
+};
 use wow_core::{ObjectGuid, Position};
 use wow_entities::{
     AccessorObjectKind, CombatBeginContextLikeCpp, CombatSubsystem, Creature, GameObject,
@@ -274,6 +277,7 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     lifecycle: Lifecycle,
     active_cells: HashSet<CellCoord>,
     personal_phase_tracker: MultiPersonalPhaseTracker,
+    spawn_group_state: SpawnGroupRuntimeState,
     grid_state_unloaded: bool,
     map_objects: HashMap<ObjectGuid, MapObjectRecord>,
 }
@@ -323,6 +327,7 @@ where
             lifecycle,
             active_cells: HashSet::new(),
             personal_phase_tracker: MultiPersonalPhaseTracker::default(),
+            spawn_group_state: SpawnGroupRuntimeState::new(),
             grid_state_unloaded: false,
             map_objects: HashMap::new(),
         }
@@ -362,6 +367,75 @@ where
 
     pub fn personal_phase_tracker(&self) -> &MultiPersonalPhaseTracker {
         &self.personal_phase_tracker
+    }
+
+    /// Map-owned bridge for C++ `Map::_toggledSpawnGroupIds`.
+    ///
+    /// C++ anchors:
+    /// - `Map.h:780-781` stores toggled spawn group ids on `Map`.
+    /// - `Map.cpp:2427-2439` toggles only non-system existing groups.
+    /// - `Map.cpp:2441-2453` queries missing/system/default/manual semantics.
+    ///
+    /// RustyCore does not yet wire ObjectMgr/SpawnStore ownership into `Map`, so
+    /// callers must pass the already-resolved template as an honest bridge.
+    pub const fn spawn_group_state(&self) -> &SpawnGroupRuntimeState {
+        &self.spawn_group_state
+    }
+
+    pub fn set_spawn_group_active_like_cpp(
+        &mut self,
+        group: Option<&SpawnGroupTemplateData>,
+        state: bool,
+    ) -> SpawnGroupActiveChange {
+        self.spawn_group_state
+            .set_spawn_group_active_like_cpp(group, state)
+    }
+
+    pub fn set_spawn_group_inactive_like_cpp(
+        &mut self,
+        group: Option<&SpawnGroupTemplateData>,
+    ) -> SpawnGroupActiveChange {
+        self.set_spawn_group_active_like_cpp(group, false)
+    }
+
+    pub fn is_spawn_group_active_like_cpp(&self, group: Option<&SpawnGroupTemplateData>) -> bool {
+        self.spawn_group_state.is_spawn_group_active_like_cpp(group)
+    }
+
+    /// Bridge for C++ `Map::ShouldBeSpawnedOnGridLoad` callers while `Map` does
+    /// not yet own the ObjectMgr spawn metadata. The canonical toggle state is
+    /// still map-owned; spawn metadata remains caller-supplied.
+    pub fn spawn_grid_load_state_like_cpp<'a>(
+        &'a self,
+        spawn_store: &'a SpawnStore,
+    ) -> SpawnGridLoadStateLikeCpp<'a> {
+        SpawnGridLoadStateLikeCpp::new(spawn_store, &self.spawn_group_state)
+    }
+
+    /// Pure bridge for C++ `Map::InitSpawnGroupState` over pre-resolved group
+    /// templates. It intentionally applies only active-state toggles; live
+    /// spawn/despawn, pool runtime, respawn persistence, and fanout are later gaps.
+    pub fn init_spawn_group_state_like_cpp<'a, I, F>(
+        &mut self,
+        groups: I,
+        mut meets_conditions: F,
+    ) -> Vec<(u32, SpawnGroupActiveChange)>
+    where
+        I: IntoIterator<Item = &'a SpawnGroupTemplateData>,
+        F: FnMut(&SpawnGroupTemplateData) -> bool,
+    {
+        let mut changes = Vec::new();
+        for group in groups {
+            if group.is_system() {
+                continue;
+            }
+            let active = meets_conditions(group);
+            changes.push((
+                group.group_id,
+                self.set_spawn_group_active_like_cpp(Some(group), active),
+            ));
+        }
+        changes
     }
 
     pub fn map_object_count(&self) -> usize {
@@ -2465,6 +2539,149 @@ mod tests {
             RecordingTerrain::default(),
             RecordingLifecycle::default(),
         )
+    }
+
+    fn spawn_group(group_id: u32, flags: SpawnGroupFlags) -> SpawnGroupTemplateData {
+        SpawnGroupTemplateData {
+            group_id,
+            name: format!("group-{group_id}"),
+            map_id: 571,
+            flags,
+        }
+    }
+
+    #[test]
+    fn map_spawn_group_initial_state_system_active_and_not_toggleable() {
+        let mut map = test_map();
+        let system = spawn_group(1, SpawnGroupFlags::SYSTEM);
+
+        assert!(map.spawn_group_state().toggled_spawn_group_ids().is_empty());
+        assert!(map.is_spawn_group_active_like_cpp(Some(&system)));
+        assert_eq!(
+            map.set_spawn_group_active_like_cpp(Some(&system), false),
+            SpawnGroupActiveChange::SystemGroup
+        );
+        assert!(map.spawn_group_state().toggled_spawn_group_ids().is_empty());
+        assert!(map.is_spawn_group_active_like_cpp(Some(&system)));
+    }
+
+    #[test]
+    fn map_spawn_group_manual_default_inactive_activate_toggles_deactivate_clears() {
+        let mut map = test_map();
+        let manual = spawn_group(10, SpawnGroupFlags::MANUAL_SPAWN);
+
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&manual)));
+        assert_eq!(
+            map.set_spawn_group_active_like_cpp(Some(&manual), true),
+            SpawnGroupActiveChange::Toggled
+        );
+        assert!(map.spawn_group_state().is_toggled(manual.group_id));
+        assert!(map.is_spawn_group_active_like_cpp(Some(&manual)));
+
+        assert_eq!(
+            map.set_spawn_group_inactive_like_cpp(Some(&manual)),
+            SpawnGroupActiveChange::ClearedToggle
+        );
+        assert!(!map.spawn_group_state().is_toggled(manual.group_id));
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&manual)));
+    }
+
+    #[test]
+    fn map_spawn_group_non_manual_default_active_deactivate_toggles_activate_clears() {
+        let mut map = test_map();
+        let automatic = spawn_group(11, SpawnGroupFlags::NONE);
+
+        assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
+        assert_eq!(
+            map.set_spawn_group_inactive_like_cpp(Some(&automatic)),
+            SpawnGroupActiveChange::Toggled
+        );
+        assert!(map.spawn_group_state().is_toggled(automatic.group_id));
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
+
+        assert_eq!(
+            map.set_spawn_group_active_like_cpp(Some(&automatic), true),
+            SpawnGroupActiveChange::ClearedToggle
+        );
+        assert!(!map.spawn_group_state().is_toggled(automatic.group_id));
+        assert!(map.is_spawn_group_active_like_cpp(Some(&automatic)));
+    }
+
+    #[test]
+    fn map_spawn_group_missing_group_returns_false_and_does_not_mutate_toggles() {
+        let mut map = test_map();
+
+        assert!(!map.is_spawn_group_active_like_cpp(None));
+        assert_eq!(
+            map.set_spawn_group_active_like_cpp(None, true),
+            SpawnGroupActiveChange::MissingGroup
+        );
+        assert_eq!(
+            map.set_spawn_group_inactive_like_cpp(None),
+            SpawnGroupActiveChange::MissingGroup
+        );
+        assert!(map.spawn_group_state().toggled_spawn_group_ids().is_empty());
+    }
+
+    #[test]
+    fn map_spawn_group_grid_load_bridge_uses_map_owned_toggle_state() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let manual = spawn_group(12, SpawnGroupFlags::MANUAL_SPAWN);
+        let spawn = crate::spawn::SpawnData {
+            object_type: SpawnObjectType::Creature,
+            spawn_id: 42,
+            map_id: 571,
+            db_data: true,
+            spawn_group: manual.clone(),
+            id: 99,
+            spawn_point: crate::spawn::SpawnPosition::new(0.0, 0.0, 0.0, 0.0),
+            phase_use_flags: 0,
+            phase_id: 0,
+            phase_group: 0,
+            terrain_swap_map: 0,
+            pool_id: 0,
+            spawn_time_secs: 0,
+            spawn_difficulties: vec![1],
+            script_id: 0,
+            string_id: String::new(),
+        };
+        store.add_object_spawn(&spawn, |_| false);
+
+        assert!(
+            !map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+
+        map.set_spawn_group_active_like_cpp(Some(&manual), true);
+        assert!(
+            map.spawn_grid_load_state_like_cpp(&store)
+                .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
+        );
+    }
+
+    #[test]
+    fn map_spawn_group_init_bridge_skips_system_and_applies_condition_semantics() {
+        let mut map = test_map();
+        let system = spawn_group(1, SpawnGroupFlags::SYSTEM);
+        let manual = spawn_group(20, SpawnGroupFlags::MANUAL_SPAWN);
+        let automatic = spawn_group(21, SpawnGroupFlags::NONE);
+        let groups = [&system, &manual, &automatic];
+
+        let changes = map.init_spawn_group_state_like_cpp(groups, |group| group.group_id == 20);
+
+        assert_eq!(
+            changes,
+            vec![
+                (20, SpawnGroupActiveChange::Toggled),
+                (21, SpawnGroupActiveChange::Toggled)
+            ]
+        );
+        assert!(!map.spawn_group_state().is_toggled(system.group_id));
+        assert!(map.spawn_group_state().is_toggled(manual.group_id));
+        assert!(map.spawn_group_state().is_toggled(automatic.group_id));
+        assert!(map.is_spawn_group_active_like_cpp(Some(&manual)));
+        assert!(!map.is_spawn_group_active_like_cpp(Some(&automatic)));
     }
 
     fn dynamic_respawn_context(
