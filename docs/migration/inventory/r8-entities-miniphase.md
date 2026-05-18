@@ -1393,3 +1393,15 @@ Implemented Rust dependency: `wow_map::Map::plan_update_spawn_group_conditions_l
 Checks expected: `cargo fmt --check`; `cargo test -p wow-map spawn_group`; `cargo test -p wow-map update_spawn_group_conditions`; `git diff --check`.
 
 Remaining gaps: this does not complete `#NEXT.R8.ENTITIES.021`. Still missing: live execution of `SpawnGroupSpawn`/`SpawnGroupDespawn`, real condition manager wiring, pool runtime, respawn persistence, live entity creation, grid/session fanout, and DB/runtime side effects.
+
+### #NEXT.R8.ENTITIES.359 — ConditionMgr map-condition helper for spawn groups
+
+Status: complete (ConditionMgr helper dependency only; no live spawn/despawn/runtime activation).
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.cpp:1121-1146` (`IsObjectMeetingNotGroupedConditions` and `IsMapMeetingNotGroupedConditions`), `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.cpp:1095-1113` (`CONDITION_SOURCE_TYPE_SPAWN_GROUP` allowed condition types), `/home/server/woltk-trinity-legacy/src/server/game/Conditions/ConditionMgr.h:187-191` (`CONDITION_SOURCE_TYPE_SPAWN_GROUP = 33` and reference/max boundaries), and `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2455-2502` (`InitSpawnGroupState` / `UpdateSpawnGroupConditions` caller shape).
+
+Implemented Rust dependency: `wow-world::conditions::is_spawn_group_meeting_map_conditions_like_cpp` now builds `ConditionSourceInfo::from_map`, installs optional `ConditionMapStateSnapshot` and realm achievement ids, resolves the C++ not-grouped key `{ source_group = 0, source_entry = spawnGroupId, source_id = 0 }` through the existing `ConditionEntriesByTypeStore`, evaluates with the existing C++-shaped condition list/reference expansion path, preserves the C++ fallback where a missing bucket returns true, and treats unsupported/map-only-unavailable condition types as false without panic. Focused tests cover missing buckets, `MAPID`, `WORLD_STATE`, `REALM_ACHIEVEMENT`, unsupported `AURA`, and `REFERENCE_CONDITION` expansion.
+
+Checks expected: `cargo fmt --check`; `cargo test -p wow-world spawn_group_meeting_map_conditions`; `git diff --check`.
+
+Remaining gaps: this does NOT complete `#NEXT.R8.ENTITIES.021` or live `UpdateSpawnGroupConditions`. Missing work remains: executing `SpawnGroupSpawn`/`SpawnGroupDespawn`, pool/runtime integration, respawn persistence, live entity creation, grid/session fanout, DB/runtime side effects, and wiring a future `world-server`/`wow-world` caller that resolves these bools and passes them into the `wow-map` planner without making `wow-map` depend on `wow-world`.
