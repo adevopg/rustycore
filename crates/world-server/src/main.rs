@@ -41,6 +41,8 @@ use wow_world::{
     SharedMapManager, WorldMMapPathfinderWorkerLikeCpp, WorldSession,
 };
 
+mod spawn_store_loader;
+
 const WORLD_CONFIG_CANDIDATES: &[&str] = &[
     "worldserver.conf",
     "worldserver.conf.dist",
@@ -702,6 +704,48 @@ async fn main() -> Result<()> {
     info!(
         "Loaded {} map difficulty conditions from MapDifficultyXCondition.db2",
         map_difficulty_x_condition_store.len()
+    );
+
+    let (canonical_spawn_store, canonical_spawn_report) =
+        spawn_store_loader::load_canonical_spawn_store_like_cpp(
+            world_db.as_ref(),
+            &map_store,
+            &map_difficulty_store,
+            &spawn_group_store,
+        )
+        .await
+        .context("Failed to load canonical SpawnStore metadata from world DB")?;
+    let _canonical_spawn_store = Arc::new(canonical_spawn_store);
+    info!(
+        "Loaded canonical SpawnStore metadata: creatures rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; gameobjects rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; areatriggers rows={} indexed={} empty-difficulty={} missing-map={}; spawn-group rows={} assigned={} missing-spawn={} invalid-type={} missing-group={} map-mismatch={} duplicate={}; represented validations skipped: creature={} gameobject={} areatrigger={}",
+        canonical_spawn_report.creature.rows,
+        canonical_spawn_report.creature.indexed,
+        canonical_spawn_report.creature.skipped_event,
+        canonical_spawn_report.creature.skipped_empty_difficulties,
+        canonical_spawn_report.creature.skipped_missing_map,
+        canonical_spawn_report.gameobject.rows,
+        canonical_spawn_report.gameobject.indexed,
+        canonical_spawn_report.gameobject.skipped_event,
+        canonical_spawn_report.gameobject.skipped_empty_difficulties,
+        canonical_spawn_report.gameobject.skipped_missing_map,
+        canonical_spawn_report.area_trigger.rows,
+        canonical_spawn_report.area_trigger.indexed,
+        canonical_spawn_report
+            .area_trigger
+            .skipped_empty_difficulties,
+        canonical_spawn_report.area_trigger.skipped_missing_map,
+        canonical_spawn_report.spawn_group_rows,
+        canonical_spawn_report.spawn_group_apply.assigned,
+        canonical_spawn_report.spawn_group_apply.missing_spawn,
+        canonical_spawn_report.spawn_group_apply.invalid_type,
+        canonical_spawn_report.spawn_group_apply.missing_group,
+        canonical_spawn_report.spawn_group_apply.map_mismatch,
+        canonical_spawn_report
+            .spawn_group_apply
+            .duplicate_spawn_group,
+        canonical_spawn_report.creature.validation_skipped,
+        canonical_spawn_report.gameobject.validation_skipped,
+        canonical_spawn_report.area_trigger.validation_skipped,
     );
     let mount_store = Arc::new(
         wow_data::MountStore::load_with_hotfixes(&data_dir, &locale, &hotfix_db)

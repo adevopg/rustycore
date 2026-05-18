@@ -390,14 +390,22 @@ impl SpawnStore {
         }
     }
 
+    /// Inserts canonical spawn metadata without touching grid indexes.
+    ///
+    /// C++ `ObjectMgr::LoadCreatures` / `LoadGameObjects` always populate
+    /// `_creatureDataStore` / `_gameObjectDataStore` before the `gameEvent`
+    /// branch. The event branch only gates `AddCreatureToGrid` /
+    /// `AddGameobjectToGrid`; it does not discard metadata.
+    pub fn insert_spawn_metadata_like_cpp(&mut self, data: &SpawnData) {
+        self.spawns
+            .insert((data.object_type, data.spawn_id), data.clone());
+    }
+
     /// C++ `ObjectMgr::AddSpawnDataToGrid` for creature/gameobject spawns.
     pub fn add_object_spawn<F>(&mut self, data: &SpawnData, is_personal_phase: F)
     where
         F: Fn(u32) -> bool,
     {
-        self.spawns
-            .insert((data.object_type, data.spawn_id), data.clone());
-
         match data.object_type {
             SpawnObjectType::Creature | SpawnObjectType::GameObject => {}
             SpawnObjectType::AreaTrigger => {
@@ -405,6 +413,8 @@ impl SpawnStore {
                 return;
             }
         }
+
+        self.insert_spawn_metadata_like_cpp(data);
 
         let cell_id = data.cell_id();
         if is_personal_phase(data.phase_id) {
@@ -437,8 +447,7 @@ impl SpawnStore {
     /// personal-phase store.
     pub fn add_area_trigger_spawn(&mut self, data: &SpawnData) {
         debug_assert_eq!(data.object_type, SpawnObjectType::AreaTrigger);
-        self.spawns
-            .insert((SpawnObjectType::AreaTrigger, data.spawn_id), data.clone());
+        self.insert_spawn_metadata_like_cpp(data);
         let cell_id = data.cell_id();
         for difficulty in data.spawn_difficulties.iter().copied() {
             let key = SpawnMapKey::new(data.map_id, difficulty);
@@ -640,6 +649,24 @@ mod tests {
                 .contains(&100)
         );
         assert!(store.cell_object_guids(571, 2, cell_id).is_none());
+    }
+
+    #[test]
+    fn insert_spawn_metadata_like_cpp_does_not_touch_grid_indexes() {
+        let mut store = SpawnStore::new();
+        let data = spawn(SpawnObjectType::Creature, 150, 0.0, 0.0);
+        let cell_id = data.cell_id();
+
+        store.insert_spawn_metadata_like_cpp(&data);
+
+        assert_eq!(
+            store
+                .spawn_data(SpawnObjectType::Creature, 150)
+                .map(|spawn| spawn.spawn_id),
+            Some(150)
+        );
+        assert!(store.cell_object_guids(571, 0, cell_id).is_none());
+        assert!(store.cell_object_guids(571, 1, cell_id).is_none());
     }
 
     #[test]
