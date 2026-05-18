@@ -76,6 +76,143 @@ pub enum DynamicRespawnScalingNoopReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpawnedPoolDataErrorLikeCpp {
+    /// C++ `SpawnedPoolData::IsSpawnedObject(SpawnObjectType, ...)` aborts for
+    /// non Creature/GameObject types (`PoolMgr.cpp:66-77`). Rust returns a typed
+    /// error at the seam instead of treating AreaTrigger as pooled/spawned.
+    UnsupportedSpawnObjectType(SpawnObjectType),
+}
+
+/// Map-owned parity seam for C++ `SpawnedPoolData` (`PoolMgr.h:51-83`).
+///
+/// This is only the map-local state shape and helpers used by C++
+/// `Map::_poolData` / `Map::GetPoolData()`. It does not implement real
+/// `PoolMgr::SpawnPool`, `DespawnPool`, RNG/chance, entity creation,
+/// AddToMap/RemoveFromMap, DB persistence/delete, or grid/session fanout.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpawnedPoolDataLikeCpp {
+    spawned_creatures: HashSet<SpawnId>,
+    spawned_gameobjects: HashSet<SpawnId>,
+    spawned_pools: HashMap<u32, u32>,
+}
+
+impl SpawnedPoolDataLikeCpp {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get_spawned_objects_like_cpp(&self, pool_id: u32) -> u32 {
+        self.spawned_pools.get(&pool_id).copied().unwrap_or(0)
+    }
+
+    pub fn is_spawned_creature_like_cpp(&self, spawn_id: SpawnId) -> bool {
+        self.spawned_creatures.contains(&spawn_id)
+    }
+
+    pub fn is_spawned_gameobject_like_cpp(&self, spawn_id: SpawnId) -> bool {
+        self.spawned_gameobjects.contains(&spawn_id)
+    }
+
+    pub fn is_spawned_pool_like_cpp(&self, sub_pool_id: u32) -> bool {
+        self.spawned_pools.contains_key(&sub_pool_id)
+    }
+
+    pub fn is_spawned_object_like_cpp(
+        &self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+    ) -> Result<bool, SpawnedPoolDataErrorLikeCpp> {
+        match object_type {
+            SpawnObjectType::Creature => Ok(self.is_spawned_creature_like_cpp(spawn_id)),
+            SpawnObjectType::GameObject => Ok(self.is_spawned_gameobject_like_cpp(spawn_id)),
+            SpawnObjectType::AreaTrigger => Err(
+                SpawnedPoolDataErrorLikeCpp::UnsupportedSpawnObjectType(object_type),
+            ),
+        }
+    }
+
+    pub fn add_spawn_like_cpp(
+        &mut self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+        pool_id: u32,
+    ) -> Result<(), SpawnedPoolDataErrorLikeCpp> {
+        match object_type {
+            SpawnObjectType::Creature => {
+                self.spawned_creatures.insert(spawn_id);
+                *self.spawned_pools.entry(pool_id).or_insert(0) += 1;
+                Ok(())
+            }
+            SpawnObjectType::GameObject => {
+                self.spawned_gameobjects.insert(spawn_id);
+                *self.spawned_pools.entry(pool_id).or_insert(0) += 1;
+                Ok(())
+            }
+            SpawnObjectType::AreaTrigger => Err(
+                SpawnedPoolDataErrorLikeCpp::UnsupportedSpawnObjectType(object_type),
+            ),
+        }
+    }
+
+    pub fn remove_spawn_like_cpp(
+        &mut self,
+        object_type: SpawnObjectType,
+        spawn_id: SpawnId,
+        pool_id: u32,
+    ) -> Result<(), SpawnedPoolDataErrorLikeCpp> {
+        match object_type {
+            SpawnObjectType::Creature => {
+                self.spawned_creatures.remove(&spawn_id);
+                Self::decrement_pool_counter_like_cpp(&mut self.spawned_pools, pool_id);
+                Ok(())
+            }
+            SpawnObjectType::GameObject => {
+                self.spawned_gameobjects.remove(&spawn_id);
+                Self::decrement_pool_counter_like_cpp(&mut self.spawned_pools, pool_id);
+                Ok(())
+            }
+            SpawnObjectType::AreaTrigger => Err(
+                SpawnedPoolDataErrorLikeCpp::UnsupportedSpawnObjectType(object_type),
+            ),
+        }
+    }
+
+    pub fn add_pool_spawn_like_cpp(&mut self, sub_pool_id: u32, pool_id: u32) {
+        self.spawned_pools.insert(sub_pool_id, 0);
+        *self.spawned_pools.entry(pool_id).or_insert(0) += 1;
+    }
+
+    pub fn remove_pool_spawn_like_cpp(&mut self, sub_pool_id: u32, pool_id: u32) {
+        self.spawned_pools.remove(&sub_pool_id);
+        Self::decrement_pool_counter_like_cpp(&mut self.spawned_pools, pool_id);
+    }
+
+    pub fn spawned_objects_like_cpp(&self) -> Vec<(SpawnObjectType, SpawnId)> {
+        let mut spawned = self
+            .spawned_creatures
+            .iter()
+            .copied()
+            .map(|spawn_id| (SpawnObjectType::Creature, spawn_id))
+            .chain(
+                self.spawned_gameobjects
+                    .iter()
+                    .copied()
+                    .map(|spawn_id| (SpawnObjectType::GameObject, spawn_id)),
+            )
+            .collect::<Vec<_>>();
+        spawned.sort_unstable();
+        spawned
+    }
+
+    fn decrement_pool_counter_like_cpp(spawned_pools: &mut HashMap<u32, u32>, pool_id: u32) {
+        let counter = spawned_pools.entry(pool_id).or_insert(0);
+        if *counter > 0 {
+            *counter -= 1;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DynamicRespawnScalingOutcome {
     pub delay_secs: u32,
     pub noop_reason: Option<DynamicRespawnScalingNoopReason>,
@@ -403,6 +540,7 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     personal_phase_tracker: MultiPersonalPhaseTracker,
     spawn_group_state: SpawnGroupRuntimeState,
     respawn_store: RespawnStoreLikeCpp,
+    pool_data: SpawnedPoolDataLikeCpp,
     grid_state_unloaded: bool,
     /// Map-local typed by-spawn-id live-object stores, matching C++
     /// `_creatureBySpawnIdStore`, `_gameobjectBySpawnIdStore`, and
@@ -472,6 +610,7 @@ where
             personal_phase_tracker: MultiPersonalPhaseTracker::default(),
             spawn_group_state: SpawnGroupRuntimeState::new(),
             respawn_store: RespawnStoreLikeCpp::new(),
+            pool_data: SpawnedPoolDataLikeCpp::new(),
             grid_state_unloaded: false,
             creatures_by_spawn_id: HashMap::new(),
             gameobjects_by_spawn_id: HashMap::new(),
@@ -1051,15 +1190,25 @@ where
         self.spawn_group_state.is_spawn_group_active_like_cpp(group)
     }
 
+    pub const fn pool_data_like_cpp(&self) -> &SpawnedPoolDataLikeCpp {
+        &self.pool_data
+    }
+
+    pub const fn pool_data_mut_like_cpp(&mut self) -> &mut SpawnedPoolDataLikeCpp {
+        &mut self.pool_data
+    }
+
     /// Bridge for C++ `Map::ShouldBeSpawnedOnGridLoad` callers while `Map` does
-    /// not yet own the ObjectMgr spawn metadata. The canonical toggle state and
-    /// respawn timers are map-owned; spawn metadata remains caller-supplied.
+    /// not yet own the ObjectMgr spawn metadata. The canonical toggle state,
+    /// respawn timers, and `SpawnedPoolData` are map-owned; spawn metadata remains
+    /// caller-supplied.
     pub fn spawn_grid_load_state_like_cpp<'a>(
         &'a self,
         spawn_store: &'a SpawnStore,
     ) -> SpawnGridLoadStateLikeCpp<'a> {
         SpawnGridLoadStateLikeCpp::new(spawn_store, &self.spawn_group_state)
             .with_respawn_timers(self.respawn_store.respawn_timer_keys_like_cpp())
+            .with_pool_spawned_objects(self.pool_data.spawned_objects_like_cpp())
     }
 
     /// Pure bridge for C++ `Map::InitSpawnGroupState` over pre-resolved group
@@ -4008,6 +4157,141 @@ mod tests {
             map.spawn_grid_load_state_like_cpp(&store)
                 .should_be_spawned_on_grid_load(SpawnObjectType::Creature, 42)
         );
+    }
+
+    #[test]
+    fn spawned_pool_data_creature_gameobject_and_dispatcher_like_cpp() {
+        let mut pool_data = SpawnedPoolDataLikeCpp::new();
+
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 0);
+        assert_eq!(
+            pool_data.is_spawned_object_like_cpp(SpawnObjectType::Creature, 101),
+            Ok(false)
+        );
+        assert_eq!(
+            pool_data.is_spawned_object_like_cpp(SpawnObjectType::GameObject, 202),
+            Ok(false)
+        );
+        assert_eq!(
+            pool_data.is_spawned_object_like_cpp(SpawnObjectType::AreaTrigger, 303),
+            Err(SpawnedPoolDataErrorLikeCpp::UnsupportedSpawnObjectType(
+                SpawnObjectType::AreaTrigger
+            ))
+        );
+
+        assert_eq!(
+            pool_data.add_spawn_like_cpp(SpawnObjectType::Creature, 101, 7),
+            Ok(())
+        );
+        assert_eq!(
+            pool_data.add_spawn_like_cpp(SpawnObjectType::GameObject, 202, 7),
+            Ok(())
+        );
+        assert!(pool_data.is_spawned_creature_like_cpp(101));
+        assert!(pool_data.is_spawned_gameobject_like_cpp(202));
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 2);
+        assert_eq!(
+            pool_data.spawned_objects_like_cpp(),
+            vec![
+                (SpawnObjectType::Creature, 101),
+                (SpawnObjectType::GameObject, 202),
+            ]
+        );
+    }
+
+    #[test]
+    fn spawned_pool_data_duplicate_add_and_remove_counter_semantics_like_cpp() {
+        let mut pool_data = SpawnedPoolDataLikeCpp::new();
+
+        assert_eq!(
+            pool_data.add_spawn_like_cpp(SpawnObjectType::Creature, 101, 7),
+            Ok(())
+        );
+        assert_eq!(
+            pool_data.add_spawn_like_cpp(SpawnObjectType::Creature, 101, 7),
+            Ok(())
+        );
+        assert!(pool_data.is_spawned_creature_like_cpp(101));
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 2);
+
+        assert_eq!(
+            pool_data.remove_spawn_like_cpp(SpawnObjectType::Creature, 101, 7),
+            Ok(())
+        );
+        assert!(!pool_data.is_spawned_creature_like_cpp(101));
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 1);
+
+        assert_eq!(
+            pool_data.remove_spawn_like_cpp(SpawnObjectType::Creature, 101, 7),
+            Ok(())
+        );
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 0);
+        assert_eq!(
+            pool_data.remove_spawn_like_cpp(SpawnObjectType::GameObject, 202, 99),
+            Ok(())
+        );
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(99), 0);
+    }
+
+    #[test]
+    fn spawned_pool_data_pool_subpool_membership_and_counts_like_cpp() {
+        let mut pool_data = SpawnedPoolDataLikeCpp::new();
+
+        pool_data.add_pool_spawn_like_cpp(70, 7);
+        assert!(pool_data.is_spawned_pool_like_cpp(70));
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(70), 0);
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 1);
+
+        pool_data.remove_pool_spawn_like_cpp(70, 7);
+        assert!(!pool_data.is_spawned_pool_like_cpp(70));
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 0);
+
+        pool_data.remove_pool_spawn_like_cpp(70, 7);
+        assert_eq!(pool_data.get_spawned_objects_like_cpp(7), 0);
+    }
+
+    #[test]
+    fn grid_load_state_uses_map_pool_data_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(14, SpawnGroupFlags::NONE);
+        let mut creature_spawn = spawn_data(SpawnObjectType::Creature, 501, active.clone());
+        creature_spawn.pool_id = 7;
+        let mut gameobject_spawn = spawn_data(SpawnObjectType::GameObject, 502, active);
+        gameobject_spawn.pool_id = 7;
+        store.add_object_spawn(&creature_spawn, |_| false);
+        store.add_object_spawn(&gameobject_spawn, |_| false);
+
+        let grid_state = map.spawn_grid_load_state_like_cpp(&store);
+        assert!(!grid_state.should_be_spawned_on_grid_load(SpawnObjectType::Creature, 501));
+        assert!(!grid_state.should_be_spawned_on_grid_load(SpawnObjectType::GameObject, 502));
+
+        assert_eq!(
+            map.pool_data_mut_like_cpp()
+                .add_spawn_like_cpp(SpawnObjectType::Creature, 501, 7),
+            Ok(())
+        );
+        let grid_state = map.spawn_grid_load_state_like_cpp(&store);
+        assert!(grid_state.should_be_spawned_on_grid_load(SpawnObjectType::Creature, 501));
+        assert!(!grid_state.should_be_spawned_on_grid_load(SpawnObjectType::GameObject, 502));
+
+        assert_eq!(
+            map.pool_data_mut_like_cpp()
+                .add_spawn_like_cpp(SpawnObjectType::GameObject, 502, 7),
+            Ok(())
+        );
+        let grid_state = map.spawn_grid_load_state_like_cpp(&store);
+        assert!(grid_state.should_be_spawned_on_grid_load(SpawnObjectType::Creature, 501));
+        assert!(grid_state.should_be_spawned_on_grid_load(SpawnObjectType::GameObject, 502));
+
+        assert_eq!(
+            map.pool_data_mut_like_cpp()
+                .remove_spawn_like_cpp(SpawnObjectType::Creature, 501, 7),
+            Ok(())
+        );
+        let grid_state = map.spawn_grid_load_state_like_cpp(&store);
+        assert!(!grid_state.should_be_spawned_on_grid_load(SpawnObjectType::Creature, 501));
+        assert!(grid_state.should_be_spawned_on_grid_load(SpawnObjectType::GameObject, 502));
     }
 
     #[test]

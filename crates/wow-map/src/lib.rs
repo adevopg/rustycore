@@ -44,8 +44,9 @@ pub use map::{
     NearbyCellGuids, NearbyCellVisitCenter, NearbyCellVisitPlan, NoopGridLifecycle,
     NoopTerrainGridLoader, ObjectUpdatePlan, PlayerDelayedRelocationVisibilityPlan,
     PlayerRelocationVisibilityPlan, ProcessRelocationNotifiesOutcome, RelocationNotifyProcessPlan,
-    RemoveFromMapError, RemoveFromMapOutcome, ResetNotifyFlagsOutcome, TerrainGridLoader,
-    cell_from_grid_center, cell_from_world, is_grid_id_loaded,
+    RemoveFromMapError, RemoveFromMapOutcome, ResetNotifyFlagsOutcome, SpawnedPoolDataErrorLikeCpp,
+    SpawnedPoolDataLikeCpp, TerrainGridLoader, cell_from_grid_center, cell_from_world,
+    is_grid_id_loaded,
 };
 pub use object_grid_loader::{
     CorpseCellStore, CorpseGridObject, GridSpawnLoadFilter, LoadAllGridSpawns,

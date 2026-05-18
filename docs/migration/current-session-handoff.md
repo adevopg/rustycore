@@ -9,8 +9,9 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 - Branch: `develop`
 - Current branch state before #380 finalization: `develop...origin/develop [ahead 34]` with a clean tree.
 - Current branch state after #382 local commit: `develop...origin/develop [ahead 37]`.
-- Latest completed committed slice: `#NEXT.R8.ENTITIES.382 — canonical player display/mount/collision-height sync from represented WorldSession shape` (review `APROBADO`, focused validation passed, committed locally at current HEAD).
-- No push/install/restart performed for #382.
+- Current branch state after #383 local commit: `develop...origin/develop [ahead 38]`.
+- Latest completed committed slice: `#NEXT.R8.ENTITIES.383 — map-owned SpawnedPoolData state + grid-load seam` (review `APROBADO`, focused validation passed, committed locally at current HEAD).
+- No push/install/restart performed for #383.
 
 ## Critical Rules
 
@@ -22,13 +23,18 @@ Continuity snapshot for RustyCore C++ -> Rust migration in `/home/server/rustyco
 
 ## Progress Estimate
 
-Overall core migration estimate after #382 `canonical player display/mount/collision-height sync`: `~87.8%`.
+Overall core migration estimate after #383 `map-owned SpawnedPoolData state + grid-load seam`: `~88.0%`.
 
-This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: full live `ProcessRespawns` branches beyond represented safe zero-delete/reschedule branches, real `PoolMgr`, `DoRespawn` entity creation/`LoadFromDB`, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete coverage beyond current seams, and broader Unit/Player inventory/auras/threat/motion/update-field work.
+This remains intentionally below the R8 TSV row-completion ratio because heavy runtime ownership gaps remain: real `PoolMgr::SpawnPool`/`DespawnPool` with chance/RNG and recursive subpools, full live `ProcessRespawns` pool and `DoRespawn` branches, entity creation/`LoadFromDB`, corpse load, AreaTrigger Create/Load/Update runtime, templates/spawns, AI, caster unregister, unit enter/exit, movement/visibility/transport, real terrain/vmap/dynamic-tree collision, transports, visibility overrides/cinematic/sight runtime, full entity-specific `AddToWorld`/`RemoveFromWorld` side effects beyond the object/spawn-id store, real dynamic escort config/runtime feeding the closure, grid/session fanout, ObjectAccessor ownership, DB save/delete coverage beyond current seams, and broader Unit/Player inventory/auras/threat/motion/update-field work.
 
-Manual test point: no new client-facing manual milestone from #382; this is a canonical player shape synchronization dependency for map-local/ObjectAccessor consumers, validated with focused `wow-world` unit checks.
+Manual test point: no new client-facing manual milestone from #383; this is a map-owned pool state dependency for grid-load/PoolMgr ownership, validated with focused `wow-map` unit checks.
 
 ## Most Recent Completed Slices
+
+- `#NEXT.R8.ENTITIES.383` (completed; review `APROBADO`; focused validation passed; committed locally at current HEAD)
+  - Adds map-owned `SpawnedPoolDataLikeCpp` to `wow_map::Map`, initialized in `with_hooks`, with C++-shaped creature/gameobject/subpool membership, duplicate-add counter semantics, saturating/remove-create-zero semantics, AreaTrigger unsupported typed error, and spawned object extraction for grid-load checks.
+  - `Map::spawn_grid_load_state_like_cpp` now feeds `SpawnGridLoadStateLikeCpp` from map-owned respawn timers, map-owned spawn-group state, and map-owned spawned pool creature/gameobject entries.
+  - This closes only map-owned SpawnedPoolData state plus the grid-load seam. Remaining gaps: no real `PoolMgr::SpawnPool`/`DespawnPool`, no RNG/chance, no `ProcessRespawns` pool branch, no entity creation/AddToMap/RemoveFromMap, no DB persistence/delete, and no grid/session fanout.
 
 - `#NEXT.R8.ENTITIES.382` (completed; review `APROBADO`; focused validation passed; committed locally at current HEAD)
   - `WorldSession::canonical_player_entity_snapshot_like_cpp` now copies represented player shape into the canonical `Player` before map insertion/replacement: default display/native display from race/gender, mount display id, object scale, and current collision height.
