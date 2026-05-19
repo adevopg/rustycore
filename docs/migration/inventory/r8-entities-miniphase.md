@@ -6,6 +6,12 @@
 ## Pending Review Tasks
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.429** `DynamicObject::Update` non-aura expiry -> remove-list enqueue seam.
+  Status: represented/complete for the bounded map-owned non-aura Update expiry -> remove-list enqueue seam only; review `APROBADO`; validation OK; committed locally at `current #429 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp:136-165`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp:167-171`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2547-2555`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Map::update_dynamic_object_like_cpp(dynamic_object_guid, elapsed_ms)` reads and mutates only canonical typed `MapObjectRecord::DynamicObject` state. Missing, non-DynamicObject/untyped, not-in-world, and aura-bound records return explicit no-mutation/no-queue outcomes. In-world non-aura records consume `DynamicObject::update_non_aura_duration(elapsed_ms)`; non-expiry reports represented script-update evidence only, while expiry drops the mutable borrow and delegates to `add_object_to_remove_list_like_cpp` without draining. Complete only for “Map-owned DynamicObject non-aura Update expiry -> remove-list enqueue seam only”. Not aura update/removal, not `_Remove`, not `RemoveAura`, not `UnbindFromCaster`, not ObjectAccessor store removal, not scripts `OnDynamicObjectUpdate`, not DynamicTree/fanout/visibility/SetSeer, not packet/session mirrors, not Spell handler wiring, not full Map::Update visitor, not DB/install/restart/push.
+
 - [x] **#NEXT.R8.ENTITIES.428** `Spell::EffectAddFarsight` DynamicObject creation seam.
   Status: complete for the bounded map-owned `Map::create_farsight_dynamic_object_like_cpp` creation/materialization seam only; review `APROBADO`; validation OK; committed locally at `current #428 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Spells/SpellEffects.cpp:2237-2261`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp:84-133`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp:209-225`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/DynamicObject/DynamicObject.cpp:233-239`.
