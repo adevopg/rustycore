@@ -388,7 +388,6 @@ pub enum DynamicObjectUpdateStatusLikeCpp {
     MissingDynamicObject,
     NotDynamicObject,
     NotInWorld,
-    UnsupportedAuraBound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +397,8 @@ pub struct DynamicObjectUpdateOutcomeLikeCpp {
     pub status: DynamicObjectUpdateStatusLikeCpp,
     pub duration_before_ms: Option<i32>,
     pub duration_after_ms: Option<i32>,
+    pub aura_update_owner_calls_before: Option<u32>,
+    pub aura_update_owner_calls_after: Option<u32>,
     pub script_update_would_run: bool,
     pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
 }
@@ -441,6 +442,8 @@ pub struct RemoveAllObjectsInRemoveListOutcomeLikeCpp {
     pub remove_errors: usize,
     pub unsupported_kinds: usize,
     pub creature_second_cleanup_count: usize,
+    pub dynamic_object_remove_aura_cleanup_count: usize,
+    pub dynamic_object_unbound_caster_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2622,7 +2625,8 @@ where
     /// Ownership: source-of-truth is canonical `Map::map_objects`; this helper
     /// mutates only the typed `MapObjectRecord::DynamicObject` duration and, after
     /// dropping that mutable borrow, enqueues the same GUID through the existing
-    /// remove-list facade. It does not drain removal, update auras, run scripts,
+    /// remove-list facade. Aura-bound DynamicObjects only record represented
+    /// `Aura::UpdateOwner` evidence and removed/expired checks. It does not drain removal, run scripts,
     /// write ObjectAccessor/session mirrors, fan out visibility, send packets, or
     /// create fallback records.
     pub fn update_dynamic_object_like_cpp(
@@ -2637,6 +2641,8 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::MissingDynamicObject,
                 duration_before_ms: None,
                 duration_after_ms: None,
+                aura_update_owner_calls_before: None,
+                aura_update_owner_calls_after: None,
                 script_update_would_run: false,
                 remove_list: None,
             };
@@ -2649,6 +2655,8 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::NotDynamicObject,
                 duration_before_ms: None,
                 duration_after_ms: None,
+                aura_update_owner_calls_before: None,
+                aura_update_owner_calls_after: None,
                 script_update_would_run: false,
                 remove_list: None,
             };
@@ -2661,12 +2669,15 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::NotDynamicObject,
                 duration_before_ms: None,
                 duration_after_ms: None,
+                aura_update_owner_calls_before: None,
+                aura_update_owner_calls_after: None,
                 script_update_would_run: false,
                 remove_list: None,
             };
         };
 
         let duration_before_ms = dynamic_object.duration_ms();
+        let aura_update_owner_calls_before = dynamic_object.represented_aura_update_owner_count();
         if !dynamic_object.world().object().is_in_world() {
             return DynamicObjectUpdateOutcomeLikeCpp {
                 dynamic_object_guid,
@@ -2674,24 +2685,16 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::NotInWorld,
                 duration_before_ms: Some(duration_before_ms),
                 duration_after_ms: Some(duration_before_ms),
+                aura_update_owner_calls_before: Some(aura_update_owner_calls_before),
+                aura_update_owner_calls_after: Some(aura_update_owner_calls_before),
                 script_update_would_run: false,
                 remove_list: None,
             };
         }
 
-        if dynamic_object.has_aura() {
-            return DynamicObjectUpdateOutcomeLikeCpp {
-                dynamic_object_guid,
-                elapsed_ms,
-                status: DynamicObjectUpdateStatusLikeCpp::UnsupportedAuraBound,
-                duration_before_ms: Some(duration_before_ms),
-                duration_after_ms: Some(duration_before_ms),
-                script_update_would_run: false,
-                remove_list: None,
-            };
-        }
+        let aura_bound_before = dynamic_object.has_aura();
 
-        let (expired, duration_after_ms) = {
+        let (expired, duration_after_ms, aura_update_owner_calls_after) = {
             let Some(record) = self.map_objects.get_mut(&dynamic_object_guid) else {
                 return DynamicObjectUpdateOutcomeLikeCpp {
                     dynamic_object_guid,
@@ -2699,6 +2702,8 @@ where
                     status: DynamicObjectUpdateStatusLikeCpp::MissingDynamicObject,
                     duration_before_ms: Some(duration_before_ms),
                     duration_after_ms: Some(duration_before_ms),
+                    aura_update_owner_calls_before: Some(aura_update_owner_calls_before),
+                    aura_update_owner_calls_after: Some(aura_update_owner_calls_before),
                     script_update_would_run: false,
                     remove_list: None,
                 };
@@ -2710,12 +2715,22 @@ where
                     status: DynamicObjectUpdateStatusLikeCpp::NotDynamicObject,
                     duration_before_ms: Some(duration_before_ms),
                     duration_after_ms: Some(duration_before_ms),
+                    aura_update_owner_calls_before: Some(aura_update_owner_calls_before),
+                    aura_update_owner_calls_after: Some(aura_update_owner_calls_before),
                     script_update_would_run: false,
                     remove_list: None,
                 };
             };
-            let expired = dynamic_object.update_non_aura_duration(elapsed_ms);
-            (expired, dynamic_object.duration_ms())
+            let expired = if aura_bound_before {
+                dynamic_object.update_aura_bound_like_cpp(elapsed_ms)
+            } else {
+                dynamic_object.update_non_aura_duration(elapsed_ms)
+            };
+            (
+                expired,
+                dynamic_object.duration_ms(),
+                dynamic_object.represented_aura_update_owner_count(),
+            )
         };
 
         if expired {
@@ -2726,6 +2741,8 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::ExpiredRemoveQueued,
                 duration_before_ms: Some(duration_before_ms),
                 duration_after_ms: Some(duration_after_ms),
+                aura_update_owner_calls_before: Some(aura_update_owner_calls_before),
+                aura_update_owner_calls_after: Some(aura_update_owner_calls_after),
                 script_update_would_run: false,
                 remove_list: Some(remove_list),
             }
@@ -2736,6 +2753,8 @@ where
                 status: DynamicObjectUpdateStatusLikeCpp::Updated,
                 duration_before_ms: Some(duration_before_ms),
                 duration_after_ms: Some(duration_after_ms),
+                aura_update_owner_calls_before: Some(aura_update_owner_calls_before),
+                aura_update_owner_calls_after: Some(aura_update_owner_calls_after),
                 script_update_would_run: true,
                 remove_list: None,
             }
@@ -3008,7 +3027,17 @@ where
             }
 
             match self.remove_from_map_like_cpp(guid, true) {
-                Ok(_) => outcome.removed += 1,
+                Ok(removed) => {
+                    outcome.removed += 1;
+                    if let Some(cleanup) = removed.dynamic_object_remove_cleanup {
+                        if cleanup.removed_aura_pending_delete {
+                            outcome.dynamic_object_remove_aura_cleanup_count += 1;
+                        }
+                        if cleanup.unbound_caster.is_some() {
+                            outcome.dynamic_object_unbound_caster_count += 1;
+                        }
+                    }
+                }
                 Err(RemoveFromMapError::ObjectNotFound { .. }) => outcome.missing_or_stale += 1,
                 Err(_) => outcome.remove_errors += 1,
             }
@@ -11795,7 +11824,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_object_update_aura_bound_is_unsupported_no_decrement_or_queue_like_cpp() {
+    fn dynamic_object_update_aura_bound_not_expired_runs_represented_update_owner_like_cpp() {
         let mut map = test_map();
         let mut dynamic_object = test_dynamic_object_for_viewpoint(4290501);
         let dynamic_object_guid = dynamic_object.world().guid();
@@ -11806,19 +11835,69 @@ mod tests {
 
         let outcome = map.update_dynamic_object_like_cpp(dynamic_object_guid, 250);
 
-        assert_eq!(
-            outcome.status,
-            DynamicObjectUpdateStatusLikeCpp::UnsupportedAuraBound
-        );
+        assert_eq!(outcome.status, DynamicObjectUpdateStatusLikeCpp::Updated);
         assert_eq!(outcome.duration_before_ms, Some(1_000));
         assert_eq!(outcome.duration_after_ms, Some(1_000));
-        assert!(!outcome.script_update_would_run);
+        assert_eq!(outcome.aura_update_owner_calls_before, Some(0));
+        assert_eq!(outcome.aura_update_owner_calls_after, Some(1));
+        assert!(outcome.script_update_would_run);
         assert_eq!(outcome.remove_list, None);
         assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
         let dynamic_object = map.get_typed_dynamic_object(dynamic_object_guid).unwrap();
         assert_eq!(dynamic_object.duration_ms(), 1_000);
         assert!(dynamic_object.has_aura());
+        assert_eq!(dynamic_object.represented_aura_update_owner_count(), 1);
         assert!(!dynamic_object.world().object().is_destroyed_object());
+    }
+
+    #[test]
+    fn dynamic_object_update_aura_bound_expired_queues_remove_and_drain_cleans_aura_caster_like_cpp()
+     {
+        let mut map = test_map();
+        let player = test_player_for_viewpoint(4310201);
+        let player_guid = player.guid();
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        let create = create_farsight_focus_for_tests(&mut map, player_guid);
+        assert_eq!(
+            create.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::Created
+        );
+        let dynamic_object_guid = create.dynamic_object_guid.unwrap();
+        {
+            let dynamic_object = map
+                .get_typed_dynamic_object_mut(dynamic_object_guid)
+                .unwrap();
+            dynamic_object.set_duration(1_000);
+            dynamic_object.set_aura_bound();
+            dynamic_object.set_aura_removed_like_cpp(true);
+        }
+
+        let outcome = map.update_dynamic_object_like_cpp(dynamic_object_guid, 250);
+
+        assert_eq!(
+            outcome.status,
+            DynamicObjectUpdateStatusLikeCpp::ExpiredRemoveQueued
+        );
+        assert_eq!(outcome.duration_before_ms, Some(1_000));
+        assert_eq!(outcome.duration_after_ms, Some(1_000));
+        assert_eq!(outcome.aura_update_owner_calls_before, Some(0));
+        assert_eq!(outcome.aura_update_owner_calls_after, Some(0));
+        assert!(!outcome.script_update_would_run);
+        assert!(outcome.remove_list.unwrap().queued);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        let dynamic_object = map.get_typed_dynamic_object(dynamic_object_guid).unwrap();
+        assert!(dynamic_object.has_aura());
+        assert_eq!(dynamic_object.bound_caster(), Some(player_guid));
+        assert!(dynamic_object.world().object().is_destroyed_object());
+
+        let drain = map.remove_all_objects_in_remove_list_like_cpp();
+
+        assert_eq!(drain.processed, 1);
+        assert_eq!(drain.removed, 1);
+        assert_eq!(drain.dynamic_object_remove_aura_cleanup_count, 1);
+        assert_eq!(drain.dynamic_object_unbound_caster_count, 1);
+        assert!(map.map_object_record(dynamic_object_guid).is_none());
     }
 
     #[test]
