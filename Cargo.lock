@@ -3153,6 +3153,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "parking_lot",
+ "rand",
  "smallvec",
  "wow-constants",
  "wow-core",

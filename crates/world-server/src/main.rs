@@ -2746,10 +2746,11 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
         return None;
     };
     let difficulty_id = map.spawn_mode();
-    let Some(difficulty_record) = caches
+    if caches
         .difficulty_store
         .get_like_cpp(spawn.id, difficulty_id)
-    else {
+        .is_none()
+    {
         debug!(
             spawn_id,
             entry = spawn.id,
@@ -2757,19 +2758,7 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
             "C++ loaded-grid Creature DoRespawn blocked: missing real creature_template_difficulty row"
         );
         return None;
-    };
-    if difficulty_record.min_level != difficulty_record.max_level {
-        debug!(
-            spawn_id,
-            entry = spawn.id,
-            difficulty_id,
-            min_level = difficulty_record.min_level,
-            max_level = difficulty_record.max_level,
-            "C++ loaded-grid Creature DoRespawn deferred: variable-level SelectLevel requires map RNG ownership; preserving map-owned respawn timer/order"
-        );
-        return None;
     }
-
     let inputs = creature_loaded_grid::build_loaded_grid_creature_inputs_from_db_like_cpp(
         spawn,
         runtime_row,
@@ -2783,7 +2772,7 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
         map.instance_id(),
         respawn_time,
         true,
-        |min_level, _max_level| min_level,
+        |min_level, max_level| map.select_creature_level_like_cpp(min_level, max_level),
     );
     let (template, resolved_spawn, runtime_selection) = match inputs {
         Ok(inputs) => inputs,
@@ -2855,10 +2844,10 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
     // timer UpdatePool plans, and the safe `DoRespawn` unloaded-grid early-return
     // branch after timer removal. DB delete/save effects are queued for async
     // execution after releasing the MapManager lock. Loaded-grid Creature
-    // DB-backed loading is wired through the map-owned seam only for supported
-    // fixed-level cases; AddToWorld/ObjectAccessor/fanout/scripts/AI/vehicle/
-    // zonescript/formation/dynamic-tree, variable-level map RNG, GameObject
-    // DB-backed loading, AreaTrigger runtime and full PoolMgr runtime remain gaps.
+    // DB-backed loading is wired through the map-owned seam for supported
+    // fixed-level and variable-level cases; AddToWorld/ObjectAccessor/fanout/
+    // scripts/AI/vehicle/zonescript/formation/dynamic-tree, GameObject DB-backed
+    // loading, AreaTrigger runtime and full PoolMgr runtime remain gaps.
     // RustyCore does not yet expose CONFIG_RESPAWN_DYNAMIC_ESCORTNPC
     // or Creature::IsEscorted ownership here, so the bridge passes false/false.
     let now_secs = SystemTime::now()
@@ -3611,6 +3600,7 @@ mod tests {
         PersistedRespawnTimesLikeCpp, RespawnDbDeleteQueueOutcomeLikeCpp,
         RespawnDbSaveQueueOutcomeLikeCpp,
         apply_canonical_spawn_group_condition_update_set_inactive_like_cpp,
+        build_loaded_grid_creature_respawn_record_like_cpp,
         canonical_map_update_tick_set_inactive_like_cpp,
         install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
         loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
@@ -4793,6 +4783,138 @@ mmap.enablePathFinding = 0
                 .get_respawn_info_like_cpp(SpawnObjectType::Creature, 1)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn loaded_grid_creature_respawn_record_variable_level_returns_creature_record_like_cpp() {
+        let mut metadata = test_spawn_metadata_with_flags([(67, 571, SpawnGroupFlags::NONE)]);
+        let spawn_id = 1;
+        let entry = 42;
+        metadata = metadata.with_creature_runtime_rows_like_cpp(BTreeMap::from([(
+            spawn_id,
+            super::spawn_store_loader::CreatureSpawnRuntimeRowLikeCpp {
+                spawn_id,
+                model_id: 999,
+                equipment_id: 3,
+                wander_distance: 15.0,
+                curhealth: 0,
+                curmana: 0,
+                movement_type: 1,
+                string_id: "variable-level-live".to_string(),
+                spawn_time_secs: 120,
+            },
+        )]));
+        let caches = variable_loaded_grid_creature_respawn_caches_like_cpp(entry);
+        let mut map = wow_map::Map::new(571, 0, 2, 60_000);
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id,
+            entry,
+            respawn_time: 0,
+            grid_id: 7,
+        });
+
+        let record = build_loaded_grid_creature_respawn_record_like_cpp(
+            &mut map,
+            SpawnObjectType::Creature,
+            spawn_id,
+            &metadata,
+            &caches,
+        )
+        .expect("variable-level loaded-grid Creature builder should no longer block");
+        let creature = record
+            .creature()
+            .expect("builder should return a typed Creature MapObjectRecord");
+        let level = creature.ai_level();
+
+        assert!((18..=20).contains(&level));
+        assert_eq!(record.kind(), wow_entities::AccessorObjectKind::Creature);
+        assert_eq!(creature.lifecycle_metadata().spawn_id, spawn_id);
+        assert_eq!(
+            creature.guid().high_type(),
+            wow_core::guid::HighGuid::Creature
+        );
+        assert_eq!(u32::from(creature.guid().map_id()), 571);
+        assert_eq!(creature.guid().entry(), entry);
+        assert_eq!(creature.guid().counter(), 1);
+        assert_eq!(creature.ai_max_health(), u64::from(level) * 20);
+        assert_eq!(creature.ai_current_health(), creature.ai_max_health());
+    }
+
+    fn variable_loaded_grid_creature_respawn_caches_like_cpp(
+        entry: u32,
+    ) -> LoadedGridCreatureRespawnCachesLikeCpp {
+        LoadedGridCreatureRespawnCachesLikeCpp {
+            template_store: Arc::new(
+                wow_data::CreatureTemplateLifecycleStoreLikeCpp::from_templates([
+                    wow_data::CreatureTemplateLifecycleRecordLikeCpp {
+                        entry,
+                        name: "Variable Level Live Creature".to_string(),
+                        faction: 35,
+                        speed_walk: 1.0,
+                        speed_run: 1.14286,
+                        scale: 1.0,
+                        classification: 0,
+                        unit_class: 1,
+                        vehicle_id: 0,
+                        movement_type: 1,
+                        flags_extra: 0,
+                        string_id: String::new(),
+                        regen_health: true,
+                        spells: [0; 8],
+                        models: vec![wow_data::CreatureTemplateLifecycleModelLikeCpp {
+                            creature_display_id: 111,
+                            display_scale: 1.0,
+                            probability: 100.0,
+                        }],
+                    },
+                ]),
+            ),
+            difficulty_store: Arc::new(wow_data::CreatureDifficultyStoreLikeCpp::from_records(
+                [wow_data::CreatureDifficultyRecordLikeCpp {
+                    entry,
+                    difficulty_id: 2,
+                    min_level: 18,
+                    max_level: 20,
+                    health_scaling_expansion: -1,
+                    health_modifier: 2.0,
+                    mana_modifier: 1.0,
+                    armor_modifier: 1.0,
+                    damage_modifier: 1.0,
+                    creature_difficulty_id: 0,
+                    type_flags: 0,
+                    type_flags2: 0,
+                    loot_id: 0,
+                    pickpocket_loot_id: 0,
+                    skin_loot_id: 0,
+                    gold_min: 0,
+                    gold_max: 0,
+                    static_flags: [0; 8],
+                }],
+                |_| 1.0,
+            )),
+            base_stats_store: Arc::new(wow_data::CreatureBaseStatsStoreLikeCpp::from_records([
+                (18, 1, creature_base_stats_record_like_cpp(180)),
+                (19, 1, creature_base_stats_record_like_cpp(190)),
+                (20, 1, creature_base_stats_record_like_cpp(200)),
+            ])),
+            health_rates: wow_data::CreatureClassificationHealthRatesLikeCpp::default(),
+            display_store: Arc::new(wow_data::CreatureDisplayInfoStore::from_entries([])),
+            model_store: Arc::new(wow_data::CreatureModelDataStore::from_entries([])),
+        }
+    }
+
+    fn creature_base_stats_record_like_cpp(
+        base_health: u32,
+    ) -> wow_data::CreatureBaseStatsRecordLikeCpp {
+        wow_data::CreatureBaseStatsRecordLikeCpp {
+            base_health: [base_health / 4, base_health / 2, base_health],
+            base_mana: 50,
+            base_armor: 0,
+            attack_power: 0,
+            ranged_attack_power: 0,
+            base_damage: [1.0, 2.0, 3.0],
+        }
     }
 
     fn test_spawn_metadata<const N: usize>(

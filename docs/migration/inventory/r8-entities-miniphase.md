@@ -5,6 +5,11 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.407** Variable-level live Creature loaded-grid DB-backed respawn loader RNG seam (map-owned RNG; not full LoadFromDB).
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1567-1575`, `/home/server/woltk-trinity-legacy/src/common/Utilities/Random.h:25-29`, `/home/server/woltk-trinity-legacy/src/common/Utilities/Random.cpp:35-47`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1770-1813`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1815-1923`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2188`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240`.
+  Rust targets: `crates/wow-map/Cargo.toml`, `crates/wow-map/src/map.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `wow_map::Map` owns the Creature level RNG seam, exposes inclusive C++-like `urand` plus `select_creature_level_like_cpp`, fixed-level rows do not consume RNG, and live `world-server` loaded-grid Creature DB-backed builder no longer blocks solely because `MinLevel != MaxLevel`; it still returns `None` for missing real dependencies and keeps vehicle/AddToWorld/ObjectAccessor/fanout/scripts/AI/formation/dynamic-tree/GameObject/PoolMgr full runtime out of scope.
+
 - [x] **#NEXT.R8.ENTITIES.406** Review correction for live Creature loaded-grid DB-backed respawn loader wiring (fixed-level cases only; variable-level deferred).
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2165-2188`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2191-2240`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1770-1813`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1815-1923`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2505-2511`.
   Scope: `runtime` wiring correction in `world-server` only; `wow_map::Map` remains source-of-truth for respawn timers, map objects and GUID sequence; `world-server` composes DB/template/difficulty/stats/model caches under `&mut Map` with no async/DB inside the map lock.

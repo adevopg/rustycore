@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rand::{Rng, SeedableRng, rngs::StdRng};
+
 use crate::cell::{Cell, GridObjectGuids, WorldObjectGuids, calculate_cell_area_like_cpp};
 use crate::coords::{
     CellCoord, GridCoord, MAX_NUMBER_OF_CELLS, MAX_NUMBER_OF_GRIDS, SIZE_OF_GRID_CELL,
@@ -777,6 +779,11 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     /// synchronization is intentionally out of scope for this seam, so all
     /// supported HighGuid generators start lazily at 1 unless explicitly set.
     guid_generators: HashMap<HighGuid, MapGuidSequenceGeneratorLikeCpp>,
+    /// Map-owned seam for C++ `urand` consumers that are owned by `Map` runtime
+    /// state. This slice wires Creature::SelectLevel only; DB/cache callers may
+    /// request random level selection through `&mut Map` but must not own or
+    /// replay this RNG themselves.
+    creature_level_rng_like_cpp: StdRng,
 }
 
 impl Map<NoopTerrainGridLoader, NoopGridLifecycle> {
@@ -833,6 +840,7 @@ where
             area_triggers_by_spawn_id: HashMap::new(),
             map_objects: HashMap::new(),
             guid_generators: HashMap::new(),
+            creature_level_rng_like_cpp: StdRng::from_entropy(),
         }
     }
 
@@ -846,6 +854,29 @@ where
 
     pub const fn spawn_mode(&self) -> Difficulty {
         self.spawn_mode
+    }
+
+    /// Mirrors TrinityCore `urand(min, max)` (`Random.cpp:35-47`): assert
+    /// `max >= min` and sample an inclusive integer range. Ownership remains on
+    /// `Map` so loaded-grid runtime consumers advance one canonical RNG stream.
+    pub fn urand_inclusive_like_cpp(&mut self, min: u32, max: u32) -> u32 {
+        assert!(max >= min, "C++ urand requires max >= min");
+        self.creature_level_rng_like_cpp.gen_range(min..=max)
+    }
+
+    /// Mirrors `Creature::SelectLevel` for DB/template min/max rows: fixed rows
+    /// use `MinLevel` without consuming RNG; variable rows call inclusive `urand`.
+    pub fn select_creature_level_like_cpp(&mut self, min_level: u8, max_level: u8) -> u8 {
+        if min_level == max_level {
+            return min_level;
+        }
+        let selected = self.urand_inclusive_like_cpp(u32::from(min_level), u32::from(max_level));
+        selected as u8
+    }
+
+    #[cfg(test)]
+    fn seed_creature_level_rng_for_tests_like_cpp(&mut self, seed: u64) {
+        self.creature_level_rng_like_cpp = StdRng::seed_from_u64(seed);
     }
 
     pub fn generate_low_guid_like_cpp(
@@ -4808,6 +4839,49 @@ mod tests {
                 high: HighGuid::Player,
             })
         );
+    }
+
+    #[test]
+    fn urand_inclusive_like_cpp_stays_within_inclusive_bounds() {
+        let mut map = test_map();
+        map.seed_creature_level_rng_for_tests_like_cpp(0x407);
+
+        let mut saw_min = false;
+        let mut saw_max = false;
+        for _ in 0..512 {
+            let value = map.urand_inclusive_like_cpp(18, 20);
+            assert!((18..=20).contains(&value));
+            saw_min |= value == 18;
+            saw_max |= value == 20;
+        }
+
+        assert!(saw_min, "inclusive C++ urand should be able to return min");
+        assert!(saw_max, "inclusive C++ urand should be able to return max");
+    }
+
+    #[test]
+    #[should_panic(expected = "C++ urand requires max >= min")]
+    fn urand_inclusive_like_cpp_asserts_max_at_least_min_like_cpp() {
+        let mut map = test_map();
+        let _ = map.urand_inclusive_like_cpp(20, 18);
+    }
+
+    #[test]
+    fn select_creature_level_fixed_path_does_not_consume_rng_like_cpp() {
+        let mut fixed_then_variable = test_map();
+        fixed_then_variable.seed_creature_level_rng_for_tests_like_cpp(0x407);
+        assert_eq!(
+            fixed_then_variable.select_creature_level_like_cpp(19, 19),
+            19
+        );
+        let after_fixed = fixed_then_variable.select_creature_level_like_cpp(18, 20);
+
+        let mut variable_only = test_map();
+        variable_only.seed_creature_level_rng_for_tests_like_cpp(0x407);
+        let without_fixed = variable_only.select_creature_level_like_cpp(18, 20);
+
+        assert_eq!(after_fixed, without_fixed);
+        assert!((18..=20).contains(&after_fixed));
     }
 
     #[test]
