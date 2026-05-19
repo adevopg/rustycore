@@ -35,9 +35,9 @@ use crate::spawn::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator, Position, guid::HighGuid};
 use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
-    Corpse, Creature, DynamicObject, GameObject, INVALID_HEIGHT, LineOfSightQuery,
-    MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord, ObjectAccessorError,
-    ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject, Unit,
+    Corpse, Creature, DynamicObject, DynamicObjectType, GameObject, INVALID_HEIGHT,
+    LineOfSightQuery, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
+    ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject, Unit,
     UnitSharedVisionSetWorldObjectRequestLikeCpp, WorldObject, WorldObjectEnvironment,
     WorldObjectHeightQuery,
 };
@@ -379,6 +379,31 @@ pub struct DynamicObjectCasterViewpointOutcomeLikeCpp {
     pub status: DynamicObjectCasterViewpointStatusLikeCpp,
     pub player_set_viewpoint: PlayerSetViewpointOutcomeLikeCpp,
     pub dynamic_object_viewpoint_toggled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FarsightDynamicObjectCreateStatusLikeCpp {
+    Created,
+    MissingCasterPlayer,
+    CasterNotInWorld,
+    CasterWrongMap,
+    InvalidDestination,
+    MapIdNotRepresentableInGuid,
+    SpellIdNotRepresentable,
+    CastTimeNotRepresentable,
+    GuidSequenceError(MapGuidSequenceErrorLikeCpp),
+    DynamicObjectRecordError(ObjectAccessorError),
+    AddToMapError,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FarsightDynamicObjectCreateOutcomeLikeCpp {
+    pub status: FarsightDynamicObjectCreateStatusLikeCpp,
+    pub caster_player_guid: ObjectGuid,
+    pub dynamic_object_guid: Option<ObjectGuid>,
+    pub low_guid: Option<i64>,
+    pub add_to_map: Option<AddToMapOutcome>,
+    pub caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2386,6 +2411,179 @@ where
             apply,
             true,
         )
+    }
+
+    /// Map-owned seam for C++ `Spell::EffectAddFarsight` ->
+    /// `DynamicObject::CreateDynamicObject` -> `SetDuration` ->
+    /// `SetCasterViewpoint`.
+    ///
+    /// C++ anchors:
+    /// - `SpellEffects.cpp:2237-2261` runs only after HIT handling has selected
+    ///   a Player caster, returns if the Player is not in world, creates
+    ///   `DynamicObject(true)`, calls `CreateDynamicObject`, then sets duration
+    ///   and caster viewpoint.
+    /// - `DynamicObject.cpp:84-133` binds the object to the caster map, validates
+    ///   the destination, creates a world-object GUID from map/spell/low guid,
+    ///   inherits phase, sets entry/scale/update fields, marks world objects
+    ///   active before AddToMap, and inserts through `Map::AddToMap`.
+    /// - `DynamicObject.cpp:209-239` resolves the already-bound caster pointer for
+    ///   `SetCasterViewpoint`; Rust represents that by `DynamicObject::bound_caster()`
+    ///   and delegates to `apply_dynamic_object_caster_viewpoint_like_cpp`.
+    ///
+    /// Ownership: source-of-truth is this `Map::map_objects` for both the caster
+    /// Player and the newly-created DynamicObject. Per #NEXT.R8.ENTITIES.428
+    /// invariants, represented fallback paths validate all rejectable inputs before
+    /// low-guid consumption so a missing/wrong caster or invalid destination leaves
+    /// the Map seam unmutated; this is an explicitly bounded creation-seam guard even
+    /// though C++ receives `guidlow` before `CreateDynamicObject` validates `pos`.
+    /// This does not parse live Spell targets, create dummy records, register through
+    /// ObjectAccessor, implement transport passenger offsets, UpdatePositionData,
+    /// ZoneScript, aura/update lifecycle, real SetSeer/fanout, packets/session mirrors,
+    /// DB, or spell handler wiring.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_farsight_dynamic_object_like_cpp(
+        &mut self,
+        caster_player_guid: ObjectGuid,
+        spell_id: u32,
+        spell_x_spell_visual_id: i32,
+        dest: Position,
+        radius: f32,
+        duration_ms: i32,
+        cast_time_ms: u64,
+        realm_id: u16,
+        server_id: u32,
+    ) -> FarsightDynamicObjectCreateOutcomeLikeCpp {
+        let early = |status| FarsightDynamicObjectCreateOutcomeLikeCpp {
+            status,
+            caster_player_guid,
+            dynamic_object_guid: None,
+            low_guid: None,
+            add_to_map: None,
+            caster_viewpoint: None,
+        };
+
+        let Some(caster_player) = self.get_typed_player(caster_player_guid) else {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::MissingCasterPlayer);
+        };
+        let caster_world = caster_player.unit().world();
+        if !caster_world.object().is_in_world() {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::CasterNotInWorld);
+        }
+        if caster_world.map_id() != self.map_id || caster_world.instance_id() != self.instance_id {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::CasterWrongMap);
+        }
+        if !dest.is_valid_map_coord_like_cpp() {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::InvalidDestination);
+        }
+        if self.map_id > 0x1FFF {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::MapIdNotRepresentableInGuid);
+        }
+        let Ok(spell_id_i32) = i32::try_from(spell_id) else {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::SpellIdNotRepresentable);
+        };
+        let Ok(cast_time_ms_u32) = u32::try_from(cast_time_ms) else {
+            return early(FarsightDynamicObjectCreateStatusLikeCpp::CastTimeNotRepresentable);
+        };
+        let inherited_phase_shift = caster_world.phase_shift().clone();
+        let inherited_suppressed_phase_shift = caster_world.suppressed_phase_shift().clone();
+
+        let low_guid = match self.generate_low_guid_like_cpp(HighGuid::DynamicObject) {
+            Ok(low_guid) => low_guid,
+            Err(error) => {
+                return early(FarsightDynamicObjectCreateStatusLikeCpp::GuidSequenceError(
+                    error,
+                ));
+            }
+        };
+        let dynamic_object_guid = ObjectGuid::create_world_object(
+            HighGuid::DynamicObject,
+            0,
+            realm_id,
+            self.map_id as u16,
+            server_id,
+            spell_id,
+            low_guid,
+        );
+
+        let mut dynamic_object = DynamicObject::new(true);
+        dynamic_object
+            .world_mut()
+            .object_mut()
+            .create(dynamic_object_guid);
+        if dynamic_object
+            .world_mut()
+            .set_map(self.map_id, self.instance_id)
+            .is_err()
+        {
+            return FarsightDynamicObjectCreateOutcomeLikeCpp {
+                status: FarsightDynamicObjectCreateStatusLikeCpp::DynamicObjectRecordError(
+                    ObjectAccessorError::ObjectHasNoMap {
+                        guid: dynamic_object_guid,
+                    },
+                ),
+                caster_player_guid,
+                dynamic_object_guid: Some(dynamic_object_guid),
+                low_guid: Some(low_guid),
+                add_to_map: None,
+                caster_viewpoint: None,
+            };
+        }
+        dynamic_object.world_mut().relocate(dest);
+        *dynamic_object.world_mut().phase_shift_mut() = inherited_phase_shift;
+        *dynamic_object.world_mut().suppressed_phase_shift_mut() = inherited_suppressed_phase_shift;
+        dynamic_object.world_mut().object_mut().set_entry(spell_id);
+        dynamic_object.world_mut().object_mut().set_scale(1.0);
+        dynamic_object.set_caster_guid(caster_player_guid);
+        dynamic_object.set_dynamic_object_type(DynamicObjectType::FarsightFocus);
+        dynamic_object.set_spell_visual_id(spell_x_spell_visual_id);
+        dynamic_object.set_spell_id(spell_id_i32);
+        dynamic_object.set_radius(radius);
+        dynamic_object.set_cast_time_ms(cast_time_ms_u32);
+        dynamic_object.bind_to_caster(caster_player_guid);
+        dynamic_object.set_duration(duration_ms);
+        if dynamic_object.world().is_world_object() {
+            dynamic_object.world_mut().set_active(true);
+        }
+
+        let record = match MapObjectRecord::new_dynamic_object(dynamic_object) {
+            Ok(record) => record,
+            Err(error) => {
+                return FarsightDynamicObjectCreateOutcomeLikeCpp {
+                    status: FarsightDynamicObjectCreateStatusLikeCpp::DynamicObjectRecordError(
+                        error,
+                    ),
+                    caster_player_guid,
+                    dynamic_object_guid: Some(dynamic_object_guid),
+                    low_guid: Some(low_guid),
+                    add_to_map: None,
+                    caster_viewpoint: None,
+                };
+            }
+        };
+        let add_to_map = match self.add_map_object_record_to_map_like_cpp(record) {
+            Ok(outcome) => outcome,
+            Err(_error) => {
+                return FarsightDynamicObjectCreateOutcomeLikeCpp {
+                    status: FarsightDynamicObjectCreateStatusLikeCpp::AddToMapError,
+                    caster_player_guid,
+                    dynamic_object_guid: Some(dynamic_object_guid),
+                    low_guid: Some(low_guid),
+                    add_to_map: None,
+                    caster_viewpoint: None,
+                };
+            }
+        };
+        let caster_viewpoint =
+            self.apply_dynamic_object_caster_viewpoint_like_cpp(dynamic_object_guid, true);
+
+        FarsightDynamicObjectCreateOutcomeLikeCpp {
+            status: FarsightDynamicObjectCreateStatusLikeCpp::Created,
+            caster_player_guid,
+            dynamic_object_guid: Some(dynamic_object_guid),
+            low_guid: Some(low_guid),
+            add_to_map: Some(add_to_map),
+            caster_viewpoint: Some(caster_viewpoint),
+        }
     }
 
     /// Bounded map-owned caller-consumption seam for C++
@@ -10438,6 +10636,285 @@ mod tests {
             .relocate(Position::xyz(11.0, 21.0, 31.0));
         dynamic_object.world_mut().object_mut().add_to_world();
         dynamic_object
+    }
+
+    fn create_farsight_focus_for_tests<Terrain, Lifecycle>(
+        map: &mut Map<Terrain, Lifecycle>,
+        caster_player_guid: ObjectGuid,
+    ) -> FarsightDynamicObjectCreateOutcomeLikeCpp
+    where
+        Terrain: TerrainGridLoader,
+        Lifecycle: GridLifecycle,
+    {
+        map.create_farsight_dynamic_object_like_cpp(
+            caster_player_guid,
+            12_345,
+            678,
+            Position::new(100.0, 200.0, 30.0, 1.5),
+            42.5,
+            30_000,
+            987_654,
+            1,
+            7,
+        )
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_inserts_focus_and_sets_viewpoint_like_cpp() {
+        let mut map = test_map();
+        let player = test_player_for_viewpoint(4280101);
+        let player_guid = player.guid();
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome = create_farsight_focus_for_tests(&mut map, player_guid);
+
+        assert_eq!(
+            outcome.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::Created
+        );
+        assert_eq!(outcome.caster_player_guid, player_guid);
+        assert_eq!(outcome.low_guid, Some(1));
+        let dynamic_guid = outcome.dynamic_object_guid.unwrap();
+        assert_eq!(dynamic_guid.high_type(), HighGuid::DynamicObject);
+        assert_ne!(dynamic_guid.counter(), 12_345);
+        assert_eq!(
+            map.get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                .unwrap(),
+            2
+        );
+        let add_to_map = outcome.add_to_map.unwrap();
+        assert!(add_to_map.inserted);
+        assert!(add_to_map.inserted_into_cell);
+        assert!(!add_to_map.already_in_world);
+
+        let dynamic_object = map.get_typed_dynamic_object(dynamic_guid).unwrap();
+        assert_eq!(dynamic_object.world().guid(), dynamic_guid);
+        assert_eq!(dynamic_object.world().map_id(), 571);
+        assert_eq!(dynamic_object.world().instance_id(), 7);
+        assert_eq!(
+            dynamic_object.world().position(),
+            Position::new(100.0, 200.0, 30.0, 1.5)
+        );
+        assert!(dynamic_object.world().object().is_in_world());
+        assert!(dynamic_object.world().is_active());
+        assert_eq!(dynamic_object.world().object().entry(), 12_345);
+        assert_eq!(dynamic_object.world().object().scale(), 1.0);
+        assert_eq!(dynamic_object.caster_guid(), player_guid);
+        assert_eq!(dynamic_object.bound_caster(), Some(player_guid));
+        assert_eq!(
+            dynamic_object.data().dynamic_object_type,
+            DynamicObjectType::FarsightFocus as u8
+        );
+        assert_eq!(dynamic_object.data().spell_visual_id, 678);
+        assert_eq!(dynamic_object.spell_id(), 12_345);
+        assert_eq!(dynamic_object.radius(), 42.5);
+        assert_eq!(dynamic_object.data().cast_time_ms, 987_654);
+        assert_eq!(dynamic_object.duration_ms(), 30_000);
+        assert!(dynamic_object.is_caster_viewpoint());
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            dynamic_guid
+        );
+        let viewpoint = outcome.caster_viewpoint.unwrap();
+        assert_eq!(viewpoint.dynamic_object_guid, dynamic_guid);
+        assert_eq!(
+            viewpoint.status,
+            DynamicObjectCasterViewpointStatusLikeCpp::CasterPlayerResolved
+        );
+        assert_eq!(
+            viewpoint.player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Applied
+        );
+        assert!(viewpoint.player_set_viewpoint.update_visibility_requested);
+        assert!(viewpoint.player_set_viewpoint.set_seer_requested);
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_missing_caster_does_not_mutate_or_consume_low_guid_like_cpp()
+    {
+        let mut map = test_map();
+        let missing_player_guid = guid(HighGuid::Player, 4280201);
+
+        let outcome = create_farsight_focus_for_tests(&mut map, missing_player_guid);
+
+        assert_eq!(
+            outcome.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::MissingCasterPlayer
+        );
+        assert_eq!(outcome.dynamic_object_guid, None);
+        assert_eq!(map.map_objects.len(), 0);
+        assert_eq!(
+            map.get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_untyped_caster_record_does_not_mutate_like_cpp() {
+        let mut map = test_map();
+        let mut player_object = world_object_with_counter(HighGuid::Player, 4280301, 571, 7, true);
+        let player_guid = player_object.guid();
+        player_object.object_mut().add_to_world();
+        map.insert_map_object(AccessorObjectKind::Player, player_object)
+            .unwrap();
+
+        let outcome = create_farsight_focus_for_tests(&mut map, player_guid);
+
+        assert_eq!(
+            outcome.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::MissingCasterPlayer
+        );
+        assert_eq!(map.map_objects.len(), 1);
+        assert_eq!(
+            map.get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_caster_not_in_world_or_wrong_map_do_not_mutate_like_cpp() {
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_player = test_player_for_viewpoint(4280401);
+        let not_in_world_guid = not_in_world_player.guid();
+        not_in_world_player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(MapObjectRecord::new_player(not_in_world_player).unwrap())
+            .unwrap();
+
+        let not_in_world =
+            create_farsight_focus_for_tests(&mut not_in_world_map, not_in_world_guid);
+
+        assert_eq!(
+            not_in_world.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::CasterNotInWorld
+        );
+        assert_eq!(not_in_world_map.map_objects.len(), 1);
+        assert_eq!(
+            not_in_world_map
+                .get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                .unwrap(),
+            1
+        );
+
+        let mut wrong_map = test_map();
+        let wrong_map_player = test_player_for_viewpoint(4280402);
+        let wrong_map_guid = wrong_map_player.guid();
+        wrong_map
+            .insert_map_object_record(MapObjectRecord::new_player(wrong_map_player).unwrap())
+            .unwrap();
+        wrong_map.map_id = 530;
+
+        let wrong_map_outcome = create_farsight_focus_for_tests(&mut wrong_map, wrong_map_guid);
+
+        assert_eq!(
+            wrong_map_outcome.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::CasterWrongMap
+        );
+        assert_eq!(wrong_map.map_objects.len(), 1);
+        assert_eq!(
+            wrong_map
+                .get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_invalid_destination_preserves_no_mutation_like_cpp() {
+        let invalid_destinations = [
+            Position::new(f32::NAN, 200.0, 30.0, 1.5),
+            Position::new(100.0, 200.0, f32::NAN, 1.5),
+            Position::new(100.0, 200.0, Position::MAP_HALFSIZE_LIKE_CPP, 1.5),
+            Position::new(100.0, 200.0, 30.0, f32::NAN),
+            Position::new(100.0, 200.0, 30.0, f32::INFINITY),
+        ];
+
+        for (index, dest) in invalid_destinations.into_iter().enumerate() {
+            let mut map = test_map();
+            let player = test_player_for_viewpoint(4280501 + index as i64);
+            let player_guid = player.guid();
+            map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+                .unwrap();
+
+            let outcome = map.create_farsight_dynamic_object_like_cpp(
+                player_guid,
+                12_345,
+                678,
+                dest,
+                42.5,
+                30_000,
+                987_654,
+                1,
+                7,
+            );
+
+            assert_eq!(
+                outcome.status,
+                FarsightDynamicObjectCreateStatusLikeCpp::InvalidDestination
+            );
+            assert_eq!(map.map_objects.len(), 1);
+            assert_eq!(
+                map.get_max_low_guid_like_cpp(HighGuid::DynamicObject)
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                map.get_typed_player(player_guid)
+                    .unwrap()
+                    .active_data()
+                    .farsight_object,
+                ObjectGuid::EMPTY
+            );
+        }
+    }
+
+    #[test]
+    fn farsight_dynamic_object_create_reports_viewpoint_no_mutation_without_panicking_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4280601);
+        let player_guid = player.guid();
+        let existing_guid = guid(HighGuid::Creature, 4280609);
+        player.set_farsight_object_like_cpp(existing_guid);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome = create_farsight_focus_for_tests(&mut map, player_guid);
+
+        assert_eq!(
+            outcome.status,
+            FarsightDynamicObjectCreateStatusLikeCpp::Created
+        );
+        let dynamic_guid = outcome.dynamic_object_guid.unwrap();
+        let viewpoint = outcome.caster_viewpoint.unwrap();
+        assert_eq!(
+            viewpoint.player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::AlreadyHasViewpoint
+        );
+        assert!(!viewpoint.player_set_viewpoint.update_visibility_requested);
+        assert!(!viewpoint.player_set_viewpoint.set_seer_requested);
+        assert!(viewpoint.dynamic_object_viewpoint_toggled);
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            existing_guid
+        );
+        assert!(
+            map.get_typed_dynamic_object(dynamic_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
     }
 
     #[test]
