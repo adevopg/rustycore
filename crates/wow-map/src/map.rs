@@ -339,6 +339,29 @@ pub struct SetWorldObjectOutcomeLikeCpp {
     pub status: SetWorldObjectStatusLikeCpp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerSetViewpointStatusLikeCpp {
+    Applied,
+    Removed,
+    MissingPlayer,
+    MissingTarget,
+    TargetNotUnit,
+    TargetIsVehicleBase,
+    AlreadyHasViewpoint,
+    ViewpointMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerSetViewpointOutcomeLikeCpp {
+    pub player_guid: ObjectGuid,
+    pub target_guid: ObjectGuid,
+    pub apply: bool,
+    pub status: PlayerSetViewpointStatusLikeCpp,
+    pub set_world_object: Option<SetWorldObjectOutcomeLikeCpp>,
+    pub update_visibility_requested: bool,
+    pub set_seer_requested: bool,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RemoveAllObjectsInRemoveListOutcomeLikeCpp {
     pub switch_processed: usize,
@@ -2120,6 +2143,230 @@ where
         request: UnitSharedVisionSetWorldObjectRequestLikeCpp,
     ) -> SetWorldObjectOutcomeLikeCpp {
         self.set_world_object_like_cpp(request.unit_guid, request.on)
+    }
+
+    fn player_set_viewpoint_outcome_like_cpp(
+        player_guid: ObjectGuid,
+        target_guid: ObjectGuid,
+        apply: bool,
+        status: PlayerSetViewpointStatusLikeCpp,
+        set_world_object: Option<SetWorldObjectOutcomeLikeCpp>,
+        update_visibility_requested: bool,
+        set_seer_requested: bool,
+    ) -> PlayerSetViewpointOutcomeLikeCpp {
+        PlayerSetViewpointOutcomeLikeCpp {
+            player_guid,
+            target_guid,
+            apply,
+            status,
+            set_world_object,
+            update_visibility_requested,
+            set_seer_requested,
+        }
+    }
+
+    fn map_record_unit_mut_like_cpp(record: &mut MapObjectRecord) -> Option<&mut Unit> {
+        match record.kind() {
+            AccessorObjectKind::Creature => record.creature_mut().map(Creature::unit_mut),
+            AccessorObjectKind::Pet => record.pet_mut().map(|pet| pet.creature_mut().unit_mut()),
+            _ => None,
+        }
+    }
+
+    /// Bounded map-owned seam for the Unit-target shared-vision branch of C++
+    /// `Player::SetViewpoint(WorldObject* target, bool apply)`.
+    ///
+    /// C++ anchors:
+    /// - `Player.cpp:25344-25387` owns FarsightObject guards/mutations,
+    ///   requests `UpdateVisibilityOf`, calls `Unit::Add/RemovePlayerToVision`
+    ///   only for Unit targets that are not `GetVehicleBase()`, and requests
+    ///   `SetSeer`.
+    /// - `Unit.cpp:6489-6509` toggles Unit active state and emits
+    ///   `SetWorldObject(true/false)` only at shared-vision empty boundaries.
+    /// - `Object.cpp:910-916` / `Map.cpp:2557-2594` keep the SetWorldObject
+    ///   map-owned switch-list enqueue/drain split.
+    ///
+    /// Scope: this helper mutates only canonical `Map::map_objects` typed Player
+    /// and typed Creature/Pet Unit targets already in this same map. It consumes
+    /// the Unit-emitted SetWorldObject DTO immediately through the Map facade, but
+    /// does not drain queues, fan out visibility, implement `SetSeer`, access
+    /// ObjectAccessor/session mirrors, create records, send packets, or touch DB.
+    pub fn apply_player_set_viewpoint_unit_like_cpp(
+        &mut self,
+        player_guid: ObjectGuid,
+        target_guid: ObjectGuid,
+        apply: bool,
+        vehicle_base_guid: Option<ObjectGuid>,
+    ) -> PlayerSetViewpointOutcomeLikeCpp {
+        let Some(player) = self.get_typed_player(player_guid) else {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                PlayerSetViewpointStatusLikeCpp::MissingPlayer,
+                None,
+                false,
+                false,
+            );
+        };
+
+        let current_farsight = player.active_data().farsight_object;
+        if apply {
+            if !current_farsight.is_empty() {
+                return Self::player_set_viewpoint_outcome_like_cpp(
+                    player_guid,
+                    target_guid,
+                    apply,
+                    PlayerSetViewpointStatusLikeCpp::AlreadyHasViewpoint,
+                    None,
+                    false,
+                    false,
+                );
+            }
+        } else if current_farsight != target_guid {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                PlayerSetViewpointStatusLikeCpp::ViewpointMismatch,
+                None,
+                false,
+                false,
+            );
+        }
+
+        let Some(target_record) = self.map_object_record(target_guid) else {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                PlayerSetViewpointStatusLikeCpp::MissingTarget,
+                None,
+                false,
+                false,
+            );
+        };
+        if !matches!(
+            target_record.kind(),
+            AccessorObjectKind::Creature | AccessorObjectKind::Pet
+        ) {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                PlayerSetViewpointStatusLikeCpp::TargetNotUnit,
+                None,
+                false,
+                false,
+            );
+        }
+
+        let vehicle_base_skip = vehicle_base_guid == Some(target_guid);
+        if !vehicle_base_skip {
+            let Some(target_record) = self.map_objects.get_mut(&target_guid) else {
+                return Self::player_set_viewpoint_outcome_like_cpp(
+                    player_guid,
+                    target_guid,
+                    apply,
+                    PlayerSetViewpointStatusLikeCpp::MissingTarget,
+                    None,
+                    false,
+                    false,
+                );
+            };
+            if Self::map_record_unit_mut_like_cpp(target_record).is_none() {
+                return Self::player_set_viewpoint_outcome_like_cpp(
+                    player_guid,
+                    target_guid,
+                    apply,
+                    PlayerSetViewpointStatusLikeCpp::TargetNotUnit,
+                    None,
+                    false,
+                    false,
+                );
+            }
+        }
+
+        let Some(player) = self.get_typed_player_mut(player_guid) else {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                PlayerSetViewpointStatusLikeCpp::MissingPlayer,
+                None,
+                false,
+                false,
+            );
+        };
+        player.set_farsight_object_like_cpp(if apply {
+            target_guid
+        } else {
+            ObjectGuid::EMPTY
+        });
+
+        if vehicle_base_skip {
+            return Self::player_set_viewpoint_outcome_like_cpp(
+                player_guid,
+                target_guid,
+                apply,
+                if apply {
+                    PlayerSetViewpointStatusLikeCpp::Applied
+                } else {
+                    PlayerSetViewpointStatusLikeCpp::Removed
+                },
+                None,
+                apply,
+                true,
+            );
+        }
+
+        let request = {
+            let Some(target_record) = self.map_objects.get_mut(&target_guid) else {
+                return Self::player_set_viewpoint_outcome_like_cpp(
+                    player_guid,
+                    target_guid,
+                    apply,
+                    PlayerSetViewpointStatusLikeCpp::MissingTarget,
+                    None,
+                    false,
+                    false,
+                );
+            };
+            let Some(target_unit) = Self::map_record_unit_mut_like_cpp(target_record) else {
+                return Self::player_set_viewpoint_outcome_like_cpp(
+                    player_guid,
+                    target_guid,
+                    apply,
+                    PlayerSetViewpointStatusLikeCpp::TargetNotUnit,
+                    None,
+                    false,
+                    false,
+                );
+            };
+            if apply {
+                target_unit.add_player_to_vision_like_cpp(player_guid)
+            } else {
+                target_unit.remove_player_from_vision_like_cpp(player_guid)
+            }
+            .set_world_object
+        };
+        let set_world_object = request.map(|request| {
+            self.apply_unit_shared_vision_set_world_object_request_like_cpp(request)
+        });
+
+        Self::player_set_viewpoint_outcome_like_cpp(
+            player_guid,
+            target_guid,
+            apply,
+            if apply {
+                PlayerSetViewpointStatusLikeCpp::Applied
+            } else {
+                PlayerSetViewpointStatusLikeCpp::Removed
+            },
+            set_world_object,
+            apply,
+            true,
+        )
     }
 
     /// C++ `Map::AddObjectToSwitchList` represented over canonical map records.
@@ -9964,6 +10211,238 @@ mod tests {
                 cell.y_coord % MAX_NUMBER_OF_CELLS,
             )
             .unwrap()
+    }
+
+    fn test_player_for_viewpoint(counter: i64) -> Player {
+        let mut player = Player::new(Some(7), false);
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Player, counter));
+        player.unit_mut().world_mut().set_map(571, 7).unwrap();
+        player
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::xyz(10.0, 20.0, 30.0));
+        player.unit_mut().world_mut().object_mut().add_to_world();
+        player
+    }
+
+    #[test]
+    fn player_set_viewpoint_apply_unit_target_consumes_set_world_object_like_cpp() {
+        let mut map = test_map();
+        let player = test_player_for_viewpoint(4240101);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 424010, 4240102);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome =
+            map.apply_player_set_viewpoint_unit_like_cpp(player_guid, target_guid, true, None);
+
+        assert_eq!(outcome.status, PlayerSetViewpointStatusLikeCpp::Applied);
+        assert!(outcome.update_visibility_requested);
+        assert!(outcome.set_seer_requested);
+        assert_eq!(
+            outcome.set_world_object,
+            Some(SetWorldObjectOutcomeLikeCpp {
+                guid: target_guid,
+                on: true,
+                status: SetWorldObjectStatusLikeCpp::Delegated(
+                    AddObjectToSwitchListStatusLikeCpp::Queued
+                ),
+            })
+        );
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            target_guid
+        );
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .contains(&player_guid)
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), Some(true));
+    }
+
+    #[test]
+    fn player_set_viewpoint_apply_existing_viewpoint_is_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4240201);
+        let player_guid = player.guid();
+        let existing_guid = guid(HighGuid::Creature, 4240209);
+        player.set_farsight_object_like_cpp(existing_guid);
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 424020, 4240202);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome =
+            map.apply_player_set_viewpoint_unit_like_cpp(player_guid, target_guid, true, None);
+
+        assert_eq!(
+            outcome.status,
+            PlayerSetViewpointStatusLikeCpp::AlreadyHasViewpoint
+        );
+        assert_eq!(outcome.set_world_object, None);
+        assert!(!outcome.update_visibility_requested);
+        assert!(!outcome.set_seer_requested);
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            existing_guid
+        );
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), None);
+    }
+
+    #[test]
+    fn player_set_viewpoint_remove_last_viewer_consumes_set_world_object_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4240301);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 424030, 4240302);
+        player.set_farsight_object_like_cpp(target_guid);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.get_typed_creature_mut(target_guid)
+            .unwrap()
+            .unit_mut()
+            .add_player_to_vision_like_cpp(player_guid);
+        assert_eq!(map.pending_switch_like_cpp(target_guid), None);
+
+        let outcome =
+            map.apply_player_set_viewpoint_unit_like_cpp(player_guid, target_guid, false, None);
+
+        assert_eq!(outcome.status, PlayerSetViewpointStatusLikeCpp::Removed);
+        assert!(!outcome.update_visibility_requested);
+        assert!(outcome.set_seer_requested);
+        assert_eq!(
+            outcome.set_world_object,
+            Some(SetWorldObjectOutcomeLikeCpp {
+                guid: target_guid,
+                on: false,
+                status: SetWorldObjectStatusLikeCpp::Delegated(
+                    AddObjectToSwitchListStatusLikeCpp::Queued
+                ),
+            })
+        );
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            ObjectGuid::EMPTY
+        );
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), Some(false));
+    }
+
+    #[test]
+    fn player_set_viewpoint_remove_mismatch_is_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4240401);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 424040, 4240402);
+        let existing_guid = guid(HighGuid::Creature, 4240409);
+        player.set_farsight_object_like_cpp(existing_guid);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome =
+            map.apply_player_set_viewpoint_unit_like_cpp(player_guid, target_guid, false, None);
+
+        assert_eq!(
+            outcome.status,
+            PlayerSetViewpointStatusLikeCpp::ViewpointMismatch
+        );
+        assert_eq!(outcome.set_world_object, None);
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            existing_guid
+        );
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), None);
+    }
+
+    #[test]
+    fn player_set_viewpoint_vehicle_base_skips_unit_shared_vision_like_cpp() {
+        let mut map = test_map();
+        let player = test_player_for_viewpoint(4240501);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 424050, 4240502);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+
+        let outcome = map.apply_player_set_viewpoint_unit_like_cpp(
+            player_guid,
+            target_guid,
+            true,
+            Some(target_guid),
+        );
+
+        assert_eq!(outcome.status, PlayerSetViewpointStatusLikeCpp::Applied);
+        assert!(outcome.update_visibility_requested);
+        assert!(outcome.set_seer_requested);
+        assert_eq!(outcome.set_world_object, None);
+        assert_eq!(
+            map.get_typed_player(player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            target_guid
+        );
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), None);
     }
 
     #[test]

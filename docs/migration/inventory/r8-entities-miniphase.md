@@ -7,6 +7,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.424** Map-owned `Player::SetViewpoint` Unit-target shared-vision consumption seam.
+  Status: complete for map-owned Player::SetViewpoint Unit-target shared-vision consumption seam only; pending review/commit; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:25344-25387`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp:6489-6509`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:910-916`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2557-2594`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Map::apply_player_set_viewpoint_unit_like_cpp(player_guid,target_guid,apply,vehicle_base_guid)` reads only canonical `Map::map_objects`, mutates typed `MapObjectRecord::Player` FarsightObject and typed Creature/Pet Unit shared-vision state, and immediately consumes emitted Unit SetWorldObject DTOs through the map-owned facade without draining queues. It reports missing Player, missing/untyped target, existing viewpoint, mismatch, and vehicle-base skip as explicit outcomes; `UpdateVisibilityOf` and `SetSeer` are represented only as outcome booleans. Not full `Player::SetViewpoint`, not real `SetSeer`, not visibility fanout/ObjectAccessor/session/aura callsite wiring, not DynamicObject/Cinematic/FarSight handlers, not full AddToWorld/RemoveFromWorld, no install/restart/push.
+
 - [x] **#NEXT.R8.ENTITIES.423** Map bridge for Unit shared-vision `SetWorldObject` requests.
 -  Status: complete for the explicit request -> Map facade bridge only; review `APROBADO`; validation OK; committed locally; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp:6489-6509`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:910-916`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2557-2572`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2574-2594`.
