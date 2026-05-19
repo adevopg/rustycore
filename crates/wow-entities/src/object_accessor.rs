@@ -57,9 +57,15 @@ impl AccessorObjectKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessorPlayer {
     normalized_name: String,
-    object: WorldObject,
+    body: AccessorPlayerBody,
     inventory: PlayerInventoryStorage,
     items: HashMap<ObjectGuid, Item>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum AccessorPlayerBody {
+    WorldObject(WorldObject),
+    Player(Box<Player>),
 }
 
 impl AccessorPlayer {
@@ -93,7 +99,46 @@ impl AccessorPlayer {
 
         Ok(Self {
             normalized_name,
-            object,
+            body: AccessorPlayerBody::WorldObject(object),
+            inventory,
+            items: items
+                .into_iter()
+                .map(|item| (item.object().guid(), item))
+                .collect(),
+        })
+    }
+
+    pub fn new_player(name: impl AsRef<str>, player: Player) -> Result<Self, ObjectAccessorError> {
+        Self::new_player_with_inventory(name, player, PlayerInventoryStorage::default())
+    }
+
+    pub fn new_player_with_inventory(
+        name: impl AsRef<str>,
+        player: Player,
+        inventory: PlayerInventoryStorage,
+    ) -> Result<Self, ObjectAccessorError> {
+        Self::new_player_with_inventory_and_items(name, player, inventory, [])
+    }
+
+    pub fn new_player_with_inventory_and_items(
+        name: impl AsRef<str>,
+        player: Player,
+        inventory: PlayerInventoryStorage,
+        items: impl IntoIterator<Item = Item>,
+    ) -> Result<Self, ObjectAccessorError> {
+        if !player.unit().world().guid().is_player() {
+            return Err(ObjectAccessorError::WrongGuidKind {
+                guid: player.unit().world().guid(),
+                expected: AccessorObjectKind::Player,
+            });
+        }
+
+        let normalized_name =
+            normalize_player_name(name.as_ref()).ok_or(ObjectAccessorError::InvalidPlayerName)?;
+
+        Ok(Self {
+            normalized_name,
+            body: AccessorPlayerBody::Player(Box::new(player)),
             inventory,
             items: items
                 .into_iter()
@@ -106,12 +151,32 @@ impl AccessorPlayer {
         &self.normalized_name
     }
 
-    pub const fn object(&self) -> &WorldObject {
-        &self.object
+    pub fn object(&self) -> &WorldObject {
+        match &self.body {
+            AccessorPlayerBody::WorldObject(object) => object,
+            AccessorPlayerBody::Player(player) => player.unit().world(),
+        }
     }
 
     pub fn object_mut(&mut self) -> &mut WorldObject {
-        &mut self.object
+        match &mut self.body {
+            AccessorPlayerBody::WorldObject(object) => object,
+            AccessorPlayerBody::Player(player) => player.unit_mut().world_mut(),
+        }
+    }
+
+    pub fn player(&self) -> Option<&Player> {
+        match &self.body {
+            AccessorPlayerBody::Player(player) => Some(player.as_ref()),
+            AccessorPlayerBody::WorldObject(_) => None,
+        }
+    }
+
+    pub fn player_mut(&mut self) -> Option<&mut Player> {
+        match &mut self.body {
+            AccessorPlayerBody::Player(player) => Some(player.as_mut()),
+            AccessorPlayerBody::WorldObject(_) => None,
+        }
     }
 
     pub const fn inventory(&self) -> &PlayerInventoryStorage {
@@ -546,15 +611,47 @@ impl ObjectAccessor {
         items: impl IntoIterator<Item = Item>,
     ) -> Result<(), ObjectAccessorError> {
         let player = AccessorPlayer::new_with_inventory_and_items(name, object, inventory, items)?;
-        let guid = player.object.guid();
+        self.insert_player_record(player);
+        Ok(())
+    }
 
-        if let Some(previous) = self.players.insert(guid, player.clone()) {
+    pub fn add_player_entity(
+        &mut self,
+        name: impl AsRef<str>,
+        player: Player,
+    ) -> Result<(), ObjectAccessorError> {
+        self.add_player_entity_with_inventory(name, player, PlayerInventoryStorage::default())
+    }
+
+    pub fn add_player_entity_with_inventory(
+        &mut self,
+        name: impl AsRef<str>,
+        player: Player,
+        inventory: PlayerInventoryStorage,
+    ) -> Result<(), ObjectAccessorError> {
+        self.add_player_entity_with_inventory_and_items(name, player, inventory, [])
+    }
+
+    pub fn add_player_entity_with_inventory_and_items(
+        &mut self,
+        name: impl AsRef<str>,
+        player: Player,
+        inventory: PlayerInventoryStorage,
+        items: impl IntoIterator<Item = Item>,
+    ) -> Result<(), ObjectAccessorError> {
+        let player =
+            AccessorPlayer::new_player_with_inventory_and_items(name, player, inventory, items)?;
+        self.insert_player_record(player);
+        Ok(())
+    }
+
+    fn insert_player_record(&mut self, player: AccessorPlayer) {
+        let guid = player.object().guid();
+        let normalized_name = player.normalized_name.clone();
+        if let Some(previous) = self.players.insert(guid, player) {
             self.player_names.remove(previous.normalized_name());
         }
-        self.player_names
-            .insert(player.normalized_name.clone(), guid);
-
-        Ok(())
+        self.player_names.insert(normalized_name, guid);
     }
 
     pub fn player_inventory_mut(
@@ -606,6 +703,15 @@ impl ObjectAccessor {
         self.players.get(&guid).map(AccessorPlayer::object)
     }
 
+    pub fn find_connected_player_entity(&self, guid: ObjectGuid) -> Option<&Player> {
+        self.players.get(&guid)?.player()
+    }
+
+    pub fn find_player_entity(&self, guid: ObjectGuid) -> Option<&Player> {
+        self.find_connected_player_entity(guid)
+            .filter(|player| player.unit().world().object().is_in_world())
+    }
+
     pub fn player_object_mut(&mut self, guid: ObjectGuid) -> Option<&mut WorldObject> {
         self.players.get_mut(&guid).map(AccessorPlayer::object_mut)
     }
@@ -629,7 +735,7 @@ impl ObjectAccessor {
     pub fn find_player_by_low_guid(&self, low_guid: i64) -> Option<&WorldObject> {
         self.players
             .values()
-            .find(|player| player.object.guid().counter() == low_guid)
+            .find(|player| player.object().guid().counter() == low_guid)
             .map(AccessorPlayer::object)
             .filter(|player| player.object().is_in_world())
     }
@@ -1141,6 +1247,30 @@ impl ObjectAccessor {
             .filter(|player| same_map(context, player))
     }
 
+    pub fn get_player_entity(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&Player> {
+        let player = self.find_player_entity(guid)?;
+        same_map(context, player.unit().world()).then_some(player)
+    }
+
+    pub fn get_typed_player_from_map_source<'a, Source>(
+        &'a self,
+        context: &WorldObject,
+        source: &Source,
+        guid: ObjectGuid,
+    ) -> Option<&'a Player>
+    where
+        Source: ObjectAccessorMapSource + ?Sized,
+    {
+        if !context.has_current_map()
+            || context.map_id() != source.map_id()
+            || context.instance_id() != source.instance_id()
+        {
+            return None;
+        }
+
+        self.get_player_entity(context, guid)
+    }
+
     #[deprecated(note = "map-local unit lookup requires ObjectAccessorMapSource")]
     pub fn get_unit(&self, context: &WorldObject, guid: ObjectGuid) -> Option<&WorldObject> {
         if guid.is_player() {
@@ -1370,6 +1500,44 @@ mod tests {
         item
     }
 
+    fn player_entity(
+        counter: i64,
+        map_id: u32,
+        instance_id: u32,
+        in_world: bool,
+        attacking: Option<ObjectGuid>,
+    ) -> Player {
+        let mut player = Player::new(Some(counter as u64), false);
+        player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Player, counter));
+        player
+            .unit_mut()
+            .world_mut()
+            .set_map(map_id, instance_id)
+            .unwrap();
+        player
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            player.unit_mut().world_mut().object_mut().add_to_world();
+        }
+        player.unit_mut().set_attacking(attacking);
+        player
+    }
+
+    fn run_player_stack_test(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(test)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn convert_type_id(type_id: wow_core::guid::TypeId) -> TypeId {
         match type_id {
             wow_core::guid::TypeId::Object => TypeId::Object,
@@ -1493,6 +1661,221 @@ mod tests {
         );
         record.player_mut().unwrap().unit_mut().set_attacking(None);
         assert_eq!(record.player().unwrap().unit().attacking(), None);
+    }
+
+    #[test]
+    fn typed_global_player_lookup_preserves_player_body_like_cpp_hashmap_holder() {
+        run_player_stack_test(|| {
+            let mut accessor = ObjectAccessor::default();
+            let context = world_object(HighGuid::Player, 530, 1, true);
+            let target = guid(HighGuid::Creature, 4_201);
+            let player = player_entity(4_200, 530, 1, true, Some(target));
+            let player_guid = player.unit().world().guid();
+            let source = TestMapSource {
+                map_id: 530,
+                instance_id: 1,
+                records: std::collections::HashMap::new(),
+            };
+
+            accessor.add_player_entity("anduin", player).unwrap();
+
+            assert_eq!(
+                accessor
+                    .find_connected_player_entity(player_guid)
+                    .unwrap()
+                    .unit()
+                    .attacking(),
+                Some(target)
+            );
+            assert_eq!(
+                accessor
+                    .find_player_entity(player_guid)
+                    .unwrap()
+                    .unit()
+                    .attacking(),
+                Some(target)
+            );
+            assert_eq!(
+                accessor
+                    .get_player_entity(&context, player_guid)
+                    .unwrap()
+                    .unit()
+                    .attacking(),
+                Some(target)
+            );
+            assert_eq!(
+                accessor
+                    .get_typed_player_from_map_source(&context, &source, player_guid)
+                    .unwrap()
+                    .unit()
+                    .attacking(),
+                Some(target)
+            );
+        });
+    }
+
+    #[test]
+    fn typed_global_player_lookup_rejects_legacy_and_cpp_early_returns() {
+        run_player_stack_test(|| {
+            let mut accessor = ObjectAccessor::default();
+            let context = world_object(HighGuid::Player, 530, 1, true);
+            let legacy = world_object(HighGuid::Player, 530, 1, true);
+            let legacy_guid = legacy.guid();
+            let not_in_world = player_entity(4_210, 530, 1, false, None);
+            let not_in_world_guid = not_in_world.unit().world().guid();
+            let other_map = player_entity(4_211, 571, 1, true, None);
+            let other_map_guid = other_map.unit().world().guid();
+            let other_instance = player_entity(4_212, 530, 2, true, None);
+            let other_instance_guid = other_instance.unit().world().guid();
+
+            accessor.add_player("legacy", legacy).unwrap();
+            accessor.add_player_entity("ghost", not_in_world).unwrap();
+            accessor.add_player_entity("map", other_map).unwrap();
+            accessor
+                .add_player_entity("instance", other_instance)
+                .unwrap();
+
+            assert!(accessor.get_player(&context, legacy_guid).is_some());
+            assert!(accessor.get_player_entity(&context, legacy_guid).is_none());
+            assert!(
+                accessor
+                    .find_connected_player_entity(not_in_world_guid)
+                    .is_some()
+            );
+            assert!(accessor.find_player_entity(not_in_world_guid).is_none());
+            assert!(
+                accessor
+                    .get_player_entity(&context, not_in_world_guid)
+                    .is_none()
+            );
+            assert!(
+                accessor
+                    .get_player_entity(&context, other_map_guid)
+                    .is_none()
+            );
+            assert!(
+                accessor
+                    .get_player_entity(&context, other_instance_guid)
+                    .is_none()
+            );
+            assert!(
+                accessor
+                    .get_player_entity(&context, guid(HighGuid::Creature, 4_213))
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn typed_player_map_source_ignores_map_object_record_player_like_cpp_hashmap_holder() {
+        run_player_stack_test(|| {
+            let mut accessor = ObjectAccessor::default();
+            let context = world_object(HighGuid::Player, 530, 1, true);
+            let source_only_player = player_entity(4_220, 530, 1, true, None);
+            let source_only_guid = source_only_player.unit().world().guid();
+            let global_player = player_entity(4_221, 530, 1, true, None);
+            let global_guid = global_player.unit().world().guid();
+            let mut source = TestMapSource {
+                map_id: 530,
+                instance_id: 1,
+                records: std::collections::HashMap::new(),
+            };
+            source.records.insert(
+                source_only_guid,
+                MapObjectRecord::new_player(source_only_player).unwrap(),
+            );
+
+            assert!(
+                accessor
+                    .get_typed_player_from_map_source(&context, &source, source_only_guid)
+                    .is_none()
+            );
+
+            accessor
+                .add_player_entity("tyrande", global_player)
+                .unwrap();
+            assert!(
+                accessor
+                    .get_typed_player_from_map_source(&context, &source, global_guid)
+                    .is_some()
+            );
+            source.map_id = 571;
+            assert!(
+                accessor
+                    .get_typed_player_from_map_source(&context, &source, global_guid)
+                    .is_none()
+            );
+            source.map_id = 530;
+            source.instance_id = 2;
+            assert!(
+                accessor
+                    .get_typed_player_from_map_source(&context, &source, global_guid)
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn player_worldobject_dispatch_and_type_mask_stay_on_global_registry_like_cpp() {
+        run_player_stack_test(|| {
+            let mut accessor = ObjectAccessor::default();
+            let context = world_object(HighGuid::Player, 530, 1, true);
+            let player = player_entity(4_230, 530, 1, true, None);
+            let player_guid = player.unit().world().guid();
+            let source = TestMapSource {
+                map_id: 530,
+                instance_id: 1,
+                records: std::collections::HashMap::new(),
+            };
+
+            accessor.add_player_entity("uther", player).unwrap();
+
+            assert_eq!(
+                accessor
+                    .get_world_object_from_map_source(&context, &source, player_guid)
+                    .unwrap()
+                    .guid(),
+                player_guid
+            );
+            assert!(matches!(
+                accessor.get_object_ref_by_type_mask_from_map_source(
+                    &context,
+                    &source,
+                    player_guid,
+                    TypeMask::PLAYER
+                ),
+                Some(AccessorObjectRef::WorldObject(object)) if object.guid() == player_guid
+            ));
+            assert_eq!(
+                accessor
+                    .get_unit_from_map_source(&context, &source, player_guid)
+                    .unwrap()
+                    .guid(),
+                player_guid
+            );
+        });
+    }
+
+    #[test]
+    fn typed_player_registration_validates_player_high_guid() {
+        run_player_stack_test(|| {
+            let mut player = player_entity(4_240, 530, 1, true, None);
+            let creature_guid = guid(HighGuid::Creature, 4_241);
+            player
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .create(creature_guid);
+
+            let error = AccessorPlayer::new_player("bad", player).unwrap_err();
+            assert_eq!(
+                error,
+                ObjectAccessorError::WrongGuidKind {
+                    guid: creature_guid,
+                    expected: AccessorObjectKind::Player,
+                }
+            );
+        });
     }
 
     #[test]
