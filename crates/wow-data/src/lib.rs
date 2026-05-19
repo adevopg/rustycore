@@ -21,6 +21,7 @@ pub mod difficulty;
 pub mod disable_mgr;
 pub mod dungeon_encounter;
 pub mod entities_movement;
+pub mod gameobject_template;
 pub mod gossip;
 pub mod graveyard;
 pub mod hotfix_cache;
@@ -115,6 +116,11 @@ pub use entities_movement::{
     EmotesTextSoundStore, EmotesTextStore, GameObjectArtKitEntry, GameObjectArtKitStore,
     GameObjectDisplayInfoEntry, GameObjectDisplayInfoStore, GameObjectsEntry, GameObjectsStore,
     UnitConditionEntry, UnitConditionStore, UnitPowerBarEntry, UnitPowerBarStore,
+};
+pub use gameobject_template::{
+    GameObjectOverrideLifecycleRecordLikeCpp, GameObjectOverrideLifecycleStoreLikeCpp,
+    GameObjectTemplateAddonLifecycleRecordLikeCpp, GameObjectTemplateLifecycleRecordLikeCpp,
+    GameObjectTemplateLifecycleStoreLikeCpp,
 };
 pub use gossip::{GossipConditionAttachmentReport, GossipMenu, GossipMenuItem, GossipStore};
 pub use graveyard::{

@@ -106,11 +106,13 @@ pub use game_object::{
     GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TEXT,
     GAMEOBJECT_TYPE_TRANSPORT, GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK,
     GO_DYNFLAG_LO_NO_INTERACT, GO_FLAG_IN_MULTI_USE, GO_FLAG_IN_USE, GameObject,
-    GameObjectDataUpdate, GameObjectDataValues, GameObjectLootSource, GameObjectOwnedLoot,
-    GameObjectTemplateData, GameObjectValuesUpdate, GatheringNodeUseSource, GoState,
-    GooberUseSource, GuardPostUseSource, ItemForgeUseSource, LootState, MAX_GAMEOBJECT_DATA,
-    MeetingStoneUseSource, NewFlagDropUseSource, NewFlagUseSource, QuestgiverUseSource,
-    RitualUseSource, SpellcasterUseSource, TrapUseSource, UiLinkUseSource,
+    GameObjectCreateLifecycleRecord, GameObjectDataUpdate, GameObjectDataValues,
+    GameObjectLifecycleError, GameObjectLoadFromDbLifecycleRecord, GameObjectLootSource,
+    GameObjectOwnedLoot, GameObjectTemplateData, GameObjectTemplateLifecycleRecord,
+    GameObjectValuesUpdate, GatheringNodeUseSource, GoState, GooberUseSource, GuardPostUseSource,
+    ItemForgeUseSource, LootState, MAX_GAMEOBJECT_DATA, MeetingStoneUseSource,
+    NewFlagDropUseSource, NewFlagUseSource, QuestgiverUseSource, RitualUseSource,
+    SpellcasterUseSource, TrapUseSource, UiLinkUseSource,
 };
 pub use item::{
     APPEARANCE_MODIFIER_SLOT_BY_SPEC, ArtifactPower, BOP_TRADEABLE_DURATION_SECS,

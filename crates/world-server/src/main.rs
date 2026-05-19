@@ -45,6 +45,7 @@ use wow_world::{
 };
 
 mod creature_loaded_grid;
+mod gameobject_loaded_grid;
 mod spawn_store_loader;
 
 const WORLD_CONFIG_CANDIDATES: &[&str] = &[
@@ -580,6 +581,21 @@ async fn main() -> Result<()> {
     info!(
         "Loaded {} DB-backed creature_template lifecycle rows for loaded-grid Creature::LoadFromDB",
         creature_template_lifecycle_store.len()
+    );
+    let gameobject_template_lifecycle_store = Arc::new(
+        wow_data::GameObjectTemplateLifecycleStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load DB-backed gameobject_template lifecycle rows for C++ GameObject::LoadFromDB")?,
+    );
+    let gameobject_override_lifecycle_store = Arc::new(
+        wow_data::GameObjectOverrideLifecycleStoreLikeCpp::load_like_cpp(world_db.as_ref())
+            .await
+            .context("Failed to load DB-backed gameobject_overrides lifecycle rows for C++ GameObject::Create")?,
+    );
+    info!(
+        "Loaded C++ GameObject lifecycle stores: {} template rows, {} spawn override rows",
+        gameobject_template_lifecycle_store.len(),
+        gameobject_override_lifecycle_store.len()
     );
     let creature_damage_rates = wow_data::CreatureClassificationDamageRatesLikeCpp {
         normal: world_config_f32(&world_configs, "Rate.Creature.Damage.Normal", 1.0),
@@ -1618,6 +1634,8 @@ async fn main() -> Result<()> {
             health_rates: creature_health_rates,
             display_store: Arc::clone(&creature_display_info_store),
             model_store: Arc::clone(&creature_model_data_store),
+            gameobject_template_store: Arc::clone(&gameobject_template_lifecycle_store),
+            gameobject_override_store: Arc::clone(&gameobject_override_lifecycle_store),
         },
     );
 
@@ -2650,6 +2668,8 @@ struct LoadedGridCreatureRespawnCachesLikeCpp {
     health_rates: wow_data::CreatureClassificationHealthRatesLikeCpp,
     display_store: Arc<wow_data::CreatureDisplayInfoStore>,
     model_store: Arc<wow_data::CreatureModelDataStore>,
+    gameobject_template_store: Arc<wow_data::GameObjectTemplateLifecycleStoreLikeCpp>,
+    gameobject_override_store: Arc<wow_data::GameObjectOverrideLifecycleStoreLikeCpp>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -2821,6 +2841,119 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
     }
 }
 
+fn build_loaded_grid_gameobject_respawn_record_like_cpp(
+    map: &mut wow_map::Map,
+    object_type: wow_map::SpawnObjectType,
+    spawn_id: wow_map::SpawnId,
+    canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
+    caches: &LoadedGridCreatureRespawnCachesLikeCpp,
+) -> Option<wow_entities::MapObjectRecord> {
+    if object_type != wow_map::SpawnObjectType::GameObject {
+        return None;
+    }
+
+    let Some(spawn) = canonical_spawn_metadata
+        .spawn_store()
+        .spawn_data(object_type, spawn_id)
+    else {
+        debug!(
+            respawn_type = object_type as u8,
+            spawn_id, "C++ loaded-grid GameObject DoRespawn blocked: missing canonical SpawnData"
+        );
+        return None;
+    };
+    let Some(runtime_row) = canonical_spawn_metadata.gameobject_runtime_row_like_cpp(spawn_id)
+    else {
+        debug!(
+            spawn_id,
+            entry = spawn.id,
+            "C++ loaded-grid GameObject DoRespawn blocked: missing DB-backed gameobject runtime row"
+        );
+        return None;
+    };
+    // C++ `Map::ProcessRespawns` erases the due map-owned respawn timer before
+    // `DoRespawn -> GameObject::LoadFromDB(addToMap=true)`. Therefore
+    // `GetMap()->GetGORespawnTime(m_spawnId)` observes no timer and the newly
+    // respawned object's effective `m_respawnTime` is 0.
+    let inputs = gameobject_loaded_grid::build_loaded_grid_gameobject_inputs_from_db_like_cpp(
+        spawn,
+        runtime_row,
+        caches.gameobject_template_store.as_ref(),
+        caches.gameobject_override_store.as_ref(),
+        map.instance_id(),
+        0,
+        true,
+    );
+    let (template, resolved_spawn) = match inputs {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            debug!(
+                ?error,
+                spawn_id,
+                entry = spawn.id,
+                "C++ loaded-grid GameObject DoRespawn blocked: failed to compose DB-backed LoadFromDB inputs"
+            );
+            return None;
+        }
+    };
+
+    let map_object_guid = if template.go_type == wow_entities::GAMEOBJECT_TYPE_TRANSPORT {
+        let low = match map.generate_low_guid_like_cpp(HighGuid::Transport) {
+            Ok(low) => low,
+            Err(error) => {
+                debug!(
+                    ?error,
+                    spawn_id,
+                    entry = spawn.id,
+                    "C++ loaded-grid GameObject DoRespawn blocked: map-owned Transport low-guid generation failed"
+                );
+                return None;
+            }
+        };
+        ObjectGuid::create_transport(HighGuid::Transport, low)
+    } else {
+        let Ok(map_id) = u16::try_from(map.map_id()) else {
+            warn!(
+                map_id = map.map_id(),
+                spawn_id,
+                entry = spawn.id,
+                "C++ loaded-grid GameObject DoRespawn blocked: map id does not fit ObjectGuid world-object map field"
+            );
+            return None;
+        };
+        let low = match map.generate_low_guid_like_cpp(HighGuid::GameObject) {
+            Ok(low) => low,
+            Err(error) => {
+                debug!(
+                    ?error,
+                    spawn_id,
+                    entry = spawn.id,
+                    "C++ loaded-grid GameObject DoRespawn blocked: map-owned GameObject low-guid generation failed"
+                );
+                return None;
+            }
+        };
+        ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, map_id, 1, template.entry, low)
+    };
+    let resolver = gameobject_loaded_grid::GameObjectLoadedGridLifecycleResolverLikeCpp::new(
+        [template],
+        [resolved_spawn],
+    );
+    match resolver.resolve_loaded_grid_gameobject_like_cpp(spawn_id, map_object_guid) {
+        Ok(resolved) => resolved.map_object_record,
+        Err(error) => {
+            debug!(
+                ?error,
+                spawn_id,
+                entry = spawn.id,
+                guid = ?map_object_guid,
+                "C++ loaded-grid GameObject DoRespawn blocked: resolver rejected loaded GameObject record"
+            );
+            None
+        }
+    }
+}
+
 fn canonical_map_update_tick_set_inactive_like_cpp(
     manager: &mut wow_map::MapManager,
     diff_ms: u32,
@@ -2877,14 +3010,26 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
                 |_, _| false,
                 |_, _| 0.0,
                 |_candidates, count| (0..count).collect(),
-                |map, object_type, spawn_id| {
-                    build_loaded_grid_creature_respawn_record_like_cpp(
-                        map,
-                        object_type,
-                        spawn_id,
-                        canonical_spawn_metadata,
-                        loaded_grid_creature_respawn_caches,
-                    )
+                |map, object_type, spawn_id| match object_type {
+                    wow_map::SpawnObjectType::Creature => {
+                        build_loaded_grid_creature_respawn_record_like_cpp(
+                            map,
+                            object_type,
+                            spawn_id,
+                            canonical_spawn_metadata,
+                            loaded_grid_creature_respawn_caches,
+                        )
+                    }
+                    wow_map::SpawnObjectType::GameObject => {
+                        build_loaded_grid_gameobject_respawn_record_like_cpp(
+                            map,
+                            object_type,
+                            spawn_id,
+                            canonical_spawn_metadata,
+                            loaded_grid_creature_respawn_caches,
+                        )
+                    }
+                    wow_map::SpawnObjectType::AreaTrigger => None,
                 },
             );
         summary.respawn_deleted_inactive_spawn_group +=
@@ -3601,6 +3746,7 @@ mod tests {
         RespawnDbSaveQueueOutcomeLikeCpp,
         apply_canonical_spawn_group_condition_update_set_inactive_like_cpp,
         build_loaded_grid_creature_respawn_record_like_cpp,
+        build_loaded_grid_gameobject_respawn_record_like_cpp,
         canonical_map_update_tick_set_inactive_like_cpp,
         install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
         loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
@@ -3693,6 +3839,12 @@ mod tests {
             health_rates: wow_data::CreatureClassificationHealthRatesLikeCpp::default(),
             display_store: Arc::new(wow_data::CreatureDisplayInfoStore::from_entries([])),
             model_store: Arc::new(wow_data::CreatureModelDataStore::from_entries([])),
+            gameobject_template_store: Arc::new(
+                wow_data::GameObjectTemplateLifecycleStoreLikeCpp::default(),
+            ),
+            gameobject_override_store: Arc::new(
+                wow_data::GameObjectOverrideLifecycleStoreLikeCpp::default(),
+            ),
         }
     }
 
@@ -4786,6 +4938,100 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
+    fn loaded_grid_gameobject_respawn_record_returns_gameobject_record_like_cpp() {
+        let spawn_id = 77;
+        let entry = 9001;
+        let mut store = SpawnStore::new();
+        let spawn = SpawnData {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id,
+            map_id: 571,
+            db_data: true,
+            spawn_group: SpawnGroupTemplateData::default_group(),
+            id: entry,
+            spawn_point: SpawnPosition::new(1.0, 2.0, 3.0, 1.0),
+            phase_use_flags: 0,
+            phase_id: 0,
+            phase_group: 0,
+            terrain_swap_map: -1,
+            pool_id: 0,
+            spawn_time_secs: 30,
+            spawn_difficulties: vec![0],
+            script_id: 0,
+            string_id: String::new(),
+        };
+        store.add_object_spawn(&spawn, |_| false);
+        let metadata =
+            super::spawn_store_loader::CanonicalSpawnMetadataLikeCpp::new(store, BTreeMap::new())
+                .with_gameobject_runtime_rows_like_cpp(BTreeMap::from([(
+                    spawn_id,
+                    super::spawn_store_loader::GameObjectSpawnRuntimeRowLikeCpp {
+                        spawn_id,
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        anim_progress: 55,
+                        state: 1,
+                        string_id: "live-gameobject".to_string(),
+                        spawn_time_secs: 30,
+                    },
+                )]));
+        let mut data = [0; wow_entities::MAX_GAMEOBJECT_DATA];
+        data[11] = 1;
+        let mut caches = empty_loaded_grid_creature_respawn_caches_like_cpp();
+        caches.gameobject_template_store = Arc::new(
+            wow_data::GameObjectTemplateLifecycleStoreLikeCpp::from_templates([
+                wow_data::GameObjectTemplateLifecycleRecordLikeCpp {
+                    entry,
+                    go_type: wow_entities::GAMEOBJECT_TYPE_GOOBER,
+                    display_id: 44,
+                    name: "Live Loaded GO".to_string(),
+                    size: 1.0,
+                    data,
+                    content_tuning_id: 0,
+                    ai_name: String::new(),
+                    script_name: String::new(),
+                    string_id: String::new(),
+                    addon: None,
+                },
+            ]),
+        );
+        let mut map = wow_map::Map::new(571, 0, 0, 60_000);
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::GameObject,
+            spawn_id,
+            entry,
+            respawn_time: 1_234,
+            grid_id: 7,
+        });
+
+        let record = build_loaded_grid_gameobject_respawn_record_like_cpp(
+            &mut map,
+            SpawnObjectType::GameObject,
+            spawn_id,
+            &metadata,
+            &caches,
+        )
+        .expect("loaded-grid GameObject builder should return a MapObjectRecord");
+        let game_object = record
+            .game_object()
+            .expect("builder should return a typed GameObject MapObjectRecord");
+
+        assert_eq!(record.kind(), wow_entities::AccessorObjectKind::GameObject);
+        assert_eq!(game_object.spawn_id(), spawn_id);
+        assert_eq!(
+            game_object.world().guid().high_type(),
+            wow_core::guid::HighGuid::GameObject
+        );
+        assert_eq!(u32::from(game_object.world().guid().map_id()), 571);
+        assert_eq!(game_object.world().guid().entry(), entry);
+        assert_eq!(game_object.world().guid().counter(), 1);
+        assert_eq!(
+            game_object.respawn_time(),
+            0,
+            "ProcessRespawns erases due timer before LoadFromDB, so new GO observes no map respawn time"
+        );
+    }
+
+    #[test]
     fn loaded_grid_creature_respawn_record_variable_level_returns_creature_record_like_cpp() {
         let mut metadata = test_spawn_metadata_with_flags([(67, 571, SpawnGroupFlags::NONE)]);
         let spawn_id = 1;
@@ -4901,6 +5147,12 @@ mmap.enablePathFinding = 0
             health_rates: wow_data::CreatureClassificationHealthRatesLikeCpp::default(),
             display_store: Arc::new(wow_data::CreatureDisplayInfoStore::from_entries([])),
             model_store: Arc::new(wow_data::CreatureModelDataStore::from_entries([])),
+            gameobject_template_store: Arc::new(
+                wow_data::GameObjectTemplateLifecycleStoreLikeCpp::default(),
+            ),
+            gameobject_override_store: Arc::new(
+                wow_data::GameObjectOverrideLifecycleStoreLikeCpp::default(),
+            ),
         }
     }
 

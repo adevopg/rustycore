@@ -112,6 +112,7 @@ pub struct CanonicalSpawnMetadataLikeCpp {
     linked_respawns: LinkedRespawnStoreLikeCpp,
     pool_mgr: PoolMgrLikeCpp,
     creature_runtime_rows: BTreeMap<SpawnId, CreatureSpawnRuntimeRowLikeCpp>,
+    gameobject_runtime_rows: BTreeMap<SpawnId, GameObjectSpawnRuntimeRowLikeCpp>,
 }
 
 impl CanonicalSpawnMetadataLikeCpp {
@@ -125,6 +126,7 @@ impl CanonicalSpawnMetadataLikeCpp {
             linked_respawns: LinkedRespawnStoreLikeCpp::new(),
             pool_mgr: PoolMgrLikeCpp::new(),
             creature_runtime_rows: BTreeMap::new(),
+            gameobject_runtime_rows: BTreeMap::new(),
         }
     }
 
@@ -169,6 +171,21 @@ impl CanonicalSpawnMetadataLikeCpp {
         rows: BTreeMap<SpawnId, CreatureSpawnRuntimeRowLikeCpp>,
     ) -> Self {
         self.creature_runtime_rows = rows;
+        self
+    }
+
+    pub fn gameobject_runtime_row_like_cpp(
+        &self,
+        spawn_id: SpawnId,
+    ) -> Option<&GameObjectSpawnRuntimeRowLikeCpp> {
+        self.gameobject_runtime_rows.get(&spawn_id)
+    }
+
+    pub fn with_gameobject_runtime_rows_like_cpp(
+        mut self,
+        rows: BTreeMap<SpawnId, GameObjectSpawnRuntimeRowLikeCpp>,
+    ) -> Self {
+        self.gameobject_runtime_rows = rows;
         self
     }
 
@@ -224,6 +241,16 @@ pub struct CreatureSpawnRuntimeRowLikeCpp {
     pub spawn_time_secs: i32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct GameObjectSpawnRuntimeRowLikeCpp {
+    pub spawn_id: SpawnId,
+    pub rotation: [f32; 4],
+    pub anim_progress: u8,
+    pub state: u8,
+    pub string_id: String,
+    pub spawn_time_secs: i32,
+}
+
 #[derive(Debug, Clone)]
 struct CreatureSpawnRow {
     spawn_id: SpawnId,
@@ -260,7 +287,10 @@ struct GameObjectSpawnRow {
     y: f32,
     z: f32,
     orientation: f32,
+    rotation: [f32; 4],
     spawn_time_secs: i32,
+    anim_progress: u8,
+    state: u8,
     spawn_difficulties: String,
     event_entry: i16,
     pool_id: u32,
@@ -333,6 +363,7 @@ pub async fn load_canonical_spawn_store_like_cpp(
 ) -> Result<(CanonicalSpawnMetadataLikeCpp, CanonicalSpawnStoreLoadReport)> {
     let mut store = SpawnStore::new();
     let mut creature_runtime_rows = BTreeMap::new();
+    let mut gameobject_runtime_rows = BTreeMap::new();
     let mut report = CanonicalSpawnStoreLoadReport::default();
 
     load_creature_spawns_like_cpp(
@@ -344,8 +375,15 @@ pub async fn load_canonical_spawn_store_like_cpp(
         &mut report,
     )
     .await?;
-    load_gameobject_spawns_like_cpp(db, map_store, map_difficulty_store, &mut store, &mut report)
-        .await?;
+    load_gameobject_spawns_like_cpp(
+        db,
+        map_store,
+        map_difficulty_store,
+        &mut store,
+        &mut gameobject_runtime_rows,
+        &mut report,
+    )
+    .await?;
     load_area_trigger_spawns_like_cpp(db, map_store, map_difficulty_store, &mut store, &mut report)
         .await?;
 
@@ -365,7 +403,8 @@ pub async fn load_canonical_spawn_store_like_cpp(
         CanonicalSpawnMetadataLikeCpp::new(store, templates)
             .with_linked_respawns_like_cpp(linked_respawns)
             .with_pool_mgr_like_cpp(pool_mgr)
-            .with_creature_runtime_rows_like_cpp(creature_runtime_rows),
+            .with_creature_runtime_rows_like_cpp(creature_runtime_rows)
+            .with_gameobject_runtime_rows_like_cpp(gameobject_runtime_rows),
         report,
     ))
 }
@@ -785,6 +824,7 @@ async fn load_gameobject_spawns_like_cpp(
     map_store: &wow_data::MapStore,
     map_difficulty_store: &wow_data::MapDifficultyStore,
     store: &mut SpawnStore,
+    gameobject_runtime_rows: &mut BTreeMap<SpawnId, GameObjectSpawnRuntimeRowLikeCpp>,
     report: &mut CanonicalSpawnStoreLoadReport,
 ) -> Result<()> {
     let stmt = db.prepare(WorldStatements::SEL_GAMEOBJECT_SPAWNS);
@@ -802,7 +842,15 @@ async fn load_gameobject_spawns_like_cpp(
             y: result.read(4),
             z: result.read(5),
             orientation: result.read(6),
+            rotation: [
+                result.read(7),
+                result.read(8),
+                result.read(9),
+                result.read(10),
+            ],
             spawn_time_secs: result.read(11),
+            anim_progress: result.read(12),
+            state: result.read(13),
             spawn_difficulties: result.read(14),
             event_entry: result.try_read(15).unwrap_or(0),
             pool_id: result.try_read(16).unwrap_or(0),
@@ -814,6 +862,7 @@ async fn load_gameobject_spawns_like_cpp(
             string_id: result.try_read(22).unwrap_or_default(),
         };
         report.gameobject.rows += 1;
+        let runtime_row = gameobject_row_to_runtime_row_like_cpp(&row);
         if let Some(spawn) = gameobject_row_to_spawn_data_like_cpp(
             &row,
             map_store,
@@ -822,9 +871,11 @@ async fn load_gameobject_spawns_like_cpp(
         ) {
             if row.event_entry != 0 {
                 store.insert_spawn_metadata_like_cpp(&spawn);
+                gameobject_runtime_rows.insert(row.spawn_id, runtime_row.clone());
                 report.gameobject.skipped_event += 1;
             } else {
                 store.add_object_spawn(&spawn, is_personal_phase_like_cpp_represented);
+                gameobject_runtime_rows.insert(row.spawn_id, runtime_row.clone());
                 report.gameobject.indexed += 1;
             }
         }
@@ -1104,6 +1155,19 @@ fn creature_row_to_runtime_row_like_cpp(row: &CreatureSpawnRow) -> CreatureSpawn
         curhealth: row.curhealth,
         curmana: row.curmana,
         movement_type: row.movement_type,
+        string_id: row.string_id.clone(),
+        spawn_time_secs: row.spawn_time_secs,
+    }
+}
+
+fn gameobject_row_to_runtime_row_like_cpp(
+    row: &GameObjectSpawnRow,
+) -> GameObjectSpawnRuntimeRowLikeCpp {
+    GameObjectSpawnRuntimeRowLikeCpp {
+        spawn_id: row.spawn_id,
+        rotation: row.rotation,
+        anim_progress: row.anim_progress,
+        state: row.state,
         string_id: row.string_id.clone(),
         spawn_time_secs: row.spawn_time_secs,
     }
@@ -1403,7 +1467,10 @@ mod tests {
             y: 21.0,
             z: 31.0,
             orientation: 1.0,
+            rotation: [0.0, 0.0, 0.0, 1.0],
             spawn_time_secs: 300,
+            anim_progress: 100,
+            state: 1,
             spawn_difficulties: difficulties.to_string(),
             event_entry,
             pool_id: 0,
