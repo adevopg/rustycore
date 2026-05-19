@@ -5,6 +5,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.421** Map-owned `WorldObject::SetWorldObject` enqueue facade for canonical records.
+  Status: complete for the map-owned facade only; no live callsite/fanout/AddToWorld completion.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:910-916`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2557-2572`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2574-2594`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:918-925`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.h:723-725`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.h:365`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Map::set_world_object_like_cpp(guid,on)` reads only the canonical `MapObjectRecord`, returns missing/stale without insertion, returns not-in-world without enqueue/mutation, and delegates in-world records to `add_object_to_switch_list_like_cpp`. Non-unit in-world records surface the existing ignored outcome, opposite toggles cancel through the existing switch-list semantics, and `Creature::is_temp_world_object` still changes only when `remove_all_objects_in_remove_list_like_cpp()` drains the queue. Remaining gaps: live `WorldObject::SetWorldObject` callsites, fanout/visibility/ObjectAccessor/dynamic-tree/scripts/AI, full AddToWorld/RemoveFromWorld and runtime ownership.
+
 - [x] **#NEXT.R8.ENTITIES.420** Map-owned switch-list drain for temporary Unit world-object container toggles.
   Status: complete after review `APROBADO`, focused validation, and local commit. Complete only for map-local queue+drain/container move.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:345-346`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.h:651-652`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2557-2572`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:2574-2594`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:260-305`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:910-925`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.h:723-724`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.h:365`.

@@ -324,6 +324,20 @@ pub struct AddObjectToSwitchListOutcomeLikeCpp {
     pub status: AddObjectToSwitchListStatusLikeCpp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetWorldObjectStatusLikeCpp {
+    MissingOrStale,
+    NotInWorld,
+    Delegated(AddObjectToSwitchListStatusLikeCpp),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetWorldObjectOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub on: bool,
+    pub status: SetWorldObjectStatusLikeCpp,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RemoveAllObjectsInRemoveListOutcomeLikeCpp {
     pub switch_processed: usize,
@@ -2046,6 +2060,44 @@ where
                 .is_none()
                 .then_some(kind),
             cleanup_before_delete_count,
+        }
+    }
+
+    /// C++ `WorldObject::SetWorldObject(bool)` facade owned by `Map` over the
+    /// canonical `MapObjectRecord` store.
+    ///
+    /// C++ anchors:
+    /// - `Object.cpp:910-916` returns when `!IsInWorld()`, otherwise delegates
+    ///   to the owning map's `AddObjectToSwitchList(this, on)`.
+    /// - `Map.cpp:2557-2572` keeps Unit validation/queue duplicate semantics in
+    ///   `add_object_to_switch_list_like_cpp`; this facade does not move grid
+    ///   containers or mutate temporary world-object state.
+    pub fn set_world_object_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        on: bool,
+    ) -> SetWorldObjectOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(guid) else {
+            return SetWorldObjectOutcomeLikeCpp {
+                guid,
+                on,
+                status: SetWorldObjectStatusLikeCpp::MissingOrStale,
+            };
+        };
+
+        if !record.object().object().is_in_world() {
+            return SetWorldObjectOutcomeLikeCpp {
+                guid,
+                on,
+                status: SetWorldObjectStatusLikeCpp::NotInWorld,
+            };
+        }
+
+        let delegated = self.add_object_to_switch_list_like_cpp(guid, on);
+        SetWorldObjectOutcomeLikeCpp {
+            guid,
+            on,
+            status: SetWorldObjectStatusLikeCpp::Delegated(delegated.status),
         }
     }
 
@@ -9891,6 +9943,128 @@ mod tests {
                 cell.y_coord % MAX_NUMBER_OF_CELLS,
             )
             .unwrap()
+    }
+
+    #[test]
+    fn set_world_object_like_cpp_creature_in_world_enqueues_and_drain_executes() {
+        let mut map = test_map();
+        let spawn_id = 421010;
+        let (guid, cell, grid) = add_loaded_grid_creature_for_switch(&mut map, spawn_id, 4210101);
+
+        let outcome = map.set_world_object_like_cpp(guid, true);
+
+        assert_eq!(outcome.guid, guid);
+        assert_eq!(outcome.on, true);
+        assert_eq!(
+            outcome.status,
+            SetWorldObjectStatusLikeCpp::Delegated(AddObjectToSwitchListStatusLikeCpp::Queued)
+        );
+        assert_eq!(map.objects_to_switch_count_like_cpp(), 1);
+        assert_eq!(map.pending_switch_like_cpp(guid), Some(true));
+        assert!(!map.get_typed_creature(guid).unwrap().is_temp_world_object());
+        assert!(
+            local_cell_for_switch(&map, grid, cell)
+                .grid_objects
+                .creatures
+                .contains(&guid)
+        );
+
+        let drain = map.remove_all_objects_in_remove_list_like_cpp();
+
+        assert_eq!(drain.switch_processed, 1);
+        assert_eq!(drain.switch_executed, 1);
+        assert!(map.map_object_record(guid).is_some());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(spawn_id), 1);
+        let local_cell = local_cell_for_switch(&map, grid, cell);
+        assert!(!local_cell.grid_objects.creatures.contains(&guid));
+        assert!(local_cell.world_objects.creatures.contains(&guid));
+        assert!(map.get_typed_creature(guid).unwrap().is_temp_world_object());
+    }
+
+    #[test]
+    fn set_world_object_like_cpp_creature_not_in_world_does_not_enqueue_or_mutate() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(421020, 4210201, true);
+        let guid = creature.guid();
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let outcome = map.set_world_object_like_cpp(guid, true);
+
+        assert_eq!(outcome.status, SetWorldObjectStatusLikeCpp::NotInWorld);
+        assert_eq!(map.objects_to_switch_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 1);
+        assert!(!map.get_typed_creature(guid).unwrap().is_temp_world_object());
+        let drain = map.remove_all_objects_in_remove_list_like_cpp();
+        assert_eq!(drain.switch_processed, 0);
+        assert!(!map.get_typed_creature(guid).unwrap().is_temp_world_object());
+    }
+
+    #[test]
+    fn set_world_object_like_cpp_non_unit_in_world_uses_ignored_outcome_without_queue() {
+        let mut map = test_map();
+        let gameobject = test_gameobject_for_spawn(421030, 4210301);
+        let guid = gameobject.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_world_object_like_cpp(guid, true);
+
+        assert_eq!(
+            outcome.status,
+            SetWorldObjectStatusLikeCpp::Delegated(
+                AddObjectToSwitchListStatusLikeCpp::IgnoredNonUnit
+            )
+        );
+        assert_eq!(map.objects_to_switch_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 1);
+    }
+
+    #[test]
+    fn set_world_object_like_cpp_missing_stale_does_not_create_records() {
+        let mut map = test_map();
+        let guid = guid(HighGuid::Creature, 4210401);
+
+        let outcome = map.set_world_object_like_cpp(guid, true);
+
+        assert_eq!(outcome.status, SetWorldObjectStatusLikeCpp::MissingOrStale);
+        assert_eq!(map.objects_to_switch_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 0);
+        let drain = map.remove_all_objects_in_remove_list_like_cpp();
+        assert_eq!(drain.switch_processed, 0);
+        assert_eq!(map.map_object_count(), 0);
+    }
+
+    #[test]
+    fn set_world_object_like_cpp_opposite_toggle_cancels_before_drain() {
+        let mut map = test_map();
+        let (guid, cell, grid) = add_loaded_grid_creature_for_switch(&mut map, 421050, 4210501);
+
+        assert_eq!(
+            map.set_world_object_like_cpp(guid, true).status,
+            SetWorldObjectStatusLikeCpp::Delegated(AddObjectToSwitchListStatusLikeCpp::Queued)
+        );
+        assert!(!map.get_typed_creature(guid).unwrap().is_temp_world_object());
+        assert_eq!(
+            map.set_world_object_like_cpp(guid, false).status,
+            SetWorldObjectStatusLikeCpp::Delegated(
+                AddObjectToSwitchListStatusLikeCpp::CancelledOppositeToggle
+            )
+        );
+        assert_eq!(map.objects_to_switch_count_like_cpp(), 0);
+
+        let drain = map.remove_all_objects_in_remove_list_like_cpp();
+
+        assert_eq!(drain.switch_processed, 0);
+        let local_cell = local_cell_for_switch(&map, grid, cell);
+        assert!(local_cell.grid_objects.creatures.contains(&guid));
+        assert!(!local_cell.world_objects.creatures.contains(&guid));
+        assert!(!map.get_typed_creature(guid).unwrap().is_temp_world_object());
     }
 
     #[test]
