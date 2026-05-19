@@ -161,6 +161,19 @@ pub enum UnitAttackStopOutcome {
     NoVictim,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitSharedVisionSetWorldObjectRequestLikeCpp {
+    pub unit_guid: ObjectGuid,
+    pub on: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitSharedVisionUpdateOutcomeLikeCpp {
+    pub player_guid: ObjectGuid,
+    pub inserted_or_removed: bool,
+    pub set_world_object: Option<UnitSharedVisionSetWorldObjectRequestLikeCpp>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnitAttackContextLikeCpp {
     pub attacker_is_mounted_player: bool,
@@ -317,6 +330,53 @@ impl Unit {
 
     pub fn world_mut(&mut self) -> &mut WorldObject {
         &mut self.world
+    }
+
+    pub fn add_player_to_vision_like_cpp(
+        &mut self,
+        player_guid: ObjectGuid,
+    ) -> UnitSharedVisionUpdateOutcomeLikeCpp {
+        let was_empty = !self.subsystems.control.has_shared_vision();
+        let set_world_object = if was_empty {
+            let unit_guid = self.world().object().guid();
+            self.world_mut().set_active(true);
+            Some(UnitSharedVisionSetWorldObjectRequestLikeCpp {
+                unit_guid,
+                on: true,
+            })
+        } else {
+            None
+        };
+        let inserted_or_removed = self.subsystems.control.add_shared_vision(player_guid);
+
+        UnitSharedVisionUpdateOutcomeLikeCpp {
+            player_guid,
+            inserted_or_removed,
+            set_world_object,
+        }
+    }
+
+    pub fn remove_player_from_vision_like_cpp(
+        &mut self,
+        player_guid: ObjectGuid,
+    ) -> UnitSharedVisionUpdateOutcomeLikeCpp {
+        let inserted_or_removed = self.subsystems.control.remove_shared_vision(player_guid);
+        let set_world_object = if self.subsystems.control.has_shared_vision() {
+            None
+        } else {
+            let unit_guid = self.world().object().guid();
+            self.world_mut().set_active(false);
+            Some(UnitSharedVisionSetWorldObjectRequestLikeCpp {
+                unit_guid,
+                on: false,
+            })
+        };
+
+        UnitSharedVisionUpdateOutcomeLikeCpp {
+            player_guid,
+            inserted_or_removed,
+            set_world_object,
+        }
     }
 
     pub const fn collision_height_like_cpp(&self) -> f32 {
@@ -1653,6 +1713,127 @@ mod tests {
         assert!(!unit.subsystems().ai.locked);
         assert!(!unit.subsystems().ai.scheduled_change_pending);
         assert!(!unit.unit_data_changes_mask().is_any_set());
+    }
+
+    #[test]
+    fn shared_vision_add_empty_to_non_empty_activates_and_requests_world_object_on_like_cpp() {
+        let mut unit = Unit::new(false);
+        let unit_guid = ObjectGuid::new(1, 42);
+        let player_guid = ObjectGuid::new(1, 100);
+        unit.world_mut().object_mut().create(unit_guid);
+
+        let outcome = unit.add_player_to_vision_like_cpp(player_guid);
+
+        assert_eq!(outcome.player_guid, player_guid);
+        assert!(outcome.inserted_or_removed);
+        assert_eq!(
+            outcome.set_world_object,
+            Some(UnitSharedVisionSetWorldObjectRequestLikeCpp {
+                unit_guid,
+                on: true,
+            })
+        );
+        assert!(unit.world().is_active());
+        assert!(!unit.world().is_world_object());
+        assert!(unit.subsystems().control.has_shared_vision());
+    }
+
+    #[test]
+    fn shared_vision_add_non_empty_or_duplicate_does_not_request_world_object_again_like_cpp() {
+        let mut unit = Unit::new(false);
+        let unit_guid = ObjectGuid::new(1, 43);
+        let first_player = ObjectGuid::new(1, 101);
+        let second_player = ObjectGuid::new(1, 102);
+        unit.world_mut().object_mut().create(unit_guid);
+
+        let first = unit.add_player_to_vision_like_cpp(first_player);
+        assert!(first.set_world_object.is_some());
+
+        let second = unit.add_player_to_vision_like_cpp(second_player);
+        assert_eq!(second.player_guid, second_player);
+        assert!(second.inserted_or_removed);
+        assert_eq!(second.set_world_object, None);
+        assert!(unit.world().is_active());
+
+        let duplicate = unit.add_player_to_vision_like_cpp(second_player);
+        assert_eq!(duplicate.player_guid, second_player);
+        assert!(!duplicate.inserted_or_removed);
+        assert_eq!(duplicate.set_world_object, None);
+        assert!(unit.world().is_active());
+    }
+
+    #[test]
+    fn shared_vision_remove_keeps_active_until_last_viewer_then_requests_off_like_cpp() {
+        let mut unit = Unit::new(false);
+        let unit_guid = ObjectGuid::new(1, 44);
+        let first_player = ObjectGuid::new(1, 103);
+        let second_player = ObjectGuid::new(1, 104);
+        unit.world_mut().object_mut().create(unit_guid);
+        unit.add_player_to_vision_like_cpp(first_player);
+        unit.add_player_to_vision_like_cpp(second_player);
+
+        let first_remove = unit.remove_player_from_vision_like_cpp(first_player);
+        assert_eq!(first_remove.player_guid, first_player);
+        assert!(first_remove.inserted_or_removed);
+        assert_eq!(first_remove.set_world_object, None);
+        assert!(unit.world().is_active());
+        assert!(unit.subsystems().control.has_shared_vision());
+
+        let last_remove = unit.remove_player_from_vision_like_cpp(second_player);
+        assert_eq!(last_remove.player_guid, second_player);
+        assert!(last_remove.inserted_or_removed);
+        assert_eq!(
+            last_remove.set_world_object,
+            Some(UnitSharedVisionSetWorldObjectRequestLikeCpp {
+                unit_guid,
+                on: false,
+            })
+        );
+        assert!(!unit.world().is_active());
+        assert!(!unit.world().is_world_object());
+        assert!(!unit.subsystems().control.has_shared_vision());
+    }
+
+    #[test]
+    fn shared_vision_remove_absent_from_empty_still_requests_off_like_cpp() {
+        let mut unit = Unit::new(false);
+        let unit_guid = ObjectGuid::new(1, 45);
+        let absent_player = ObjectGuid::new(1, 105);
+        unit.world_mut().object_mut().create(unit_guid);
+        unit.world_mut().set_active(true);
+
+        let outcome = unit.remove_player_from_vision_like_cpp(absent_player);
+
+        assert_eq!(outcome.player_guid, absent_player);
+        assert!(!outcome.inserted_or_removed);
+        assert_eq!(
+            outcome.set_world_object,
+            Some(UnitSharedVisionSetWorldObjectRequestLikeCpp {
+                unit_guid,
+                on: false,
+            })
+        );
+        assert!(!unit.world().is_active());
+        assert!(!unit.world().is_world_object());
+        assert!(!unit.subsystems().control.has_shared_vision());
+    }
+
+    #[test]
+    fn shared_vision_remove_absent_keeps_active_when_other_viewers_remain_like_cpp() {
+        let mut unit = Unit::new(false);
+        let unit_guid = ObjectGuid::new(1, 46);
+        let present_player = ObjectGuid::new(1, 106);
+        let absent_player = ObjectGuid::new(1, 107);
+        unit.world_mut().object_mut().create(unit_guid);
+        unit.add_player_to_vision_like_cpp(present_player);
+
+        let outcome = unit.remove_player_from_vision_like_cpp(absent_player);
+
+        assert_eq!(outcome.player_guid, absent_player);
+        assert!(!outcome.inserted_or_removed);
+        assert_eq!(outcome.set_world_object, None);
+        assert!(unit.world().is_active());
+        assert!(unit.subsystems().control.has_shared_vision());
     }
 
     #[test]

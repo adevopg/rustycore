@@ -3,7 +3,15 @@
 > Generated: 2026-05-07
 > Rule: every Entities claim is contrasted against `/home/server/woltk-trinity-legacy/src/server/game/Entities/`.
 
+## Pending Review Tasks
+
 ## Closed Tasks
+
+- [x] **#NEXT.R8.ENTITIES.422** Unit shared-vision `SetWorldObject` request seam.
+  Status: complete for Unit shared-vision SetWorldObject request seam only; review APROBADO; validation OK; committed locally; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp:6489-6509`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:25344-25387`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:910-916`.
+  Rust targets: `crates/wow-entities/src/unit.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Unit::add_player_to_vision_like_cpp` / `remove_player_from_vision_like_cpp` update only local shared-vision state plus `WorldObject::is_active` and return an explicit SetWorldObject request for a future map-owned caller. Empty->non-empty add requests `on=true`; non-empty/duplicate adds do not request again; removing while another viewer remains does not request; removing the last or an absent viewer from an already-empty set requests `on=false` like C++ `list::remove` then `empty()`. No `wow-map` dependency or live map enqueue is introduced. Not full `Player::SetViewpoint`, SetSeer/FarsightObject/UpdateVisibilityOf/fanout, live map wiring, or full `WorldObject::SetWorldObject`.
 
 - [x] **#NEXT.R8.ENTITIES.421** Map-owned `WorldObject::SetWorldObject` enqueue facade for canonical records.
   Status: complete for the map-owned facade only; no live callsite/fanout/AddToWorld completion.
