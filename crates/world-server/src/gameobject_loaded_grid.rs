@@ -12,7 +12,10 @@
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:7770-7854`
 //!   `LoadGameObjectTemplateAddons`: addon fields.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:951-1185`
-//!   `GameObject::Create`: caller-owned GUID, map binding, template/addon/override intrinsic state.
+//!   `GameObject::Create`: caller-owned GUID, map binding, template/addon/override intrinsic state,
+//!   and linked-trap create/AddToMap side effect for DB-backed spawns.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1187-1200`
+//!   `GameObject::CreateGameObject`: linked trap template lookup plus dynamic spawn_id=0 create.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1911-1978`
 //!   `GameObject::LoadFromDB`: spawn id, compatibility, spawntimesecs and caller-owned AddToMap.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h:843-851,998-1010`
@@ -22,7 +25,10 @@ use std::collections::BTreeMap;
 
 use crate::spawn_store_loader::GameObjectSpawnRuntimeRowLikeCpp;
 use wow_core::{ObjectGuid, Position, guid::HighGuid};
-use wow_data::{GameObjectOverrideLifecycleStoreLikeCpp, GameObjectTemplateLifecycleStoreLikeCpp};
+use wow_data::{
+    GameObjectOverrideLifecycleRecordLikeCpp, GameObjectOverrideLifecycleStoreLikeCpp,
+    GameObjectTemplateLifecycleRecordLikeCpp, GameObjectTemplateLifecycleStoreLikeCpp,
+};
 use wow_entities::{
     GAMEOBJECT_TYPE_BUTTON, GAMEOBJECT_TYPE_DOOR, GAMEOBJECT_TYPE_FLAGDROP,
     GAMEOBJECT_TYPE_FLAGSTAND, GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT,
@@ -70,6 +76,7 @@ pub struct ResolvedGameObjectSpawnLikeCpp {
 pub struct GameObjectLoadedGridResolvedLikeCpp {
     pub lifecycle_record: GameObjectLoadFromDbLifecycleRecord,
     pub game_object: GameObject,
+    pub pre_add_records: Vec<MapObjectRecord>,
     pub map_object_record: Option<MapObjectRecord>,
     pub map_insertion_requested: bool,
 }
@@ -136,6 +143,19 @@ impl GameObjectLoadedGridLifecycleResolverLikeCpp {
         spawn_id: u64,
         map_object_guid: ObjectGuid,
     ) -> Result<GameObjectLoadedGridResolvedLikeCpp, GameObjectLoadedGridResolveErrorLikeCpp> {
+        self.resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(
+            spawn_id,
+            map_object_guid,
+            None,
+        )
+    }
+
+    pub fn resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(
+        &self,
+        spawn_id: u64,
+        map_object_guid: ObjectGuid,
+        linked_trap_guid: Option<ObjectGuid>,
+    ) -> Result<GameObjectLoadedGridResolvedLikeCpp, GameObjectLoadedGridResolveErrorLikeCpp> {
         let spawn = self
             .spawns
             .get(&spawn_id)
@@ -166,8 +186,17 @@ impl GameObjectLoadedGridLifecycleResolverLikeCpp {
             respawn_compatibility_mode: spawn.respawn_compatibility_mode,
             string_id: spawn.string_id.clone(),
         };
-        let game_object = GameObject::try_load_from_db_lifecycle(lifecycle_record.clone())
+        let mut game_object = GameObject::try_load_from_db_lifecycle(lifecycle_record.clone())
             .map_err(GameObjectLoadedGridResolveErrorLikeCpp::Lifecycle)?;
+        let mut pre_add_records = Vec::new();
+        if let Some(trap_guid) = linked_trap_guid {
+            if let Some(linked_trap_record) =
+                self.build_linked_trap_record_like_cpp(spawn, &template_data, trap_guid)?
+            {
+                game_object.set_linked_trap_like_cpp(trap_guid);
+                pre_add_records.push(linked_trap_record);
+            }
+        }
         let map_insertion_requested = spawn.add_to_map;
         let map_object_record = if map_insertion_requested {
             Some(
@@ -181,10 +210,100 @@ impl GameObjectLoadedGridLifecycleResolverLikeCpp {
         Ok(GameObjectLoadedGridResolvedLikeCpp {
             lifecycle_record,
             game_object,
+            pre_add_records,
             map_object_record,
             map_insertion_requested,
         })
     }
+
+    fn build_linked_trap_record_like_cpp(
+        &self,
+        owner_spawn: &ResolvedGameObjectSpawnLikeCpp,
+        owner_template_data: &GameObjectTemplateData,
+        trap_guid: ObjectGuid,
+    ) -> Result<Option<MapObjectRecord>, GameObjectLoadedGridResolveErrorLikeCpp> {
+        let linked_entry = owner_template_data.get_linked_gameobject_entry_like_cpp();
+        if linked_entry == 0 {
+            return Ok(None);
+        }
+        let Some(trap_template) = self.templates.get(&linked_entry) else {
+            return Ok(None);
+        };
+        let trap_spawn = ResolvedGameObjectSpawnLikeCpp {
+            spawn_id: 0,
+            entry: linked_entry,
+            map_id: owner_spawn.map_id,
+            instance_id: owner_spawn.instance_id,
+            position: owner_spawn.position,
+            rotation: owner_spawn.rotation,
+            anim_progress: 255,
+            go_state: GoState::Ready,
+            spawntimesecs: 0,
+            effective_map_respawn_time: 0,
+            add_to_map: true,
+            respawn_compatibility_mode: true,
+            string_id: String::new(),
+        };
+        if validate_map_object_guid_like_cpp(&trap_spawn, trap_template, trap_guid).is_err() {
+            return Ok(None);
+        }
+        let Ok(trap) = GameObject::try_create_from_lifecycle(GameObjectCreateLifecycleRecord {
+            guid: trap_guid,
+            map_id: owner_spawn.map_id,
+            instance_id: owner_spawn.instance_id,
+            position: owner_spawn.position,
+            rotation: owner_spawn.rotation,
+            anim_progress: 255,
+            go_state: GoState::Ready,
+            art_kit: 0,
+            dynamic: false,
+            spawn_id: 0,
+            template: template_lifecycle_record(trap_template),
+        }) else {
+            return Ok(None);
+        };
+        Ok(MapObjectRecord::new_game_object(trap).ok())
+    }
+}
+
+pub fn resolved_template_from_lifecycle_record_like_cpp(
+    template: &GameObjectTemplateLifecycleRecordLikeCpp,
+    override_record: Option<&GameObjectOverrideLifecycleRecordLikeCpp>,
+) -> Result<ResolvedGameObjectTemplateLikeCpp, GameObjectLoadedGridResolveErrorLikeCpp> {
+    if template.go_type == u32::from(GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT) {
+        return Err(
+            GameObjectLoadedGridResolveErrorLikeCpp::UnsupportedMapObjectTransport {
+                entry: template.entry,
+            },
+        );
+    }
+    let addon = template.addon;
+    let faction = override_record
+        .map(|record| record.faction)
+        .or_else(|| addon.map(|record| record.faction))
+        .unwrap_or(0);
+    let flags = override_record
+        .map(|record| record.flags)
+        .or_else(|| addon.map(|record| record.flags))
+        .unwrap_or(0);
+    let world_effect_id = addon.map(|record| record.world_effect_id).unwrap_or(0);
+    let anim_kit_id = addon.map(|record| record.anim_kit_id).unwrap_or(0);
+
+    Ok(ResolvedGameObjectTemplateLikeCpp {
+        entry: template.entry,
+        go_type: template.go_type,
+        display_id: template.display_id,
+        name: template.name.clone(),
+        scale: template.size,
+        faction,
+        flags,
+        data: template.data,
+        world_effect_id,
+        anim_kit_id,
+        level: template.content_tuning_id,
+        percent_health: 100,
+        custom_param: 0,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -395,7 +514,10 @@ mod tests {
         GameObjectTemplateAddonLifecycleRecordLikeCpp, GameObjectTemplateLifecycleRecordLikeCpp,
         GameObjectTemplateLifecycleStoreLikeCpp,
     };
-    use wow_entities::{GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_GOOBER};
+    use wow_entities::{
+        GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_TRANSPORT,
+        GAMEOBJECT_TYPE_TRAP,
+    };
     use wow_map::{SpawnData, SpawnObjectType, SpawnPosition};
 
     fn template_store(
@@ -425,6 +547,26 @@ mod tests {
                 addon,
             },
         ])
+    }
+
+    fn template_record(
+        entry: u32,
+        go_type: u32,
+        data: [u32; MAX_GAMEOBJECT_DATA],
+    ) -> GameObjectTemplateLifecycleRecordLikeCpp {
+        GameObjectTemplateLifecycleRecordLikeCpp {
+            entry,
+            go_type,
+            display_id: 44,
+            name: format!("template-{entry}"),
+            size: 1.25,
+            data,
+            content_tuning_id: 0,
+            ai_name: String::new(),
+            script_name: String::new(),
+            string_id: String::new(),
+            addon: None,
+        }
     }
 
     fn spawn(spawn_id: u64) -> SpawnData {
@@ -489,6 +631,158 @@ mod tests {
         assert_eq!(resolved.lifecycle_record.create.template.flags, 7);
         assert_eq!(resolved.lifecycle_record.create.template.world_effect_id, 9);
         assert_eq!(resolved.lifecycle_record.string_id, "runtime-string");
+    }
+
+    #[test]
+    fn gameobject_linked_trap_pre_add_record_matches_cpp_dynamic_spawn() {
+        let overrides = GameObjectOverrideLifecycleStoreLikeCpp::default();
+        let mut owner_data = [0; MAX_GAMEOBJECT_DATA];
+        owner_data[12] = 9002;
+        let trap_data = [0; MAX_GAMEOBJECT_DATA];
+        let templates = GameObjectTemplateLifecycleStoreLikeCpp::from_templates([
+            template_record(9001, GAMEOBJECT_TYPE_GOOBER, owner_data),
+            template_record(9002, GAMEOBJECT_TYPE_TRAP, trap_data),
+        ]);
+        let (template, resolved_spawn) = build_loaded_grid_gameobject_inputs_from_db_like_cpp(
+            &spawn(88),
+            &runtime(88),
+            &templates,
+            &overrides,
+            1,
+            0,
+            true,
+        )
+        .unwrap();
+        let owner_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9001, 22);
+        let trap_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9002, 23);
+
+        let resolved = GameObjectLoadedGridLifecycleResolverLikeCpp::new(
+            [
+                template,
+                resolved_template_from_lifecycle_record_like_cpp(
+                    templates.get(9002).unwrap(),
+                    None,
+                )
+                .unwrap(),
+            ],
+            [resolved_spawn],
+        )
+        .resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(88, owner_guid, Some(trap_guid))
+        .unwrap();
+
+        assert_eq!(resolved.pre_add_records.len(), 1);
+        assert_eq!(resolved.game_object.linked_trap_guid_like_cpp(), trap_guid);
+        let trap = resolved.pre_add_records[0]
+            .game_object()
+            .expect("linked trap pre-add record is a GameObject");
+        assert_eq!(trap.spawn_id(), 0);
+        assert_eq!(trap.world().guid(), trap_guid);
+        assert_eq!(trap.world().map_id(), 571);
+        assert_eq!(
+            trap.world().instance_id(),
+            resolved.game_object.world().instance_id()
+        );
+        assert_eq!(
+            trap.world().position(),
+            resolved.game_object.world().position()
+        );
+        assert_eq!(trap.prev_go_state(), GoState::Ready);
+        assert_eq!(trap.respawn_compatibility_mode(), true);
+    }
+
+    #[test]
+    fn gameobject_linked_trap_missing_template_does_not_block_owner_like_cpp() {
+        let overrides = GameObjectOverrideLifecycleStoreLikeCpp::default();
+        let mut owner_data = [0; MAX_GAMEOBJECT_DATA];
+        owner_data[12] = 9002;
+        let templates = GameObjectTemplateLifecycleStoreLikeCpp::from_templates([template_record(
+            9001,
+            GAMEOBJECT_TYPE_GOOBER,
+            owner_data,
+        )]);
+        let (template, resolved_spawn) = build_loaded_grid_gameobject_inputs_from_db_like_cpp(
+            &spawn(88),
+            &runtime(88),
+            &templates,
+            &overrides,
+            1,
+            0,
+            true,
+        )
+        .unwrap();
+        let owner_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9001, 22);
+        let trap_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9002, 23);
+
+        let resolved =
+            GameObjectLoadedGridLifecycleResolverLikeCpp::new([template], [resolved_spawn])
+                .resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(
+                    88,
+                    owner_guid,
+                    Some(trap_guid),
+                )
+                .unwrap();
+
+        assert!(resolved.map_object_record.is_some());
+        assert!(resolved.pre_add_records.is_empty());
+        assert_eq!(
+            resolved.game_object.linked_trap_guid_like_cpp(),
+            ObjectGuid::EMPTY
+        );
+    }
+
+    #[test]
+    fn gameobject_linked_trap_rejected_guid_does_not_block_owner_like_cpp() {
+        let overrides = GameObjectOverrideLifecycleStoreLikeCpp::default();
+        let mut owner_data = [0; MAX_GAMEOBJECT_DATA];
+        owner_data[12] = 9002;
+        let trap_data = [0; MAX_GAMEOBJECT_DATA];
+        let templates = GameObjectTemplateLifecycleStoreLikeCpp::from_templates([
+            template_record(9001, GAMEOBJECT_TYPE_GOOBER, owner_data),
+            template_record(9002, GAMEOBJECT_TYPE_TRANSPORT, trap_data),
+        ]);
+        let (template, resolved_spawn) = build_loaded_grid_gameobject_inputs_from_db_like_cpp(
+            &spawn(88),
+            &runtime(88),
+            &templates,
+            &overrides,
+            1,
+            0,
+            true,
+        )
+        .unwrap();
+        let owner_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9001, 22);
+        let mismatched_trap_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9002, 23);
+
+        let resolved = GameObjectLoadedGridLifecycleResolverLikeCpp::new(
+            [
+                template,
+                resolved_template_from_lifecycle_record_like_cpp(
+                    templates.get(9002).unwrap(),
+                    None,
+                )
+                .unwrap(),
+            ],
+            [resolved_spawn],
+        )
+        .resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(
+            88,
+            owner_guid,
+            Some(mismatched_trap_guid),
+        )
+        .unwrap();
+
+        assert!(resolved.map_object_record.is_some());
+        assert!(resolved.pre_add_records.is_empty());
+        assert_eq!(
+            resolved.game_object.linked_trap_guid_like_cpp(),
+            ObjectGuid::EMPTY
+        );
     }
 
     #[test]

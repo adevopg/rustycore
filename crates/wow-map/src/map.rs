@@ -440,6 +440,21 @@ pub struct SpawnGroupConditionUpdateOutcomeLikeCpp {
     pub spawn_outcome: Option<SpawnGroupSpawnOutcomeLikeCpp>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedGridRespawnRecordsLikeCpp {
+    pub pre_add_records: Vec<MapObjectRecord>,
+    pub primary_record: MapObjectRecord,
+}
+
+impl LoadedGridRespawnRecordsLikeCpp {
+    pub fn primary_only(primary_record: MapObjectRecord) -> Self {
+        Self {
+            pre_add_records: Vec::new(),
+            primary_record,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProcessRespawnsSafeSideEffectsSummaryLikeCpp {
     pub deleted_inactive_spawn_group: usize,
@@ -1304,7 +1319,7 @@ where
         F: FnMut(ObjectGuid, &Creature) -> bool,
         R: FnMut(PoolMemberKindLikeCpp, u32) -> f32,
         C: FnMut(&[PoolObjectLikeCpp], usize) -> Vec<usize>,
-        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<MapObjectRecord>,
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
     {
         let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
 
@@ -1392,19 +1407,23 @@ where
                 }
                 CheckRespawnCompositeOutcomeLikeCpp::Allowed => {
                     if is_grid_id_loaded(self, checked_info.grid_id) {
-                        let Some(record) = load_record(self, object_type, spawn_id) else {
+                        let Some(records) = load_record(self, object_type, spawn_id) else {
                             summary.blocked_loaded_grid_respawn_loads += 1;
                             summary.blocked_do_respawn_runtime += 1;
                             break;
                         };
 
                         // C++ `ProcessRespawns` pops/erases the timer before
-                        // calling `DoRespawn`; `LoadFromDB(..., addToMap=true)`
-                        // then returns false on `AddToMap` failure and the
-                        // temporary object is deleted, but the respawn timer has
-                        // already been removed and DB deletion continues.
+                        // calling `DoRespawn`. For DB-backed GameObjects,
+                        // `GameObject::Create` may also create and AddToMap a
+                        // linked trap first; that AddToMap failure only deletes
+                        // the trap and does not block the owner. The primary
+                        // `AddToMap` result remains determinant as in C++.
                         self.remove_respawn_time_like_cpp(object_type, spawn_id);
-                        match self.add_map_object_record_to_map_like_cpp(record) {
+                        for pre_add_record in records.pre_add_records {
+                            let _ = self.add_map_object_record_to_map_like_cpp(pre_add_record);
+                        }
+                        match self.add_map_object_record_to_map_like_cpp(records.primary_record) {
                             Ok(_outcome) => {
                                 summary.executed_loaded_grid_respawns += 1;
                             }
@@ -2581,12 +2600,29 @@ where
         let record = self
             .remove_map_object(guid)
             .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
+        let linked_trap_guid = record
+            .game_object()
+            .map(GameObject::linked_trap_guid_like_cpp)
+            .filter(|linked_guid| !linked_guid.is_empty() && *linked_guid != guid);
         let kind = record.kind();
         let mut object = record.into_object();
         let was_in_world = object.object().is_in_world();
         let was_active = is_active_object_like_cpp(kind, &object);
         let cell = Cell::from_world(object.position().x, object.position().y);
         let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
+
+        if let Some(linked_trap_guid) = linked_trap_guid {
+            // C++ `GameObject::RemoveFromWorld` despawns `m_linkedTrap` before
+            // `WorldObject::RemoveFromWorld` (`GameObject.cpp:939-943`), and
+            // `Map::RemoveFromMap` calls `obj->RemoveFromWorld()` before grid
+            // removal (`Map.cpp:933-951`). This bounded seam represents that
+            // ordering map-locally with no scheduler/fanout, avoids
+            // self-recursion, and tolerates traps already removed by another
+            // path.
+            if self.map_object_record(linked_trap_guid).is_some() {
+                let _ = self.remove_from_map_like_cpp(linked_trap_guid, true);
+            }
+        }
 
         object.object_mut().remove_from_world();
         let removed_from_cell = remove_object_guid_from_cell_like_cpp(
@@ -5583,7 +5619,9 @@ mod tests {
                     .world_mut()
                     .object_mut()
                     .remove_from_world();
-                Some(MapObjectRecord::new_creature(creature).unwrap())
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(creature).unwrap(),
+                ))
             },
         );
 
@@ -5639,7 +5677,9 @@ mod tests {
                 assert_eq!(spawn_id, 39801);
                 let mut gameobject = test_gameobject_for_spawn(39801, 3980101);
                 gameobject.world_mut().object_mut().remove_from_world();
-                Some(MapObjectRecord::new_game_object(gameobject).unwrap())
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_game_object(gameobject).unwrap(),
+                ))
             },
         );
 
@@ -5663,6 +5703,65 @@ mod tests {
             .get_grid_type(cell.cell_x(), cell.cell_y())
             .expect("record inserted into target cell");
         assert!(local_cell.grid_objects.gameobjects.contains(&expected_guid));
+    }
+
+    #[test]
+    fn process_respawns_loaded_grid_pre_add_records_are_best_effort_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(409, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::GameObject, 40901, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 40901, 100));
+        let owner_guid = guid(HighGuid::GameObject, 4090101);
+        let trap_guid = guid(HighGuid::GameObject, 4090102);
+        let missing_trap_guid = guid(HighGuid::GameObject, 4090103);
+
+        let summary = map.process_due_respawns_composite_loaded_grid_respawns_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &PoolMgrLikeCpp::new(),
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, count| (0..count).collect(),
+            |_map, object_type, spawn_id| {
+                assert_eq!(object_type, SpawnObjectType::GameObject);
+                assert_eq!(spawn_id, 40901);
+                let mut trap = test_gameobject_for_spawn(0, 4090102);
+                trap.world_mut().object_mut().remove_from_world();
+                let mut missing_trap = test_gameobject_for_spawn(0, 4090103);
+                missing_trap.world_mut().object_mut().remove_from_world();
+                missing_trap
+                    .world_mut()
+                    .relocate(Position::xyz(1_000_000.0, 1_000_000.0, 0.0));
+                let mut owner = test_gameobject_for_spawn(40901, 4090101);
+                owner.world_mut().object_mut().remove_from_world();
+                owner.set_linked_trap_like_cpp(trap_guid);
+                Some(LoadedGridRespawnRecordsLikeCpp {
+                    pre_add_records: vec![
+                        MapObjectRecord::new_game_object(trap).unwrap(),
+                        MapObjectRecord::new_game_object(missing_trap).unwrap(),
+                    ],
+                    primary_record: MapObjectRecord::new_game_object(owner).unwrap(),
+                })
+            },
+        );
+
+        assert_eq!(summary.executed_loaded_grid_respawns, 1);
+        assert_eq!(summary.blocked_loaded_grid_respawn_add_to_map, 0);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert!(map.map_object_record(trap_guid).is_some());
+        assert!(map.map_object_record(missing_trap_guid).is_none());
+
+        map.remove_from_map_like_cpp(owner_guid, true).unwrap();
+        assert!(map.map_object_record(owner_guid).is_none());
+        assert!(map.map_object_record(trap_guid).is_none());
     }
 
     #[test]
@@ -5779,7 +5878,9 @@ mod tests {
                     1_000_000.0,
                     0.0,
                 ));
-                Some(MapObjectRecord::new_creature(creature).unwrap())
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(creature).unwrap(),
+                ))
             },
         );
 
@@ -8346,6 +8447,30 @@ mod tests {
         object
     }
 
+    fn game_object_with_counter(
+        counter: i64,
+        map_id: u32,
+        instance_id: u32,
+        in_world: bool,
+    ) -> GameObject {
+        let mut game_object = GameObject::new();
+        game_object
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::GameObject, counter));
+        game_object
+            .world_mut()
+            .set_map(map_id, instance_id)
+            .unwrap();
+        game_object
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            game_object.world_mut().object_mut().add_to_world();
+        }
+        game_object
+    }
+
     fn convert_type_id(type_id: wow_core::guid::TypeId) -> TypeId {
         match type_id {
             wow_core::guid::TypeId::Object => TypeId::Object,
@@ -8933,6 +9058,34 @@ mod tests {
         assert!(!object.object().is_in_grid());
         assert!(!object.has_current_map());
         assert_eq!(object.current_cell(), None);
+    }
+
+    #[test]
+    fn linked_trap_remove_owner_removes_trap_map_local_and_leaves_unrelated_objects() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(10, 571, 7, false);
+        let trap = game_object_with_counter(11, 571, 7, false);
+        let unrelated = game_object_with_counter(12, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        let trap_guid = trap.world().guid();
+        let unrelated_guid = unrelated.world().guid();
+        owner.set_linked_trap_like_cpp(trap_guid);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(unrelated).unwrap(),
+        )
+        .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(owner_guid, true).unwrap();
+
+        assert_eq!(removed.guid, owner_guid);
+        assert!(map.map_object_record(owner_guid).is_none());
+        assert!(map.map_object_record(trap_guid).is_none());
+        assert!(map.map_object_record(unrelated_guid).is_some());
     }
 
     #[test]

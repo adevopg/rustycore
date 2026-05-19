@@ -2722,7 +2722,7 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
     spawn_id: wow_map::SpawnId,
     canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
     caches: &LoadedGridCreatureRespawnCachesLikeCpp,
-) -> Option<wow_entities::MapObjectRecord> {
+) -> Option<wow_map::map::LoadedGridRespawnRecordsLikeCpp> {
     if object_type != wow_map::SpawnObjectType::Creature {
         return None;
     }
@@ -2827,7 +2827,9 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
         [(spawn.id, runtime_selection)],
     );
     match resolver.resolve_loaded_grid_creature_like_cpp(spawn_id, map_object_guid) {
-        Ok(resolved) => resolved.map_object_record,
+        Ok(resolved) => resolved.map_object_record.map(|primary_record| {
+            wow_map::map::LoadedGridRespawnRecordsLikeCpp::primary_only(primary_record)
+        }),
         Err(error) => {
             debug!(
                 ?error,
@@ -2847,7 +2849,7 @@ fn build_loaded_grid_gameobject_respawn_record_like_cpp(
     spawn_id: wow_map::SpawnId,
     canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
     caches: &LoadedGridCreatureRespawnCachesLikeCpp,
-) -> Option<wow_entities::MapObjectRecord> {
+) -> Option<wow_map::map::LoadedGridRespawnRecordsLikeCpp> {
     if object_type != wow_map::SpawnObjectType::GameObject {
         return None;
     }
@@ -2935,12 +2937,127 @@ fn build_loaded_grid_gameobject_respawn_record_like_cpp(
         };
         ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, map_id, 1, template.entry, low)
     };
+    let mut linked_trap_guid = None;
+    let mut resolver_templates = vec![template.clone()];
+    let linked_entry = wow_entities::GameObjectTemplateData::new(template.go_type, template.data)
+        .get_linked_gameobject_entry_like_cpp();
+    if linked_entry != 0 && template.go_type != wow_entities::GAMEOBJECT_TYPE_TRANSPORT {
+        if let Some(linked_template_record) = caches.gameobject_template_store.get(linked_entry) {
+            let linked_template =
+                match gameobject_loaded_grid::resolved_template_from_lifecycle_record_like_cpp(
+                    linked_template_record,
+                    None,
+                ) {
+                    Ok(linked_template)
+                        if linked_template.go_type != wow_entities::GAMEOBJECT_TYPE_TRANSPORT =>
+                    {
+                        Some(linked_template)
+                    }
+                    Ok(_) => {
+                        debug!(
+                            spawn_id,
+                            entry = spawn.id,
+                            linked_entry,
+                            "C++ loaded-grid GameObject linked trap skipped: linked transport template not represented by this seam"
+                        );
+                        None
+                    }
+                    Err(error) => {
+                        debug!(
+                            ?error,
+                            spawn_id,
+                            entry = spawn.id,
+                            linked_entry,
+                            "C++ loaded-grid GameObject linked trap skipped: linked template rejected"
+                        );
+                        None
+                    }
+                };
+            if let Some(linked_template) = linked_template {
+                let Ok(map_id) = u16::try_from(map.map_id()) else {
+                    warn!(
+                        map_id = map.map_id(),
+                        spawn_id,
+                        entry = spawn.id,
+                        linked_entry,
+                        "C++ loaded-grid GameObject linked trap skipped: map id does not fit ObjectGuid world-object map field"
+                    );
+                    let resolver =
+                        gameobject_loaded_grid::GameObjectLoadedGridLifecycleResolverLikeCpp::new(
+                            resolver_templates,
+                            [resolved_spawn],
+                        );
+                    return match resolver
+                        .resolve_loaded_grid_gameobject_like_cpp(spawn_id, map_object_guid)
+                    {
+                        Ok(resolved) => resolved.map_object_record.map(|primary_record| {
+                            wow_map::map::LoadedGridRespawnRecordsLikeCpp {
+                                pre_add_records: resolved.pre_add_records,
+                                primary_record,
+                            }
+                        }),
+                        Err(error) => {
+                            debug!(
+                                ?error,
+                                spawn_id,
+                                entry = spawn.id,
+                                guid = ?map_object_guid,
+                                "C++ loaded-grid GameObject DoRespawn blocked: resolver rejected loaded GameObject record"
+                            );
+                            None
+                        }
+                    };
+                };
+                let trap_low = match map.generate_low_guid_like_cpp(HighGuid::GameObject) {
+                    Ok(low) => Some(low),
+                    Err(error) => {
+                        debug!(
+                            ?error,
+                            spawn_id,
+                            entry = spawn.id,
+                            linked_entry,
+                            "C++ loaded-grid GameObject linked trap skipped: map-owned GameObject low-guid generation failed"
+                        );
+                        None
+                    }
+                };
+                if let Some(trap_low) = trap_low {
+                    linked_trap_guid = Some(ObjectGuid::create_world_object(
+                        HighGuid::GameObject,
+                        0,
+                        1,
+                        map_id,
+                        1,
+                        linked_entry,
+                        trap_low,
+                    ));
+                    resolver_templates.push(linked_template);
+                }
+            }
+        } else {
+            debug!(
+                spawn_id,
+                entry = spawn.id,
+                linked_entry,
+                "C++ loaded-grid GameObject linked trap skipped: missing linked trap template"
+            );
+        }
+    }
     let resolver = gameobject_loaded_grid::GameObjectLoadedGridLifecycleResolverLikeCpp::new(
-        [template],
+        resolver_templates,
         [resolved_spawn],
     );
-    match resolver.resolve_loaded_grid_gameobject_like_cpp(spawn_id, map_object_guid) {
-        Ok(resolved) => resolved.map_object_record,
+    match resolver.resolve_loaded_grid_gameobject_with_linked_trap_like_cpp(
+        spawn_id,
+        map_object_guid,
+        linked_trap_guid,
+    ) {
+        Ok(resolved) => resolved.map_object_record.map(|primary_record| {
+            wow_map::map::LoadedGridRespawnRecordsLikeCpp {
+                pre_add_records: resolved.pre_add_records,
+                primary_record,
+            }
+        }),
         Err(error) => {
             debug!(
                 ?error,
@@ -5010,12 +5127,16 @@ mmap.enablePathFinding = 0
             &metadata,
             &caches,
         )
-        .expect("loaded-grid GameObject builder should return a MapObjectRecord");
+        .expect("loaded-grid GameObject builder should return loaded-grid records");
         let game_object = record
+            .primary_record
             .game_object()
             .expect("builder should return a typed GameObject MapObjectRecord");
 
-        assert_eq!(record.kind(), wow_entities::AccessorObjectKind::GameObject);
+        assert_eq!(
+            record.primary_record.kind(),
+            wow_entities::AccessorObjectKind::GameObject
+        );
         assert_eq!(game_object.spawn_id(), spawn_id);
         assert_eq!(
             game_object.world().guid().high_type(),
@@ -5069,12 +5190,16 @@ mmap.enablePathFinding = 0
         )
         .expect("variable-level loaded-grid Creature builder should no longer block");
         let creature = record
+            .primary_record
             .creature()
             .expect("builder should return a typed Creature MapObjectRecord");
         let level = creature.ai_level();
 
         assert!((18..=20).contains(&level));
-        assert_eq!(record.kind(), wow_entities::AccessorObjectKind::Creature);
+        assert_eq!(
+            record.primary_record.kind(),
+            wow_entities::AccessorObjectKind::Creature
+        );
         assert_eq!(creature.lifecycle_metadata().spawn_id, spawn_id);
         assert_eq!(
             creature.guid().high_type(),

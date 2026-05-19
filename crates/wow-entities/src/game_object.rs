@@ -64,6 +64,8 @@ pub const GAMEOBJECT_DATA_CHEST_USE_GROUP_LOOT_RULES: usize = 15;
 pub const GAMEOBJECT_DATA_CHEST_DUNGEON_ENCOUNTER: usize = 25;
 pub const GAMEOBJECT_DATA_CHEST_PERSONAL_LOOT: usize = 30;
 pub const GAMEOBJECT_DATA_CHEST_PUSH_LOOT: usize = 33;
+// C++ anchor: /home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h:65-68
+pub const GAMEOBJECT_DATA_BUTTON_LINKED_TRAP: usize = 3;
 pub const GAMEOBJECT_DATA_GOOBER_CONSUMABLE: usize = 5;
 pub const GAMEOBJECT_DATA_GATHERING_NODE_DESPAWN_DELAY: usize = 6;
 pub const GAMEOBJECT_DATA_GATHERING_NODE_TRIGGERED_EVENT: usize = 7;
@@ -839,6 +841,18 @@ impl GameObjectTemplateData {
             linked_trap_entry: self.data[GAMEOBJECT_DATA_GATHERING_NODE_LINKED_TRAP],
         })
     }
+
+    pub const fn get_linked_gameobject_entry_like_cpp(&self) -> u32 {
+        match self.go_type {
+            // C++ anchor: GameObjectData.h:1049-1059 `GAMEOBJECT_TYPE_BUTTON` -> `button.linkedTrap`.
+            GAMEOBJECT_TYPE_BUTTON => self.data[GAMEOBJECT_DATA_BUTTON_LINKED_TRAP],
+            GAMEOBJECT_TYPE_SPELL_FOCUS => self.spell_focus_linked_trap_like_cpp(),
+            GAMEOBJECT_TYPE_GOOBER => self.data[12],
+            GAMEOBJECT_TYPE_CHEST => self.data[GAMEOBJECT_DATA_CHEST_LINKED_TRAP],
+            GAMEOBJECT_TYPE_GATHERING_NODE => self.data[GAMEOBJECT_DATA_GATHERING_NODE_LINKED_TRAP],
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -918,6 +932,7 @@ pub struct GameObject {
     anim_kit_id: u16,
     world_effect_id: u32,
     lifecycle_string_id: String,
+    linked_trap_guid: ObjectGuid,
     stationary_position: Position,
     grid_unload_cleanup_before_delete_count: u32,
     grid_unload_delete_requested: bool,
@@ -962,6 +977,7 @@ impl GameObject {
             anim_kit_id: 0,
             world_effect_id: 0,
             lifecycle_string_id: String::new(),
+            linked_trap_guid: ObjectGuid::EMPTY,
             stationary_position: Position::new(0.0, 0.0, 0.0, 0.0),
             grid_unload_cleanup_before_delete_count: 0,
             grid_unload_delete_requested: false,
@@ -1392,6 +1408,14 @@ impl GameObject {
         });
     }
 
+    pub const fn linked_trap_guid_like_cpp(&self) -> ObjectGuid {
+        self.linked_trap_guid
+    }
+
+    pub fn set_linked_trap_like_cpp(&mut self, linked_trap_guid: ObjectGuid) {
+        self.linked_trap_guid = linked_trap_guid;
+    }
+
     pub const fn owner_guid(&self) -> ObjectGuid {
         self.data.created_by
     }
@@ -1548,6 +1572,7 @@ impl Default for GameObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_core::guid::HighGuid;
 
     #[test]
     fn gameobject_constructor_matches_cpp_base_state() {
@@ -2491,6 +2516,68 @@ mod tests {
                 .spell_focus_linked_trap_like_cpp(),
             0
         );
+    }
+
+    #[test]
+    fn gameobject_template_linked_gameobject_entry_dispatches_cpp_sources() {
+        let mut data = [0; MAX_GAMEOBJECT_DATA];
+        data[GAMEOBJECT_DATA_BUTTON_LINKED_TRAP] = 103;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_BUTTON, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            103
+        );
+
+        data = [0; MAX_GAMEOBJECT_DATA];
+        data[2] = 802;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_SPELL_FOCUS, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            802
+        );
+
+        data = [0; MAX_GAMEOBJECT_DATA];
+        data[12] = 1012;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_GOOBER, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            1012
+        );
+
+        data = [0; MAX_GAMEOBJECT_DATA];
+        data[GAMEOBJECT_DATA_CHEST_LINKED_TRAP] = 307;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_CHEST, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            307
+        );
+
+        data = [0; MAX_GAMEOBJECT_DATA];
+        data[GAMEOBJECT_DATA_GATHERING_NODE_LINKED_TRAP] = 5020;
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_GATHERING_NODE, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            5020
+        );
+        assert_eq!(
+            GameObjectTemplateData::new(GAMEOBJECT_TYPE_TRAP, data)
+                .get_linked_gameobject_entry_like_cpp(),
+            0
+        );
+    }
+
+    #[test]
+    fn gameobject_linked_trap_guid_defaults_and_can_be_cleared_like_cpp() {
+        let mut go = GameObject::new();
+        assert_eq!(go.linked_trap_guid_like_cpp(), ObjectGuid::EMPTY);
+        let trap_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 1, 9002, 2);
+
+        go.set_linked_trap_like_cpp(trap_guid);
+        assert_eq!(go.linked_trap_guid_like_cpp(), trap_guid);
+
+        go.set_linked_trap_like_cpp(ObjectGuid::EMPTY);
+        assert_eq!(go.linked_trap_guid_like_cpp(), ObjectGuid::EMPTY);
     }
 
     #[test]
