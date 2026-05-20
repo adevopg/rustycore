@@ -4,8 +4,15 @@
 > Rule: every Entities claim is contrasted against `/home/server/woltk-trinity-legacy/src/server/game/Entities/`.
 
 ## Pending Review Tasks
+- None. Latest #460 slice has reviewer `APROBADO` and CI `CI_OK`; it is commit-ready locally.
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.460** Map-owned `GameObject::Update` GOOBER pre-`ClearLoot()` represented branch / `GO_FLAG_NODESPAWN` early return.
+  Status: represented-complete for this bounded GOOBER ordering seam; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #460 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1581-1607`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:3711-3721`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:2902`.
+  Rust targets: `crates/wow-entities/src/game_object.rs`, `crates/wow-entities/src/lib.rs`, `crates/wow-map/src/map.rs`, `crates/wow-map/src/manager.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: after canonical exact typed GameObject validation and entity-level update, GOOBER objects still in `LootState::JustDeactivated` consume only represented source evidence for spell/user cleanup and lock/autoclose state reset before `ClearLoot()`. The C++ `GO_FLAG_NODESPAWN` early return is checked from `game_object.data().flags` for every GOOBER in the branch, including when `represented_goober_use_source_like_cpp()` is `None`; that outcome reports `goober_nodespawn_return`, skips `ClearLoot()`, preserves loot/use state, and does not enqueue remove-list. Non-NODESPAWN GOOBER records reach represented `ClearLoot()` after the pre-branch. Remaining gaps stay explicit: real spell casts, ObjectAccessor/player lookup/session fanout, DB/PoolMgr/scripts/AI, go-type implementation ownership, install/restart/push, and full GameObject runtime parity.
+
 - [x] **#NEXT.R8.ENTITIES.459** Map-owned `GameObject::Update` non-goober `GO_JUST_DEACTIVATED` `ClearLoot()` seam.
   Status: represented-complete only for this bounded non-goober `ClearLoot()` consumption seam; review `APROBADO` after one docs-only correction; CI `CI_OK`; validation OK; committed locally at `current #459 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1575-1607`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:3711-3721`.

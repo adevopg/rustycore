@@ -37,7 +37,7 @@ use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
     Corpse, Creature, CreatureRuntimePlan, CreatureRuntimeUpdateContext, DynamicObject,
     DynamicObjectType, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_DOOR, GAMEOBJECT_TYPE_GOOBER,
-    GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_TRANSPORT, GameObject,
+    GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_TRANSPORT, GO_FLAG_NODESPAWN, GameObject,
     GameObjectUpdateOutcomeLikeCpp as EntityGameObjectUpdateOutcomeLikeCpp,
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
@@ -766,6 +766,11 @@ pub struct GameObjectUpdateOutcomeLikeCpp {
     pub linked_trap_removed: bool,
     pub linked_trap_missing_or_self: bool,
     pub loot_cleared: bool,
+    pub goober_spell_cast_spell_id: Option<u32>,
+    pub goober_spell_casts_represented: usize,
+    pub goober_users_cleared: bool,
+    pub goober_state_reset: bool,
+    pub goober_nodespawn_return: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -778,6 +783,10 @@ pub struct GameObjectsUpdateSummaryLikeCpp {
     pub not_in_world: usize,
     pub linked_traps_removed: usize,
     pub loot_cleared: usize,
+    pub goober_spell_casts_represented: usize,
+    pub goober_users_cleared: usize,
+    pub goober_state_reset: usize,
+    pub goober_nodespawn_returns: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4399,6 +4408,11 @@ where
                 linked_trap_removed: false,
                 linked_trap_missing_or_self: false,
                 loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
             };
         };
 
@@ -4420,6 +4434,11 @@ where
                 linked_trap_removed: false,
                 linked_trap_missing_or_self: false,
                 loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
             };
         }
 
@@ -4441,6 +4460,11 @@ where
                 linked_trap_removed: false,
                 linked_trap_missing_or_self: false,
                 loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
             };
         };
 
@@ -4464,6 +4488,11 @@ where
                 linked_trap_removed: false,
                 linked_trap_missing_or_self: false,
                 loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
             };
         }
 
@@ -4486,6 +4515,11 @@ where
                     linked_trap_removed: false,
                     linked_trap_missing_or_self: false,
                     loot_cleared: false,
+                    goober_spell_cast_spell_id: None,
+                    goober_spell_casts_represented: 0,
+                    goober_users_cleared: false,
+                    goober_state_reset: false,
+                    goober_nodespawn_return: false,
                 };
             };
             let Some(game_object) = record.game_object_mut() else {
@@ -4506,6 +4540,11 @@ where
                     linked_trap_removed: false,
                     linked_trap_missing_or_self: false,
                     loot_cleared: false,
+                    goober_spell_cast_spell_id: None,
+                    goober_spell_casts_represented: 0,
+                    goober_users_cleared: false,
+                    goober_state_reset: false,
+                    goober_nodespawn_return: false,
                 };
             };
             game_object.update_like_cpp(diff_ms)
@@ -4544,21 +4583,55 @@ where
                     })
             };
 
-        let loot_cleared =
-            if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
-                false
-            } else if let Some(game_object) = self
+        let mut goober_spell_cast_spell_id = None;
+        let mut goober_spell_casts_represented = 0;
+        let mut goober_users_cleared = false;
+        let mut goober_state_reset = false;
+        let mut goober_nodespawn_return = false;
+
+        if entity_update.status != EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+            if let Some(game_object) = self
                 .map_objects
                 .get_mut(&game_object_guid)
                 .and_then(MapObjectRecord::game_object_mut)
                 .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
-                .filter(|game_object| game_object.data().type_id != GAMEOBJECT_TYPE_GOOBER as i8)
+                .filter(|game_object| game_object.data().type_id == GAMEOBJECT_TYPE_GOOBER as i8)
             {
-                game_object.clear_loot_like_cpp();
-                true
-            } else {
-                false
-            };
+                if let Some(goober_source) = game_object.represented_goober_use_source_like_cpp() {
+                    if goober_source.spell_id != 0 {
+                        goober_spell_cast_spell_id = Some(goober_source.spell_id);
+                        goober_spell_casts_represented =
+                            game_object.unique_users_snapshot_like_cpp().len();
+                        game_object.clear_unique_users_and_reset_use_times_like_cpp();
+                        goober_users_cleared = true;
+                    }
+
+                    if goober_source.lock_id != 0 || goober_source.auto_close_ms != 0 {
+                        game_object.set_go_state(GoState::Ready);
+                        goober_state_reset = true;
+                    }
+                }
+
+                goober_nodespawn_return = game_object.data().flags & GO_FLAG_NODESPAWN != 0;
+            }
+        }
+
+        let loot_cleared = if entity_update.status
+            == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested
+            || goober_nodespawn_return
+        {
+            false
+        } else if let Some(game_object) = self
+            .map_objects
+            .get_mut(&game_object_guid)
+            .and_then(MapObjectRecord::game_object_mut)
+            .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+        {
+            game_object.clear_loot_like_cpp();
+            true
+        } else {
+            false
+        };
 
         if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
             if let Some(record) = self.map_objects.get_mut(&game_object_guid) {
@@ -4585,6 +4658,11 @@ where
                 linked_trap_removed,
                 linked_trap_missing_or_self,
                 loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
             }
         } else {
             GameObjectUpdateOutcomeLikeCpp {
@@ -4605,6 +4683,11 @@ where
                 linked_trap_removed,
                 linked_trap_missing_or_self,
                 loot_cleared,
+                goober_spell_cast_spell_id,
+                goober_spell_casts_represented,
+                goober_users_cleared,
+                goober_state_reset,
+                goober_nodespawn_return,
             }
         }
     }
@@ -4638,6 +4721,16 @@ where
             }
             if outcome.loot_cleared {
                 summary.loot_cleared += 1;
+            }
+            summary.goober_spell_casts_represented += outcome.goober_spell_casts_represented;
+            if outcome.goober_users_cleared {
+                summary.goober_users_cleared += 1;
+            }
+            if outcome.goober_state_reset {
+                summary.goober_state_reset += 1;
+            }
+            if outcome.goober_nodespawn_return {
+                summary.goober_nodespawn_returns += 1;
             }
             match outcome.status {
                 GameObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
@@ -9694,8 +9787,8 @@ mod tests {
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AccessorObjectRef, Creature, GameObject, GameObjectOwnedLoot, ObjectAccessor,
-        ObjectNotifyFlags, Player, Transport,
+        AccessorObjectRef, Creature, GameObject, GameObjectOwnedLoot, GooberUseSource,
+        ObjectAccessor, ObjectNotifyFlags, Player, Transport,
     };
 
     const GO_FLAG_MAP_OBJECT: u32 = 0x0010_0000;
@@ -18927,17 +19020,23 @@ mod tests {
     }
 
     #[test]
-    fn gameobject_update_just_deactivated_goober_preserves_pre_clearloot_state_like_cpp_gap() {
+    fn gameobject_update_just_deactivated_goober_spell_represents_casts_and_clears_loot_like_cpp() {
         let mut map = test_map();
-        let mut gameobject = game_object_with_counter(4590111, 571, 7, false);
+        let mut gameobject = game_object_with_counter(4600101, 571, 7, false);
         let gameobject_guid = gameobject.world().guid();
-        let personal_guid = guid(HighGuid::Player, 4590193);
-        let unique_guid = guid(HighGuid::Player, 4590194);
+        let personal_guid = guid(HighGuid::Player, 4600191);
+        let first_unique_guid = guid(HighGuid::Player, 4600192);
+        let second_unique_guid = guid(HighGuid::Player, 4600193);
         gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            spell_id: 12345,
+            ..GooberUseSource::default()
+        }));
         gameobject.set_loot_state(LootState::JustDeactivated, None);
         gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(17, 4));
         gameobject.set_personal_loot_like_cpp(personal_guid, GameObjectOwnedLoot::new(19, 5));
-        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+        assert!(gameobject.add_unique_use_like_cpp(first_unique_guid));
+        assert!(gameobject.add_unique_use_like_cpp(second_unique_guid));
         gameobject.add_use_like_cpp();
 
         map.add_map_object_record_to_map_like_cpp(
@@ -18952,15 +19051,173 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
-        // C++ GameObject.cpp:1581-1605 runs the goober spell/user/state/NODESPAWN
-        // branch before ClearLoot(); this branch remains an explicit later gap, so
-        // this slice must not mutate loot/users/use-times or report loot_cleared.
-        assert!(!outcome.loot_cleared);
+        assert_eq!(outcome.goober_spell_cast_spell_id, Some(12345));
+        assert_eq!(outcome.goober_spell_casts_represented, 2);
+        assert!(outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(!outcome.goober_nodespawn_return);
+        assert!(outcome.loot_cleared);
         assert_eq!(canonical.loot_state(), LootState::JustDeactivated);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(canonical.personal_loot_count_like_cpp(), 0);
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_lock_resets_state_and_clears_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600201, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            lock_id: 77,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(23, 1));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.goober_state_reset);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert!(outcome.loot_cleared);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_nodespawn_returns_before_clearloot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600301, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600391);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_flags(gameobject.data().flags | GO_FLAG_NODESPAWN);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            spell_id: 23456,
+            auto_close_ms: 5000,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(29, 2));
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, Some(23456));
+        assert_eq!(outcome.goober_spell_casts_represented, 1);
+        assert!(outcome.goober_users_cleared);
+        assert!(outcome.goober_state_reset);
+        assert!(outcome.goober_nodespawn_return);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert!(canonical.shared_loot_like_cpp().is_some());
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_nodespawn_without_source_returns_before_clearloot_like_cpp()
+     {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600351, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600352);
+        let personal_guid = guid(HighGuid::Player, 4600353);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_flags(gameobject.data().flags | GO_FLAG_NODESPAWN);
+        gameobject.set_represented_goober_use_source_like_cpp(None);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(30, 2));
+        gameobject.set_personal_loot_like_cpp(personal_guid, GameObjectOwnedLoot::new(31, 1));
+        gameobject.add_use_like_cpp();
+        gameobject.add_use_like_cpp();
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+        let use_times_before = gameobject.use_times();
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, None);
+        assert_eq!(outcome.goober_spell_casts_represented, 0);
+        assert!(!outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(outcome.goober_nodespawn_return);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(canonical.data().state, GoState::Active as i8);
         assert!(canonical.shared_loot_like_cpp().is_some());
         assert_eq!(canonical.personal_loot_count_like_cpp(), 1);
         assert_eq!(canonical.unique_user_count_like_cpp(), 1);
-        assert_eq!(canonical.use_times(), 2);
+        assert_eq!(canonical.use_times(), use_times_before);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_without_spell_clears_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600401, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600491);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource::default()));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(31, 3));
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, None);
+        assert_eq!(outcome.goober_spell_casts_represented, 0);
+        assert!(!outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(!outcome.goober_nodespawn_return);
+        assert!(outcome.loot_cleared);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
     }
 
     #[test]

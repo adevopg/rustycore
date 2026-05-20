@@ -105,7 +105,7 @@ pub use game_object::{
     GAMEOBJECT_TYPE_NEW_FLAG_DROP, GAMEOBJECT_TYPE_QUESTGIVER, GAMEOBJECT_TYPE_RITUAL,
     GAMEOBJECT_TYPE_SPELL_FOCUS, GAMEOBJECT_TYPE_SPELLCASTER, GAMEOBJECT_TYPE_TEXT,
     GAMEOBJECT_TYPE_TRANSPORT, GAMEOBJECT_TYPE_TRAP, GAMEOBJECT_TYPE_UI_LINK,
-    GO_DYNFLAG_LO_NO_INTERACT, GO_FLAG_IN_MULTI_USE, GO_FLAG_IN_USE, GameObject,
+    GO_DYNFLAG_LO_NO_INTERACT, GO_FLAG_IN_MULTI_USE, GO_FLAG_IN_USE, GO_FLAG_NODESPAWN, GameObject,
     GameObjectCreateLifecycleRecord, GameObjectDataUpdate, GameObjectDataValues,
     GameObjectLifecycleError, GameObjectLoadFromDbLifecycleRecord, GameObjectLootSource,
     GameObjectOwnedLoot, GameObjectTemplateData, GameObjectTemplateLifecycleRecord,

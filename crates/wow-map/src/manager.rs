@@ -1813,6 +1813,10 @@ mod tests {
                 not_in_world: 0,
                 linked_traps_removed: 0,
                 loot_cleared: 0,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: 0,
+                goober_state_reset: 0,
+                goober_nodespawn_returns: 0,
             }
         );
         let game_object = managed_map
@@ -1855,6 +1859,10 @@ mod tests {
                 not_in_world: 0,
                 linked_traps_removed: 0,
                 loot_cleared: 0,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: 0,
+                goober_state_reset: 0,
+                goober_nodespawn_returns: 0,
             }
         );
         assert!(
@@ -1886,6 +1894,10 @@ mod tests {
                 not_in_world: 1,
                 linked_traps_removed: 0,
                 loot_cleared: 0,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: 0,
+                goober_state_reset: 0,
+                goober_nodespawn_returns: 0,
             }
         );
         let game_object = managed_map
@@ -1918,6 +1930,10 @@ mod tests {
                 not_in_world: 0,
                 linked_traps_removed: 0,
                 loot_cleared: 0,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: 0,
+                goober_state_reset: 0,
+                goober_nodespawn_returns: 0,
             }
         );
         assert!(
