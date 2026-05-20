@@ -217,6 +217,29 @@ pub struct GameObjectUpdateModelOutcomeLikeCpp {
     pub new_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectSetDisplayIdStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+}
+
+/// Represented map-owned result for C++ `GameObject::SetDisplayId(uint32)`.
+///
+/// C++ anchor: `GameObject.cpp:3817-3820`. This preserves statement order over
+/// canonical exact typed `Map::map_objects` GameObject records: write
+/// `GameObjectData::DisplayID` first, then call represented `UpdateModel()`.
+/// The model creation evidence remains caller-provided and is never inferred
+/// from display/template/DB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectSetDisplayIdOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectSetDisplayIdStatusLikeCpp,
+    pub previous_display_id: Option<i32>,
+    pub new_display_id: Option<i32>,
+    pub update_model: Option<GameObjectUpdateModelOutcomeLikeCpp>,
+}
+
 /// Represented result for C++ `DynamicMapTree::update(t_diff)`.
 ///
 /// Anchors: `Map.cpp:666-668`, `DynamicTree.cpp:34-38,66-101,115-138`.
@@ -1715,6 +1738,69 @@ where
             model_count_after: self.dynamic_tree_model_keys_like_cpp.len(),
             unbalanced_before,
             unbalanced_after: self.dynamic_tree_unbalanced_times_like_cpp,
+        }
+    }
+
+    /// Represents C++ `GameObject::SetDisplayId(uint32)` over canonical map-owned state.
+    ///
+    /// C++ anchor: `GameObject.cpp:3817-3820`. C++ first writes
+    /// `GameObjectData::DisplayID`, then calls `UpdateModel()`. This map-owned
+    /// caller seam preserves that order and delegates all represented model-key
+    /// side effects to `update_gameobject_model_like_cpp`.
+    pub fn set_gameobject_display_id_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        display_id: u32,
+        new_has_model: bool,
+        new_is_map_object: bool,
+    ) -> GameObjectSetDisplayIdOutcomeLikeCpp {
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::MissingGameObject,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::WrongKind,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        }
+
+        let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        else {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::WrongKind,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        };
+
+        let previous_display_id = game_object.data().display_id;
+        game_object.set_display_id(display_id);
+        let new_display_id = game_object.data().display_id;
+
+        let update_model =
+            self.update_gameobject_model_like_cpp(guid, new_has_model, new_is_map_object);
+
+        GameObjectSetDisplayIdOutcomeLikeCpp {
+            guid,
+            status: GameObjectSetDisplayIdStatusLikeCpp::Updated,
+            previous_display_id: Some(previous_display_id),
+            new_display_id: Some(new_display_id),
+            update_model: Some(update_model),
         }
     }
 
@@ -9855,6 +9941,165 @@ mod tests {
         assert!(wrong_kind.new_model_insert.is_none());
         assert!(untyped.new_model_insert.is_none());
         assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_display_set_in_world_writes_field_then_updates_model_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45401, 4540101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(111);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 777, true, false);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(111));
+        assert_eq!(outcome.new_display_id, Some(777));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::Updated
+        );
+        assert_eq!(
+            update_model.old_model_remove.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(
+            update_model.new_model_insert.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 777);
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn gameobject_display_set_not_in_world_preserves_old_model_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45402, 4540201);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(222);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 888, false, false);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(222));
+        assert_eq!(outcome.new_display_id, Some(888));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::NotInWorld
+        );
+        assert!(update_model.old_model_present);
+        assert!(update_model.old_model_registered);
+        assert!(update_model.old_model_remove.is_none());
+        assert!(update_model.new_model_insert.is_none());
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 888);
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn gameobject_display_set_missing_wrong_kind_and_untyped_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4540301);
+        let creature = test_creature_for_spawn(45403, 4540302, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4540303, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.set_gameobject_display_id_like_cpp(missing_guid, 777, true, true);
+        let wrong_kind = map.set_gameobject_display_id_like_cpp(creature_guid, 777, true, true);
+        let untyped = map.set_gameobject_display_id_like_cpp(untyped_guid, 777, true, true);
+
+        assert_eq!(
+            missing.status,
+            GameObjectSetDisplayIdStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectSetDisplayIdStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectSetDisplayIdStatusLikeCpp::WrongKind
+        );
+        assert!(missing.update_model.is_none());
+        assert!(wrong_kind.update_model.is_none());
+        assert!(untyped.update_model.is_none());
+        assert_eq!(missing.previous_display_id, None);
+        assert_eq!(wrong_kind.previous_display_id, None);
+        assert_eq!(untyped.previous_display_id, None);
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_display_set_does_not_infer_model_from_nonzero_display_id_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45404, 4540401);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(0);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 999, false, true);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(0));
+        assert_eq!(outcome.new_display_id, Some(999));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::Updated
+        );
+        assert!(!update_model.old_model_present);
+        assert!(update_model.old_model_remove.is_none());
+        assert!(update_model.new_model_insert.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 999);
+        assert!(!gameobject.has_represented_gameobject_model_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
     }
 
     #[test]
