@@ -1240,6 +1240,11 @@ impl GameObject {
         is_map_object: bool,
     ) {
         self.set_represented_gameobject_model_like_cpp(has_model);
+        // C++ `CreateModel()` assigns a fresh `m_model`. Any previous represented
+        // `m_model->enableCollision(...)` evidence belongs to the deleted/replaced
+        // model and must not leak onto the new one; `UpdateModel()` does not call
+        // `EnableCollision()` after recreation.
+        self.represented_gameobject_model_collision_enabled_like_cpp = None;
         let represented_map_object = has_model && is_map_object;
         self.represented_gameobject_model_is_map_object_like_cpp = represented_map_object;
         if represented_map_object {
@@ -1908,6 +1913,25 @@ mod tests {
         go.set_represented_gameobject_model_like_cpp(false);
 
         assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, 0);
+    }
+
+    #[test]
+    fn gameobject_model_recreation_clears_previous_collision_evidence_like_cpp() {
+        let mut go = GameObject::new();
+        go.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        let enabled = go.enable_represented_gameobject_collision_like_cpp(true);
+        assert_eq!(enabled.new_collision_enabled, Some(true));
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, GO_FLAG_MAP_OBJECT);
+
+        go.apply_represented_gameobject_model_creation_like_cpp(true, false);
+
+        assert!(go.has_represented_gameobject_model_like_cpp());
         assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
         assert_eq!(
             go.represented_gameobject_model_collision_enabled_like_cpp(),

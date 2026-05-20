@@ -189,6 +189,34 @@ pub struct DynamicMapTreeModelMutationOutcomeLikeCpp {
     pub unbalanced_after: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateModelStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+    NotInWorld,
+}
+
+/// Represented map-owned result for C++ `GameObject::UpdateModel()`.
+///
+/// C++ anchor: `GameObject.cpp:3867-3880`. This helper operates only on the
+/// canonical `Map::map_objects` exact typed GameObject record, consumes explicit
+/// caller-provided `CreateModel()` evidence, and mutates only represented local
+/// model/flag/collision evidence plus the map-owned represented DynamicMapTree
+/// key set. It does not infer from display/template/DB and does not call
+/// `EnableCollision()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateModelOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectUpdateModelStatusLikeCpp,
+    pub old_model_present: bool,
+    pub old_model_registered: bool,
+    pub old_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub new_has_model: bool,
+    pub new_is_map_object: bool,
+    pub new_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+}
+
 /// Represented result for C++ `DynamicMapTree::update(t_diff)`.
 ///
 /// Anchors: `Map.cpp:666-668`, `DynamicTree.cpp:34-38,66-101,115-138`.
@@ -1687,6 +1715,99 @@ where
             model_count_after: self.dynamic_tree_model_keys_like_cpp.len(),
             unbalanced_before,
             unbalanced_after: self.dynamic_tree_unbalanced_times_like_cpp,
+        }
+    }
+
+    /// Represents C++ `GameObject::UpdateModel()` over canonical map-owned state.
+    ///
+    /// C++ anchors: `GameObject.cpp:3867-3880`, `GameObject.cpp:4394-4399`, and
+    /// `GameObject.cpp:3818-3820`. The caller supplies explicit represented
+    /// `CreateModel()` output; this helper never infers model existence or
+    /// map-object-ness from display id, template, type or DB. Only exact typed
+    /// `MapObjectRecord::GameObject` records are mutated; missing, untyped,
+    /// wrong-kind and not-in-world records are explicit no-mutation outcomes.
+    pub fn update_gameobject_model_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        new_has_model: bool,
+        new_is_map_object: bool,
+    ) -> GameObjectUpdateModelOutcomeLikeCpp {
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::MissingGameObject,
+                old_model_present: false,
+                old_model_registered: false,
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::WrongKind,
+                old_model_present: false,
+                old_model_registered: false,
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        }
+
+        let game_object = record
+            .game_object()
+            .expect("exact typed GameObject record checked above");
+        if !game_object.world().object().is_in_world() {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::NotInWorld,
+                old_model_present: game_object.has_represented_gameobject_model_like_cpp(),
+                old_model_registered: self.contains_gameobject_model_like_cpp(key),
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        }
+
+        let old_model_present = game_object.has_represented_gameobject_model_like_cpp();
+        let old_model_registered =
+            old_model_present && self.contains_gameobject_model_like_cpp(key);
+        let old_model_remove =
+            old_model_registered.then(|| self.remove_gameobject_model_like_cpp(key));
+
+        if let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        {
+            // C++ removes `GO_FLAG_MAP_OBJECT`, deletes/nulls `m_model`, then
+            // calls `CreateModel()`. The first call clears old map-object and
+            // collision evidence; the second installs only the explicit new
+            // model/map-object evidence and does not call `EnableCollision()`.
+            game_object.apply_represented_gameobject_model_creation_like_cpp(false, false);
+            game_object.apply_represented_gameobject_model_creation_like_cpp(
+                new_has_model,
+                new_is_map_object,
+            );
+        }
+
+        let new_model_insert = new_has_model.then(|| self.insert_gameobject_model_like_cpp(key));
+
+        GameObjectUpdateModelOutcomeLikeCpp {
+            guid,
+            status: GameObjectUpdateModelStatusLikeCpp::Updated,
+            old_model_present,
+            old_model_registered,
+            old_model_remove,
+            new_has_model,
+            new_is_map_object,
+            new_model_insert,
         }
     }
 
@@ -9109,6 +9230,8 @@ mod tests {
         Transport,
     };
 
+    const GO_FLAG_MAP_OBJECT: u32 = 0x0010_0000;
+
     #[derive(Debug, Default)]
     struct RecordingTerrain {
         loads: Vec<(u32, u32)>,
@@ -9572,6 +9695,166 @@ mod tests {
         assert!(outcome.gameobject_model_insert.is_none());
         assert!(outcome.gameobject_collision_enable.is_none());
         assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_removes_old_and_inserts_new_without_collision_like_cpp()
+    {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45301, 4530101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, true, false);
+
+        assert_eq!(outcome.status, GameObjectUpdateModelStatusLikeCpp::Updated);
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        let remove = outcome.old_model_remove.unwrap();
+        assert_eq!(
+            remove.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(remove.model_count_before, 1);
+        assert_eq!(remove.model_count_after, 0);
+        assert_eq!(remove.unbalanced_before, 1);
+        assert_eq!(remove.unbalanced_after, 2);
+        let insert = outcome.new_model_insert.unwrap();
+        assert_eq!(
+            insert.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert_eq!(insert.model_count_before, 0);
+        assert_eq!(insert.model_count_after, 1);
+        assert_eq!(insert.unbalanced_before, 2);
+        assert_eq!(insert.unbalanced_after, 3);
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_to_no_model_removes_old_without_insert_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45302, 4530201);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, false, true);
+
+        assert_eq!(outcome.status, GameObjectUpdateModelStatusLikeCpp::Updated);
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        assert_eq!(
+            outcome.old_model_remove.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert!(outcome.new_model_insert.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(!gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_not_in_world_is_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45303, 4530301);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, false, false);
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateModelStatusLikeCpp::NotInWorld
+        );
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        assert!(outcome.old_model_remove.is_none());
+        assert!(outcome.new_model_insert.is_none());
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            gameobject.data().flags & GO_FLAG_MAP_OBJECT,
+            GO_FLAG_MAP_OBJECT
+        );
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_missing_and_wrong_kind_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4530401);
+        let creature = test_creature_for_spawn(45304, 4530402, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4530403, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.update_gameobject_model_like_cpp(missing_guid, true, true);
+        let wrong_kind = map.update_gameobject_model_like_cpp(creature_guid, true, true);
+        let untyped = map.update_gameobject_model_like_cpp(untyped_guid, true, true);
+
+        assert_eq!(
+            missing.status,
+            GameObjectUpdateModelStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectUpdateModelStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectUpdateModelStatusLikeCpp::WrongKind
+        );
+        assert!(missing.new_model_insert.is_none());
+        assert!(wrong_kind.new_model_insert.is_none());
+        assert!(untyped.new_model_insert.is_none());
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
     }
 
     #[test]
