@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use wow_constants::{SpellState, TypeId, UnitState};
 use wow_core::{ObjectGuid, Position};
 
-use crate::{Vehicle, VehicleSeatAddon, VehicleSeatInfo};
+use crate::{
+    CreatureAddToWorldVehicleResetContextLikeCpp, Vehicle, VehicleResetPlan, VehicleSeatAddon,
+    VehicleSeatInfo,
+};
 
 /// Minimal bridge for TrinityCore `Unit` aura containers.
 ///
@@ -3654,6 +3657,15 @@ pub struct VehicleKitRemoveOutcomeLikeCpp {
     pub kit_cleared: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleKitAddToWorldResetOutcomeLikeCpp {
+    pub kit_id: u32,
+    pub aim_create_represented: bool,
+    pub ai_initialize_represented: bool,
+    pub reset_evading: bool,
+    pub reset_plan: VehicleResetPlan,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VehicleSubsystem {
     pub vehicle_guid: Option<ObjectGuid>,
@@ -3789,6 +3801,30 @@ impl VehicleSubsystem {
             installed: kit.installed,
             script_on_install_represented: true,
         }
+    }
+
+    pub fn reset_vehicle_kit_for_creature_add_to_world_like_cpp(
+        &mut self,
+        context: &CreatureAddToWorldVehicleResetContextLikeCpp,
+        base_is_alive: bool,
+    ) -> Option<VehicleKitAddToWorldResetOutcomeLikeCpp> {
+        let kit = self.kit.as_mut()?;
+        let vehicle = kit.vehicle.as_mut()?;
+        let reset_plan = vehicle.reset_plan_like_cpp(
+            false,
+            base_is_alive,
+            context.is_mechanical_creature,
+            context.is_world_boss,
+            &context.accessories,
+        )?;
+
+        Some(VehicleKitAddToWorldResetOutcomeLikeCpp {
+            kit_id: kit.kit_id,
+            aim_create_represented: true,
+            ai_initialize_represented: true,
+            reset_evading: false,
+            reset_plan,
+        })
     }
 
     pub fn remove_vehicle_kit_like_cpp(

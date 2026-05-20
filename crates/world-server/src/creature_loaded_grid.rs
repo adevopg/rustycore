@@ -36,10 +36,10 @@ use wow_data::{
     CreatureTemplateLifecycleStoreLikeCpp,
 };
 use wow_entities::{
-    Creature, CreatureCreateLifecycleRecord, CreatureLifecycleStats,
-    CreatureLoadFromDbLifecycleRecord, CreatureModelDimensions, CreatureSpawnLifecycleRecord,
-    CreatureTemplateLifecycleRecord, MapObjectRecord, MovementGeneratorType,
-    VehicleKitCreateInputLikeCpp,
+    Creature, CreatureAddToWorldVehicleResetContextLikeCpp, CreatureCreateLifecycleRecord,
+    CreatureLifecycleStats, CreatureLoadFromDbLifecycleRecord, CreatureModelDimensions,
+    CreatureSpawnLifecycleRecord, CreatureTemplateLifecycleRecord, MapObjectRecord,
+    MovementGeneratorType, VehicleKitCreateInputLikeCpp,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +58,7 @@ pub struct ResolvedCreatureTemplateLikeCpp {
     pub spells: [u32; 8],
     pub classification: u32,
     pub flags_extra: u32,
+    pub creature_type: u32,
     pub type_flags: u32,
     pub movement_type: MovementGeneratorType,
     pub min_level: u8,
@@ -66,6 +67,7 @@ pub struct ResolvedCreatureTemplateLikeCpp {
     pub original_equipment_id: i8,
     pub vehicle_id: Option<u32>,
     pub vehicle_kit_create_input: Option<VehicleKitCreateInputLikeCpp>,
+    pub add_to_world_vehicle_reset_context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
     pub corpse_delay: u32,
     pub ignore_corpse_decay_ratio: bool,
 }
@@ -199,6 +201,9 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
                 dynamic: false,
                 vehicle_id: template.vehicle_id,
                 vehicle_kit_create_input: template.vehicle_kit_create_input.clone(),
+                add_to_world_vehicle_reset_context: template
+                    .add_to_world_vehicle_reset_context
+                    .clone(),
                 template: template_lifecycle_record(template),
                 spawn: Some(spawn_lifecycle_record(spawn)),
                 selected_level: selection.selected_level,
@@ -344,6 +349,7 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
         spells: template.spells,
         classification: template.classification,
         flags_extra: template.flags_extra,
+        creature_type: template.creature_type,
         type_flags: difficulty.type_flags,
         movement_type,
         min_level: difficulty.min_level,
@@ -352,6 +358,7 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
         original_equipment_id,
         vehicle_id: (template.vehicle_id != 0).then_some(template.vehicle_id),
         vehicle_kit_create_input: None,
+        add_to_world_vehicle_reset_context: None,
         corpse_delay: 0,
         ignore_corpse_decay_ratio: false,
     };
@@ -473,6 +480,7 @@ fn template_lifecycle_record(
         spells: template.spells,
         classification: template.classification,
         flags_extra: template.flags_extra,
+        creature_type: template.creature_type,
         type_flags: template.type_flags,
         movement_type: template.movement_type,
         min_level: template.min_level,
@@ -543,6 +551,7 @@ mod tests {
             spells: [11, 22, 33, 44, 55, 66, 77, 88],
             classification: 4,
             flags_extra: 0x10,
+            creature_type: 0,
             type_flags: 0x20,
             movement_type: MovementGeneratorType::Idle,
             min_level: 18,
@@ -551,6 +560,7 @@ mod tests {
             original_equipment_id: -2,
             vehicle_id: None,
             vehicle_kit_create_input: None,
+            add_to_world_vehicle_reset_context: None,
             corpse_delay: 61,
             ignore_corpse_decay_ratio: true,
         }
@@ -679,6 +689,7 @@ mod tests {
                 speed_run: 1.14286,
                 scale: 1.25,
                 classification: 1,
+                creature_type: 0,
                 unit_class: 1,
                 vehicle_id,
                 movement_type: 1,

@@ -56,6 +56,8 @@ const WORLD_CONFIG_CANDIDATES: &[&str] = &[
 ];
 const WORLD_CONFIG_DIR: &str = "worldserver.conf.d";
 const DEFAULT_RESPAWN_MIN_CHECK_INTERVAL_MS: u32 = 5_000;
+const CREATURE_TYPE_MECHANICAL_LIKE_CPP: u32 = 9;
+const CREATURE_TYPE_FLAG_BOSS_MOB_LIKE_CPP: u32 = 0x0001_0000;
 
 // ── Account lookup implementation ────────────────────────────────
 
@@ -1636,6 +1638,7 @@ async fn main() -> Result<()> {
             model_store: Arc::clone(&creature_model_data_store),
             vehicle_store: Arc::clone(&vehicle_store),
             vehicle_seat_store: Arc::clone(&vehicle_seat_store),
+            vehicle_accessory_store: Arc::clone(&vehicle_accessory_store),
             gameobject_template_store: Arc::clone(&gameobject_template_lifecycle_store),
             gameobject_override_store: Arc::clone(&gameobject_override_lifecycle_store),
         },
@@ -2672,6 +2675,7 @@ struct LoadedGridCreatureRespawnCachesLikeCpp {
     model_store: Arc<wow_data::CreatureModelDataStore>,
     vehicle_store: Arc<wow_data::VehicleStore>,
     vehicle_seat_store: Arc<wow_data::VehicleSeatStore>,
+    vehicle_accessory_store: Arc<wow_data::VehicleAccessoryStoreLikeCpp>,
     gameobject_template_store: Arc<wow_data::GameObjectTemplateLifecycleStoreLikeCpp>,
     gameobject_override_store: Arc<wow_data::GameObjectOverrideLifecycleStoreLikeCpp>,
 }
@@ -2825,17 +2829,27 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
     };
     let mut template = template;
     if let Some(vehicle_id) = template.vehicle_id {
-        template.vehicle_kit_create_input =
-            caches.vehicle_store.get(vehicle_id).map(|vehicle_entry| {
-                wow_entities::VehicleKitCreateInputLikeCpp {
-                    vehicle_id,
-                    creature_entry: template.entry,
-                    loading: true,
-                    seat_defs: caches
-                        .vehicle_seat_store
-                        .seat_defs_for_vehicle_like_cpp(vehicle_entry),
-                }
+        if let Some(vehicle_entry) = caches.vehicle_store.get(vehicle_id) {
+            template.vehicle_kit_create_input = Some(wow_entities::VehicleKitCreateInputLikeCpp {
+                vehicle_id,
+                creature_entry: template.entry,
+                loading: true,
+                seat_defs: caches
+                    .vehicle_seat_store
+                    .seat_defs_for_vehicle_like_cpp(vehicle_entry),
             });
+            template.add_to_world_vehicle_reset_context =
+                Some(wow_entities::CreatureAddToWorldVehicleResetContextLikeCpp {
+                    is_mechanical_creature: template.creature_type
+                        == CREATURE_TYPE_MECHANICAL_LIKE_CPP,
+                    is_world_boss: template.type_flags & CREATURE_TYPE_FLAG_BOSS_MOB_LIKE_CPP != 0,
+                    accessories: caches
+                        .vehicle_accessory_store
+                        .accessories_for_vehicle_like_cpp(Some(spawn_id), template.entry)
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_default(),
+                });
+        }
     }
 
     let map_object_high = if template.vehicle_id.is_some() {
@@ -3982,6 +3996,10 @@ mod tests {
             model_store: Arc::new(wow_data::CreatureModelDataStore::from_entries([])),
             vehicle_store: Arc::new(wow_data::VehicleStore::from_entries([])),
             vehicle_seat_store: Arc::new(wow_data::VehicleSeatStore::from_entries([])),
+            vehicle_accessory_store: Arc::new(wow_data::VehicleAccessoryStoreLikeCpp::from_parts(
+                [],
+                [],
+            )),
             gameobject_template_store: Arc::new(
                 wow_data::GameObjectTemplateLifecycleStoreLikeCpp::default(),
             ),
@@ -5258,8 +5276,27 @@ mmap.enablePathFinding = 0
                 spawn_time_secs: 120,
             },
         )]));
-        let caches =
+        let mut caches =
             variable_loaded_grid_creature_respawn_caches_with_vehicle_id_like_cpp(entry, 101);
+        let entry_accessory = wow_entities::VehicleAccessory {
+            accessory_entry: 7001,
+            seat_id: 1,
+            is_minion: false,
+            summoned_type: 6,
+            summon_time_ms: 3_000,
+        };
+        let spawn_accessory = wow_entities::VehicleAccessory {
+            accessory_entry: 8001,
+            seat_id: 2,
+            is_minion: true,
+            summoned_type: 8,
+            summon_time_ms: 4_000,
+        };
+        caches.vehicle_accessory_store =
+            Arc::new(wow_data::VehicleAccessoryStoreLikeCpp::from_parts(
+                [(spawn_id, vec![spawn_accessory])],
+                [(entry, vec![entry_accessory])],
+            ));
         let mut map = wow_map::Map::new(571, 0, 2, 60_000);
         map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
             object_type: SpawnObjectType::Creature,
@@ -5314,6 +5351,12 @@ mmap.enablePathFinding = 0
         assert_eq!(outcome.usable_seat_num, 1);
         assert!(outcome.update_display_power_represented);
         assert!(!outcome.send_set_vehicle_rec_id_represented);
+        let reset_context = creature
+            .add_to_world_vehicle_reset_context_like_cpp()
+            .expect("VehicleEntry-backed template should build AddToWorld reset context");
+        assert!(!reset_context.is_mechanical_creature);
+        assert!(!reset_context.is_world_boss);
+        assert_eq!(reset_context.accessories, vec![spawn_accessory]);
     }
 
     #[test]
@@ -5400,6 +5443,7 @@ mmap.enablePathFinding = 0
                         speed_run: 1.14286,
                         scale: 1.0,
                         classification: 0,
+                        creature_type: 0,
                         unit_class: 1,
                         vehicle_id,
                         movement_type: 1,
@@ -5448,6 +5492,10 @@ mmap.enablePathFinding = 0
             model_store: Arc::new(wow_data::CreatureModelDataStore::from_entries([])),
             vehicle_store: Arc::new(vehicle_store_for_loaded_grid_test(vehicle_id)),
             vehicle_seat_store: Arc::new(vehicle_seat_store_for_loaded_grid_test()),
+            vehicle_accessory_store: Arc::new(wow_data::VehicleAccessoryStoreLikeCpp::from_parts(
+                [],
+                [],
+            )),
             gameobject_template_store: Arc::new(
                 wow_data::GameObjectTemplateLifecycleStoreLikeCpp::default(),
             ),

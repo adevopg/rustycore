@@ -44,8 +44,8 @@ use wow_entities::{
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
     ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
     TransportUpdateLikeCpp, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp,
-    VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, WorldObject,
-    WorldObjectEnvironment, WorldObjectHeightQuery,
+    VehicleKitAddToWorldResetOutcomeLikeCpp, VehicleKitInstallOutcomeLikeCpp,
+    VehicleKitRemoveOutcomeLikeCpp, WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
@@ -7346,6 +7346,7 @@ where
                 inserted_into_cell: false,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                creature_vehicle_reset: None,
                 creature_vehicle_install: None,
             });
         }
@@ -7393,6 +7394,22 @@ where
             // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
             object.object_mut().set_is_new_object(false);
         }
+
+        let creature_vehicle_reset = if kind == AccessorObjectKind::Creature {
+            record.creature_mut().and_then(|creature| {
+                let context = creature
+                    .add_to_world_vehicle_reset_context_like_cpp()?
+                    .clone();
+                let base_is_alive = creature.is_alive();
+                creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .vehicle
+                    .reset_vehicle_kit_for_creature_add_to_world_like_cpp(&context, base_is_alive)
+            })
+        } else {
+            None
+        };
 
         let creature_vehicle_install = if kind == AccessorObjectKind::Creature {
             record.creature_mut().and_then(|creature| {
@@ -7458,6 +7475,7 @@ where
             inserted_into_cell: true,
             gameobject_model_insert,
             gameobject_collision_enable,
+            creature_vehicle_reset,
             creature_vehicle_install,
         })
     }
@@ -9402,7 +9420,7 @@ pub struct GameObjectCollisionEnableOutcomeLikeCpp {
     pub new_collision_enabled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddToMapOutcome {
     pub guid: ObjectGuid,
     pub cell: CellCoord,
@@ -9414,6 +9432,7 @@ pub struct AddToMapOutcome {
     pub inserted_into_cell: bool,
     pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub creature_vehicle_reset: Option<VehicleKitAddToWorldResetOutcomeLikeCpp>,
     pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
 }
 
@@ -10525,8 +10544,10 @@ mod tests {
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AccessorObjectRef, Creature, GameObject, GameObjectLootSource, GameObjectOwnedLoot,
-        GooberUseSource, ObjectAccessor, ObjectNotifyFlags, Player, Transport,
+        AccessorObjectRef, Creature, CreatureAddToWorldVehicleResetContextLikeCpp, GameObject,
+        GameObjectLootSource, GameObjectOwnedLoot, GooberUseSource, ObjectAccessor,
+        ObjectNotifyFlags, Player, Transport, VehicleAccessory, VehicleSeatAddon, VehicleSeatInfo,
+        VehicleSpellImmunity, VehicleSpellImmunityKind,
     };
 
     const GO_FLAG_MAP_OBJECT: u32 = 0x0010_0000;
@@ -16285,6 +16306,177 @@ mod tests {
         assert!(!cell.world_objects.creatures.contains(&guid));
     }
 
+    fn creature_add_to_world_vehicle_reset_context(
+        is_mechanical_creature: bool,
+        is_world_boss: bool,
+    ) -> CreatureAddToWorldVehicleResetContextLikeCpp {
+        CreatureAddToWorldVehicleResetContextLikeCpp {
+            is_mechanical_creature,
+            is_world_boss,
+            accessories: vec![VehicleAccessory {
+                accessory_entry: 7001,
+                is_minion: false,
+                summon_time_ms: 3_000,
+                seat_id: 1,
+                summoned_type: 6,
+            }],
+        }
+    }
+
+    fn create_loaded_creature_vehicle_kit_like_cpp(creature: &mut Creature, vehicle_id: u32) {
+        let guid = creature.guid();
+        let position = creature.unit().world().position();
+        let entry = creature.unit().world().object().entry();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .create_vehicle_kit_like_cpp(
+                guid,
+                position,
+                Some(vehicle_id),
+                entry,
+                true,
+                Some(vec![(
+                    0,
+                    VehicleSeatInfo {
+                        id: 100,
+                        attachment_offset: Position::default(),
+                        can_enter_or_exit: true,
+                        usable_by_override: false,
+                        can_control: false,
+                        disables_gravity: false,
+                        passenger_not_selectable: false,
+                        keep_pet: false,
+                    },
+                    VehicleSeatAddon::default(),
+                )]),
+            );
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_resets_then_installs_vehicle_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(400, 40001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9003);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let reset = outcome.creature_vehicle_reset.unwrap();
+        assert_eq!(reset.kit_id, 9003);
+        assert!(reset.aim_create_represented);
+        assert!(reset.ai_initialize_represented);
+        assert!(!reset.reset_evading);
+        assert!(reset.reset_plan.call_on_reset_script);
+        assert!(
+            reset
+                .reset_plan
+                .immunity_plan
+                .immunities
+                .contains(&VehicleSpellImmunity {
+                    kind: VehicleSpellImmunityKind::Effect,
+                    spell_or_mechanic: 98,
+                    apply: true,
+                })
+        );
+        let accessory_plan = reset.reset_plan.accessory_install_plan.unwrap();
+        assert_eq!(accessory_plan.accessories.len(), 1);
+        assert_eq!(accessory_plan.accessories[0].accessory_entry, 7001);
+        assert!(outcome.creature_vehicle_install.is_some());
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
+        assert_eq!(kit.kit_id(), 9003);
+        assert!(kit.installed());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_mechanical_world_boss_skips_mechanical_immunities_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(401, 40101, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(true, true),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9004);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let immunities = &outcome
+            .creature_vehicle_reset
+            .unwrap()
+            .reset_plan
+            .immunity_plan
+            .immunities;
+        assert!(immunities.contains(&VehicleSpellImmunity {
+            kind: VehicleSpellImmunityKind::Effect,
+            spell_or_mechanic: 98,
+            apply: true,
+        }));
+        assert!(!immunities.contains(&VehicleSpellImmunity {
+            kind: VehicleSpellImmunityKind::Effect,
+            spell_or_mechanic: 6,
+            apply: true,
+        }));
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_without_kit_has_no_reset_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(402, 40201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.creature_vehicle_reset.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_already_in_world_has_no_reset_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(403, 40301, true);
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9005);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.creature_vehicle_reset.is_none());
+    }
+
     #[test]
     fn creature_vehicle_add_to_map_installs_local_vehicle_kit_like_cpp() {
         let mut map = test_map();
@@ -16317,7 +16509,7 @@ mod tests {
             .and_then(MapObjectRecord::creature)
             .unwrap();
         assert!(stored.unit().world().object().is_in_world());
-        let kit = stored.unit().subsystems().vehicle.kit.unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
         assert_eq!(kit.kit_id, 9001);
         assert!(kit.active);
         assert!(kit.installed);
@@ -16362,7 +16554,7 @@ mod tests {
             .map_object_record(guid)
             .and_then(MapObjectRecord::creature)
             .unwrap();
-        let kit = stored.unit().subsystems().vehicle.kit.unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
         assert_eq!(kit.kit_id, 9002);
         assert!(!kit.installed);
     }

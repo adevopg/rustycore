@@ -63,14 +63,15 @@ pub use corpse::{
 };
 pub use creature::{
     CREATURE_NOPATH_EVADE_TIME_MS, CREATURE_REGEN_INTERVAL_MS, CREATURE_TAPPERS_SOFT_CAP, Creature,
-    CreatureAiOwnershipState, CreatureAiState, CreatureCreateLifecycleRecord,
-    CreatureLifecycleMetadata, CreatureLifecyclePlan, CreatureLifecycleStats,
-    CreatureLifecycleStep, CreatureLoadFromDbLifecycleRecord, CreatureModelDimensions,
-    CreatureMovementInform, CreatureRuntimeAction, CreatureRuntimeEvadeReason, CreatureRuntimePlan,
-    CreatureRuntimeState, CreatureRuntimeUpdateContext, CreatureSpawnLifecycleRecord,
-    CreatureTemplateLifecycleRecord, DEFAULT_BOUNDARY_CHECK_TIME_MS, DEFAULT_CORPSE_DELAY_SECS,
-    DEFAULT_MONSTER_SIGHT_DISTANCE, DEFAULT_RESPAWN_DELAY_SECS, LOOT_MODE_DEFAULT,
-    MAX_CREATURE_SPELLS, MovementGeneratorType, ReactState, VehicleKitCreateInputLikeCpp,
+    CreatureAddToWorldVehicleResetContextLikeCpp, CreatureAiOwnershipState, CreatureAiState,
+    CreatureCreateLifecycleRecord, CreatureLifecycleMetadata, CreatureLifecyclePlan,
+    CreatureLifecycleStats, CreatureLifecycleStep, CreatureLoadFromDbLifecycleRecord,
+    CreatureModelDimensions, CreatureMovementInform, CreatureRuntimeAction,
+    CreatureRuntimeEvadeReason, CreatureRuntimePlan, CreatureRuntimeState,
+    CreatureRuntimeUpdateContext, CreatureSpawnLifecycleRecord, CreatureTemplateLifecycleRecord,
+    DEFAULT_BOUNDARY_CHECK_TIME_MS, DEFAULT_CORPSE_DELAY_SECS, DEFAULT_MONSTER_SIGHT_DISTANCE,
+    DEFAULT_RESPAWN_DELAY_SECS, LOOT_MODE_DEFAULT, MAX_CREATURE_SPELLS, MovementGeneratorType,
+    ReactState, VehicleKitCreateInputLikeCpp,
 };
 pub use dynamic_object::{
     DYNAMIC_OBJECT_DATA_CAST_TIME_BIT, DYNAMIC_OBJECT_DATA_CASTER_BIT,
@@ -285,7 +286,8 @@ pub use unit_subsystems::{
     SUMMON_SLOT_TOTEM_3 as UNIT_SUMMON_SLOT_TOTEM_3,
     SUMMON_SLOT_TOTEM_4 as UNIT_SUMMON_SLOT_TOTEM_4, SeekAssistancePlan, SpellChargeState,
     SpellCooldown, SpellHistory, SpellSubsystem, THREAT_UPDATE_INTERVAL_MS, ThreatOnlineState,
-    ThreatReferenceState, ThreatTauntState, UnitSubsystems, VehicleKitCreateOutcomeLikeCpp,
+    ThreatReferenceState, ThreatTauntState, UnitSubsystems,
+    VehicleKitAddToWorldResetOutcomeLikeCpp, VehicleKitCreateOutcomeLikeCpp,
     VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, VehicleKitState,
     VehicleSubsystem,
 };

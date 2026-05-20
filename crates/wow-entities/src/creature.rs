@@ -3,7 +3,9 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, Position};
 
-use crate::{BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit, VehicleSeatAddon, VehicleSeatInfo};
+use crate::{
+    BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit, VehicleAccessory, VehicleSeatAddon, VehicleSeatInfo,
+};
 
 pub const CREATURE_REGEN_INTERVAL_MS: u32 = 2_000;
 pub const MAX_CREATURE_SPELLS: usize = 8;
@@ -181,6 +183,7 @@ pub struct CreatureTemplateLifecycleRecord {
     pub spells: [u32; MAX_CREATURE_SPELLS],
     pub classification: u32,
     pub flags_extra: u32,
+    pub creature_type: u32,
     pub type_flags: u32,
     pub movement_type: MovementGeneratorType,
     pub min_level: u8,
@@ -225,6 +228,13 @@ pub struct VehicleKitCreateInputLikeCpp {
     pub seat_defs: Vec<(i8, VehicleSeatInfo, VehicleSeatAddon)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureAddToWorldVehicleResetContextLikeCpp {
+    pub is_mechanical_creature: bool,
+    pub is_world_boss: bool,
+    pub accessories: Vec<VehicleAccessory>,
+}
+
 /// Resolved, testable input for TrinityCore `Creature::Create`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreatureCreateLifecycleRecord {
@@ -236,6 +246,7 @@ pub struct CreatureCreateLifecycleRecord {
     pub dynamic: bool,
     pub vehicle_id: Option<u32>,
     pub vehicle_kit_create_input: Option<VehicleKitCreateInputLikeCpp>,
+    pub add_to_world_vehicle_reset_context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
     pub template: CreatureTemplateLifecycleRecord,
     pub spawn: Option<CreatureSpawnLifecycleRecord>,
     pub selected_level: u8,
@@ -262,6 +273,7 @@ pub struct CreatureLifecycleMetadata {
     pub unit_class: u8,
     pub classification: u32,
     pub flags_extra: u32,
+    pub creature_type: u32,
     pub type_flags: u32,
     pub selected_level: u8,
     pub selected_display_id: u32,
@@ -288,6 +300,7 @@ pub struct CreatureLifecycleMetadata {
     pub map_insertion_requested: bool,
     pub dynamic_spawn: bool,
     pub vehicle_id: Option<u32>,
+    pub add_to_world_vehicle_reset_context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
     pub equipment_id: u8,
     pub original_equipment_id: i8,
 }
@@ -301,6 +314,7 @@ impl Default for CreatureLifecycleMetadata {
             unit_class: 0,
             classification: 0,
             flags_extra: 0,
+            creature_type: 0,
             type_flags: 0,
             selected_level: 0,
             selected_display_id: 0,
@@ -327,6 +341,7 @@ impl Default for CreatureLifecycleMetadata {
             map_insertion_requested: false,
             dynamic_spawn: false,
             vehicle_id: None,
+            add_to_world_vehicle_reset_context: None,
             equipment_id: 0,
             original_equipment_id: 0,
         }
@@ -806,6 +821,7 @@ impl Creature {
             unit_class: template.unit_class,
             classification: template.classification,
             flags_extra: template.flags_extra,
+            creature_type: template.creature_type,
             type_flags: template.type_flags,
             selected_level: record.selected_level,
             selected_display_id: record.selected_display_id,
@@ -838,6 +854,7 @@ impl Creature {
             map_insertion_requested: spawn.map(|spawn| spawn.add_to_map).unwrap_or(false),
             dynamic_spawn: record.dynamic,
             vehicle_id: record.vehicle_id,
+            add_to_world_vehicle_reset_context: record.add_to_world_vehicle_reset_context,
             equipment_id,
             original_equipment_id,
         };
@@ -899,6 +916,21 @@ impl Creature {
 
     pub const fn lifecycle_metadata(&self) -> &CreatureLifecycleMetadata {
         &self.lifecycle_metadata
+    }
+
+    pub fn add_to_world_vehicle_reset_context_like_cpp(
+        &self,
+    ) -> Option<&CreatureAddToWorldVehicleResetContextLikeCpp> {
+        self.lifecycle_metadata
+            .add_to_world_vehicle_reset_context
+            .as_ref()
+    }
+
+    pub fn set_add_to_world_vehicle_reset_context_like_cpp(
+        &mut self,
+        context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
+    ) {
+        self.lifecycle_metadata.add_to_world_vehicle_reset_context = context;
     }
 
     pub fn clear_data_changes(&mut self) {
@@ -2448,6 +2480,7 @@ mod tests {
             spells,
             classification: 3,
             flags_extra: 0x10,
+            creature_type: 9,
             type_flags: 0x20,
             movement_type: MovementGeneratorType::Idle,
             min_level: 70,
@@ -2520,6 +2553,7 @@ mod tests {
                 loading: true,
                 seat_defs: vec![vehicle_seat_def(0, true), vehicle_seat_def(2, false)],
             }),
+            add_to_world_vehicle_reset_context: None,
             template: creature_lifecycle_template(),
             spawn: None,
             selected_level: 71,

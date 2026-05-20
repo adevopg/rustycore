@@ -3,7 +3,17 @@
 > Generated: 2026-05-07
 > Rule: every Entities claim is contrasted against `/home/server/woltk-trinity-legacy/src/server/game/Entities/`.
 
+## Prepared / Pending Review Tasks
+
+- None.
+
 ## Closed Tasks
+
+- [x] **#NEXT.R8.ENTITIES.469** Creature AddToWorld `AIM_Initialize -> Vehicle::Reset(false)` reset/accessory evidence seam.
+  Status: represented-complete only for local reset evidence before existing AddToMap install evidence; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #469 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:2469-2474`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureData.h:54`, `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:4572-4582`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.cpp:84-107`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.cpp:193-257`.
+  Rust targets: `crates/wow-data/src/creature_template.rs`, `crates/wow-entities/src/creature.rs`, `crates/wow-entities/src/lib.rs`, `crates/wow-entities/src/unit_subsystems.rs`, `crates/wow-map/src/map.rs`, `crates/world-server/src/creature_loaded_grid.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: represented-complete only for local reset evidence before existing AddToMap install evidence; reset records knockback immunity, mechanical non-world-boss immunity gating, accessory-plan DTOs, and spawn-specific accessory preference over entry rows. Boundaries: no real accessory Creature summon/AddToMap, no scripts/AI/fanout/ObjectAccessor/dynamic tree/packets/DB/ZoneScript/formation.
 - [x] **#NEXT.R8.ENTITIES.468** loaded-grid Creature `CreateVehicleKit` DB2 seat-backed local Vehicle object seam.
   Status: represented-complete for DB2 seat-backed local `Vehicle` object creation during loaded-grid Creature `CreateVehicleKit(loading=true)` only; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #468 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:1770-1812`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp:11298-11312`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.cpp:37-59`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Vehicle/Vehicle.cpp:78-83`.
