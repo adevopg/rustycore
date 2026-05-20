@@ -286,7 +286,7 @@ pub use unit_subsystems::{
     SUMMON_SLOT_TOTEM_4 as UNIT_SUMMON_SLOT_TOTEM_4, SeekAssistancePlan, SpellChargeState,
     SpellCooldown, SpellHistory, SpellSubsystem, THREAT_UPDATE_INTERVAL_MS, ThreatOnlineState,
     ThreatReferenceState, ThreatTauntState, UnitSubsystems, VehicleKitInstallOutcomeLikeCpp,
-    VehicleKitState, VehicleSubsystem,
+    VehicleKitRemoveOutcomeLikeCpp, VehicleKitState, VehicleSubsystem,
 };
 pub use update_fields::{
     ACTIVE_PLAYER_DATA_BITS, AREA_TRIGGER_DATA_BITS, CONTAINER_DATA_BITS, CONVERSATION_DATA_BITS,

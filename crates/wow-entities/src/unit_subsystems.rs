@@ -3594,6 +3594,19 @@ pub struct VehicleKitInstallOutcomeLikeCpp {
     pub script_on_install_represented: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleKitRemoveOutcomeLikeCpp {
+    pub kit_id: Option<u32>,
+    pub had_kit: bool,
+    pub previous_installed: Option<bool>,
+    pub on_remove_from_world: bool,
+    pub send_set_vehicle_rec_id_zero_represented: bool,
+    pub uninstall_represented: bool,
+    pub remove_all_passengers_represented: bool,
+    pub script_on_uninstall_represented: bool,
+    pub kit_cleared: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VehicleSubsystem {
     pub vehicle_guid: Option<ObjectGuid>,
@@ -3643,6 +3656,37 @@ impl VehicleSubsystem {
             previous_installed: Some(previous_installed),
             installed: kit.installed,
             script_on_install_represented: true,
+        }
+    }
+
+    pub fn remove_vehicle_kit_like_cpp(
+        &mut self,
+        on_remove_from_world: bool,
+    ) -> VehicleKitRemoveOutcomeLikeCpp {
+        let Some(kit) = self.kit.take() else {
+            return VehicleKitRemoveOutcomeLikeCpp {
+                kit_id: None,
+                had_kit: false,
+                previous_installed: None,
+                on_remove_from_world,
+                send_set_vehicle_rec_id_zero_represented: false,
+                uninstall_represented: false,
+                remove_all_passengers_represented: false,
+                script_on_uninstall_represented: false,
+                kit_cleared: false,
+            };
+        };
+
+        VehicleKitRemoveOutcomeLikeCpp {
+            kit_id: Some(kit.kit_id),
+            had_kit: true,
+            previous_installed: Some(kit.installed),
+            on_remove_from_world,
+            send_set_vehicle_rec_id_zero_represented: !on_remove_from_world,
+            uninstall_represented: true,
+            remove_all_passengers_represented: true,
+            script_on_uninstall_represented: true,
+            kit_cleared: true,
         }
     }
 
@@ -5298,6 +5342,46 @@ mod unit_subsystems_tests {
     }
 
     #[test]
+    fn vehicle_remove_kit_without_kit_returns_before_send_like_cpp() {
+        let mut vehicle = VehicleSubsystem::default();
+
+        let remove = vehicle.remove_vehicle_kit_like_cpp(false);
+
+        assert_eq!(remove.kit_id, None);
+        assert!(!remove.had_kit);
+        assert_eq!(remove.previous_installed, None);
+        assert!(!remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(!remove.uninstall_represented);
+        assert!(!remove.remove_all_passengers_represented);
+        assert!(!remove.script_on_uninstall_represented);
+        assert!(!remove.kit_cleared);
+        assert_eq!(vehicle.kit, None);
+    }
+
+    #[test]
+    fn vehicle_remove_existing_kit_sends_rec_id_zero_before_uninstall_like_cpp() {
+        let mut vehicle = VehicleSubsystem::default();
+        vehicle.set_vehicle_kit(467, true);
+        let install = vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(install.kit_id, Some(467));
+        assert!(install.installed);
+
+        let remove = vehicle.remove_vehicle_kit_like_cpp(false);
+
+        assert_eq!(remove.kit_id, Some(467));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(!remove.on_remove_from_world);
+        assert!(remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert_eq!(vehicle.kit, None);
+    }
+
+    #[test]
     fn motion_charm_vehicle_and_ai_helpers_roundtrip() {
         let mut subsystems = UnitSubsystems::default();
         let controller = guid(20);
@@ -5361,6 +5445,37 @@ mod unit_subsystems_tests {
         assert_eq!(missing_install.previous_installed, None);
         assert!(!missing_install.installed);
         assert!(!missing_install.script_on_install_represented);
+
+        subsystems.vehicle.set_vehicle_kit(43, true);
+        let install_before_remove = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert!(install_before_remove.installed);
+        subsystems.vehicle.vehicle_guid = Some(vehicle);
+        subsystems.vehicle.base_vehicle_guid = Some(vehicle);
+        subsystems.vehicle.seat_id = Some(2);
+        let remove = subsystems.vehicle.remove_vehicle_kit_like_cpp(true);
+        assert_eq!(remove.kit_id, Some(43));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert_eq!(subsystems.vehicle.kit, None);
+        assert_eq!(subsystems.vehicle.vehicle_guid, Some(vehicle));
+        assert_eq!(subsystems.vehicle.base_vehicle_guid, Some(vehicle));
+        assert_eq!(subsystems.vehicle.seat_id, Some(2));
+        let missing_remove = subsystems.vehicle.remove_vehicle_kit_like_cpp(true);
+        assert_eq!(missing_remove.kit_id, None);
+        assert!(!missing_remove.had_kit);
+        assert_eq!(missing_remove.previous_installed, None);
+        assert!(missing_remove.on_remove_from_world);
+        assert!(!missing_remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(!missing_remove.uninstall_represented);
+        assert!(!missing_remove.remove_all_passengers_represented);
+        assert!(!missing_remove.script_on_uninstall_represented);
+        assert!(!missing_remove.kit_cleared);
 
         subsystems.ai.set_active(Some("NullAI"));
         subsystems.ai.push("CombatAI");

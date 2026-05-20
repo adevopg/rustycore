@@ -44,7 +44,8 @@ use wow_entities::{
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
     ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
     TransportUpdateLikeCpp, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp,
-    VehicleKitInstallOutcomeLikeCpp, WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
+    VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, WorldObject,
+    WorldObjectEnvironment, WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
@@ -7517,6 +7518,22 @@ where
             self.contains_gameobject_model_like_cpp(key)
                 .then(|| self.remove_gameobject_model_like_cpp(key))
         });
+        let creature_vehicle_remove = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .and_then(|creature| {
+                if !creature.unit().world().object().is_in_world() {
+                    return None;
+                }
+
+                let remove = creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .vehicle
+                    .remove_vehicle_kit_like_cpp(true);
+                remove.had_kit.then_some(remove)
+            });
         let record = self
             .remove_map_object(guid)
             .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
@@ -7572,6 +7589,7 @@ where
             dynamic_object_caster_viewpoint,
             dynamic_object_remove_cleanup,
             gameobject_model_remove,
+            creature_vehicle_remove,
             object: if delete_from_world {
                 None
             } else {
@@ -9423,6 +9441,7 @@ pub struct RemoveFromMapOutcome {
     pub dynamic_object_caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
     pub dynamic_object_remove_cleanup: Option<DynamicObjectRemoveCleanupOutcomeLikeCpp>,
     pub gameobject_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
     pub object: Option<WorldObject>,
 }
 
@@ -16466,6 +16485,117 @@ mod tests {
         ));
         assert_eq!(map.map_object_count(), 0);
         assert!(map.terrain().loads.is_empty());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_uninstalls_local_vehicle_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46701, 4670101, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9101, true);
+        let guid = creature.guid();
+        let added = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(added.creature_vehicle_install.is_some());
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        let remove = removed.creature_vehicle_remove.unwrap();
+        assert_eq!(remove.kit_id, Some(9101));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert!(removed.object.is_some());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_delete_keeps_uninstall_evidence_without_object_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46702, 4670201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9102, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let remove = removed.creature_vehicle_remove.unwrap();
+        assert_eq!(remove.kit_id, Some(9102));
+        assert!(remove.kit_cleared);
+        assert!(removed.object.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_not_in_world_does_not_consume_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46703, 4670301, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9103, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let stored = map
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .unwrap();
+        stored
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(removed.creature_vehicle_remove.is_none());
+        assert!(removed.object.is_some());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_non_creature_has_no_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(46704, 4670401);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(removed.creature_vehicle_remove.is_none());
     }
 
     #[test]
