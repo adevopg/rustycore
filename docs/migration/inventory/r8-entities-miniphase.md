@@ -5,7 +5,15 @@
 
 ## Prepared / Pending Review Tasks
 
+- None.
+
 ## Closed Tasks
+
+- [x] **#NEXT.R8.ENTITIES.473** Creature AddToWorld/RemoveFromWorld ZoneScript callback evidence seam.
+  Status: represented-complete only for map-owned evidence of `Creature::AddToWorld -> GetZoneScript()->OnCreatureCreate(this)` and `Creature::RemoveFromWorld -> GetZoneScript()->OnCreatureRemove(this)` callback positions; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #473 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:353-368`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: represented-complete only for bounded outcome evidence over canonical `Map::map_objects` / exact typed `MapObjectRecord::Creature`: AddToMap emits `creature_zone_script_create` only on the normal not-already-in-world exact typed Creature path after `SearchFormation`, AIM/vehicle reset and `creature_vehicle_install`; already-in-world, generic kind-only Creature records and non-Creature paths emit no create evidence. RemoveFromMap computes `creature_zone_script_remove` from canonical in-world exact typed Creature state before vehicle-kit removal, formation cleanup and record extraction; missing, non-Creature and not-in-world paths emit no remove evidence. Boundaries: no real `ZoneScript`, no script manager/trait/dispatch, no ObjectAccessor/session cache write-back, no fanout/scripts/packets/DB/full Creature runtime.
 
 - [x] **#NEXT.R8.ENTITIES.472** DB-backed Creature formation metadata -> loaded-grid SearchFormation consumption seam.
   Status: represented-complete only for DB `creature_formations` startup metadata feeding loaded-grid Creature `FormationInfo` into the existing bounded `SearchFormation`/map-owned holder seam; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #472 HEAD`; no push/install/restart.

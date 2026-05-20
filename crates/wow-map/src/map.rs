@@ -7447,6 +7447,7 @@ where
                 creature_search_formation: None,
                 creature_vehicle_reset: None,
                 creature_vehicle_install: None,
+                creature_zone_script_create: None,
             });
         }
 
@@ -7531,6 +7532,18 @@ where
         } else {
             None
         };
+        let creature_zone_script_create = if kind == AccessorObjectKind::Creature {
+            record
+                .creature()
+                .is_some()
+                .then_some(CreatureZoneScriptCreateOutcomeLikeCpp {
+                    guid,
+                    represented_callback: true,
+                    script_dispatch_represented: false,
+                })
+        } else {
+            None
+        };
 
         let (gameobject_model_insert, gameobject_collision_enable) =
             if kind == AccessorObjectKind::GameObject {
@@ -7586,6 +7599,7 @@ where
             creature_search_formation,
             creature_vehicle_reset,
             creature_vehicle_install,
+            creature_zone_script_create,
         })
     }
 
@@ -7645,6 +7659,16 @@ where
             self.contains_gameobject_model_like_cpp(key)
                 .then(|| self.remove_gameobject_model_like_cpp(key))
         });
+        let creature_zone_script_remove = self
+            .map_object_record(guid)
+            .filter(|record| record.kind() == AccessorObjectKind::Creature)
+            .and_then(MapObjectRecord::creature)
+            .filter(|creature| creature.unit().world().object().is_in_world())
+            .map(|_| CreatureZoneScriptRemoveOutcomeLikeCpp {
+                guid,
+                represented_callback: true,
+                script_dispatch_represented: false,
+            });
         let creature_vehicle_remove = self
             .map_objects
             .get_mut(&guid)
@@ -7717,6 +7741,7 @@ where
             dynamic_object_caster_viewpoint,
             dynamic_object_remove_cleanup,
             gameobject_model_remove,
+            creature_zone_script_remove,
             creature_vehicle_remove,
             creature_remove_formation,
             object: if delete_from_world {
@@ -9531,6 +9556,20 @@ pub struct GameObjectCollisionEnableOutcomeLikeCpp {
     pub new_collision_enabled: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureZoneScriptCreateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback: bool,
+    pub script_dispatch_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureZoneScriptRemoveOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback: bool,
+    pub script_dispatch_represented: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddToMapOutcome {
     pub guid: ObjectGuid,
@@ -9546,6 +9585,7 @@ pub struct AddToMapOutcome {
     pub creature_search_formation: Option<CreatureSearchFormationOutcomeLikeCpp>,
     pub creature_vehicle_reset: Option<VehicleKitAddToWorldResetOutcomeLikeCpp>,
     pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
+    pub creature_zone_script_create: Option<CreatureZoneScriptCreateOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -9572,6 +9612,7 @@ pub struct RemoveFromMapOutcome {
     pub dynamic_object_caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
     pub dynamic_object_remove_cleanup: Option<DynamicObjectRemoveCleanupOutcomeLikeCpp>,
     pub gameobject_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub creature_zone_script_remove: Option<CreatureZoneScriptRemoveOutcomeLikeCpp>,
     pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
     pub creature_remove_formation: Option<CreatureRemoveFormationOutcomeLikeCpp>,
     pub object: Option<WorldObject>,
@@ -16756,6 +16797,150 @@ mod tests {
         assert!(removed.creature_remove_formation.is_none());
         assert!(map.creature_group_holder_contains_like_cpp(900480, creature_guid));
         assert_eq!(map.creature_group_holder_member_count_like_cpp(900480), 1);
+    }
+
+    #[test]
+    fn creature_zone_script_add_to_map_create_evidence_only_on_normal_creature_path_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(490, 49001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let zone_script = outcome.creature_zone_script_create.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+        assert!(!outcome.already_in_world);
+
+        let already_in_world = test_creature_for_spawn(491, 49101, true);
+        let already = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_creature(already_in_world).unwrap(),
+            )
+            .unwrap();
+
+        assert!(already.already_in_world);
+        assert!(already.creature_zone_script_create.is_none());
+
+        let generic_creature = world_object_with_counter(HighGuid::Creature, 49002, 571, 7, false);
+        let generic = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new(AccessorObjectKind::Creature, generic_creature).unwrap(),
+            )
+            .unwrap();
+
+        assert!(!generic.already_in_world);
+        assert!(generic.creature_zone_script_create.is_none());
+    }
+
+    #[test]
+    fn creature_zone_script_add_to_map_create_follows_vehicle_install_tail_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(492, 49201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9492, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let install = outcome.creature_vehicle_install.unwrap();
+        assert_eq!(install.kit_id, Some(9492));
+        let zone_script = outcome.creature_zone_script_create.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+    }
+
+    #[test]
+    fn creature_zone_script_remove_from_map_remove_evidence_precedes_formation_cleanup_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(493, 49301, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900493)));
+        let guid = creature.guid();
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(map.creature_group_holder_contains_like_cpp(900493, guid));
+
+        let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let zone_script = removed.creature_zone_script_remove.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+        let formation = removed.creature_remove_formation.unwrap();
+        assert_eq!(formation.guid, guid);
+        assert!(formation.had_group);
+        assert!(formation.removed_member);
+        assert!(formation.removed_group);
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900493), 0);
+    }
+
+    #[test]
+    fn creature_zone_script_remove_from_map_missing_not_in_world_and_non_creature_noop_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::Creature, 49401);
+        assert!(matches!(
+            map.remove_from_map_like_cpp(missing_guid, true),
+            Err(RemoveFromMapError::ObjectNotFound { guid }) if guid == missing_guid
+        ));
+
+        let mut not_in_world = test_creature_for_spawn(494, 49402, true);
+        not_in_world
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let not_in_world_guid = not_in_world.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(not_in_world).unwrap(),
+        )
+        .unwrap();
+        map.map_objects
+            .get_mut(&not_in_world_guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .unwrap()
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let removed = map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+        assert!(removed.creature_zone_script_remove.is_none());
+
+        let mut gameobject = test_gameobject_for_spawn(495, 49501);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let gameobject_guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        let removed = map.remove_from_map_like_cpp(gameobject_guid, true).unwrap();
+        assert!(removed.creature_zone_script_remove.is_none());
     }
 
     fn creature_add_to_world_vehicle_reset_context(
