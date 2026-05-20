@@ -11,8 +11,9 @@ use std::sync::Arc;
 use crate::MapKey;
 use crate::map::{
     AreaTriggersUpdateSummaryLikeCpp, ConversationsUpdateSummaryLikeCpp,
-    CreatureUpdateSummaryLikeCpp, DynamicObjectsUpdateSummaryLikeCpp, Map, NoopGridLifecycle,
-    NoopTerrainGridLoader, SceneObjectUpdateContextLikeCpp, SceneObjectsUpdateSummaryLikeCpp,
+    CreatureUpdateSummaryLikeCpp, DynamicObjectsUpdateSummaryLikeCpp,
+    GameObjectsUpdateSummaryLikeCpp, Map, NoopGridLifecycle, NoopTerrainGridLoader,
+    SceneObjectUpdateContextLikeCpp, SceneObjectsUpdateSummaryLikeCpp,
 };
 use crate::spawn::Difficulty;
 use wow_core::GameTime;
@@ -147,6 +148,7 @@ pub struct ManagedMap {
     delayed_update_calls: Vec<u32>,
     last_dynamic_objects_update_summary: DynamicObjectsUpdateSummaryLikeCpp,
     last_creatures_update_summary: CreatureUpdateSummaryLikeCpp,
+    last_game_objects_update_summary: GameObjectsUpdateSummaryLikeCpp,
     last_area_triggers_update_summary: AreaTriggersUpdateSummaryLikeCpp,
     last_conversations_update_summary: ConversationsUpdateSummaryLikeCpp,
     last_scene_objects_update_summary: SceneObjectsUpdateSummaryLikeCpp,
@@ -176,6 +178,7 @@ impl ManagedMap {
             delayed_update_calls: Vec::new(),
             last_dynamic_objects_update_summary: DynamicObjectsUpdateSummaryLikeCpp::default(),
             last_creatures_update_summary: CreatureUpdateSummaryLikeCpp::default(),
+            last_game_objects_update_summary: GameObjectsUpdateSummaryLikeCpp::default(),
             last_area_triggers_update_summary: AreaTriggersUpdateSummaryLikeCpp::default(),
             last_conversations_update_summary: ConversationsUpdateSummaryLikeCpp::default(),
             last_scene_objects_update_summary: SceneObjectsUpdateSummaryLikeCpp::default(),
@@ -239,6 +242,10 @@ impl ManagedMap {
         self.last_creatures_update_summary
     }
 
+    pub const fn last_game_objects_update_summary(&self) -> GameObjectsUpdateSummaryLikeCpp {
+        self.last_game_objects_update_summary
+    }
+
     pub const fn last_area_triggers_update_summary(&self) -> AreaTriggersUpdateSummaryLikeCpp {
         self.last_area_triggers_update_summary
     }
@@ -280,7 +287,12 @@ impl ManagedMap {
                 .update_creatures_like_cpp(diff_ms, now_secs, |_guid, _creature| {
                     CreatureRuntimeUpdateContext::default()
                 });
-        // Partial C++ ObjectUpdater seam: after Creature, visit only the
+        // Partial C++ ObjectUpdater seam: after Creature, visit represented
+        // map-owned GameObject records. C++ real order is TypeContainerVisitor
+        // nearby-cell/active-object traversal; this Rust insertion only adds the
+        // missing family and leaves AI/go-type/per-player/packet/DB gaps open.
+        self.last_game_objects_update_summary = self.map.update_game_objects_like_cpp(diff_ms);
+        // Partial C++ ObjectUpdater seam: after GameObject, visit only the
         // represented map-owned AreaTrigger family in this slice. Other families,
         // nearby-cell traversal, player/session updates, fanout and scripts stay
         // explicit remaining gaps.
@@ -1014,7 +1026,7 @@ mod tests {
     use crate::spawn::{SpawnGroupFlags, SpawnGroupTemplateData};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AreaTrigger, Conversation, Creature, DynamicObject, GameObject, MapObjectRecord,
+        AreaTrigger, Conversation, Creature, DynamicObject, GameObject, LootState, MapObjectRecord,
         SceneObject,
     };
 
@@ -1300,6 +1312,149 @@ mod tests {
             .get_typed_dynamic_object(dynamic_object_guid)
             .unwrap();
         assert_eq!(dynamic_object.duration_ms(), 10);
+    }
+
+    #[test]
+    fn map_manager_game_object_update_visits_live_game_object_without_expiry_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let game_object_guid = insert_game_object_for_update(&mut manager, 4380101, 0, true);
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        assert_eq!(managed_map.update_calls(), &[1]);
+        assert_eq!(managed_map.delayed_update_calls(), &[1]);
+        assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(
+            managed_map.last_game_objects_update_summary(),
+            GameObjectsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 1,
+                despawn_remove_queued: 0,
+                missing_or_stale: 0,
+                not_game_object: 0,
+                not_in_world: 0,
+            }
+        );
+        let game_object = managed_map
+            .map()
+            .get_typed_game_object(game_object_guid)
+            .unwrap();
+        assert_eq!(game_object.despawn_delay(), 0);
+    }
+
+    #[test]
+    fn map_manager_game_object_update_expired_despawn_then_delayed_update_drains_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let game_object_guid = insert_game_object_for_update(&mut manager, 4380201, 1, true);
+        {
+            let game_object = manager
+                .find_map_mut(1, 0)
+                .unwrap()
+                .map_mut()
+                .get_typed_game_object_mut(game_object_guid)
+                .unwrap();
+            game_object.set_loot_state(LootState::Activated, Some(ObjectGuid::create_player(1, 2)));
+            assert_eq!(game_object.loot_state(), LootState::Activated);
+        }
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        assert_eq!(managed_map.update_calls(), &[1]);
+        assert_eq!(managed_map.delayed_update_calls(), &[1]);
+        assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(
+            managed_map.last_game_objects_update_summary(),
+            GameObjectsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 0,
+                despawn_remove_queued: 1,
+                missing_or_stale: 0,
+                not_game_object: 0,
+                not_in_world: 0,
+            }
+        );
+        assert!(
+            managed_map
+                .map()
+                .map_object_record(game_object_guid)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn map_manager_game_object_update_skips_not_in_world_and_keeps_delay_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let game_object_guid = insert_game_object_for_update(&mut manager, 4380301, 10, false);
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(
+            managed_map.last_game_objects_update_summary(),
+            GameObjectsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 0,
+                despawn_remove_queued: 0,
+                missing_or_stale: 0,
+                not_game_object: 0,
+                not_in_world: 1,
+            }
+        );
+        let game_object = managed_map
+            .map()
+            .get_typed_game_object(game_object_guid)
+            .unwrap();
+        assert_eq!(game_object.despawn_delay(), 10);
+    }
+
+    #[test]
+    fn map_manager_game_object_update_summary_ignores_non_game_objects_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let game_object_guid = insert_game_object_for_update(&mut manager, 4380401, 0, true);
+        let dynamic_object_guid = insert_dynamic_object_for_update(&mut manager, 4380402, 10, true);
+        let creature_guid = insert_creature_for_update(&mut manager, 4380403, true);
+        let area_trigger_guid = insert_area_trigger_for_update(&mut manager, 4380404, 10, true);
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        assert_eq!(
+            managed_map.last_game_objects_update_summary(),
+            GameObjectsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 1,
+                despawn_remove_queued: 0,
+                missing_or_stale: 0,
+                not_game_object: 0,
+                not_in_world: 0,
+            }
+        );
+        assert!(
+            managed_map
+                .map()
+                .map_object_record(game_object_guid)
+                .is_some()
+        );
+        assert!(
+            managed_map
+                .map()
+                .map_object_record(dynamic_object_guid)
+                .is_some()
+        );
+        assert!(managed_map.map().map_object_record(creature_guid).is_some());
+        assert!(
+            managed_map
+                .map()
+                .map_object_record(area_trigger_guid)
+                .is_some()
+        );
     }
 
     #[test]
@@ -1924,6 +2079,38 @@ mod tests {
             map.insert_map_object_record(record).unwrap();
         }
         dynamic_object_guid
+    }
+
+    fn insert_game_object_for_update(
+        manager: &mut MapManager,
+        counter: i64,
+        despawn_delay_ms: u32,
+        in_world: bool,
+    ) -> ObjectGuid {
+        let game_object_guid = guid(HighGuid::GameObject, counter, 1, 0);
+        let mut game_object = GameObject::new();
+        game_object
+            .world_mut()
+            .object_mut()
+            .create(game_object_guid);
+        game_object.world_mut().set_map(1, 0).unwrap();
+        game_object
+            .world_mut()
+            .relocate(Position::xyz(13.0, 23.0, 33.0));
+        if in_world {
+            game_object.world_mut().object_mut().add_to_world();
+        }
+        if despawn_delay_ms != 0 {
+            assert!(game_object.schedule_despawn_or_unsummon_like_cpp(despawn_delay_ms, 77));
+        }
+        let record = MapObjectRecord::new_game_object(game_object).unwrap();
+        let map = manager.find_map_mut(1, 0).unwrap().map_mut();
+        if in_world {
+            map.add_map_object_record_to_map_like_cpp(record).unwrap();
+        } else {
+            map.insert_map_object_record(record).unwrap();
+        }
+        game_object_guid
     }
 
     fn insert_area_trigger_for_update(

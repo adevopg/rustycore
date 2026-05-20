@@ -36,10 +36,13 @@ use wow_core::{ObjectGuid, ObjectGuidGenerator, Position, guid::HighGuid};
 use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
     Corpse, Creature, CreatureRuntimePlan, CreatureRuntimeUpdateContext, DynamicObject,
-    DynamicObjectType, GameObject, INVALID_HEIGHT, LineOfSightQuery, MAX_VISIBILITY_DISTANCE,
-    MapBindingError, MapObjectRecord, ObjectAccessorError, ObjectAccessorMapSource,
-    ObjectNotifyFlags, Player, SceneObject, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp,
-    WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
+    DynamicObjectType, GameObject,
+    GameObjectUpdateOutcomeLikeCpp as EntityGameObjectUpdateOutcomeLikeCpp,
+    GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, INVALID_HEIGHT,
+    LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
+    ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject, Unit,
+    UnitSharedVisionSetWorldObjectRequestLikeCpp, WorldObject, WorldObjectEnvironment,
+    WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
@@ -412,6 +415,41 @@ pub struct DynamicObjectsUpdateSummaryLikeCpp {
     pub expired_remove_queued: usize,
     pub missing_or_stale: usize,
     pub not_dynamic_object: usize,
+    pub not_in_world: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateStatusLikeCpp {
+    Updated,
+    DespawnRemoveQueued,
+    MissingGameObject,
+    NotGameObject,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateOutcomeLikeCpp {
+    pub game_object_guid: ObjectGuid,
+    pub diff_ms: u32,
+    pub status: GameObjectUpdateStatusLikeCpp,
+    pub despawn_delay_before_ms: Option<u32>,
+    pub despawn_delay_after_ms: Option<u32>,
+    pub despawn_respawn_time_secs: Option<u32>,
+    pub world_update_would_run: bool,
+    pub ai_update_not_represented: bool,
+    pub go_type_impl_update_not_represented: bool,
+    pub despawn_or_unsummon_requested: bool,
+    pub entity_update: Option<EntityGameObjectUpdateOutcomeLikeCpp>,
+    pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub despawn_remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_game_object: usize,
     pub not_in_world: usize,
 }
 
@@ -2974,6 +3012,215 @@ where
                     summary.not_dynamic_object += 1;
                 }
                 DynamicObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `GameObject::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:666-785` creates `Trinity::ObjectUpdater updater(t_diff)`
+    ///   during `Map::Update`.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects and explicitly instantiates `GameObject`.
+    /// - `GameObject.cpp:1215-1233` is represented through the entity-level
+    ///   `m_despawnDelay` countdown; expiry represents `DespawnOrUnsummon(0ms,
+    ///   m_despawnRespawnTime)`.
+    /// - `GameObject.cpp:1740-1764` `Delete()` is represented only as
+    ///   `SetLootState(GO_NOT_READY)` plus `AddObjectToRemoveList()`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. Missing,
+    /// non-GameObject and not-in-world outcomes do not mutate state. This helper
+    /// never creates fallback records, reads session/ObjectAccessor mirrors,
+    /// saves DB respawn times, runs PoolMgr, sends packets, fans out visibility,
+    /// executes AI/go-type implementations, drains removal, or includes Transport
+    /// records whose embedded body happens to be a GameObject.
+    pub fn update_game_object_like_cpp(
+        &mut self,
+        game_object_guid: ObjectGuid,
+        diff_ms: u32,
+    ) -> GameObjectUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(game_object_guid) else {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::MissingGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+            };
+        }
+
+        let Some(game_object) = record.game_object() else {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+            };
+        };
+
+        let despawn_delay_before_ms = game_object.despawn_delay();
+        let despawn_respawn_time_secs = game_object.despawn_respawn_time();
+        if !game_object.world().object().is_in_world() {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotInWorld,
+                despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+            };
+        }
+
+        let entity_update = {
+            let Some(record) = self.map_objects.get_mut(&game_object_guid) else {
+                return GameObjectUpdateOutcomeLikeCpp {
+                    game_object_guid,
+                    diff_ms,
+                    status: GameObjectUpdateStatusLikeCpp::MissingGameObject,
+                    despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                    despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                    despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                    world_update_would_run: false,
+                    ai_update_not_represented: false,
+                    go_type_impl_update_not_represented: false,
+                    despawn_or_unsummon_requested: false,
+                    entity_update: None,
+                    remove_list: None,
+                };
+            };
+            let Some(game_object) = record.game_object_mut() else {
+                return GameObjectUpdateOutcomeLikeCpp {
+                    game_object_guid,
+                    diff_ms,
+                    status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                    despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                    despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                    despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                    world_update_would_run: false,
+                    ai_update_not_represented: false,
+                    go_type_impl_update_not_represented: false,
+                    despawn_or_unsummon_requested: false,
+                    entity_update: None,
+                    remove_list: None,
+                };
+            };
+            game_object.update_like_cpp(diff_ms)
+        };
+
+        if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+            if let Some(record) = self.map_objects.get_mut(&game_object_guid) {
+                if let Some(game_object) = record.game_object_mut() {
+                    game_object.set_loot_state(LootState::NotReady, None);
+                }
+            }
+            let remove_list = self.add_object_to_remove_list_like_cpp(game_object_guid);
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: Some(remove_list),
+            }
+        } else {
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::Updated,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: None,
+            }
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `GameObject` records only.
+    ///
+    /// This snapshots canonical typed GameObject GUIDs from `Map::map_objects`
+    /// and delegates each GUID to `update_game_object_like_cpp`. C++ visits by
+    /// nearby cell/active object order; this slice only adds the missing
+    /// map-owned GameObject family and keeps the existing Rust family order.
+    pub fn update_game_objects_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> GameObjectsUpdateSummaryLikeCpp {
+        let game_object_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::GameObject && record.game_object().is_some())
+                    .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = GameObjectsUpdateSummaryLikeCpp::default();
+        for guid in game_object_guids {
+            summary.visited += 1;
+            let outcome = self.update_game_object_like_cpp(guid, diff_ms);
+            match outcome.status {
+                GameObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued => {
+                    summary.despawn_remove_queued += 1;
+                }
+                GameObjectUpdateStatusLikeCpp::MissingGameObject => summary.missing_or_stale += 1,
+                GameObjectUpdateStatusLikeCpp::NotGameObject => summary.not_game_object += 1,
+                GameObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
             }
         }
 

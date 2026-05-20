@@ -109,10 +109,10 @@ pub use game_object::{
     GameObjectCreateLifecycleRecord, GameObjectDataUpdate, GameObjectDataValues,
     GameObjectLifecycleError, GameObjectLoadFromDbLifecycleRecord, GameObjectLootSource,
     GameObjectOwnedLoot, GameObjectTemplateData, GameObjectTemplateLifecycleRecord,
-    GameObjectValuesUpdate, GatheringNodeUseSource, GoState, GooberUseSource, GuardPostUseSource,
-    ItemForgeUseSource, LootState, MAX_GAMEOBJECT_DATA, MeetingStoneUseSource,
-    NewFlagDropUseSource, NewFlagUseSource, QuestgiverUseSource, RitualUseSource,
-    SpellcasterUseSource, TrapUseSource, UiLinkUseSource,
+    GameObjectUpdateOutcomeLikeCpp, GameObjectUpdateStatusLikeCpp, GameObjectValuesUpdate,
+    GatheringNodeUseSource, GoState, GooberUseSource, GuardPostUseSource, ItemForgeUseSource,
+    LootState, MAX_GAMEOBJECT_DATA, MeetingStoneUseSource, NewFlagDropUseSource, NewFlagUseSource,
+    QuestgiverUseSource, RitualUseSource, SpellcasterUseSource, TrapUseSource, UiLinkUseSource,
 };
 pub use item::{
     APPEARANCE_MODIFIER_SLOT_BY_SPEC, ArtifactPower, BOP_TRADEABLE_DURATION_SECS,

@@ -109,6 +109,37 @@ pub enum LootState {
     JustDeactivated = 3,
 }
 
+/// Represented status for the `m_despawnDelay` branch of TrinityCore
+/// `GameObject::Update(diff)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateStatusLikeCpp {
+    Updated,
+    DespawnRequested,
+}
+
+/// Evidence for the bounded Rust representation of TrinityCore
+/// `GameObject::Update(diff)`.
+///
+/// C++ anchors:
+/// - `GameObject.cpp:1215-1233`: `WorldObject::Update(diff)`, AI lookup/
+///   initialization branch, `m_despawnDelay` countdown, and immediate
+///   `DespawnOrUnsummon(0ms, m_despawnRespawnTime)` when the delay expires.
+/// - `GameObject.cpp:1235-1274` and `1276+`: go-type implementation,
+///   per-player state/visibility packets and loot-state machine remain explicit
+///   gaps; booleans here mark non-represented branches, not execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateOutcomeLikeCpp {
+    pub diff_ms: u32,
+    pub status: GameObjectUpdateStatusLikeCpp,
+    pub despawn_delay_before_ms: u32,
+    pub despawn_delay_after_ms: u32,
+    pub despawn_respawn_time_secs: u32,
+    pub world_update_would_run: bool,
+    pub ai_update_not_represented: bool,
+    pub go_type_impl_update_not_represented: bool,
+    pub despawn_or_unsummon_requested: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GameObjectLootSource {
     pub loot_id: u32,
@@ -1158,6 +1189,66 @@ impl GameObject {
 
     pub const fn despawn_respawn_time(&self) -> u32 {
         self.despawn_respawn_time
+    }
+
+    /// Represented subset of TrinityCore `GameObject::DespawnOrUnsummon(delay, forceRespawnTime)`
+    /// for delayed scheduling only.
+    ///
+    /// C++ anchor: `GameObject.cpp:1711-1719` sets `m_despawnDelay` only when
+    /// `delay > 0` and either no delay is pending or the new delay is shorter.
+    /// The immediate `delay == 0` Delete/AddObjectToRemoveList path belongs to
+    /// `wow-map` in this Rust slice.
+    pub fn schedule_despawn_or_unsummon_like_cpp(
+        &mut self,
+        delay_ms: u32,
+        force_respawn_time_secs: u32,
+    ) -> bool {
+        if delay_ms == 0 {
+            return false;
+        }
+
+        if self.despawn_delay == 0 || self.despawn_delay > delay_ms {
+            self.despawn_delay = delay_ms;
+            self.despawn_respawn_time = force_respawn_time_secs;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Bounded local representation of TrinityCore `GameObject::Update(diff)`
+    /// through the `m_despawnDelay` branch only.
+    ///
+    /// C++ anchors: `GameObject.cpp:1215-1233` for `WorldObject::Update`
+    /// plus despawn delay, and `GameObject.cpp:1235-1274`/`1276+` as explicit
+    /// gaps. No AI, go-type runtime, per-player state, packets, DB, pool
+    /// manager or full loot-state machine executes in `wow-entities`.
+    pub fn update_like_cpp(&mut self, diff_ms: u32) -> GameObjectUpdateOutcomeLikeCpp {
+        let despawn_delay_before_ms = self.despawn_delay;
+        let mut status = GameObjectUpdateStatusLikeCpp::Updated;
+        let mut despawn_or_unsummon_requested = false;
+
+        if self.despawn_delay != 0 {
+            if self.despawn_delay > diff_ms {
+                self.despawn_delay -= diff_ms;
+            } else {
+                self.despawn_delay = 0;
+                status = GameObjectUpdateStatusLikeCpp::DespawnRequested;
+                despawn_or_unsummon_requested = true;
+            }
+        }
+
+        GameObjectUpdateOutcomeLikeCpp {
+            diff_ms,
+            status,
+            despawn_delay_before_ms,
+            despawn_delay_after_ms: self.despawn_delay,
+            despawn_respawn_time_secs: self.despawn_respawn_time,
+            world_update_would_run: true,
+            ai_update_not_represented: true,
+            go_type_impl_update_not_represented: true,
+            despawn_or_unsummon_requested,
+        }
     }
 
     pub const fn restock_time(&self) -> i64 {
@@ -2728,6 +2819,87 @@ mod tests {
                 .gathering_node_use_source_like_cpp(),
             None
         );
+    }
+
+    #[test]
+    fn gameobject_update_no_despawn_delay_stays_updated_like_cpp() {
+        let mut go = GameObject::new();
+
+        let outcome = go.update_like_cpp(40);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.despawn_delay_before_ms, 0);
+        assert_eq!(outcome.despawn_delay_after_ms, 0);
+        assert!(!outcome.despawn_or_unsummon_requested);
+        assert!(outcome.world_update_would_run);
+        assert!(outcome.ai_update_not_represented);
+        assert!(outcome.go_type_impl_update_not_represented);
+    }
+
+    #[test]
+    fn gameobject_update_decrements_pending_despawn_delay_like_cpp() {
+        let mut go = GameObject::new();
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(100, 7));
+
+        let outcome = go.update_like_cpp(40);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.despawn_delay_before_ms, 100);
+        assert_eq!(outcome.despawn_delay_after_ms, 60);
+        assert_eq!(outcome.despawn_respawn_time_secs, 7);
+        assert_eq!(go.despawn_delay(), 60);
+        assert!(!outcome.despawn_or_unsummon_requested);
+    }
+
+    #[test]
+    fn gameobject_update_expired_despawn_delay_requests_immediate_despawn_like_cpp() {
+        let mut exact = GameObject::new();
+        assert!(exact.schedule_despawn_or_unsummon_like_cpp(40, 9));
+        let exact_outcome = exact.update_like_cpp(40);
+        assert_eq!(
+            exact_outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRequested
+        );
+        assert_eq!(exact_outcome.despawn_delay_before_ms, 40);
+        assert_eq!(exact_outcome.despawn_delay_after_ms, 0);
+        assert_eq!(exact_outcome.despawn_respawn_time_secs, 9);
+        assert!(exact_outcome.despawn_or_unsummon_requested);
+        assert_eq!(exact.despawn_delay(), 0);
+        assert_eq!(exact.despawn_respawn_time(), 9);
+
+        let mut overshoot = GameObject::new();
+        assert!(overshoot.schedule_despawn_or_unsummon_like_cpp(40, 11));
+        let overshoot_outcome = overshoot.update_like_cpp(50);
+        assert_eq!(
+            overshoot_outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRequested
+        );
+        assert_eq!(overshoot_outcome.despawn_delay_before_ms, 40);
+        assert_eq!(overshoot_outcome.despawn_delay_after_ms, 0);
+        assert_eq!(overshoot_outcome.despawn_respawn_time_secs, 11);
+        assert!(overshoot_outcome.despawn_or_unsummon_requested);
+        assert_eq!(overshoot.despawn_respawn_time(), 11);
+    }
+
+    #[test]
+    fn gameobject_update_despawn_scheduler_only_shortens_pending_delay_like_cpp() {
+        let mut go = GameObject::new();
+
+        assert!(!go.schedule_despawn_or_unsummon_like_cpp(0, 3));
+        assert_eq!(go.despawn_delay(), 0);
+        assert_eq!(go.despawn_respawn_time(), 0);
+
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(100, 7));
+        assert_eq!(go.despawn_delay(), 100);
+        assert_eq!(go.despawn_respawn_time(), 7);
+
+        assert!(!go.schedule_despawn_or_unsummon_like_cpp(150, 9));
+        assert_eq!(go.despawn_delay(), 100);
+        assert_eq!(go.despawn_respawn_time(), 7);
+
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(40, 11));
+        assert_eq!(go.despawn_delay(), 40);
+        assert_eq!(go.despawn_respawn_time(), 11);
     }
 
     #[test]
