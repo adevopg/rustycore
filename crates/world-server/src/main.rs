@@ -799,12 +799,26 @@ async fn main() -> Result<()> {
         .context("Failed to load canonical SpawnStore metadata from world DB")?;
     let canonical_spawn_metadata = Arc::new(canonical_spawn_metadata);
     info!(
-        "Loaded canonical SpawnStore metadata: creatures rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; gameobjects rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; areatriggers rows={} indexed={} empty-difficulty={} missing-map={}; poolmgr templates rows={} loaded={} creature-members loaded={}/{} gameobject-members loaded={}/{} pool-members loaded={}/{} relation-removals={} map-mismatches={} circular={} empty={} missing-map={} autospawn loaded={}/{} skipped-empty={} skipped-broken={} skipped-child={}; spawn-group rows={} assigned={} missing-spawn={} invalid-type={} missing-group={} map-mismatch={} duplicate={}; represented validations skipped: creature={} gameobject={} areatrigger={}",
+        "Loaded canonical SpawnStore metadata: creatures rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; formations rows={} loaded={} missing-leader={} missing-member={} duplicate-member={} pruned-missing-leader-self={}; gameobjects rows={} indexed={} event-managed={} empty-difficulty={} missing-map={}; areatriggers rows={} indexed={} empty-difficulty={} missing-map={}; poolmgr templates rows={} loaded={} creature-members loaded={}/{} gameobject-members loaded={}/{} pool-members loaded={}/{} relation-removals={} map-mismatches={} circular={} empty={} missing-map={} autospawn loaded={}/{} skipped-empty={} skipped-broken={} skipped-child={}; spawn-group rows={} assigned={} missing-spawn={} invalid-type={} missing-group={} map-mismatch={} duplicate={}; represented validations skipped: creature={} gameobject={} areatrigger={}",
         canonical_spawn_report.creature.rows,
         canonical_spawn_report.creature.indexed,
         canonical_spawn_report.creature.skipped_event,
         canonical_spawn_report.creature.skipped_empty_difficulties,
         canonical_spawn_report.creature.skipped_missing_map,
+        canonical_spawn_report.creature_formations.rows,
+        canonical_spawn_report.creature_formations.loaded,
+        canonical_spawn_report
+            .creature_formations
+            .skipped_missing_leader,
+        canonical_spawn_report
+            .creature_formations
+            .skipped_missing_member,
+        canonical_spawn_report
+            .creature_formations
+            .duplicate_member_ignored,
+        canonical_spawn_report
+            .creature_formations
+            .removed_missing_leader_self,
         canonical_spawn_report.gameobject.rows,
         canonical_spawn_report.gameobject.indexed,
         canonical_spawn_report.gameobject.skipped_event,
@@ -2800,6 +2814,9 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
         map.instance_id(),
         respawn_time,
         true,
+        canonical_spawn_metadata
+            .creature_formation_info_like_cpp(spawn_id)
+            .copied(),
         |min_level, max_level| map.select_creature_level_like_cpp(min_level, max_level),
     );
     let (template, resolved_spawn, runtime_selection) = match inputs {
@@ -3133,9 +3150,12 @@ fn canonical_map_update_tick_set_inactive_like_cpp(
     // branch after timer removal. DB delete/save effects are queued for async
     // execution after releasing the MapManager lock. Loaded-grid Creature
     // DB-backed loading is wired through the map-owned seam for supported
-    // fixed-level and variable-level cases; AddToWorld/ObjectAccessor/fanout/
-    // scripts/AI/vehicle/zonescript/formation/dynamic-tree, GameObject DB-backed
-    // loading, AreaTrigger runtime and full PoolMgr runtime remain gaps.
+    // fixed-level and variable-level cases, including DB-backed FormationInfo
+    // propagation into the bounded SearchFormation/AddCreatureToGroup seam;
+    // AddToWorld ObjectAccessor/fanout, scripts/AI, vehicle runtime beyond local
+    // evidence, zonescript, formation movement/combat/full CreatureGroup runtime,
+    // dynamic-tree, GameObject DB-backed loading, AreaTrigger runtime and full
+    // PoolMgr runtime remain gaps.
     // RustyCore does not yet expose CONFIG_RESPAWN_DYNAMIC_ESCORTNPC
     // or Creature::IsEscorted ownership here, so the bridge passes false/false.
     let now_secs = SystemTime::now()

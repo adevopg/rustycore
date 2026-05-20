@@ -34,6 +34,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use wow_core::{ObjectGuid, Position, guid::HighGuid};
 use wow_database::{WorldDatabase, WorldStatements};
+use wow_entities::CreatureFormationInfoLikeCpp;
 use wow_map::pool::{
     PoolGroupLikeCpp, PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolObjectLikeCpp,
     PoolTemplateDataLikeCpp,
@@ -73,6 +74,17 @@ pub struct CanonicalSpawnStoreLoadReport {
     pub spawn_group_apply: SpawnGroupApplyReport,
     pub linked_respawn: LinkedRespawnLoadReportLikeCpp,
     pub pool_mgr: PoolMgrLoadReportLikeCpp,
+    pub creature_formations: CreatureFormationLoadReportLikeCpp,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreatureFormationLoadReportLikeCpp {
+    pub rows: usize,
+    pub loaded: usize,
+    pub skipped_missing_leader: usize,
+    pub skipped_missing_member: usize,
+    pub duplicate_member_ignored: usize,
+    pub removed_missing_leader_self: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,6 +125,7 @@ pub struct CanonicalSpawnMetadataLikeCpp {
     pool_mgr: PoolMgrLikeCpp,
     creature_runtime_rows: BTreeMap<SpawnId, CreatureSpawnRuntimeRowLikeCpp>,
     gameobject_runtime_rows: BTreeMap<SpawnId, GameObjectSpawnRuntimeRowLikeCpp>,
+    creature_formations: BTreeMap<SpawnId, CreatureFormationInfoLikeCpp>,
 }
 
 impl CanonicalSpawnMetadataLikeCpp {
@@ -127,6 +140,7 @@ impl CanonicalSpawnMetadataLikeCpp {
             pool_mgr: PoolMgrLikeCpp::new(),
             creature_runtime_rows: BTreeMap::new(),
             gameobject_runtime_rows: BTreeMap::new(),
+            creature_formations: BTreeMap::new(),
         }
     }
 
@@ -164,6 +178,20 @@ impl CanonicalSpawnMetadataLikeCpp {
         spawn_id: SpawnId,
     ) -> Option<&CreatureSpawnRuntimeRowLikeCpp> {
         self.creature_runtime_rows.get(&spawn_id)
+    }
+    pub fn creature_formation_info_like_cpp(
+        &self,
+        spawn_id: SpawnId,
+    ) -> Option<&CreatureFormationInfoLikeCpp> {
+        self.creature_formations.get(&spawn_id)
+    }
+
+    pub fn with_creature_formations_like_cpp(
+        mut self,
+        formations: BTreeMap<SpawnId, CreatureFormationInfoLikeCpp>,
+    ) -> Self {
+        self.creature_formations = formations;
+        self
     }
 
     pub fn with_creature_runtime_rows_like_cpp(
@@ -355,6 +383,111 @@ impl From<LinkedRespawnDbRow> for LinkedRespawnRowLikeCpp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CreatureFormationRowLikeCpp {
+    pub leader_spawn_id: SpawnId,
+    pub member_spawn_id: SpawnId,
+    pub dist: f32,
+    pub angle_degrees: f32,
+    pub group_ai: u32,
+    pub point_1: u32,
+    pub point_2: u32,
+}
+
+pub fn apply_creature_formation_rows_like_cpp(
+    rows: impl IntoIterator<Item = CreatureFormationRowLikeCpp>,
+    store: &SpawnStore,
+    report: &mut CreatureFormationLoadReportLikeCpp,
+) -> BTreeMap<SpawnId, CreatureFormationInfoLikeCpp> {
+    let mut formations = BTreeMap::new();
+    let mut leader_spawn_ids = std::collections::BTreeSet::new();
+
+    for row in rows {
+        report.rows += 1;
+        if store
+            .spawn_data(SpawnObjectType::Creature, row.leader_spawn_id)
+            .is_none()
+        {
+            report.skipped_missing_leader += 1;
+            continue;
+        }
+        if store
+            .spawn_data(SpawnObjectType::Creature, row.member_spawn_id)
+            .is_none()
+        {
+            report.skipped_missing_member += 1;
+            continue;
+        }
+        leader_spawn_ids.insert(row.leader_spawn_id);
+        if formations.contains_key(&row.member_spawn_id) {
+            report.duplicate_member_ignored += 1;
+            continue;
+        }
+
+        let (follow_dist, follow_angle_radians) = if row.leader_spawn_id == row.member_spawn_id {
+            (0.0, 0.0)
+        } else {
+            (row.dist, row.angle_degrees * std::f32::consts::PI / 180.0)
+        };
+        formations.insert(
+            row.member_spawn_id,
+            CreatureFormationInfoLikeCpp {
+                leader_spawn_id: row.leader_spawn_id,
+                follow_dist,
+                follow_angle_radians,
+                group_ai: row.group_ai,
+                leader_waypoint_ids: [row.point_1, row.point_2],
+            },
+        );
+        report.loaded += 1;
+    }
+
+    for leader_spawn_id in leader_spawn_ids {
+        if !formations.contains_key(&leader_spawn_id) {
+            let before = formations.len();
+            formations.retain(|_, info| info.leader_spawn_id != leader_spawn_id);
+            report.removed_missing_leader_self += before.saturating_sub(formations.len());
+        }
+    }
+    report.loaded = formations.len();
+
+    formations
+}
+
+async fn load_creature_formations_like_cpp(
+    db: &WorldDatabase,
+    store: &SpawnStore,
+    report: &mut CanonicalSpawnStoreLoadReport,
+) -> Result<BTreeMap<SpawnId, CreatureFormationInfoLikeCpp>> {
+    let stmt = db.prepare(WorldStatements::SEL_CREATURE_FORMATIONS);
+    let mut result = db.query(&stmt).await?;
+    if result.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut rows = Vec::new();
+    loop {
+        rows.push(CreatureFormationRowLikeCpp {
+            leader_spawn_id: result.read(0),
+            member_spawn_id: result.read(1),
+            dist: result.read(2),
+            angle_degrees: result.read(3),
+            group_ai: result.read(4),
+            point_1: u32::from(result.try_read::<u16>(5).unwrap_or(0)),
+            point_2: u32::from(result.try_read::<u16>(6).unwrap_or(0)),
+        });
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(apply_creature_formation_rows_like_cpp(
+        rows,
+        store,
+        &mut report.creature_formations,
+    ))
+}
+
 pub async fn load_canonical_spawn_store_like_cpp(
     db: &WorldDatabase,
     map_store: &wow_data::MapStore,
@@ -375,6 +508,9 @@ pub async fn load_canonical_spawn_store_like_cpp(
         &mut report,
     )
     .await?;
+    // C++ `World::SetInitialWorldSettings` loads waypoint paths before
+    // `FormationMgr::LoadCreatureFormations`; waypoints remain metadata-only here.
+    let creature_formations = load_creature_formations_like_cpp(db, &store, &mut report).await?;
     load_gameobject_spawns_like_cpp(
         db,
         map_store,
@@ -404,7 +540,8 @@ pub async fn load_canonical_spawn_store_like_cpp(
             .with_linked_respawns_like_cpp(linked_respawns)
             .with_pool_mgr_like_cpp(pool_mgr)
             .with_creature_runtime_rows_like_cpp(creature_runtime_rows)
-            .with_gameobject_runtime_rows_like_cpp(gameobject_runtime_rows),
+            .with_gameobject_runtime_rows_like_cpp(gameobject_runtime_rows)
+            .with_creature_formations_like_cpp(creature_formations),
         report,
     ))
 }
@@ -1914,6 +2051,139 @@ mod tests {
             .is_none()
         );
         assert_eq!(report.skipped_empty_difficulties, 1);
+    }
+
+    fn formation_test_store(spawn_ids: &[SpawnId]) -> SpawnStore {
+        let maps = map_store(&[1]);
+        let difficulties = map_difficulty_store(&[(1, 0)]);
+        let mut report = SpawnKindLoadReport::default();
+        let mut store = SpawnStore::new();
+        for spawn_id in spawn_ids {
+            let spawn = creature_row_to_spawn_data_like_cpp(
+                &creature_row(*spawn_id, 0, "0"),
+                &maps,
+                &difficulties,
+                &mut report,
+            )
+            .expect("test creature spawn row should be valid");
+            store.insert_spawn_metadata_like_cpp(&spawn);
+        }
+        store
+    }
+
+    fn formation_row(
+        leader_spawn_id: SpawnId,
+        member_spawn_id: SpawnId,
+        dist: f32,
+        angle_degrees: f32,
+    ) -> CreatureFormationRowLikeCpp {
+        CreatureFormationRowLikeCpp {
+            leader_spawn_id,
+            member_spawn_id,
+            dist,
+            angle_degrees,
+            group_ai: 17,
+            point_1: 101,
+            point_2: 102,
+        }
+    }
+
+    #[test]
+    fn creature_formation_loader_converts_member_degrees_to_radians_like_cpp() {
+        let store = formation_test_store(&[10, 11]);
+        let mut report = CreatureFormationLoadReportLikeCpp::default();
+        let formations = apply_creature_formation_rows_like_cpp(
+            [
+                formation_row(10, 10, 99.0, 180.0),
+                formation_row(10, 11, 7.5, 90.0),
+            ],
+            &store,
+            &mut report,
+        );
+
+        let member = formations.get(&11).expect("member formation should load");
+        assert_eq!(member.leader_spawn_id, 10);
+        assert_eq!(member.follow_dist, 7.5);
+        assert!((member.follow_angle_radians - std::f32::consts::FRAC_PI_2).abs() < 0.0001);
+        assert_eq!(member.group_ai, 17);
+        assert_eq!(member.leader_waypoint_ids, [101, 102]);
+        assert_eq!(report.loaded, 2);
+    }
+
+    #[test]
+    fn creature_formation_loader_forces_leader_self_dist_angle_zero_like_cpp() {
+        let store = formation_test_store(&[20]);
+        let mut report = CreatureFormationLoadReportLikeCpp::default();
+        let formations = apply_creature_formation_rows_like_cpp(
+            [formation_row(20, 20, 33.0, 270.0)],
+            &store,
+            &mut report,
+        );
+
+        let leader = formations.get(&20).expect("leader self row should load");
+        assert_eq!(leader.follow_dist, 0.0);
+        assert_eq!(leader.follow_angle_radians, 0.0);
+        assert_eq!(report.loaded, 1);
+    }
+
+    #[test]
+    fn creature_formation_loader_skips_missing_leader_and_member_like_cpp() {
+        let store = formation_test_store(&[30, 31]);
+        let mut report = CreatureFormationLoadReportLikeCpp::default();
+        let formations = apply_creature_formation_rows_like_cpp(
+            [
+                formation_row(99, 31, 1.0, 1.0),
+                formation_row(30, 98, 1.0, 1.0),
+                formation_row(30, 30, 0.0, 0.0),
+            ],
+            &store,
+            &mut report,
+        );
+
+        assert!(formations.contains_key(&30));
+        assert_eq!(formations.len(), 1);
+        assert_eq!(report.rows, 3);
+        assert_eq!(report.skipped_missing_leader, 1);
+        assert_eq!(report.skipped_missing_member, 1);
+    }
+
+    #[test]
+    fn creature_formation_loader_prunes_group_without_leader_self_row_like_cpp() {
+        let store = formation_test_store(&[40, 41]);
+        let mut report = CreatureFormationLoadReportLikeCpp::default();
+        let formations = apply_creature_formation_rows_like_cpp(
+            [formation_row(40, 41, 4.0, 45.0)],
+            &store,
+            &mut report,
+        );
+
+        assert!(formations.is_empty());
+        assert_eq!(report.removed_missing_leader_self, 1);
+        assert_eq!(report.loaded, 0);
+    }
+
+    #[test]
+    fn creature_formation_loader_duplicate_member_keeps_first_like_cpp_emplace() {
+        let store = formation_test_store(&[50, 51]);
+        let mut report = CreatureFormationLoadReportLikeCpp::default();
+        let formations = apply_creature_formation_rows_like_cpp(
+            [
+                formation_row(50, 50, 0.0, 0.0),
+                formation_row(50, 51, 3.0, 30.0),
+                formation_row(50, 51, 9.0, 90.0),
+            ],
+            &store,
+            &mut report,
+        );
+
+        let member = formations.get(&51).expect("first member row should remain");
+        assert_eq!(member.follow_dist, 3.0);
+        assert!(
+            (member.follow_angle_radians - (30.0_f32 * std::f32::consts::PI / 180.0)).abs()
+                < 0.0001
+        );
+        assert_eq!(report.duplicate_member_ignored, 1);
+        assert_eq!(report.loaded, 2);
     }
 
     #[test]

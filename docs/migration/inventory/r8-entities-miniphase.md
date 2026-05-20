@@ -5,10 +5,13 @@
 
 ## Prepared / Pending Review Tasks
 
-- None.
-
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.472** DB-backed Creature formation metadata -> loaded-grid SearchFormation consumption seam.
+  Status: represented-complete only for DB `creature_formations` startup metadata feeding loaded-grid Creature `FormationInfo` into the existing bounded `SearchFormation`/map-owned holder seam; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #472 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureGroups.h:39-46`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureGroups.cpp:96-172`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:379-389`, `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:2288-2292`.
+  Rust targets: `crates/wow-database/src/statements/world.rs`, `crates/world-server/src/spawn_store_loader.rs`, `crates/world-server/src/creature_loaded_grid.rs`, `crates/world-server/src/main.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: DB `creature_formations` rows are loaded after creature spawn metadata using C++ query/semantics: leader/member existence validation from `SpawnStore`, leader self-row dist/angle zero, member angle degrees->radians, waypoint IDs/groupAI preserved, duplicate members keep first valid row, and formations without a valid leader self-row are pruned. Loaded-grid Creature resolver carries optional formation info into `Creature` before `MapObjectRecord::Creature`, so `Map::add_map_object_record_to_map_like_cpp` can consume existing bounded `SearchFormation` behavior. Boundaries: no global `sFormationMgr`, no movement formation/`LeaderStartedMoving`/`FormationMovementGenerator`, no combat assist, no scripts/AI/fanout/ObjectAccessor/dynamic tree/packets/DB writes/full CreatureGroup runtime.
 - [x] **#NEXT.R8.ENTITIES.471** Creature RemoveFromWorld formation group-holder cleanup seam.
   Status: represented-complete only for the bounded `Creature::RemoveFromWorld()` formation cleanup seam; review `APROBADO` after one bounded test-coverage correction; CI `CI_OK`; validation OK; committed locally at `current #471 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:353-368`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/CreatureGroups.cpp:79-94`.

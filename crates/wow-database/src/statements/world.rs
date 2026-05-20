@@ -87,6 +87,8 @@ pub enum WorldStatements {
     SEL_CREATURES_IN_RANGE,
     /// Load all creature spawn rows into the C++ ObjectMgr-style spawn store.
     SEL_CREATURE_SPAWNS,
+    /// C++ FormationMgr::LoadCreatureFormations startup query.
+    SEL_CREATURE_FORMATIONS,
     /// Load creature template for query response (name, type, display, etc.).
     SEL_CREATURE_QUERY_RESPONSE,
     /// Load creature display models for a template entry.
@@ -482,6 +484,9 @@ impl StatementDef for WorldStatements {
                 "LEFT OUTER JOIN game_event_creature ON creature.guid = game_event_creature.guid ",
                 "LEFT OUTER JOIN pool_members ON pool_members.type = 0 AND creature.guid = pool_members.spawnId",
             ),
+            Self::SEL_CREATURE_FORMATIONS => {
+                "SELECT leaderGUID, memberGUID, dist, angle, groupAI, point_1, point_2 FROM creature_formations ORDER BY leaderGUID"
+            }
             Self::SEL_CREATURE_QUERY_RESPONSE => concat!(
                 "SELECT ct.entry, ct.name, ct.femaleName, ct.subname, ct.TitleAlt, ct.IconName, ",
                 "ct.type, ct.family, ct.Classification, ct.KillCredit1, ct.KillCredit2, ",

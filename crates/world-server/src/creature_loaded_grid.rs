@@ -37,9 +37,9 @@ use wow_data::{
 };
 use wow_entities::{
     Creature, CreatureAddToWorldVehicleResetContextLikeCpp, CreatureCreateLifecycleRecord,
-    CreatureLifecycleStats, CreatureLoadFromDbLifecycleRecord, CreatureModelDimensions,
-    CreatureSpawnLifecycleRecord, CreatureTemplateLifecycleRecord, MapObjectRecord,
-    MovementGeneratorType, VehicleKitCreateInputLikeCpp,
+    CreatureFormationInfoLikeCpp, CreatureLifecycleStats, CreatureLoadFromDbLifecycleRecord,
+    CreatureModelDimensions, CreatureSpawnLifecycleRecord, CreatureTemplateLifecycleRecord,
+    MapObjectRecord, MovementGeneratorType, VehicleKitCreateInputLikeCpp,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +98,7 @@ pub struct ResolvedCreatureSpawnLikeCpp {
     pub duplicate_spawn_found: bool,
     pub add_to_map: bool,
     pub respawn_compatibility_mode: bool,
+    pub formation_info: Option<CreatureFormationInfoLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,7 +219,8 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
             spawn: spawn_lifecycle_record(spawn),
         };
 
-        let creature = Creature::load_from_db_lifecycle(lifecycle_record.clone());
+        let mut creature = Creature::load_from_db_lifecycle(lifecycle_record.clone());
+        creature.set_formation_info_like_cpp(spawn.formation_info);
         let map_insertion_requested = spawn.add_to_map;
         let map_object_record = if map_insertion_requested {
             Some(
@@ -253,6 +255,7 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
     instance_id: u32,
     respawn_time: i64,
     add_to_map: bool,
+    formation_info: Option<CreatureFormationInfoLikeCpp>,
     mut select_level: impl FnMut(u8, u8) -> u8,
 ) -> Result<
     (
@@ -403,6 +406,7 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
             .spawn_group
             .flags
             .contains(wow_map::SpawnGroupFlags::COMPATIBILITY_MODE),
+        formation_info,
     };
     let runtime_selection = ResolvedCreatureRuntimeSelectionLikeCpp {
         selected_level,
@@ -613,6 +617,7 @@ mod tests {
             duplicate_spawn_found: true,
             add_to_map,
             respawn_compatibility_mode: true,
+            formation_info: None,
         }
     }
 
@@ -799,6 +804,7 @@ mod tests {
                 9,
                 123,
                 true,
+                None,
                 |min, max| {
                     assert_eq!((min, max), (18, 20));
                     19
@@ -873,6 +879,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("regen=true should use health-rate-scaled max health");
@@ -919,6 +926,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("flags5 NO_HEALTH_REGEN should preserve initial spawned stats");
@@ -965,6 +973,7 @@ mod tests {
                 0,
                 0,
                 false,
+                None,
                 |_, _| 19,
             ),
             Err(CreatureLoadedGridResolveErrorLikeCpp::MissingTemplate { entry })
@@ -983,6 +992,7 @@ mod tests {
                 0,
                 0,
                 false,
+                None,
                 |_, _| 19,
             ),
             Err(CreatureLoadedGridResolveErrorLikeCpp::MissingDifficulty {
@@ -1031,6 +1041,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| panic!("equal-level path must not call selector"),
         )
         .expect("first template model/full health fallback should resolve");
@@ -1076,6 +1087,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("regen=false zero current health should preserve dead DB health");
@@ -1120,6 +1132,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("regen=false non-zero current health should min-clamp after scaling");
@@ -1145,6 +1158,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("regen=false current health should scale by classification health rate");
@@ -1183,6 +1197,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             |_, _| 19,
         )
         .expect("DB-backed vehicle template should compose resolver inputs");
@@ -1294,6 +1309,66 @@ mod tests {
             .and_then(MapObjectRecord::creature)
             .expect("map insertion record should contain the created creature");
         assert_eq!(recorded.guid(), map_object_guid);
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_propagates_formation_info_to_record_like_cpp() {
+        let entry = 12_350;
+        let spawn_id = 62;
+        let formation_info = CreatureFormationInfoLikeCpp {
+            leader_spawn_id: 62,
+            follow_dist: 0.0,
+            follow_angle_radians: 0.0,
+            group_ai: 7,
+            leader_waypoint_ids: [101, 102],
+        };
+        let mut resolved_spawn = spawn(spawn_id, entry, true);
+        resolved_spawn.formation_info = Some(formation_info);
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [template(entry)],
+            [resolved_spawn],
+            [selection(entry)],
+        );
+        let resolved = resolver
+            .resolve_loaded_grid_creature_like_cpp(spawn_id, map_creature_guid(entry, 571, 99_062))
+            .expect("formation metadata should not block loaded-grid resolver");
+
+        assert_eq!(
+            resolved.creature.formation_info_like_cpp(),
+            Some(&formation_info)
+        );
+        assert_eq!(
+            resolved
+                .map_object_record
+                .as_ref()
+                .and_then(MapObjectRecord::creature)
+                .and_then(Creature::formation_info_like_cpp),
+            Some(&formation_info)
+        );
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_preserves_absent_formation_info_like_cpp() {
+        let entry = 12_351;
+        let spawn_id = 63;
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [template(entry)],
+            [spawn(spawn_id, entry, true)],
+            [selection(entry)],
+        );
+        let resolved = resolver
+            .resolve_loaded_grid_creature_like_cpp(spawn_id, map_creature_guid(entry, 571, 99_063))
+            .expect("absence of formation metadata is the previous behavior");
+
+        assert!(resolved.creature.formation_info_like_cpp().is_none());
+        assert!(
+            resolved
+                .map_object_record
+                .as_ref()
+                .and_then(MapObjectRecord::creature)
+                .and_then(Creature::formation_info_like_cpp)
+                .is_none()
+        );
     }
 
     #[test]
