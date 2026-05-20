@@ -37,7 +37,8 @@ use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
     Corpse, Creature, CreatureRuntimePlan, CreatureRuntimeUpdateContext, DynamicObject,
     DynamicObjectType, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_DOOR, GAMEOBJECT_TYPE_GOOBER,
-    GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_TRANSPORT, GO_FLAG_NODESPAWN, GameObject,
+    GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_NEW_FLAG, GAMEOBJECT_TYPE_NEW_FLAG_DROP,
+    GAMEOBJECT_TYPE_TRANSPORT, GO_FLAG_NODESPAWN, GameObject,
     GameObjectUpdateOutcomeLikeCpp as EntityGameObjectUpdateOutcomeLikeCpp,
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
@@ -777,6 +778,14 @@ pub struct GameObjectUpdateOutcomeLikeCpp {
     pub non_consumed_update_visibility_represented: bool,
     pub non_consumed_update_dynamic_flags_represented: bool,
     pub non_consumed_source_missing: bool,
+    pub summoned_expired_delete: bool,
+    pub summoned_expired_respawn_time_zeroed: bool,
+    pub summoned_expired_despawn_represented: bool,
+    pub summoned_expired_go_state_ready: bool,
+    pub new_flag_drop_owner_in_base_command_represented: bool,
+    pub new_flag_drop_owner_missing_or_empty: bool,
+    pub new_flag_drop_owner_wrong_kind: bool,
+    pub new_flag_drop_owner_not_new_flag: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -799,6 +808,14 @@ pub struct GameObjectsUpdateSummaryLikeCpp {
     pub non_consumed_update_visibility_represented: usize,
     pub non_consumed_update_dynamic_flags_represented: usize,
     pub non_consumed_source_missing: usize,
+    pub summoned_expired_deletes: usize,
+    pub summoned_expired_respawn_time_zeroed: usize,
+    pub summoned_expired_despawn_represented: usize,
+    pub summoned_expired_go_state_ready: usize,
+    pub new_flag_drop_owner_in_base_commands_represented: usize,
+    pub new_flag_drop_owner_missing_or_empty: usize,
+    pub new_flag_drop_owner_wrong_kind: usize,
+    pub new_flag_drop_owner_not_new_flag: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4432,6 +4449,14 @@ where
                 non_consumed_update_visibility_represented: false,
                 non_consumed_update_dynamic_flags_represented: false,
                 non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
             };
         };
 
@@ -4464,6 +4489,14 @@ where
                 non_consumed_update_visibility_represented: false,
                 non_consumed_update_dynamic_flags_represented: false,
                 non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
             };
         }
 
@@ -4496,6 +4529,14 @@ where
                 non_consumed_update_visibility_represented: false,
                 non_consumed_update_dynamic_flags_represented: false,
                 non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
             };
         };
 
@@ -4530,6 +4571,14 @@ where
                 non_consumed_update_visibility_represented: false,
                 non_consumed_update_dynamic_flags_represented: false,
                 non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
             };
         }
 
@@ -4563,6 +4612,14 @@ where
                     non_consumed_update_visibility_represented: false,
                     non_consumed_update_dynamic_flags_represented: false,
                     non_consumed_source_missing: false,
+                    summoned_expired_delete: false,
+                    summoned_expired_respawn_time_zeroed: false,
+                    summoned_expired_despawn_represented: false,
+                    summoned_expired_go_state_ready: false,
+                    new_flag_drop_owner_in_base_command_represented: false,
+                    new_flag_drop_owner_missing_or_empty: false,
+                    new_flag_drop_owner_wrong_kind: false,
+                    new_flag_drop_owner_not_new_flag: false,
                 };
             };
             let Some(game_object) = record.game_object_mut() else {
@@ -4594,6 +4651,14 @@ where
                     non_consumed_update_visibility_represented: false,
                     non_consumed_update_dynamic_flags_represented: false,
                     non_consumed_source_missing: false,
+                    summoned_expired_delete: false,
+                    summoned_expired_respawn_time_zeroed: false,
+                    summoned_expired_despawn_represented: false,
+                    summoned_expired_go_state_ready: false,
+                    new_flag_drop_owner_in_base_command_represented: false,
+                    new_flag_drop_owner_missing_or_empty: false,
+                    new_flag_drop_owner_wrong_kind: false,
+                    new_flag_drop_owner_not_new_flag: false,
                 };
             };
             game_object.update_like_cpp(diff_ms)
@@ -4643,6 +4708,14 @@ where
         let mut non_consumed_update_visibility_represented = false;
         let mut non_consumed_update_dynamic_flags_represented = false;
         let mut non_consumed_source_missing = false;
+        let mut summoned_expired_delete = false;
+        let mut summoned_expired_respawn_time_zeroed = false;
+        let mut summoned_expired_despawn_represented = false;
+        let mut summoned_expired_go_state_ready = false;
+        let mut new_flag_drop_owner_in_base_command_represented = false;
+        let mut new_flag_drop_owner_missing_or_empty = false;
+        let mut new_flag_drop_owner_wrong_kind = false;
+        let mut new_flag_drop_owner_not_new_flag = false;
 
         if entity_update.status != EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
             if let Some(game_object) = self
@@ -4711,12 +4784,13 @@ where
                     // GameObject.cpp:3683-3709 because line 1617 only writes
                     // GO_NOT_READY after arming the fully-looted chest restock timer;
                     // Activated-specific restock/collision semantics are not part of
-                    // this branch. `GetOwner()` is not represented yet, so the
-                    // summoned/expired guard only proves the current Rust source:
-                    // `GetSpellId() && m_respawnTime == 0`.
+                    // this branch. Owner/spell-created expiration is consumed below
+                    // through the represented `Delete()` seam.
                     if let Some(despawn_at_action) = despawn_at_action {
-                        let is_summoned_and_expired =
-                            game_object.spell_id() != 0 && game_object.respawn_time() == 0;
+                        let is_summoned_and_expired = (game_object.owner_guid()
+                            != ObjectGuid::EMPTY
+                            || game_object.spell_id() != 0)
+                            && game_object.respawn_time() == 0;
                         if !despawn_at_action && !is_summoned_and_expired {
                             if go_type == GAMEOBJECT_TYPE_CHEST {
                                 if let Some(source) =
@@ -4749,7 +4823,123 @@ where
             }
         }
 
-        if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+        if loot_cleared && !non_consumed_chest_or_goober_return {
+            let summoned_snapshot = self
+                .map_object_record(game_object_guid)
+                .and_then(MapObjectRecord::game_object)
+                .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+                .map(|game_object| {
+                    (
+                        game_object.data().type_id as u32,
+                        game_object.owner_guid(),
+                        game_object.spell_id(),
+                        game_object.respawn_time(),
+                    )
+                });
+
+            if let Some((go_type, owner_guid, spell_id, respawn_time)) = summoned_snapshot {
+                let is_summoned_and_expired =
+                    (owner_guid != ObjectGuid::EMPTY || spell_id != 0) && respawn_time == 0;
+                if is_summoned_and_expired {
+                    if let Some(game_object) = self
+                        .map_objects
+                        .get_mut(&game_object_guid)
+                        .and_then(MapObjectRecord::game_object_mut)
+                    {
+                        game_object.set_respawn_time(0);
+                        game_object.set_loot_state(LootState::NotReady, None);
+                        summoned_expired_respawn_time_zeroed = true;
+                        summoned_expired_despawn_represented = true;
+                        if go_type != GAMEOBJECT_TYPE_TRANSPORT {
+                            game_object.set_go_state(GoState::Ready);
+                            summoned_expired_go_state_ready = true;
+                        }
+                    }
+
+                    if go_type == GAMEOBJECT_TYPE_NEW_FLAG_DROP {
+                        if owner_guid == ObjectGuid::EMPTY {
+                            new_flag_drop_owner_missing_or_empty = true;
+                        } else {
+                            match self.map_object_record(owner_guid) {
+                                Some(owner_record)
+                                    if owner_record.kind() == AccessorObjectKind::GameObject =>
+                                {
+                                    match owner_record.game_object() {
+                                        Some(owner_go)
+                                            if owner_go.data().type_id as u32
+                                                == GAMEOBJECT_TYPE_NEW_FLAG =>
+                                        {
+                                            // C++ NewFlag::SetState(InBase, nullptr) has
+                                            // no full Rust go-type state object yet; record
+                                            // the exact typed owner command as represented
+                                            // evidence only, without faking ZoneScript or
+                                            // fanout.
+                                            new_flag_drop_owner_in_base_command_represented = true;
+                                        }
+                                        Some(_) => {
+                                            new_flag_drop_owner_not_new_flag = true;
+                                        }
+                                        None => {
+                                            new_flag_drop_owner_wrong_kind = true;
+                                        }
+                                    }
+                                }
+                                Some(_) => {
+                                    new_flag_drop_owner_wrong_kind = true;
+                                }
+                                None => {
+                                    new_flag_drop_owner_missing_or_empty = true;
+                                }
+                            }
+                        }
+                    }
+
+                    summoned_expired_delete = true;
+                }
+            }
+        }
+
+        if summoned_expired_delete {
+            let remove_list = self.add_object_to_remove_list_like_cpp(game_object_guid);
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: Some(remove_list),
+                linked_trap_guid,
+                linked_trap_removed,
+                linked_trap_missing_or_self,
+                loot_cleared,
+                goober_spell_cast_spell_id,
+                goober_spell_casts_represented,
+                goober_users_cleared,
+                goober_state_reset,
+                goober_nodespawn_return,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing,
+                summoned_expired_delete,
+                summoned_expired_respawn_time_zeroed,
+                summoned_expired_despawn_represented,
+                summoned_expired_go_state_ready,
+                new_flag_drop_owner_in_base_command_represented,
+                new_flag_drop_owner_missing_or_empty,
+                new_flag_drop_owner_wrong_kind,
+                new_flag_drop_owner_not_new_flag,
+            }
+        } else if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
             if let Some(record) = self.map_objects.get_mut(&game_object_guid) {
                 if let Some(game_object) = record.game_object_mut() {
                     game_object.set_loot_state(LootState::NotReady, None);
@@ -4785,6 +4975,14 @@ where
                 non_consumed_update_visibility_represented: false,
                 non_consumed_update_dynamic_flags_represented: false,
                 non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
             }
         } else {
             GameObjectUpdateOutcomeLikeCpp {
@@ -4816,6 +5014,14 @@ where
                 non_consumed_update_visibility_represented,
                 non_consumed_update_dynamic_flags_represented,
                 non_consumed_source_missing,
+                summoned_expired_delete,
+                summoned_expired_respawn_time_zeroed,
+                summoned_expired_despawn_represented,
+                summoned_expired_go_state_ready,
+                new_flag_drop_owner_in_base_command_represented,
+                new_flag_drop_owner_missing_or_empty,
+                new_flag_drop_owner_wrong_kind,
+                new_flag_drop_owner_not_new_flag,
             }
         }
     }
@@ -4878,6 +5084,30 @@ where
             }
             if outcome.non_consumed_source_missing {
                 summary.non_consumed_source_missing += 1;
+            }
+            if outcome.summoned_expired_delete {
+                summary.summoned_expired_deletes += 1;
+            }
+            if outcome.summoned_expired_respawn_time_zeroed {
+                summary.summoned_expired_respawn_time_zeroed += 1;
+            }
+            if outcome.summoned_expired_despawn_represented {
+                summary.summoned_expired_despawn_represented += 1;
+            }
+            if outcome.summoned_expired_go_state_ready {
+                summary.summoned_expired_go_state_ready += 1;
+            }
+            if outcome.new_flag_drop_owner_in_base_command_represented {
+                summary.new_flag_drop_owner_in_base_commands_represented += 1;
+            }
+            if outcome.new_flag_drop_owner_missing_or_empty {
+                summary.new_flag_drop_owner_missing_or_empty += 1;
+            }
+            if outcome.new_flag_drop_owner_wrong_kind {
+                summary.new_flag_drop_owner_wrong_kind += 1;
+            }
+            if outcome.new_flag_drop_owner_not_new_flag {
+                summary.new_flag_drop_owner_not_new_flag += 1;
             }
             match outcome.status {
                 GameObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
@@ -19518,18 +19748,17 @@ mod tests {
     }
 
     #[test]
-    fn gameobject_update_spell_created_expired_does_not_take_non_consumed_return_like_cpp() {
+    fn gameobject_update_spell_created_expired_deletes_after_clearloot_like_cpp() {
         let mut map = test_map();
         let mut gameobject = game_object_with_counter(4610501, 571, 7, false);
         let gameobject_guid = gameobject.world().guid();
         gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_go_state(GoState::Active);
         gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
             chest_restock_time_secs: 30,
             chest_consumable: false,
             ..GameObjectLootSource::default()
         }));
-        // Represents only the Rust-proven half of C++ `isSummonedAndExpired`:
-        // `GetSpellId() && m_respawnTime == 0`; owner GUID support remains a gap.
         gameobject.set_spell_id(123);
         gameobject.set_respawn_time(0);
         gameobject.set_loot_state(LootState::JustDeactivated, None);
@@ -19540,12 +19769,236 @@ mod tests {
         .unwrap();
 
         let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
 
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
         assert!(outcome.loot_cleared);
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.summoned_expired_respawn_time_zeroed);
+        assert!(outcome.summoned_expired_despawn_represented);
+        assert!(outcome.summoned_expired_go_state_ready);
+        assert!(outcome.remove_list.as_ref().is_some_and(|list| list.queued));
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert_eq!(canonical.respawn_time(), 0);
         assert!(!outcome.non_consumed_chest_or_goober_return);
         assert!(!outcome.non_consumed_restock_armed);
         assert!(!outcome.non_consumed_set_ready);
         assert!(!outcome.non_consumed_update_visibility_represented);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_owner_created_expired_deletes_after_clearloot_like_cpp() {
+        let mut map = test_map();
+        let owner_guid = guid(HighGuid::Player, 4620191);
+        let mut gameobject = game_object_with_counter(4620101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 30,
+            chest_consumable: false,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_created_by(owner_guid);
+        gameobject.set_respawn_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.loot_cleared);
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.summoned_expired_respawn_time_zeroed);
+        assert!(outcome.remove_list.as_ref().is_some_and(|list| list.queued));
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_new_flag_drop_owner_new_flag_command_is_represented_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4620201, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG as u8);
+        let mut drop = game_object_with_counter(4620202, 571, 7, false);
+        let drop_guid = drop.world().guid();
+        drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        drop.set_created_by(owner_guid);
+        drop.set_respawn_time(0);
+        drop.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(drop).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(drop_guid, 1, 1_000);
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.new_flag_drop_owner_in_base_command_represented);
+        assert!(!outcome.new_flag_drop_owner_missing_or_empty);
+        assert!(!outcome.new_flag_drop_owner_wrong_kind);
+        assert!(!outcome.new_flag_drop_owner_not_new_flag);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_new_flag_drop_missing_and_wrong_owner_are_explicit_noops_like_cpp() {
+        let mut missing_map = test_map();
+        let mut missing_drop = game_object_with_counter(4620301, 571, 7, false);
+        let missing_drop_guid = missing_drop.world().guid();
+        missing_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        missing_drop.set_created_by(guid(HighGuid::GameObject, 4620399));
+        missing_drop.set_respawn_time(0);
+        missing_drop.set_loot_state(LootState::JustDeactivated, None);
+        missing_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(missing_drop).unwrap(),
+            )
+            .unwrap();
+
+        let missing_outcome = missing_map.update_game_object_like_cpp(missing_drop_guid, 1, 1_000);
+
+        assert!(missing_outcome.summoned_expired_delete);
+        assert!(missing_outcome.new_flag_drop_owner_missing_or_empty);
+        assert!(!missing_outcome.new_flag_drop_owner_in_base_command_represented);
+
+        let mut wrong_kind_map = test_map();
+        let creature = test_creature_for_spawn(4620401, 4620401, true);
+        let creature_guid = creature.guid();
+        let mut wrong_kind_drop = game_object_with_counter(4620402, 571, 7, false);
+        let wrong_kind_drop_guid = wrong_kind_drop.world().guid();
+        wrong_kind_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        wrong_kind_drop.set_created_by(creature_guid);
+        wrong_kind_drop.set_respawn_time(0);
+        wrong_kind_drop.set_loot_state(LootState::JustDeactivated, None);
+        wrong_kind_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        wrong_kind_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(wrong_kind_drop).unwrap(),
+            )
+            .unwrap();
+
+        let wrong_kind_outcome =
+            wrong_kind_map.update_game_object_like_cpp(wrong_kind_drop_guid, 1, 1_000);
+
+        assert!(wrong_kind_outcome.summoned_expired_delete);
+        assert!(wrong_kind_outcome.new_flag_drop_owner_wrong_kind);
+        assert!(!wrong_kind_outcome.new_flag_drop_owner_in_base_command_represented);
+
+        let mut not_new_flag_map = test_map();
+        let mut owner = game_object_with_counter(4620501, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        let mut not_new_flag_drop = game_object_with_counter(4620502, 571, 7, false);
+        let not_new_flag_drop_guid = not_new_flag_drop.world().guid();
+        not_new_flag_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        not_new_flag_drop.set_created_by(owner_guid);
+        not_new_flag_drop.set_respawn_time(0);
+        not_new_flag_drop.set_loot_state(LootState::JustDeactivated, None);
+        not_new_flag_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        not_new_flag_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(not_new_flag_drop).unwrap(),
+            )
+            .unwrap();
+
+        let not_new_flag_outcome =
+            not_new_flag_map.update_game_object_like_cpp(not_new_flag_drop_guid, 1, 1_000);
+
+        assert!(not_new_flag_outcome.summoned_expired_delete);
+        assert!(not_new_flag_outcome.new_flag_drop_owner_not_new_flag);
+        assert!(!not_new_flag_outcome.new_flag_drop_owner_in_base_command_represented);
+    }
+
+    #[test]
+    fn gameobject_update_owner_or_spell_with_future_respawn_does_not_delete_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4620601, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_consumable: true,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_created_by(guid(HighGuid::Player, 4620691));
+        gameobject.set_spell_id(456);
+        gameobject.set_respawn_time(60);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.loot_cleared);
+        assert!(!outcome.summoned_expired_delete);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert_eq!(canonical.respawn_time(), 60);
+        assert_eq!(canonical.loot_state(), LootState::JustDeactivated);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_summary_counts_summoned_expired_delete_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4620701, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG as u8);
+        let mut drop = game_object_with_counter(4620702, 571, 7, false);
+        drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        drop.set_created_by(owner_guid);
+        drop.set_respawn_time(0);
+        drop.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(drop).unwrap())
+            .unwrap();
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.summoned_expired_deletes, 1);
+        assert_eq!(summary.summoned_expired_respawn_time_zeroed, 1);
+        assert_eq!(summary.summoned_expired_despawn_represented, 1);
+        assert_eq!(summary.new_flag_drop_owner_in_base_commands_represented, 1);
+        assert_eq!(summary.despawn_remove_queued, 1);
     }
 
     #[test]

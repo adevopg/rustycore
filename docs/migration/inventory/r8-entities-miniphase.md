@@ -4,9 +4,15 @@
 > Rule: every Entities claim is contrasted against `/home/server/woltk-trinity-legacy/src/server/game/Entities/`.
 
 ## Pending Review Tasks
-- None. Latest #461 slice has reviewer `APROBADO`, CI `CI_OK`, validation OK, and is committed locally; no dirty review slice is pending.
+- None. Latest #462 slice has reviewer `APROBADO`, CI `CI_OK`, validation OK, and is committed locally at `current #462 HEAD`; no dirty review slice is pending.
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.462** Map-owned `GameObject::Update` owner/spell-created expired delete seam.
+  Status: represented-complete for this bounded owner/spell-created expired delete seam; review `APROBADO` after docs-only correction; CI `CI_OK`; validation OK; committed locally at `current #462 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1575-1636`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1740-1764`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:506-569`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: after represented `ClearLoot()` and the #461 non-consumed CHEST/GOOBER guard, canonical exact typed GameObjects with `(owner_guid != EMPTY || spell_id != 0) && respawn_time == 0` consume represented `SetRespawnTime(0)`/`Delete()`: `LootState::NotReady`, non-transport `GoState::Ready`, represented despawn evidence, and map-owned remove-list enqueue. `GAMEOBJECT_TYPE_NEW_FLAG_DROP` resolves owner only from canonical `Map::map_objects`; exact typed `GAMEOBJECT_TYPE_NEW_FLAG` owner records `SetNewFlagState(InBase, nullptr)` as represented evidence, while missing/empty/wrong-kind/not-NEW_FLAG owners are explicit no-op outcomes. No generic visual despawn, SaveRespawnTime, PoolMgr, DB, ZoneScript, real packets/fanout, ObjectAccessor, or full GameObject runtime parity is claimed.
+
 - [x] **#NEXT.R8.ENTITIES.461** Map-owned `GameObject::Update` non-consumed chest/goober post-`ClearLoot()` early return.
   Status: represented-complete for this bounded post-`ClearLoot()` early-return seam; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #461 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1575-1607`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1609-1623`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1740-1764`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:3683-3709`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObjectData.h:843-849`.
