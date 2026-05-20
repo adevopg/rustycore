@@ -6,6 +6,11 @@
 ## Pending Review Tasks
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.456** represented `GameObject::SetLootState` collision/restock map-owned caller seam.
+  Status: represented-complete for this bounded facade/local evidence slice; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #456 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:3683-3709`.
+  Rust targets: `crates/wow-entities/src/game_object.rs`, `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `GameObject::set_loot_state` now mirrors C++ local GUID storage for any state when caller supplies unit evidence and clears on `None`; `Map::set_gameobject_loot_state_like_cpp` consumes only canonical exact typed `MapObjectRecord::GameObject` records, writes loot state/unit GUID before later represented effects, exposes the unimplemented AI hook as evidence, arms restock only from explicit chest/restock/GameTime/`Loot::IsChanged()` caller evidence and previous zero restock time, returns before collision for doors, and records represented `EnableCollision` only from explicit model evidence using the C++ condition over current GO state and requested loot state. Missing, wrong-kind, and generic/untyped records are explicit no-mutation outcomes. Remaining gaps: no real AI `OnLootStateChanged`, no real `m_goTypeImpl`, no real `GameObjectModel`/BIH/collision geometry, no live `GameTime` source beyond caller input, no real `Loot::IsChanged` unless supplied by caller, no ObjectAccessor/session/fanout/scripts/DB/live callers, install/restart/push, or full runtime loot-state parity.
 - [x] **#NEXT.R8.ENTITIES.455** represented `GameObject::SetGoState` -> `EnableCollision` map-owned caller seam.
   Status: represented-complete; review `APROBADO` after one bounded correction; CI `CI_OK`; validation OK; committed locally at `current #455 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:3771-3793`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:2065-2072`.

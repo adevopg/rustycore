@@ -36,8 +36,8 @@ use wow_core::{ObjectGuid, ObjectGuidGenerator, Position, guid::HighGuid};
 use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
     Corpse, Creature, CreatureRuntimePlan, CreatureRuntimeUpdateContext, DynamicObject,
-    DynamicObjectType, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT,
-    GAMEOBJECT_TYPE_TRANSPORT, GameObject,
+    DynamicObjectType, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_DOOR,
+    GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_TRANSPORT, GameObject,
     GameObjectUpdateOutcomeLikeCpp as EntityGameObjectUpdateOutcomeLikeCpp,
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
@@ -265,6 +265,39 @@ pub struct GameObjectSetGoStateOutcomeLikeCpp {
     pub represented_model_present: bool,
     pub transport_type: bool,
     pub in_world_for_collision_branch: Option<bool>,
+    pub collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectSetLootStateStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+}
+
+/// Represented map-owned result for C++ `GameObject::SetLootState(LootState, Unit*)`.
+///
+/// C++ anchor: `GameObject.cpp:3683-3709`. This preserves statement order over
+/// canonical exact typed `Map::map_objects` GameObject records: write local loot
+/// state/unit GUID first, expose the unimplemented AI hook as evidence, then
+/// represent only explicit-caller-evidence restock and represented `m_model` collision.
+/// It does not execute real AI, infer `Loot::IsChanged()`, create real
+/// `GameObjectModel`/BIH geometry, fan out ObjectAccessor/session/script/DB effects, or
+/// resolve a real `Unit*` from the supplied GUID evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectSetLootStateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectSetLootStateStatusLikeCpp,
+    pub previous_loot_state: Option<LootState>,
+    pub new_loot_state: Option<LootState>,
+    pub previous_loot_state_unit_guid: Option<ObjectGuid>,
+    pub new_loot_state_unit_guid: Option<ObjectGuid>,
+    pub previous_restock_time: Option<i64>,
+    pub new_restock_time: Option<i64>,
+    pub ai_on_loot_state_changed_not_represented: bool,
+    pub restock_armed: bool,
+    pub represented_model_present: bool,
+    pub door_type_early_return: bool,
     pub collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
 }
 
@@ -1927,6 +1960,132 @@ where
             represented_model_present,
             transport_type,
             in_world_for_collision_branch,
+            collision_enable,
+        }
+    }
+
+    /// Represents C++ `GameObject::SetLootState(LootState, Unit*)` over canonical map-owned state.
+    ///
+    /// C++ anchor: `GameObject.cpp:3683-3709`. Source-of-truth is `Map::map_objects`;
+    /// this mutates only exact typed `MapObjectRecord::GameObject` records. The `unit_guid`
+    /// argument is only represented evidence for `unit->GetGUID()` and no real `Unit*` is
+    /// resolved. Restock consumes explicit caller-supplied `Loot::IsChanged()` evidence; collision
+    /// consumes only explicit represented `m_model` evidence and never real geometry/BIH.
+    pub fn set_gameobject_loot_state_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        state: LootState,
+        unit_guid: Option<ObjectGuid>,
+        game_time_secs: i64,
+        chest_restock_time_secs: u32,
+        shared_loot_is_changed_like_cpp: bool,
+    ) -> GameObjectSetLootStateOutcomeLikeCpp {
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::MissingGameObject,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::WrongKind,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        }
+
+        let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        else {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::WrongKind,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        };
+
+        let previous_loot_state = game_object.loot_state();
+        let previous_loot_state_unit_guid = game_object.loot_state_unit_guid();
+        let previous_restock_time = game_object.restock_time();
+        let represented_model_present = game_object.has_represented_gameobject_model_like_cpp();
+        let type_id = game_object.data().type_id;
+
+        game_object.set_loot_state(state, unit_guid);
+
+        let restock_armed = type_id == GAMEOBJECT_TYPE_CHEST as i8
+            && state == LootState::Activated
+            && chest_restock_time_secs > 0
+            && previous_restock_time == 0
+            && shared_loot_is_changed_like_cpp;
+        if restock_armed {
+            let restock_time = game_time_secs.saturating_add(i64::from(chest_restock_time_secs));
+            game_object.set_restock_time_like_cpp(restock_time);
+        }
+
+        let door_type_early_return = type_id == GAMEOBJECT_TYPE_DOOR as i8;
+        let collision_enable = if door_type_early_return || !represented_model_present {
+            None
+        } else {
+            let collision_enabled = (game_object.data().state != GoState::Ready as i8
+                && (state == LootState::Activated || state == LootState::JustDeactivated))
+                || state == LootState::Ready;
+            let collision =
+                game_object.enable_represented_gameobject_collision_like_cpp(collision_enabled);
+            Some(GameObjectCollisionEnableOutcomeLikeCpp {
+                requested_enable: collision.requested_enable,
+                represented_model_present: collision.represented_model_present,
+                previous_collision_enabled: collision.previous_collision_enabled,
+                new_collision_enabled: collision.new_collision_enabled,
+            })
+        };
+
+        GameObjectSetLootStateOutcomeLikeCpp {
+            guid,
+            status: GameObjectSetLootStateStatusLikeCpp::Updated,
+            previous_loot_state: Some(previous_loot_state),
+            new_loot_state: Some(game_object.loot_state()),
+            previous_loot_state_unit_guid: Some(previous_loot_state_unit_guid),
+            new_loot_state_unit_guid: Some(game_object.loot_state_unit_guid()),
+            previous_restock_time: Some(previous_restock_time),
+            new_restock_time: Some(game_object.restock_time()),
+            ai_on_loot_state_changed_not_represented: true,
+            restock_armed,
+            represented_model_present,
+            door_type_early_return,
             collision_enable,
         }
     }
@@ -10419,6 +10578,203 @@ mod tests {
         assert_eq!(missing.previous_state, None);
         assert_eq!(wrong_kind.previous_state, None);
         assert_eq!(untyped.previous_state, None);
+        assert!(missing.collision_enable.is_none());
+        assert!(wrong_kind.collision_enable.is_none());
+        assert!(untyped.collision_enable.is_none());
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_chest_activated_arms_restock_and_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45601, 4560101);
+        let go_guid = gameobject.world().guid();
+        let unit = guid(HighGuid::Player, 4560199);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_loot_state_like_cpp(
+            go_guid,
+            LootState::Activated,
+            Some(unit),
+            1_000,
+            30,
+            true,
+        );
+
+        assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_loot_state, Some(LootState::NotReady));
+        assert_eq!(outcome.new_loot_state, Some(LootState::Activated));
+        assert_eq!(outcome.new_loot_state_unit_guid, Some(unit));
+        assert!(outcome.ai_on_loot_state_changed_not_represented);
+        assert!(outcome.restock_armed);
+        assert_eq!(outcome.previous_restock_time, Some(0));
+        assert_eq!(outcome.new_restock_time, Some(1_030));
+        let collision = outcome.collision_enable.unwrap();
+        assert_eq!(collision.requested_enable, true);
+        assert_eq!(collision.new_collision_enabled, Some(true));
+        let gameobject = map
+            .map_object_record(go_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.restock_time(), 1_030);
+        assert_eq!(gameobject.loot_state_unit_guid(), unit);
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_restock_requires_changed_and_zero_previous_like_cpp() {
+        let mut map = test_map();
+        let mut unchanged = test_gameobject_for_spawn(45602, 4560201);
+        let unchanged_guid = unchanged.world().guid();
+        unchanged.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(unchanged).unwrap())
+            .unwrap();
+
+        let unchanged_outcome = map.set_gameobject_loot_state_like_cpp(
+            unchanged_guid,
+            LootState::Activated,
+            None,
+            2_000,
+            60,
+            false,
+        );
+        assert!(!unchanged_outcome.restock_armed);
+        assert_eq!(unchanged_outcome.new_restock_time, Some(0));
+
+        let mut already_restocking = test_gameobject_for_spawn(45603, 4560301);
+        let already_guid = already_restocking.world().guid();
+        already_restocking.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        already_restocking.set_restock_time_like_cpp(77);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(already_restocking).unwrap())
+            .unwrap();
+
+        let already_outcome = map.set_gameobject_loot_state_like_cpp(
+            already_guid,
+            LootState::Activated,
+            None,
+            2_000,
+            60,
+            true,
+        );
+        assert!(!already_outcome.restock_armed);
+        assert_eq!(already_outcome.previous_restock_time, Some(77));
+        assert_eq!(already_outcome.new_restock_time, Some(77));
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_door_writes_loot_but_preserves_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45604, 4560401);
+        let guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_DOOR as u8);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(false);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome =
+            map.set_gameobject_loot_state_like_cpp(guid, LootState::Ready, None, 3_000, 60, true);
+
+        assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.new_loot_state, Some(LootState::Ready));
+        assert!(outcome.door_type_early_return);
+        assert!(outcome.collision_enable.is_none());
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.loot_state(), LootState::Ready);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_model_collision_condition_matches_cpp() {
+        let mut map = test_map();
+        let cases = [
+            (4560501, GoState::Active, LootState::Ready, true),
+            (4560502, GoState::Active, LootState::Activated, true),
+            (4560503, GoState::Active, LootState::JustDeactivated, true),
+            (4560504, GoState::Ready, LootState::Activated, false),
+        ];
+
+        for (counter, go_state, loot_state, expected_collision) in cases {
+            let mut gameobject = test_gameobject_for_spawn(counter as SpawnId, counter);
+            let guid = gameobject.world().guid();
+            gameobject.set_go_state(go_state);
+            gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+            gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+            map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+                .unwrap();
+
+            let outcome =
+                map.set_gameobject_loot_state_like_cpp(guid, loot_state, None, 4_000, 0, true);
+
+            assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+            let collision = outcome.collision_enable.unwrap();
+            assert_eq!(collision.requested_enable, expected_collision);
+            assert_eq!(collision.new_collision_enabled, Some(expected_collision));
+        }
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_missing_wrong_kind_and_untyped_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4560601);
+        let creature = test_creature_for_spawn(45606, 4560602, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4560603, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.set_gameobject_loot_state_like_cpp(
+            missing_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+        let wrong_kind = map.set_gameobject_loot_state_like_cpp(
+            creature_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+        let untyped = map.set_gameobject_loot_state_like_cpp(
+            untyped_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+
+        assert_eq!(
+            missing.status,
+            GameObjectSetLootStateStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectSetLootStateStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectSetLootStateStatusLikeCpp::WrongKind
+        );
+        assert_eq!(missing.previous_loot_state, None);
+        assert_eq!(wrong_kind.previous_loot_state, None);
+        assert_eq!(untyped.previous_loot_state, None);
         assert!(missing.collision_enable.is_none());
         assert!(wrong_kind.collision_enable.is_none());
         assert!(untyped.collision_enable.is_none());

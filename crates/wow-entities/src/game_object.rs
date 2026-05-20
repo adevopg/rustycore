@@ -1400,11 +1400,17 @@ impl GameObject {
 
     pub fn set_loot_state(&mut self, state: LootState, unit: Option<ObjectGuid>) {
         self.loot_state = state;
-        self.loot_state_unit_guid = if state == LootState::Activated {
-            unit.unwrap_or(ObjectGuid::EMPTY)
-        } else {
-            ObjectGuid::EMPTY
-        };
+        self.loot_state_unit_guid = unit.unwrap_or(ObjectGuid::EMPTY);
+    }
+
+    /// Represented local setter for TrinityCore `GameObject::SetLootState` restock writes.
+    ///
+    /// C++ anchor: `GameObject.cpp:3693-3695` assigns `m_restockTime` only after the
+    /// map-owned caller has proven chest type, activated loot state, positive restock seconds,
+    /// previous zero restock time, and real `Loot::IsChanged()` evidence. This method only writes
+    /// the local represented field; it does not infer `GameTime`, template data, or loot changes.
+    pub fn set_restock_time_like_cpp(&mut self, restock_time: i64) {
+        self.restock_time = restock_time;
     }
 
     pub const fn spawned_by_default(&self) -> bool {
@@ -3343,15 +3349,21 @@ mod tests {
     }
 
     #[test]
-    fn loot_state_tracks_activating_unit_only_for_activated_state() {
+    fn loot_state_tracks_unit_for_any_state_and_none_clears_like_cpp() {
         let mut go = GameObject::new();
         let unit = ObjectGuid::new(7, 11);
 
-        go.set_loot_state(LootState::Activated, Some(unit));
-        assert_eq!(go.loot_state(), LootState::Activated);
-        assert_eq!(go.loot_state_unit_guid(), unit);
+        for state in [
+            LootState::Activated,
+            LootState::Ready,
+            LootState::JustDeactivated,
+        ] {
+            go.set_loot_state(state, Some(unit));
+            assert_eq!(go.loot_state(), state);
+            assert_eq!(go.loot_state_unit_guid(), unit);
+        }
 
-        go.set_loot_state(LootState::Ready, Some(unit));
+        go.set_loot_state(LootState::Ready, None);
         assert_eq!(go.loot_state(), LootState::Ready);
         assert_eq!(go.loot_state_unit_guid(), ObjectGuid::EMPTY);
     }
