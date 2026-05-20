@@ -6,6 +6,11 @@
 ## Pending Review Tasks
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.448** represented `Map::Update` tail `OnMapUpdate`/metrics seam.
+  Status: represented-complete only for the C++ `Map::Update` tail boundary after `ProcessRelocationNotifies(t_diff)`; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #448 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:804-815`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp:1598-1613`, `/home/server/woltk-trinity-legacy/src/server/game/Scripting/ScriptMgr.cpp:1509-1524`.
+  Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-map/src/manager.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `ManagedMap::update(diff_ms)` records a represented `sScriptMgr->OnMapUpdate(this, diff)` boundary invocation immediately after live `process_live_relocation_notifies_like_cpp(...)`, preserving map id, instance id, kind, diff, and `script_dispatch_represented=false`; it then records represented metric counts for canonical typed `Creature` and exact `GameObject` records in `Map::map_objects`. Generic `WorldObject` records, `Player`, `Pet`, `Transport`, `DynamicObject`, and `AreaTrigger` do not count as these metrics. No real ScriptMgr registry/dispatch, `WorldMapScript`/`InstanceMapScript`/`BattlegroundMapScript` callbacks, Prometheus/telemetry backend, ObjectAccessor/session/fanout, DB, or install/restart/push is claimed.
 - [x] **#NEXT.R8.ENTITIES.447** represented Map weather update timer/default-weather seam.
   Status: represented-complete only for map-owned `_weatherUpdateTimer` / `_zoneDynamicInfo.DefaultWeather` update/reset seam; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #447 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:72-73`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:163`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:777-798`, `/home/server/woltk-trinity-legacy/src/common/Time/Timer.h:62-87`, `/home/server/woltk-trinity-legacy/src/server/game/Weather/Weather.cpp:44-65`.

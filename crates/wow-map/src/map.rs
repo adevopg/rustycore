@@ -142,6 +142,14 @@ pub struct SpawnedPoolDataLikeCpp {
     spawned_pools: HashMap<u32, u32>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MapUpdateMetricsSummaryLikeCpp {
+    pub creature_count: usize,
+    pub gameobject_count: usize,
+    pub map_id: u32,
+    pub instance_id: u32,
+}
+
 impl SpawnedPoolDataLikeCpp {
     pub fn new() -> Self {
         Self::default()
@@ -7133,6 +7141,38 @@ where
 
     pub fn map_object_record(&self, guid: ObjectGuid) -> Option<&MapObjectRecord> {
         self.map_objects.get(&guid)
+    }
+
+    /// Represented tail metrics from C++ `Map::Update` after
+    /// `sScriptMgr->OnMapUpdate(this, t_diff)` (`Map.cpp:804-815`).
+    ///
+    /// C++ emits `TC_METRIC_VALUE("map_creatures", GetObjectsStore().Size<Creature>())`
+    /// and `TC_METRIC_VALUE("map_gameobjects", GetObjectsStore().Size<GameObject>())`.
+    /// Rust reads only canonical typed `MapObjectRecord`s from `map_objects`: a
+    /// record must have both the exact canonical kind and the corresponding typed
+    /// body. Generic `WorldObject` records, Pet, Transport, DynamicObject,
+    /// AreaTrigger, Player, etc. are intentionally excluded; no telemetry backend
+    /// is invoked here.
+    pub fn map_update_metrics_like_cpp(&self) -> MapUpdateMetricsSummaryLikeCpp {
+        let mut summary = MapUpdateMetricsSummaryLikeCpp {
+            map_id: self.map_id,
+            instance_id: self.instance_id,
+            ..MapUpdateMetricsSummaryLikeCpp::default()
+        };
+
+        for record in self.map_objects.values() {
+            match record.kind() {
+                AccessorObjectKind::Creature if record.creature().is_some() => {
+                    summary.creature_count += 1;
+                }
+                AccessorObjectKind::GameObject if record.game_object().is_some() => {
+                    summary.gameobject_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        summary
     }
 
     pub fn map_object(&self, guid: ObjectGuid) -> Option<&WorldObject> {

@@ -14,11 +14,12 @@ use crate::MapKey;
 use crate::map::{
     AreaTriggersUpdateSummaryLikeCpp, ConversationsUpdateSummaryLikeCpp,
     CreatureUpdateSummaryLikeCpp, DynamicObjectsUpdateSummaryLikeCpp,
-    GameObjectsUpdateSummaryLikeCpp, Map, MoveListDrainSummaryLikeCpp, NoopGridLifecycle,
-    NoopTerrainGridLoader, PersonalPhaseTrackerUpdateSummaryLikeCpp,
-    ProcessRelocationNotifiesOutcome, SceneObjectUpdateContextLikeCpp,
-    SceneObjectsUpdateSummaryLikeCpp, ScriptScheduleProcessSummaryLikeCpp,
-    SendObjectUpdatesSummaryLikeCpp, TransportsUpdateSummaryLikeCpp, WeatherUpdateSummaryLikeCpp,
+    GameObjectsUpdateSummaryLikeCpp, Map, MapUpdateMetricsSummaryLikeCpp,
+    MoveListDrainSummaryLikeCpp, NoopGridLifecycle, NoopTerrainGridLoader,
+    PersonalPhaseTrackerUpdateSummaryLikeCpp, ProcessRelocationNotifiesOutcome,
+    SceneObjectUpdateContextLikeCpp, SceneObjectsUpdateSummaryLikeCpp,
+    ScriptScheduleProcessSummaryLikeCpp, SendObjectUpdatesSummaryLikeCpp,
+    TransportsUpdateSummaryLikeCpp, WeatherUpdateSummaryLikeCpp,
 };
 use crate::spawn::Difficulty;
 use wow_core::GameTime;
@@ -149,6 +150,35 @@ pub struct LiveMoveListDrainSummaryLikeCpp {
     pub area_trigger: MoveListDrainSummaryLikeCpp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapUpdateScriptHookSummaryLikeCpp {
+    pub invoked: bool,
+    pub diff_ms: u32,
+    pub map_id: u32,
+    pub instance_id: u32,
+    pub kind: ManagedMapKind,
+    pub script_dispatch_represented: bool,
+}
+
+impl Default for MapUpdateScriptHookSummaryLikeCpp {
+    fn default() -> Self {
+        Self {
+            invoked: false,
+            diff_ms: 0,
+            map_id: 0,
+            instance_id: 0,
+            kind: ManagedMapKind::World,
+            script_dispatch_represented: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MapUpdateTailSummaryLikeCpp {
+    pub script_hook: MapUpdateScriptHookSummaryLikeCpp,
+    pub metrics: MapUpdateMetricsSummaryLikeCpp,
+}
+
 #[derive(Debug)]
 pub struct ManagedMap {
     map: Map<NoopTerrainGridLoader, NoopGridLifecycle>,
@@ -171,6 +201,7 @@ pub struct ManagedMap {
     last_personal_phase_tracker_update_summary: PersonalPhaseTrackerUpdateSummaryLikeCpp,
     last_live_move_list_drain_summary: LiveMoveListDrainSummaryLikeCpp,
     last_process_relocation_notifies_outcome_like_cpp: ProcessRelocationNotifiesOutcome,
+    last_map_update_tail_summary_like_cpp: MapUpdateTailSummaryLikeCpp,
     unload_all_calls: u32,
 }
 
@@ -221,6 +252,7 @@ impl ManagedMap {
             last_live_move_list_drain_summary: LiveMoveListDrainSummaryLikeCpp::default(),
             last_process_relocation_notifies_outcome_like_cpp:
                 ProcessRelocationNotifiesOutcome::default(),
+            last_map_update_tail_summary_like_cpp: MapUpdateTailSummaryLikeCpp::default(),
             unload_all_calls: 0,
         }
     }
@@ -334,6 +366,10 @@ impl ManagedMap {
             .clone()
     }
 
+    pub const fn last_map_update_tail_summary_like_cpp(&self) -> MapUpdateTailSummaryLikeCpp {
+        self.last_map_update_tail_summary_like_cpp
+    }
+
     pub const fn unload_all_calls(&self) -> u32 {
         self.unload_all_calls
     }
@@ -444,6 +480,23 @@ impl ManagedMap {
         self.last_process_relocation_notifies_outcome_like_cpp = self
             .map
             .process_live_relocation_notifies_like_cpp(diff_ms, DEFAULT_VISIBILITY_NOTIFY_PERIOD);
+        // C++ `Map::Update` tail immediately follows ProcessRelocationNotifies:
+        // `sScriptMgr->OnMapUpdate(this, t_diff)` then the `map_creatures` and
+        // `map_gameobjects` metrics (`Map.cpp:804-815`). Rust records only the
+        // boundary invocation and typed canonical counts from `Map::map_objects`;
+        // no real ScriptMgr dispatch, script callbacks, Prometheus/telemetry,
+        // ObjectAccessor, DB, or fanout side effects are claimed.
+        self.last_map_update_tail_summary_like_cpp = MapUpdateTailSummaryLikeCpp {
+            script_hook: MapUpdateScriptHookSummaryLikeCpp {
+                invoked: true,
+                diff_ms,
+                map_id: self.map.map_id(),
+                instance_id: self.map.instance_id(),
+                kind: self.kind,
+                script_dispatch_represented: false,
+            },
+            metrics: self.map.map_update_metrics_like_cpp(),
+        };
     }
 
     fn delayed_update(&mut self, diff_ms: u32) {
@@ -1157,11 +1210,12 @@ mod tests {
 
     use crate::map::MapObjectMoveListFamilyLikeCpp;
     use crate::spawn::{SpawnGroupFlags, SpawnGroupTemplateData};
-    use wow_constants::DeathState;
+    use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AreaTrigger, Conversation, Creature, DynamicObject, GameObject, LootState, MapObjectRecord,
-        ObjectNotifyFlags, Player, SceneObject, Transport, TransportPathLeg, TransportTemplate,
+        AccessorObjectKind, AreaTrigger, Conversation, Creature, DynamicObject, GameObject,
+        LootState, MapObjectRecord, ObjectNotifyFlags, Player, SceneObject, Transport,
+        TransportPathLeg, TransportTemplate, WorldObject,
     };
 
     #[test]
@@ -1531,6 +1585,109 @@ mod tests {
             0
         );
         assert!(managed_map.map().map_object_record(creature_guid).is_none());
+    }
+
+    #[test]
+    fn map_update_tail_empty_map_records_hook_and_zero_metrics_like_cpp() {
+        let mut managed_map = ManagedMap::new(
+            571,
+            77,
+            0,
+            MIN_GRID_DELAY_MS.into(),
+            ManagedMapKind::Dungeon {
+                has_reset_schedule: true,
+            },
+        );
+
+        assert_eq!(
+            managed_map.last_map_update_tail_summary_like_cpp(),
+            MapUpdateTailSummaryLikeCpp::default()
+        );
+
+        managed_map.update(37);
+
+        assert_eq!(
+            managed_map.last_map_update_tail_summary_like_cpp(),
+            MapUpdateTailSummaryLikeCpp {
+                script_hook: MapUpdateScriptHookSummaryLikeCpp {
+                    invoked: true,
+                    diff_ms: 37,
+                    map_id: 571,
+                    instance_id: 77,
+                    kind: ManagedMapKind::Dungeon {
+                        has_reset_schedule: true,
+                    },
+                    script_dispatch_represented: false,
+                },
+                metrics: MapUpdateMetricsSummaryLikeCpp {
+                    creature_count: 0,
+                    gameobject_count: 0,
+                    map_id: 571,
+                    instance_id: 77,
+                },
+            }
+        );
+        assert_eq!(
+            managed_map.last_process_relocation_notifies_outcome_like_cpp(),
+            ProcessRelocationNotifiesOutcome::default()
+        );
+    }
+
+    #[test]
+    fn map_update_tail_metrics_count_only_typed_creature_and_gameobject_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+
+        let _creature_guid = insert_creature_for_update(&mut manager, 4480101, true);
+        let _game_object_guid = insert_game_object_for_update(&mut manager, 4480102, 0, true);
+        let _dynamic_object_guid =
+            insert_dynamic_object_for_update(&mut manager, 4480103, 10, true);
+        let _area_trigger_guid = insert_area_trigger_for_update(&mut manager, 4480104, 10, true);
+        let _transport_guid = insert_transport_for_update(&mut manager, 4480105, true, 1);
+        let _player_guid = insert_player_for_relocation_notify(
+            &mut manager,
+            4480106,
+            Position::xyz(16.0, 26.0, 36.0),
+        );
+        insert_generic_world_object_record_for_metrics(
+            &mut manager,
+            AccessorObjectKind::Creature,
+            guid(HighGuid::Creature, 4480107, 1, 0),
+            TypeId::Unit,
+            TypeMask::UNIT,
+        );
+        insert_generic_world_object_record_for_metrics(
+            &mut manager,
+            AccessorObjectKind::GameObject,
+            guid(HighGuid::GameObject, 4480108, 1, 0),
+            TypeId::GameObject,
+            TypeMask::GAME_OBJECT,
+        );
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        let tail = managed_map.last_map_update_tail_summary_like_cpp();
+        assert_eq!(
+            tail.script_hook,
+            MapUpdateScriptHookSummaryLikeCpp {
+                invoked: true,
+                diff_ms: 1,
+                map_id: 1,
+                instance_id: 0,
+                kind: ManagedMapKind::World,
+                script_dispatch_represented: false,
+            }
+        );
+        assert_eq!(
+            tail.metrics,
+            MapUpdateMetricsSummaryLikeCpp {
+                creature_count: 1,
+                gameobject_count: 1,
+                map_id: 1,
+                instance_id: 0,
+            }
+        );
     }
 
     #[test]
@@ -2928,6 +3085,27 @@ mod tests {
             map.insert_map_object_record(record).unwrap();
         }
         game_object_guid
+    }
+
+    fn insert_generic_world_object_record_for_metrics(
+        manager: &mut MapManager,
+        kind: AccessorObjectKind,
+        guid: ObjectGuid,
+        type_id: TypeId,
+        type_mask: TypeMask,
+    ) {
+        let mut object = WorldObject::new(true, type_id, type_mask);
+        object.object_mut().create(guid);
+        object.set_map(1, 0).unwrap();
+        object.relocate(Position::xyz(17.0, 27.0, 37.0));
+        object.object_mut().add_to_world();
+        let record = MapObjectRecord::new(kind, object).unwrap();
+        manager
+            .find_map_mut(1, 0)
+            .unwrap()
+            .map_mut()
+            .add_map_object_record_to_map_like_cpp(record)
+            .unwrap();
     }
 
     fn insert_transport_for_update(
