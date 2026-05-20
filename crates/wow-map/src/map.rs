@@ -43,8 +43,8 @@ use wow_entities::{
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
     ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
-    TransportUpdateLikeCpp, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp, WorldObject,
-    WorldObjectEnvironment, WorldObjectHeightQuery,
+    TransportUpdateLikeCpp, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp,
+    VehicleKitInstallOutcomeLikeCpp, WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
@@ -7345,6 +7345,7 @@ where
                 inserted_into_cell: false,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                creature_vehicle_install: None,
             });
         }
 
@@ -7391,6 +7392,19 @@ where
             // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
             object.object_mut().set_is_new_object(false);
         }
+
+        let creature_vehicle_install = if kind == AccessorObjectKind::Creature {
+            record.creature_mut().and_then(|creature| {
+                let install = creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .vehicle
+                    .install_vehicle_kit_like_cpp();
+                install.had_kit.then_some(install)
+            })
+        } else {
+            None
+        };
 
         let (gameobject_model_insert, gameobject_collision_enable) =
             if kind == AccessorObjectKind::GameObject {
@@ -7443,6 +7457,7 @@ where
             inserted_into_cell: true,
             gameobject_model_insert,
             gameobject_collision_enable,
+            creature_vehicle_install,
         })
     }
 
@@ -9381,6 +9396,7 @@ pub struct AddToMapOutcome {
     pub inserted_into_cell: bool,
     pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -16248,6 +16264,88 @@ mod tests {
             .unwrap();
         assert!(cell.grid_objects.creatures.contains(&guid));
         assert!(!cell.world_objects.creatures.contains(&guid));
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_installs_local_vehicle_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(397, 39701, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9001, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        let install = outcome.creature_vehicle_install.unwrap();
+        assert_eq!(install.kit_id, Some(9001));
+        assert!(install.had_kit);
+        assert_eq!(install.previous_installed, Some(false));
+        assert!(install.installed);
+        assert!(install.script_on_install_represented);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        let kit = stored.unit().subsystems().vehicle.kit.unwrap();
+        assert_eq!(kit.kit_id, 9001);
+        assert!(kit.active);
+        assert!(kit.installed);
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_without_kit_has_no_install_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(398, 39801, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.creature_vehicle_install.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_already_in_world_does_not_install_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(399, 39901, true);
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9002, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.creature_vehicle_install.is_none());
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.unwrap();
+        assert_eq!(kit.kit_id, 9002);
+        assert!(!kit.installed);
     }
 
     #[test]

@@ -1420,6 +1420,7 @@ mod tests {
             resolved.creature.unit().subsystems().vehicle.kit,
             Some(wow_entities::VehicleKitState {
                 kit_id: 77,
+                installed: false,
                 active: true,
             })
         );

@@ -3582,6 +3582,16 @@ pub struct ControlledOwnerAttackedNotification {
 pub struct VehicleKitState {
     pub kit_id: u32,
     pub active: bool,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleKitInstallOutcomeLikeCpp {
+    pub kit_id: Option<u32>,
+    pub had_kit: bool,
+    pub previous_installed: Option<bool>,
+    pub installed: bool,
+    pub script_on_install_represented: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -3604,7 +3614,36 @@ impl VehicleSubsystem {
     }
 
     pub fn set_vehicle_kit(&mut self, kit_id: u32, active: bool) {
-        self.kit = Some(VehicleKitState { kit_id, active });
+        self.kit = Some(VehicleKitState {
+            kit_id,
+            active,
+            installed: false,
+        });
+    }
+
+    pub fn install_vehicle_kit_like_cpp(&mut self) -> VehicleKitInstallOutcomeLikeCpp {
+        let Some(kit) = self.kit.as_mut() else {
+            return VehicleKitInstallOutcomeLikeCpp {
+                kit_id: None,
+                had_kit: false,
+                previous_installed: None,
+                installed: false,
+                script_on_install_represented: false,
+            };
+        };
+
+        let previous_installed = kit.installed;
+        if !kit.installed {
+            kit.installed = true;
+        }
+
+        VehicleKitInstallOutcomeLikeCpp {
+            kit_id: Some(kit.kit_id),
+            had_kit: true,
+            previous_installed: Some(previous_installed),
+            installed: kit.installed,
+            script_on_install_represented: true,
+        }
     }
 
     pub fn clear_vehicle_kit(&mut self) {
@@ -5302,10 +5341,26 @@ mod unit_subsystems_tests {
         assert_eq!(subsystems.vehicle.vehicle_guid, Some(vehicle));
         assert_eq!(subsystems.vehicle.seat_id, Some(1));
         assert_eq!(subsystems.vehicle.kit.map(|kit| kit.kit_id), Some(42));
+        assert_eq!(subsystems.vehicle.kit.map(|kit| kit.installed), Some(false));
+        let install = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(install.kit_id, Some(42));
+        assert!(install.had_kit);
+        assert_eq!(install.previous_installed, Some(false));
+        assert!(install.installed);
+        assert!(install.script_on_install_represented);
+        let reinstall = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(reinstall.previous_installed, Some(true));
+        assert!(reinstall.installed);
         subsystems.vehicle.exit_vehicle();
         subsystems.vehicle.clear_vehicle_kit();
         assert_eq!(subsystems.vehicle.vehicle_guid, None);
         assert_eq!(subsystems.vehicle.kit, None);
+        let missing_install = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(missing_install.kit_id, None);
+        assert!(!missing_install.had_kit);
+        assert_eq!(missing_install.previous_installed, None);
+        assert!(!missing_install.installed);
+        assert!(!missing_install.script_on_install_represented);
 
         subsystems.ai.set_active(Some("NullAI"));
         subsystems.ai.push("CombatAI");

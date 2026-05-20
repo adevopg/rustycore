@@ -2522,6 +2522,7 @@ mod tests {
             Some(crate::VehicleKitState {
                 kit_id: 101,
                 active: true,
+                installed: false,
             })
         );
         assert_eq!(creature.lifecycle_metadata().vehicle_id, Some(101));

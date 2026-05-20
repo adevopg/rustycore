@@ -5274,6 +5274,7 @@ mmap.enablePathFinding = 0
             Some(wow_entities::VehicleKitState {
                 kit_id: 101,
                 active: true,
+                installed: false,
             })
         );
     }
