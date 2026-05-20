@@ -726,6 +726,15 @@ impl Creature {
         self.spells = template.spells;
         self.equipment_id = equipment_id;
         self.original_equipment_id = original_equipment_id;
+        if let Some(vehicle_id) = record.vehicle_id {
+            // C++ `Creature::CreateFromProto` calls `CreateVehicleKit(vehId, entry, true)` here.
+            // This is only the local represented kit seam; real `UpdateDisplayPower()` and
+            // `AddToWorld`/`VehicleKit::Install()` remain outside this lifecycle slice.
+            self.unit
+                .subsystems_mut()
+                .vehicle
+                .set_vehicle_kit(vehicle_id, true);
+        }
         self.default_movement_type = spawn
             .map(|spawn| spawn.movement_type)
             .unwrap_or(template.movement_type);
@@ -2508,6 +2517,14 @@ mod tests {
         assert_eq!(creature.spells()[3], 116);
         assert_eq!(creature.equipment_id(), 6);
         assert_eq!(creature.original_equipment_id(), -6);
+        assert_eq!(
+            creature.unit().subsystems().vehicle.kit,
+            Some(crate::VehicleKitState {
+                kit_id: 101,
+                active: true,
+            })
+        );
+        assert_eq!(creature.lifecycle_metadata().vehicle_id, Some(101));
         assert_eq!(creature.unit().data().level, 71);
         assert_eq!(creature.unit().data().max_health, 5_000);
         assert_eq!(creature.unit().data().health, 4_500);

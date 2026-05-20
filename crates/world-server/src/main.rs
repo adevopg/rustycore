@@ -2819,8 +2819,13 @@ fn build_loaded_grid_creature_respawn_record_like_cpp(
             return None;
         }
     };
+    let map_object_high = if template.vehicle_id.is_some() {
+        HighGuid::Vehicle
+    } else {
+        HighGuid::Creature
+    };
     let map_object_guid =
-        ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, map_id, 1, template.entry, low);
+        ObjectGuid::create_world_object(map_object_high, 0, 1, map_id, 1, template.entry, low);
     let resolver = creature_loaded_grid::CreatureLoadedGridLifecycleResolverLikeCpp::new(
         [template],
         [resolved_spawn],
@@ -5212,8 +5217,76 @@ mmap.enablePathFinding = 0
         assert_eq!(creature.ai_current_health(), creature.ai_max_health());
     }
 
+    #[test]
+    fn loaded_grid_creature_respawn_record_vehicle_template_uses_creature_low_vehicle_high_like_cpp()
+     {
+        let mut metadata = test_spawn_metadata_with_flags([(67, 571, SpawnGroupFlags::NONE)]);
+        let spawn_id = 1;
+        let entry = 42;
+        metadata = metadata.with_creature_runtime_rows_like_cpp(BTreeMap::from([(
+            spawn_id,
+            super::spawn_store_loader::CreatureSpawnRuntimeRowLikeCpp {
+                spawn_id,
+                model_id: 999,
+                equipment_id: 3,
+                wander_distance: 15.0,
+                curhealth: 0,
+                curmana: 0,
+                movement_type: 1,
+                string_id: "vehicle-template-live".to_string(),
+                spawn_time_secs: 120,
+            },
+        )]));
+        let caches =
+            variable_loaded_grid_creature_respawn_caches_with_vehicle_id_like_cpp(entry, 101);
+        let mut map = wow_map::Map::new(571, 0, 2, 60_000);
+        map.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+            object_type: SpawnObjectType::Creature,
+            spawn_id,
+            entry,
+            respawn_time: 0,
+            grid_id: 7,
+        });
+
+        let record = build_loaded_grid_creature_respawn_record_like_cpp(
+            &mut map,
+            SpawnObjectType::Creature,
+            spawn_id,
+            &metadata,
+            &caches,
+        )
+        .expect("vehicle-template loaded-grid Creature builder should resolve");
+        let creature = record
+            .primary_record
+            .creature()
+            .expect("builder should return a typed Creature MapObjectRecord");
+
+        assert_eq!(
+            creature.guid().high_type(),
+            wow_core::guid::HighGuid::Vehicle
+        );
+        assert_eq!(creature.guid().counter(), 1);
+        assert_eq!(creature.guid().entry(), entry);
+        assert_eq!(creature.lifecycle_metadata().spawn_id, spawn_id);
+        assert_eq!(creature.lifecycle_metadata().vehicle_id, Some(101));
+        assert_eq!(
+            creature.unit().subsystems().vehicle.kit,
+            Some(wow_entities::VehicleKitState {
+                kit_id: 101,
+                active: true,
+            })
+        );
+    }
+
     fn variable_loaded_grid_creature_respawn_caches_like_cpp(
         entry: u32,
+    ) -> LoadedGridCreatureRespawnCachesLikeCpp {
+        variable_loaded_grid_creature_respawn_caches_with_vehicle_id_like_cpp(entry, 0)
+    }
+
+    fn variable_loaded_grid_creature_respawn_caches_with_vehicle_id_like_cpp(
+        entry: u32,
+        vehicle_id: u32,
     ) -> LoadedGridCreatureRespawnCachesLikeCpp {
         LoadedGridCreatureRespawnCachesLikeCpp {
             template_store: Arc::new(
@@ -5227,7 +5300,7 @@ mmap.enablePathFinding = 0
                         scale: 1.0,
                         classification: 0,
                         unit_class: 1,
-                        vehicle_id: 0,
+                        vehicle_id,
                         movement_type: 1,
                         flags_extra: 0,
                         string_id: String::new(),

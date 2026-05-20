@@ -141,10 +141,6 @@ pub enum CreatureLoadedGridResolveErrorLikeCpp {
         expected_entry: u32,
     },
     MapObjectRecord(String),
-    UnsupportedVehicle {
-        entry: u32,
-        vehicle_id: u32,
-    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -186,12 +182,6 @@ impl CreatureLoadedGridLifecycleResolverLikeCpp {
             .templates
             .get(&spawn.entry)
             .ok_or(CreatureLoadedGridResolveErrorLikeCpp::MissingTemplate { entry: spawn.entry })?;
-        if let Some(vehicle_id) = template.vehicle_id {
-            return Err(CreatureLoadedGridResolveErrorLikeCpp::UnsupportedVehicle {
-                entry: template.entry,
-                vehicle_id,
-            });
-        }
         let selection = self.runtime_selections.get(&spawn.entry).ok_or(
             CreatureLoadedGridResolveErrorLikeCpp::MissingRuntimeSelection { entry: spawn.entry },
         )?;
@@ -267,12 +257,6 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
     let template = template_store
         .get(spawn.id)
         .ok_or(CreatureLoadedGridResolveErrorLikeCpp::MissingTemplate { entry: spawn.id })?;
-    if template.vehicle_id != 0 {
-        return Err(CreatureLoadedGridResolveErrorLikeCpp::UnsupportedVehicle {
-            entry: template.entry,
-            vehicle_id: template.vehicle_id,
-        });
-    }
     let difficulty = difficulty_store
         .get_like_cpp(template.entry, difficulty_id)
         .ok_or(CreatureLoadedGridResolveErrorLikeCpp::MissingDifficulty {
@@ -363,7 +347,7 @@ pub fn build_loaded_grid_creature_inputs_from_db_like_cpp(
         max_level: difficulty.max_level,
         equipment_id,
         original_equipment_id,
-        vehicle_id: None,
+        vehicle_id: (template.vehicle_id != 0).then_some(template.vehicle_id),
         corpse_delay: 0,
         ignore_corpse_decay_ratio: false,
     };
@@ -578,6 +562,10 @@ mod tests {
         ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, map_id, 1, entry, counter)
     }
 
+    fn map_vehicle_guid(entry: u32, map_id: u16, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(HighGuid::Vehicle, 0, 1, map_id, 1, entry, counter)
+    }
+
     fn spawn(spawn_id: u64, entry: u32, add_to_map: bool) -> ResolvedCreatureSpawnLikeCpp {
         ResolvedCreatureSpawnLikeCpp {
             spawn_id,
@@ -663,6 +651,14 @@ mod tests {
         entry: u32,
         regen_health: bool,
     ) -> CreatureTemplateLifecycleStoreLikeCpp {
+        db_backed_template_store_with_regen_and_vehicle(entry, regen_health, 0)
+    }
+
+    fn db_backed_template_store_with_regen_and_vehicle(
+        entry: u32,
+        regen_health: bool,
+        vehicle_id: u32,
+    ) -> CreatureTemplateLifecycleStoreLikeCpp {
         CreatureTemplateLifecycleStoreLikeCpp::from_templates([
             wow_data::CreatureTemplateLifecycleRecordLikeCpp {
                 entry,
@@ -673,7 +669,7 @@ mod tests {
                 scale: 1.25,
                 classification: 1,
                 unit_class: 1,
-                vehicle_id: 0,
+                vehicle_id,
                 movement_type: 1,
                 flags_extra: 0x40,
                 string_id: "template-string".to_string(),
@@ -1136,6 +1132,43 @@ mod tests {
     }
 
     #[test]
+    fn loaded_grid_db_backed_builder_preserves_vehicle_template_id_like_cpp() {
+        let entry = 12_407;
+        let spawn = db_backed_spawn(entry);
+        let runtime_row = CreatureSpawnRuntimeRowLikeCpp {
+            spawn_id: spawn.spawn_id,
+            model_id: 999,
+            equipment_id: 1,
+            wander_distance: 0.0,
+            curhealth: 0,
+            curmana: 0,
+            movement_type: 0,
+            string_id: String::new(),
+            spawn_time_secs: 20,
+        };
+        let (display_store, model_store) = empty_display_stores();
+
+        let (template, _, _) = build_loaded_grid_creature_inputs_from_db_like_cpp(
+            &spawn,
+            &runtime_row,
+            &db_backed_template_store_with_regen_and_vehicle(entry, true, 77),
+            &db_backed_difficulty_store(entry),
+            &db_backed_base_stats_store(),
+            &CreatureClassificationHealthRatesLikeCpp::default(),
+            &display_store,
+            &model_store,
+            2,
+            0,
+            0,
+            false,
+            |_, _| 19,
+        )
+        .expect("DB-backed vehicle template should compose resolver inputs");
+
+        assert_eq!(template.vehicle_id, Some(77));
+    }
+
+    #[test]
     fn loaded_grid_creature_lifecycle_resolver_maps_spawn_template_and_selection_like_cpp() {
         let entry = 12_345;
         let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
@@ -1362,21 +1395,63 @@ mod tests {
     }
 
     #[test]
-    fn loaded_grid_creature_lifecycle_resolver_rejects_vehicle_templates_for_now() {
+    fn loaded_grid_creature_lifecycle_resolver_accepts_vehicle_template_with_vehicle_guid_like_cpp()
+    {
         let entry = 12_351;
+        let map_object_guid = map_vehicle_guid(entry, 571, 99_006);
         let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
             [vehicle_template(entry, 77)],
             [spawn(63, entry, true)],
             [selection(entry)],
         );
 
+        let resolved = resolver
+            .resolve_loaded_grid_creature_like_cpp(63, map_object_guid)
+            .expect("vehicle-template Creature should resolve with HighGuid::Vehicle");
+
+        assert_eq!(resolved.lifecycle_record.create.vehicle_id, Some(77));
         assert_eq!(
-            resolver
-                .resolve_loaded_grid_creature_like_cpp(63, map_creature_guid(entry, 571, 99_006)),
-            Err(CreatureLoadedGridResolveErrorLikeCpp::UnsupportedVehicle {
-                entry,
-                vehicle_id: 77,
+            resolved.lifecycle_record.create.guid.high_type(),
+            HighGuid::Vehicle
+        );
+        assert_eq!(resolved.creature.guid(), map_object_guid);
+        assert_eq!(resolved.creature.lifecycle_metadata().vehicle_id, Some(77));
+        assert_eq!(
+            resolved.creature.unit().subsystems().vehicle.kit,
+            Some(wow_entities::VehicleKitState {
+                kit_id: 77,
+                active: true,
             })
+        );
+        let recorded = resolved
+            .map_object_record
+            .as_ref()
+            .and_then(MapObjectRecord::creature)
+            .expect("vehicle-template map record should remain typed Creature");
+        assert_eq!(recorded.guid().high_type(), HighGuid::Vehicle);
+    }
+
+    #[test]
+    fn loaded_grid_creature_lifecycle_resolver_rejects_creature_guid_for_vehicle_template_like_cpp()
+    {
+        let entry = 12_353;
+        let wrong_guid = map_creature_guid(entry, 571, 99_009);
+        let resolver = CreatureLoadedGridLifecycleResolverLikeCpp::new(
+            [vehicle_template(entry, 88)],
+            [spawn(65, entry, true)],
+            [selection(entry)],
+        );
+
+        assert_eq!(
+            resolver.resolve_loaded_grid_creature_like_cpp(65, wrong_guid),
+            Err(
+                CreatureLoadedGridResolveErrorLikeCpp::InvalidMapObjectGuid {
+                    guid: wrong_guid,
+                    expected_high: HighGuid::Vehicle,
+                    expected_map_id: 571,
+                    expected_entry: entry,
+                }
+            )
         );
     }
 
