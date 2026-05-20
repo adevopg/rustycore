@@ -14,8 +14,8 @@ use crate::map::{
     AreaTriggersUpdateSummaryLikeCpp, ConversationsUpdateSummaryLikeCpp,
     CreatureUpdateSummaryLikeCpp, DynamicObjectsUpdateSummaryLikeCpp,
     GameObjectsUpdateSummaryLikeCpp, Map, NoopGridLifecycle, NoopTerrainGridLoader,
-    SceneObjectUpdateContextLikeCpp, SceneObjectsUpdateSummaryLikeCpp,
-    TransportsUpdateSummaryLikeCpp,
+    PersonalPhaseTrackerUpdateSummaryLikeCpp, SceneObjectUpdateContextLikeCpp,
+    SceneObjectsUpdateSummaryLikeCpp, TransportsUpdateSummaryLikeCpp,
 };
 use crate::spawn::Difficulty;
 use wow_core::GameTime;
@@ -155,6 +155,7 @@ pub struct ManagedMap {
     last_area_triggers_update_summary: AreaTriggersUpdateSummaryLikeCpp,
     last_conversations_update_summary: ConversationsUpdateSummaryLikeCpp,
     last_scene_objects_update_summary: SceneObjectsUpdateSummaryLikeCpp,
+    last_personal_phase_tracker_update_summary: PersonalPhaseTrackerUpdateSummaryLikeCpp,
     unload_all_calls: u32,
 }
 
@@ -196,6 +197,8 @@ impl ManagedMap {
             last_area_triggers_update_summary: AreaTriggersUpdateSummaryLikeCpp::default(),
             last_conversations_update_summary: ConversationsUpdateSummaryLikeCpp::default(),
             last_scene_objects_update_summary: SceneObjectsUpdateSummaryLikeCpp::default(),
+            last_personal_phase_tracker_update_summary:
+                PersonalPhaseTrackerUpdateSummaryLikeCpp::default(),
             unload_all_calls: 0,
         }
     }
@@ -276,6 +279,12 @@ impl ManagedMap {
         self.last_scene_objects_update_summary
     }
 
+    pub const fn last_personal_phase_tracker_update_summary(
+        &self,
+    ) -> PersonalPhaseTrackerUpdateSummaryLikeCpp {
+        self.last_personal_phase_tracker_update_summary
+    }
+
     pub const fn unload_all_calls(&self) -> u32 {
         self.unload_all_calls
     }
@@ -336,6 +345,13 @@ impl ManagedMap {
                 .update_scene_objects_like_cpp(diff_ms, |_guid, scene_object| {
                     SceneObjectUpdateContextLikeCpp::represented_default_for(scene_object)
                 });
+        // C++ calls `GetMultiPersonalPhaseTracker().Update(this, t_diff)` after
+        // SendObjectUpdates/scripts/weather and before later move/remove drains.
+        // Rust consumes the existing map-owned tracker here as a represented seam
+        // only: GUID expiry -> AddObjectToRemoveList, without claiming exact full
+        // update ordering, visibility fanout, DB, scripts, or dynamic-tree parity.
+        self.last_personal_phase_tracker_update_summary =
+            self.map.update_personal_phase_tracker_like_cpp(diff_ms);
     }
 
     fn delayed_update(&mut self, diff_ms: u32) {
@@ -1318,6 +1334,37 @@ mod tests {
                 .map_object_record(dynamic_object_guid)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn map_manager_update_personal_phase_expiry_enqueues_and_delayed_update_drains_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let creature_guid = insert_creature_for_update(&mut manager, 4400301, true);
+        let owner = ObjectGuid::create_player(1, 44003);
+        {
+            let map = manager.find_map_mut(1, 0).unwrap().map_mut();
+            map.register_personal_phase_object_for_test(44, owner, creature_guid);
+            map.mark_personal_phases_for_deletion_for_test(owner);
+        }
+
+        assert_eq!(manager.update(60_000), Some(60_000));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        assert_eq!(managed_map.update_calls(), &[60_000]);
+        assert_eq!(managed_map.delayed_update_calls(), &[60_000]);
+        assert_eq!(
+            managed_map.last_personal_phase_tracker_update_summary(),
+            PersonalPhaseTrackerUpdateSummaryLikeCpp {
+                expired_objects: 1,
+                remove_queued: 1,
+                missing_or_stale: 0,
+                unsupported_kinds: 0,
+                duplicate_queued: 0,
+            }
+        );
+        assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+        assert!(managed_map.map().map_object_record(creature_guid).is_none());
     }
 
     #[test]

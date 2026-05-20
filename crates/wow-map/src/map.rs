@@ -314,6 +314,15 @@ pub struct AddObjectToRemoveListOutcomeLikeCpp {
 
 pub type RemoveListOutcomeLikeCpp = AddObjectToRemoveListOutcomeLikeCpp;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PersonalPhaseTrackerUpdateSummaryLikeCpp {
+    pub expired_objects: usize,
+    pub remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub unsupported_kinds: usize,
+    pub duplicate_queued: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddObjectToSwitchListStatusLikeCpp {
     Queued,
@@ -1425,6 +1434,23 @@ where
         &self.personal_phase_tracker
     }
 
+    #[cfg(test)]
+    pub(crate) fn register_personal_phase_object_for_test(
+        &mut self,
+        phase_id: u32,
+        phase_owner: ObjectGuid,
+        object: ObjectGuid,
+    ) {
+        self.personal_phase_tracker
+            .register_tracked_object(phase_id, phase_owner, object);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_personal_phases_for_deletion_for_test(&mut self, phase_owner: ObjectGuid) {
+        self.personal_phase_tracker
+            .mark_all_phases_for_deletion(phase_owner);
+    }
+
     /// Map-owned bridge for C++ `Map::_respawnTimes` and the per-type respawn maps.
     ///
     /// C++ anchors:
@@ -2393,6 +2419,48 @@ where
                 .then_some(kind),
             cleanup_before_delete_count,
         }
+    }
+
+    /// C++ `GetMultiPersonalPhaseTracker().Update(this, t_diff)` represented on `Map`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:797-798` calls the map-owned multi personal phase tracker during
+    ///   `Map::Update` before deferred move/remove-list processing.
+    /// - `PersonalPhaseTracker.cpp:62-78,106-113,192-202` expires per-owner phases,
+    ///   calls `Map::AddObjectToRemoveList` for tracked objects, clears phase
+    ///   object/grid sets, and removes empty owner trackers.
+    ///
+    /// Rust ownership: `personal_phase_tracker.update(diff_ms)` is the sole source
+    /// of expired GUIDs; `map_objects` remains canonical for real records/removal.
+    /// This seam does not drain `objects_to_remove`, rebuild objects from external
+    /// caches, or claim session/ObjectAccessor/visibility/DB/script behavior.
+    pub fn update_personal_phase_tracker_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> PersonalPhaseTrackerUpdateSummaryLikeCpp {
+        let expired_guids = self.personal_phase_tracker.update(diff_ms);
+        let mut summary = PersonalPhaseTrackerUpdateSummaryLikeCpp {
+            expired_objects: expired_guids.len(),
+            ..Default::default()
+        };
+
+        for guid in expired_guids {
+            let outcome = self.add_object_to_remove_list_like_cpp(guid);
+            if outcome.queued {
+                summary.remove_queued += 1;
+            }
+            if outcome.duplicate {
+                summary.duplicate_queued += 1;
+            }
+            if outcome.missing_or_stale {
+                summary.missing_or_stale += 1;
+            }
+            if outcome.unsupported_kind.is_some() {
+                summary.unsupported_kinds += 1;
+            }
+        }
+
+        summary
     }
 
     /// C++ `WorldObject::SetWorldObject(bool)` facade owned by `Map` over the
@@ -12128,6 +12196,67 @@ mod tests {
         let creature = map.get_typed_creature(guid).unwrap();
         assert!(creature.unit().world().object().is_destroyed_object());
         assert_eq!(creature.cleanup_before_delete_count(), 1);
+    }
+
+    #[test]
+    fn personal_phase_tracker_update_enqueues_expired_canonical_object_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 44001);
+        let phase_id = 44;
+        let creature = test_creature_for_spawn(44001, 4400101, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        map.register_personal_phase_object_for_test(phase_id, owner, guid);
+        map.mark_personal_phases_for_deletion_for_test(owner);
+
+        let early = map.update_personal_phase_tracker_like_cpp(59_999);
+
+        assert_eq!(early, PersonalPhaseTrackerUpdateSummaryLikeCpp::default());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(guid).is_some());
+
+        let expired = map.update_personal_phase_tracker_like_cpp(1);
+
+        assert_eq!(
+            expired,
+            PersonalPhaseTrackerUpdateSummaryLikeCpp {
+                expired_objects: 1,
+                remove_queued: 1,
+                missing_or_stale: 0,
+                unsupported_kinds: 0,
+                duplicate_queued: 0,
+            }
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        assert!(map.map_object_record(guid).is_some());
+        let creature = map.get_typed_creature(guid).unwrap();
+        assert!(creature.unit().world().object().is_destroyed_object());
+        assert_eq!(creature.cleanup_before_delete_count(), 1);
+    }
+
+    #[test]
+    fn personal_phase_tracker_update_counts_missing_expired_guid_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 44002);
+        let missing_guid = guid(HighGuid::Creature, 4400201);
+        map.register_personal_phase_object_for_test(44, owner, missing_guid);
+        map.mark_personal_phases_for_deletion_for_test(owner);
+
+        let summary = map.update_personal_phase_tracker_like_cpp(60_000);
+
+        assert_eq!(
+            summary,
+            PersonalPhaseTrackerUpdateSummaryLikeCpp {
+                expired_objects: 1,
+                remove_queued: 0,
+                missing_or_stale: 1,
+                unsupported_kinds: 0,
+                duplicate_queued: 0,
+            }
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 0);
     }
 
     #[test]
