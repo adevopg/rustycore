@@ -4,7 +4,7 @@
 //! - `game/Maps/Map.h`
 //! - `game/Maps/Map.cpp`
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -1099,6 +1099,44 @@ pub struct RemoveAllObjectsInRemoveListOutcomeLikeCpp {
     pub dynamic_object_unbound_caster_count: usize,
 }
 
+/// Bounded represented action for C++ `Map::AddFarSpellCallback` / `_farSpellCallbacks`.
+///
+/// C++ anchors:
+/// - `Map.cpp:2514-2517` enqueues a heap-owned `FarSpellCallback`.
+/// - `Map.cpp:2519-2530` drains FIFO callbacks at the start of `Map::DelayedUpdate`
+///   and executes each callback before `RemoveAllObjectsInRemoveList()`.
+///
+/// Rust intentionally represents only closed map-owned actions. This is not a real
+/// Spell/FarSpellCallback implementation: no arbitrary closures, Spell/Aura runtime,
+/// caster lookup, ObjectAccessor, session fanout, packets, scripts, or AI callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepresentedFarSpellCallbackActionLikeCpp {
+    /// Records execution evidence only; useful for FIFO/order tests without mutation.
+    RecordExecution,
+    /// Represented map mutation: callback queues an object for same-tick remove-list
+    /// drain by delegating to `Map::AddObjectToRemoveList` semantics.
+    QueueObjectRemove { guid: ObjectGuid },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepresentedFarSpellCallbackLikeCpp {
+    pub id: u64,
+    pub action: RepresentedFarSpellCallbackActionLikeCpp,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FarSpellCallbackDrainSummaryLikeCpp {
+    pub queued_before: usize,
+    pub processed: usize,
+    pub record_only: usize,
+    pub remove_queue_attempted: usize,
+    pub remove_queued: usize,
+    pub remove_missing_or_stale: usize,
+    pub remove_duplicates: usize,
+    pub unsupported_remove_kinds: usize,
+    pub queued_after: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SwitchGridContainersOutcomeLikeCpp {
     executed: bool,
@@ -1659,6 +1697,14 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     /// before `objects_to_remove` (`Map.cpp:2574-2594`). Session/ObjectAccessor/DB
     /// caches must not reconstruct or drain it.
     objects_to_switch: HashMap<ObjectGuid, bool>,
+    /// Map-owned represented `_farSpellCallbacks` FIFO queue for C++
+    /// `Map::AddFarSpellCallback` / `Map::DelayedUpdate` (`Map.cpp:2514-2530`).
+    ///
+    /// Source-of-truth and drain ownership are this `Map`; callers may enqueue only
+    /// explicit represented actions and only `Map::drain_far_spell_callbacks_like_cpp`
+    /// consumes them. This must run before `remove_all_objects_in_remove_list_like_cpp`.
+    far_spell_callbacks_like_cpp: VecDeque<RepresentedFarSpellCallbackLikeCpp>,
+    represented_far_spell_callback_execution_log_like_cpp: Vec<u64>,
     /// Map-owned delayed cell/grid movement queues matching C++
     /// `_creaturesToMove`, `_gameObjectsToMove`, `_dynamicObjectsToMove`, and
     /// `_areaTriggersToMove` (`Map.h:566-579`, `Map.cpp:1163-1416`).
@@ -1783,6 +1829,8 @@ where
             dynamic_tree_unbalanced_times_like_cpp: 0,
             objects_to_remove: HashSet::new(),
             objects_to_switch: HashMap::new(),
+            far_spell_callbacks_like_cpp: VecDeque::new(),
+            represented_far_spell_callback_execution_log_like_cpp: Vec::new(),
             creatures_to_move: Vec::new(),
             gameobjects_to_move: Vec::new(),
             dynamic_objects_to_move: Vec::new(),
@@ -3406,6 +3454,70 @@ where
             actions.push((group.group_id, action));
         }
         actions
+    }
+
+    /// C++ `Map::AddFarSpellCallback` represented as a map-owned FIFO action queue.
+    ///
+    /// This helper only accepts explicit represented actions; it does not expose a
+    /// general closure/callback runtime or real Spell/Aura side effects.
+    pub fn add_far_spell_callback_like_cpp(
+        &mut self,
+        callback: RepresentedFarSpellCallbackLikeCpp,
+    ) {
+        self.far_spell_callbacks_like_cpp.push_back(callback);
+    }
+
+    pub fn far_spell_callbacks_count_like_cpp(&self) -> usize {
+        self.far_spell_callbacks_like_cpp.len()
+    }
+
+    pub fn represented_far_spell_callback_execution_log_like_cpp(&self) -> &[u64] {
+        &self.represented_far_spell_callback_execution_log_like_cpp
+    }
+
+    /// C++ `Map::DelayedUpdate` first block: drain `_farSpellCallbacks` FIFO before
+    /// `RemoveAllObjectsInRemoveList()` (`Map.cpp:2519-2530`).
+    ///
+    /// Limits: this is a bounded represented seam only. It executes no real Spell,
+    /// Aura, caster/ObjectAccessor lookup, session fanout, packet, script, AI, or
+    /// arbitrary callback side effects. `QueueObjectRemove` is the minimal map-owned
+    /// mutation used to prove same-tick ordering before the remove-list drain.
+    pub fn drain_far_spell_callbacks_like_cpp(&mut self) -> FarSpellCallbackDrainSummaryLikeCpp {
+        let queued_before = self.far_spell_callbacks_like_cpp.len();
+        let mut summary = FarSpellCallbackDrainSummaryLikeCpp {
+            queued_before,
+            ..Default::default()
+        };
+
+        while let Some(callback) = self.far_spell_callbacks_like_cpp.pop_front() {
+            summary.processed += 1;
+            self.represented_far_spell_callback_execution_log_like_cpp
+                .push(callback.id);
+            match callback.action {
+                RepresentedFarSpellCallbackActionLikeCpp::RecordExecution => {
+                    summary.record_only += 1;
+                }
+                RepresentedFarSpellCallbackActionLikeCpp::QueueObjectRemove { guid } => {
+                    summary.remove_queue_attempted += 1;
+                    let outcome = self.add_object_to_remove_list_like_cpp(guid);
+                    if outcome.queued {
+                        summary.remove_queued += 1;
+                    }
+                    if outcome.missing_or_stale {
+                        summary.remove_missing_or_stale += 1;
+                    }
+                    if outcome.duplicate {
+                        summary.remove_duplicates += 1;
+                    }
+                    if outcome.unsupported_kind.is_some() {
+                        summary.unsupported_remove_kinds += 1;
+                    }
+                }
+            }
+        }
+
+        summary.queued_after = self.far_spell_callbacks_like_cpp.len();
+        summary
     }
 
     /// C++ `Map::AddObjectToRemoveList` represented over canonical map records.
@@ -20075,6 +20187,52 @@ mod tests {
             .relocate(Position::xyz(11.0, 21.0, 31.0));
         dynamic_object.world_mut().object_mut().add_to_world();
         dynamic_object
+    }
+
+    #[test]
+    fn far_spell_callbacks_drain_fifo_record_execution_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 10,
+            action: RepresentedFarSpellCallbackActionLikeCpp::RecordExecution,
+        });
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 20,
+            action: RepresentedFarSpellCallbackActionLikeCpp::RecordExecution,
+        });
+
+        let summary = map.drain_far_spell_callbacks_like_cpp();
+
+        assert_eq!(summary.queued_before, 2);
+        assert_eq!(summary.processed, 2);
+        assert_eq!(summary.record_only, 2);
+        assert_eq!(summary.queued_after, 0);
+        assert_eq!(map.far_spell_callbacks_count_like_cpp(), 0);
+        assert_eq!(
+            map.represented_far_spell_callback_execution_log_like_cpp(),
+            &[10, 20]
+        );
+    }
+
+    #[test]
+    fn far_spell_callback_queue_object_remove_missing_records_stale_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let missing_guid = guid(HighGuid::DynamicObject, 487_001);
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 1,
+            action: RepresentedFarSpellCallbackActionLikeCpp::QueueObjectRemove {
+                guid: missing_guid,
+            },
+        });
+
+        let summary = map.drain_far_spell_callbacks_like_cpp();
+
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.remove_queue_attempted, 1);
+        assert_eq!(summary.remove_queued, 0);
+        assert_eq!(summary.remove_missing_or_stale, 1);
+        assert_eq!(summary.remove_duplicates, 0);
+        assert_eq!(summary.queued_after, 0);
     }
 
     fn create_farsight_focus_for_tests<Terrain, Lifecycle>(

@@ -14,13 +14,13 @@ use crate::MapKey;
 use crate::map::{
     AreaTriggersUpdateSummaryLikeCpp, ConversationsUpdateSummaryLikeCpp,
     CreatureUpdateSummaryLikeCpp, DynamicMapTreeUpdateSummaryLikeCpp,
-    DynamicObjectsUpdateSummaryLikeCpp, GameObjectsUpdateSummaryLikeCpp,
-    GridStatesUpdateSummaryLikeCpp, Map, MapUpdateMetricsSummaryLikeCpp,
-    MoveListDrainSummaryLikeCpp, NoopGridLifecycle, NoopTerrainGridLoader,
-    PersonalPhaseTrackerUpdateSummaryLikeCpp, ProcessRelocationNotifiesOutcome,
-    SceneObjectUpdateContextLikeCpp, SceneObjectsUpdateSummaryLikeCpp,
-    ScriptScheduleProcessSummaryLikeCpp, SendObjectUpdatesSummaryLikeCpp,
-    TransportsUpdateSummaryLikeCpp, WeatherUpdateSummaryLikeCpp,
+    DynamicObjectsUpdateSummaryLikeCpp, FarSpellCallbackDrainSummaryLikeCpp,
+    GameObjectsUpdateSummaryLikeCpp, GridStatesUpdateSummaryLikeCpp, Map,
+    MapUpdateMetricsSummaryLikeCpp, MoveListDrainSummaryLikeCpp, NoopGridLifecycle,
+    NoopTerrainGridLoader, PersonalPhaseTrackerUpdateSummaryLikeCpp,
+    ProcessRelocationNotifiesOutcome, SceneObjectUpdateContextLikeCpp,
+    SceneObjectsUpdateSummaryLikeCpp, ScriptScheduleProcessSummaryLikeCpp,
+    SendObjectUpdatesSummaryLikeCpp, TransportsUpdateSummaryLikeCpp, WeatherUpdateSummaryLikeCpp,
 };
 use crate::spawn::Difficulty;
 use wow_core::GameTime;
@@ -202,6 +202,7 @@ pub struct ManagedMap {
     last_weather_update_summary_like_cpp: WeatherUpdateSummaryLikeCpp,
     last_personal_phase_tracker_update_summary: PersonalPhaseTrackerUpdateSummaryLikeCpp,
     last_live_move_list_drain_summary: LiveMoveListDrainSummaryLikeCpp,
+    last_far_spell_callback_drain_summary_like_cpp: FarSpellCallbackDrainSummaryLikeCpp,
     last_grid_states_update_summary_like_cpp: GridStatesUpdateSummaryLikeCpp,
     last_process_relocation_notifies_outcome_like_cpp: ProcessRelocationNotifiesOutcome,
     last_map_update_tail_summary_like_cpp: MapUpdateTailSummaryLikeCpp,
@@ -255,6 +256,8 @@ impl ManagedMap {
             last_personal_phase_tracker_update_summary:
                 PersonalPhaseTrackerUpdateSummaryLikeCpp::default(),
             last_live_move_list_drain_summary: LiveMoveListDrainSummaryLikeCpp::default(),
+            last_far_spell_callback_drain_summary_like_cpp:
+                FarSpellCallbackDrainSummaryLikeCpp::default(),
             last_grid_states_update_summary_like_cpp: GridStatesUpdateSummaryLikeCpp::default(),
             last_process_relocation_notifies_outcome_like_cpp:
                 ProcessRelocationNotifiesOutcome::default(),
@@ -369,6 +372,12 @@ impl ManagedMap {
 
     pub fn last_live_move_list_drain_summary_like_cpp(&self) -> LiveMoveListDrainSummaryLikeCpp {
         self.last_live_move_list_drain_summary.clone()
+    }
+
+    pub const fn last_far_spell_callback_drain_summary_like_cpp(
+        &self,
+    ) -> FarSpellCallbackDrainSummaryLikeCpp {
+        self.last_far_spell_callback_drain_summary_like_cpp
     }
 
     pub const fn last_grid_states_update_summary_like_cpp(&self) -> GridStatesUpdateSummaryLikeCpp {
@@ -526,6 +535,12 @@ impl ManagedMap {
 
     fn delayed_update(&mut self, diff_ms: u32) {
         self.delayed_update_calls.push(diff_ms);
+        // C++ `Map::DelayedUpdate` drains `_farSpellCallbacks` before
+        // `RemoveAllObjectsInRemoveList()`, then updates grid states unless BG/arena
+        // (`Map.cpp:2519-2544`). Rust keeps callback ownership inside `Map`; the
+        // manager only orchestrates the live order and records the drain summary.
+        self.last_far_spell_callback_drain_summary_like_cpp =
+            self.map.drain_far_spell_callbacks_like_cpp();
         self.map.remove_all_objects_in_remove_list_like_cpp();
         self.last_grid_states_update_summary_like_cpp = if self.kind.is_battleground_or_arena() {
             GridStatesUpdateSummaryLikeCpp {
@@ -1244,7 +1259,10 @@ mod tests {
 
     use crate::coords::GridCoord;
     use crate::grid::GridStateKind;
-    use crate::map::MapObjectMoveListFamilyLikeCpp;
+    use crate::map::{
+        MapObjectMoveListFamilyLikeCpp, RepresentedFarSpellCallbackActionLikeCpp,
+        RepresentedFarSpellCallbackLikeCpp,
+    };
     use crate::spawn::{SpawnGroupFlags, SpawnGroupTemplateData};
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
@@ -1555,6 +1573,71 @@ mod tests {
                 .map()
                 .map_object_record(dynamic_object_guid)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn map_manager_update_far_spell_callback_queues_remove_before_delayed_remove_drain_like_cpp() {
+        let mut manager = MapManager::new(MIN_GRID_DELAY_MS, 1);
+        manager.create_world_map(1, 0);
+        let dynamic_object_guid = guid(HighGuid::DynamicObject, 487_0101, 1, 0);
+        let mut dynamic_object = DynamicObject::new(true);
+        dynamic_object
+            .world_mut()
+            .object_mut()
+            .create(dynamic_object_guid);
+        dynamic_object.world_mut().set_map(1, 0).unwrap();
+        dynamic_object
+            .world_mut()
+            .relocate(Position::xyz(11.0, 21.0, 31.0));
+        dynamic_object.world_mut().object_mut().add_to_world();
+        dynamic_object.set_duration(10_000);
+
+        {
+            let managed_map = manager.find_map_mut(1, 0).unwrap();
+            managed_map
+                .map_mut()
+                .add_map_object_record_to_map_like_cpp(
+                    MapObjectRecord::new_dynamic_object(dynamic_object).unwrap(),
+                )
+                .unwrap();
+            managed_map.map_mut().add_far_spell_callback_like_cpp(
+                RepresentedFarSpellCallbackLikeCpp {
+                    id: 487,
+                    action: RepresentedFarSpellCallbackActionLikeCpp::QueueObjectRemove {
+                        guid: dynamic_object_guid,
+                    },
+                },
+            );
+            assert_eq!(managed_map.map().far_spell_callbacks_count_like_cpp(), 1);
+            assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+            assert!(
+                managed_map
+                    .map()
+                    .map_object_record(dynamic_object_guid)
+                    .is_some()
+            );
+        }
+
+        assert_eq!(manager.update(1), Some(1));
+
+        let managed_map = manager.find_map(1, 0).unwrap();
+        let far_spell = managed_map.last_far_spell_callback_drain_summary_like_cpp();
+        assert_eq!(far_spell.processed, 1);
+        assert_eq!(far_spell.remove_queued, 1);
+        assert_eq!(far_spell.queued_after, 0);
+        assert_eq!(managed_map.map().objects_to_remove_count_like_cpp(), 0);
+        assert!(
+            managed_map
+                .map()
+                .map_object_record(dynamic_object_guid)
+                .is_none()
+        );
+        assert_eq!(
+            managed_map
+                .last_grid_states_update_summary_like_cpp()
+                .diff_ms,
+            1
         );
     }
 
