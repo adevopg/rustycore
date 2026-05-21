@@ -4492,11 +4492,19 @@ impl WorldSession {
         position: &wow_core::Position,
         visibility_radius: f32,
     ) -> Option<Vec<wow_packet::packets::update::GameObjectCreateData>> {
+        let requested_map_id = u32::from(map_id);
+        let player_map_key = self.current_canonical_player_map_key_like_cpp();
         let manager = self.canonical_map_manager.as_ref()?;
         let Ok(manager) = manager.lock() else {
             return None;
         };
-        let map = manager.find_map(u32::from(map_id), 0)?;
+        let map = match player_map_key {
+            Some(key) if key.map_id == requested_map_id => {
+                manager.find_map(key.map_id, key.instance_id)?
+            }
+            Some(_) => return None,
+            None => manager.find_map(requested_map_id, 0)?,
+        };
         let nearby =
             map.map()
                 .nearby_cell_guids_like_cpp(position.x, position.y, visibility_radius);
@@ -4566,17 +4574,30 @@ impl WorldSession {
         position: &wow_core::Position,
         visibility_radius: f32,
     ) -> Option<Vec<wow_packet::packets::update::DynamicObjectCreateData>> {
+        let requested_map_id = u32::from(map_id);
+        let player_map_key = self.current_canonical_player_map_key_like_cpp();
         let manager = self.canonical_map_manager.as_ref()?;
         let Ok(manager) = manager.lock() else {
             return None;
         };
-        let map = manager.find_map(u32::from(map_id), 0)?;
+        let map = match player_map_key {
+            Some(key) if key.map_id == requested_map_id => {
+                manager.find_map(key.map_id, key.instance_id)?
+            }
+            Some(_) => return None,
+            None => manager.find_map(requested_map_id, 0)?,
+        };
         let nearby =
             map.map()
                 .nearby_cell_guids_like_cpp(position.x, position.y, visibility_radius);
         let mut dynamic_objects = Vec::new();
 
-        for guid in nearby.grid.dynamic_objects {
+        for guid in nearby
+            .world
+            .dynamic_objects
+            .into_iter()
+            .chain(nearby.grid.dynamic_objects)
+        {
             let Some(dynamic_object) = map.map().get_typed_dynamic_object(guid) else {
                 continue;
             };
@@ -14406,11 +14427,10 @@ impl WorldSession {
 
     fn current_canonical_player_map_key_like_cpp(&self) -> Option<wow_map::MapKey> {
         let guid = self.player_guid()?;
-        let map_id = u32::from(self.player_map_id_like_cpp());
         let manager = self.canonical_map_manager.as_ref()?;
         let manager = manager.lock().ok()?;
         let mut key = None;
-        manager.do_for_all_maps_with_map_id(map_id, |managed| {
+        manager.do_for_all_maps(|managed| {
             if key.is_none() && managed.map().get_typed_player(guid).is_some() {
                 key = Some(wow_map::MapKey::new(
                     managed.map_id(),
@@ -17235,21 +17255,110 @@ mod tests {
         entry: u32,
         position: Position,
     ) {
-        let mut gameobject = GameObject::new();
-        gameobject.world_mut().object_mut().create(guid);
-        gameobject.world_mut().object_mut().set_entry(entry);
-        gameobject.world_mut().set_map(571, 0).unwrap();
-        gameobject.world_mut().relocate(position);
-        gameobject.world_mut().object_mut().add_to_world();
+        add_canonical_test_gameobject_on_map(canonical, guid, entry, position, 571, 0);
+    }
+
+    fn add_canonical_test_player_on_map(
+        canonical: &SharedCanonicalMapManager,
+        guid: ObjectGuid,
+        position: Position,
+        map_id: u32,
+        instance_id: u32,
+    ) {
+        let mut player = Player::new(Some(1), false);
+        player.unit_mut().world_mut().object_mut().create(guid);
+        player.unit_mut().world_mut().set_name("InstanceOwner");
+        player
+            .unit_mut()
+            .world_mut()
+            .set_map(map_id, instance_id)
+            .unwrap();
+        player.unit_mut().world_mut().relocate(position);
+        player.unit_mut().world_mut().object_mut().add_to_world();
 
         canonical
             .lock()
             .unwrap()
-            .find_map_mut(571, 0)
-            .unwrap()
+            .create_world_map(map_id, instance_id)
             .map_mut()
+            .insert_map_object_record(wow_entities::MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+    }
+
+    fn add_canonical_test_gameobject_on_map(
+        canonical: &SharedCanonicalMapManager,
+        guid: ObjectGuid,
+        entry: u32,
+        position: Position,
+        map_id: u32,
+        instance_id: u32,
+    ) {
+        let mut gameobject = GameObject::new();
+        gameobject.world_mut().object_mut().create(guid);
+        gameobject.world_mut().object_mut().set_entry(entry);
+        gameobject.world_mut().set_map(map_id, instance_id).unwrap();
+        gameobject.world_mut().relocate(position);
+
+        let mut guard = canonical.lock().unwrap();
+        let map = guard.create_world_map(map_id, instance_id);
+        let _ = map
+            .map_mut()
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, gameobject.world().clone());
+        gameobject.world_mut().object_mut().add_to_world();
+        map.map_mut()
             .insert_map_object_record(
                 wow_entities::MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn test_dynamic_object_guid(entry: u32, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(
+            wow_core::guid::HighGuid::DynamicObject,
+            0,
+            1,
+            571,
+            0,
+            entry,
+            counter,
+        )
+    }
+
+    fn add_canonical_test_dynamic_object_on_map(
+        canonical: &SharedCanonicalMapManager,
+        guid: ObjectGuid,
+        caster: ObjectGuid,
+        spell_id: u32,
+        position: Position,
+        map_id: u32,
+        instance_id: u32,
+    ) {
+        let mut dynamic_object = wow_entities::DynamicObject::new(true);
+        dynamic_object.world_mut().object_mut().create(guid);
+        dynamic_object.world_mut().object_mut().set_entry(spell_id);
+        dynamic_object
+            .world_mut()
+            .set_map(map_id, instance_id)
+            .unwrap();
+        dynamic_object.world_mut().relocate(position);
+        dynamic_object.set_caster_guid(caster);
+        dynamic_object.set_dynamic_object_type(wow_entities::DynamicObjectType::FarsightFocus);
+        dynamic_object.set_spell_visual_id(700);
+        dynamic_object.set_spell_id(spell_id as i32);
+        dynamic_object.set_radius(25.0);
+        dynamic_object.set_cast_time_ms(1500);
+        dynamic_object.set_duration(5000);
+
+        let mut guard = canonical.lock().unwrap();
+        let map = guard.create_world_map(map_id, instance_id);
+        let _ = map.map_mut().add_to_map_like_cpp(
+            AccessorObjectKind::DynamicObject,
+            dynamic_object.world().clone(),
+        );
+        dynamic_object.world_mut().object_mut().add_to_world();
+        map.map_mut()
+            .insert_map_object_record(
+                wow_entities::MapObjectRecord::new_dynamic_object(dynamic_object).unwrap(),
             )
             .unwrap();
     }
@@ -17349,6 +17458,164 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn canonical_visibility_uses_player_instance() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 49_600);
+        let position = Position::new(100.0, 200.0, 30.0, 0.0);
+        let instance_guid = test_gameobject_guid(49_601, 49_601);
+        let default_instance_guid = test_gameobject_guid(49_600, 49_600);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "InstanceOwner".to_string(),
+            position,
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        add_canonical_test_player_on_map(&canonical, player_guid, position, 571, 7);
+        add_canonical_test_gameobject_on_map(
+            &canonical,
+            default_instance_guid,
+            49_600,
+            position,
+            571,
+            0,
+        );
+        add_canonical_test_gameobject_on_map(&canonical, instance_guid, 49_601, position, 571, 7);
+        session.represented_gameobject_use_states.insert(
+            default_instance_guid,
+            RepresentedGameObjectUseState {
+                display_id: Some(7_600),
+                go_type: Some(3),
+                map_id: Some(571),
+                position: Some(position),
+                ..Default::default()
+            },
+        );
+        session.represented_gameobject_use_states.insert(
+            instance_guid,
+            RepresentedGameObjectUseState {
+                display_id: Some(7_601),
+                go_type: Some(3),
+                map_id: Some(571),
+                position: Some(position),
+                ..Default::default()
+            },
+        );
+
+        let visible = session
+            .visible_gameobjects_from_canonical_map_like_cpp(571, &position, 100.0)
+            .expect("typed canonical player should select the player's map instance");
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].guid, instance_guid);
+        assert_eq!(visible[0].entry, 49_601);
+    }
+
+    #[test]
+    fn canonical_visibility_uses_player_instance_cross_map_blocks_instance_zero_fallback() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 49_620);
+        let session_position = Position::new(100.0, 200.0, 30.0, 0.0);
+        let canonical_player_position = Position::new(10.0, 20.0, 30.0, 0.0);
+        let default_instance_guid = test_gameobject_guid(49_620, 49_620);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "CrossMapOwner".to_string(),
+            session_position,
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        add_canonical_test_player_on_map(&canonical, player_guid, canonical_player_position, 1, 7);
+        add_canonical_test_gameobject_on_map(
+            &canonical,
+            default_instance_guid,
+            49_620,
+            session_position,
+            571,
+            0,
+        );
+        session.represented_gameobject_use_states.insert(
+            default_instance_guid,
+            RepresentedGameObjectUseState {
+                display_id: Some(7_620),
+                go_type: Some(3),
+                map_id: Some(571),
+                position: Some(session_position),
+                ..Default::default()
+            },
+        );
+
+        let visible =
+            session.visible_gameobjects_from_canonical_map_like_cpp(571, &session_position, 100.0);
+
+        assert!(
+            visible.is_none(),
+            "typed canonical player on another map must block legacy instance-0 fallback"
+        );
+    }
+
+    #[test]
+    fn dynamic_object_visibility_uses_player_instance() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 49_610);
+        let position = Position::new(100.0, 200.0, 30.0, 0.0);
+        let instance_guid = test_dynamic_object_guid(49_611, 49_611);
+        let default_instance_guid = test_dynamic_object_guid(49_610, 49_610);
+
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "InstanceOwner".to_string(),
+            position,
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        add_canonical_test_player_on_map(&canonical, player_guid, position, 571, 7);
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            default_instance_guid,
+            player_guid,
+            49_610,
+            position,
+            571,
+            0,
+        );
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            instance_guid,
+            player_guid,
+            49_611,
+            position,
+            571,
+            7,
+        );
+
+        let visible = session
+            .visible_dynamic_objects_from_canonical_map_like_cpp(571, &position, 100.0)
+            .expect("typed canonical player should select the player's map instance");
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].guid, instance_guid);
+        assert_eq!(visible[0].entry_id, 49_611);
     }
 
     #[test]
