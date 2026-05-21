@@ -275,6 +275,7 @@ impl WorldSession {
             flags: target_flags,
             unit: target_guid,
             item: wow_core::ObjectGuid::EMPTY,
+            ..SpellTargetData::default()
         };
 
         // ── Initiate cast or execute immediately ─────────────────────────

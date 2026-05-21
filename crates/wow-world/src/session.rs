@@ -15463,6 +15463,7 @@ impl WorldSession {
                 flags: 0x2, // SpellCastTargetFlags::Unit
                 unit: target_guid,
                 item: ObjectGuid::EMPTY,
+                ..SpellTargetData::default()
             },
             hit_targets: vec![target_guid],
         };
