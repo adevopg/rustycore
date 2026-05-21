@@ -9,6 +9,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.474** Creature RemoveFromWorld Unit cleanup/order evidence seam.
+  Status: represented-complete only for local `Creature::RemoveFromWorld()` ordering/evidence in canonical typed Creature remove-from-map; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #474 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:353-368`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Unit/Unit.cpp:9479-9533`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:933-951`.
+  Rust targets: `crates/wow-entities/src/unit.rs`, `crates/wow-entities/src/lib.rs`, `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `Unit::remove_from_world_like_cpp()` preserves the C++ `IsInWorld()` guard, records bounded during-remove/world-object evidence, calls local `VehicleSubsystem::remove_vehicle_kit_like_cpp(true)` at the Unit point, and leaves AI/aura/control/owned-object/follower/totem cleanup explicitly unrepresented. `Map::remove_from_map_like_cpp` snapshots `was_in_world` before the Unit helper, keeps ZoneScript then formation then Unit ordering for exact typed in-world Creatures, derives legacy vehicle evidence from the Unit outcome, and emits no Unit/vehicle evidence for missing, non-Creature, generic kind-only Creature, or not-in-world Creature records. Boundaries: no real AI `OnDespawn`, aura/control/owned-object cleanup, ExitVehicle, totems, ObjectAccessor/session/fanout, packets, DB writes, or full Unit runtime cleanup.
+
 - [x] **#NEXT.R8.ENTITIES.473** Creature AddToWorld/RemoveFromWorld ZoneScript callback evidence seam.
   Status: represented-complete only for map-owned evidence of `Creature::AddToWorld -> GetZoneScript()->OnCreatureCreate(this)` and `Creature::RemoveFromWorld -> GetZoneScript()->OnCreatureRemove(this)` callback positions; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #473 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:333-350`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/Creature/Creature.cpp:353-368`.

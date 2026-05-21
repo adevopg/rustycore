@@ -6,7 +6,7 @@ use wow_core::ObjectGuid;
 
 use crate::{
     CurrentSpellRef, CurrentSpellSlot, ObjectDataUpdate, UnitSubsystems, UpdateMask,
-    VisibleItemValues, WorldObject,
+    VehicleKitRemoveOutcomeLikeCpp, VisibleItemValues, WorldObject,
     update_fields::{TYPEID_UNIT, UNIT_DATA_BITS},
 };
 
@@ -130,6 +130,18 @@ pub struct UnitValuesUpdate {
     pub changed_object_type_mask: u32,
     pub object_data: Option<ObjectDataUpdate>,
     pub unit_data: Option<UnitDataUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitRemoveFromWorldOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub was_in_world: bool,
+    pub during_remove_entered: bool,
+    pub ai_on_despawn_represented: bool,
+    pub vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
+    pub leave_world_cleanup_represented: bool,
+    pub world_object_removed: bool,
+    pub during_remove_cleared: bool,
 }
 
 impl UnitValuesUpdate {
@@ -330,6 +342,40 @@ impl Unit {
 
     pub fn world_mut(&mut self) -> &mut WorldObject {
         &mut self.world
+    }
+
+    /// Bounded represented seam for C++ `Unit::RemoveFromWorld()`
+    /// (`Unit.cpp:9479-9533`). This preserves the `IsInWorld()` guard and the
+    /// local ordering around `RemoveVehicleKit(true)` and
+    /// `WorldObject::RemoveFromWorld()` without overclaiming AI, aura,
+    /// control, owned-object, follower, totem, ObjectAccessor, packet, or DB
+    /// cleanup runtime.
+    pub fn remove_from_world_like_cpp(&mut self) -> Option<UnitRemoveFromWorldOutcomeLikeCpp> {
+        let guid = self.world().object().guid();
+        if !self.world().object().is_in_world() {
+            return None;
+        }
+
+        let vehicle_remove = {
+            let remove = self
+                .subsystems_mut()
+                .vehicle
+                .remove_vehicle_kit_like_cpp(true);
+            remove.had_kit.then_some(remove)
+        };
+
+        self.world_mut().object_mut().remove_from_world();
+
+        Some(UnitRemoveFromWorldOutcomeLikeCpp {
+            guid,
+            was_in_world: true,
+            during_remove_entered: true,
+            ai_on_despawn_represented: false,
+            vehicle_remove,
+            leave_world_cleanup_represented: false,
+            world_object_removed: !self.world().object().is_in_world(),
+            during_remove_cleared: true,
+        })
     }
 
     pub fn add_player_to_vision_like_cpp(

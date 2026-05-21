@@ -44,9 +44,10 @@ use wow_entities::{
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
     ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
-    TransportUpdateLikeCpp, Unit, UnitSharedVisionSetWorldObjectRequestLikeCpp,
-    VehicleKitAddToWorldResetOutcomeLikeCpp, VehicleKitInstallOutcomeLikeCpp,
-    VehicleKitRemoveOutcomeLikeCpp, WorldObject, WorldObjectEnvironment, WorldObjectHeightQuery,
+    TransportUpdateLikeCpp, Unit, UnitRemoveFromWorldOutcomeLikeCpp,
+    UnitSharedVisionSetWorldObjectRequestLikeCpp, VehicleKitAddToWorldResetOutcomeLikeCpp,
+    VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, WorldObject,
+    WorldObjectEnvironment, WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
@@ -7659,6 +7660,9 @@ where
             self.contains_gameobject_model_like_cpp(key)
                 .then(|| self.remove_gameobject_model_like_cpp(key))
         });
+        let remove_from_map_was_in_world = self
+            .map_object_record(guid)
+            .is_some_and(|record| record.object().object().is_in_world());
         let creature_zone_script_remove = self
             .map_object_record(guid)
             .filter(|record| record.kind() == AccessorObjectKind::Creature)
@@ -7669,23 +7673,15 @@ where
                 represented_callback: true,
                 script_dispatch_represented: false,
             });
-        let creature_vehicle_remove = self
+        let creature_remove_formation = self.remove_creature_from_formation_like_cpp(guid);
+        let creature_unit_remove_from_world = self
             .map_objects
             .get_mut(&guid)
             .and_then(MapObjectRecord::creature_mut)
-            .and_then(|creature| {
-                if !creature.unit().world().object().is_in_world() {
-                    return None;
-                }
-
-                let remove = creature
-                    .unit_mut()
-                    .subsystems_mut()
-                    .vehicle
-                    .remove_vehicle_kit_like_cpp(true);
-                remove.had_kit.then_some(remove)
-            });
-        let creature_remove_formation = self.remove_creature_from_formation_like_cpp(guid);
+            .and_then(|creature| creature.unit_mut().remove_from_world_like_cpp());
+        let creature_vehicle_remove = creature_unit_remove_from_world
+            .as_ref()
+            .and_then(|outcome| outcome.vehicle_remove);
         let record = self
             .remove_map_object(guid)
             .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
@@ -7696,7 +7692,7 @@ where
         let kind = record.kind();
         let was_world_object_like_cpp = map_record_is_world_object_like_cpp(&record);
         let mut object = record.into_object();
-        let was_in_world = object.object().is_in_world();
+        let was_in_world = remove_from_map_was_in_world;
         let was_active = is_active_object_like_cpp(kind, &object);
         let cell = Cell::from_world(object.position().x, object.position().y);
         let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
@@ -7743,6 +7739,7 @@ where
             gameobject_model_remove,
             creature_zone_script_remove,
             creature_vehicle_remove,
+            creature_unit_remove_from_world,
             creature_remove_formation,
             object: if delete_from_world {
                 None
@@ -9614,6 +9611,7 @@ pub struct RemoveFromMapOutcome {
     pub gameobject_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub creature_zone_script_remove: Option<CreatureZoneScriptRemoveOutcomeLikeCpp>,
     pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
+    pub creature_unit_remove_from_world: Option<UnitRemoveFromWorldOutcomeLikeCpp>,
     pub creature_remove_formation: Option<CreatureRemoveFormationOutcomeLikeCpp>,
     pub object: Option<WorldObject>,
 }
@@ -16870,7 +16868,8 @@ mod tests {
     }
 
     #[test]
-    fn creature_zone_script_remove_from_map_remove_evidence_precedes_formation_cleanup_like_cpp() {
+    fn creature_zone_script_remove_from_map_remove_evidence_precedes_formation_then_unit_vehicle_like_cpp()
+     {
         let mut map = test_map();
         let mut creature = test_creature_for_spawn(493, 49301, true);
         creature
@@ -16879,6 +16878,11 @@ mod tests {
             .object_mut()
             .remove_from_world();
         creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900493)));
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9493, true);
         let guid = creature.guid();
 
         map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
@@ -16897,6 +16901,17 @@ mod tests {
         assert!(formation.removed_member);
         assert!(formation.removed_group);
         assert_eq!(map.creature_group_holder_member_count_like_cpp(900493), 0);
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.guid, guid);
+        assert!(unit_remove.was_in_world);
+        assert!(unit_remove.during_remove_entered);
+        assert!(!unit_remove.ai_on_despawn_represented);
+        assert!(!unit_remove.leave_world_cleanup_represented);
+        assert!(unit_remove.world_object_removed);
+        assert!(unit_remove.during_remove_cleared);
+        let unit_vehicle_remove = unit_remove.vehicle_remove.unwrap();
+        assert_eq!(unit_vehicle_remove.kit_id, Some(9493));
+        assert_eq!(removed.creature_vehicle_remove, Some(unit_vehicle_remove));
     }
 
     #[test]
@@ -16930,7 +16945,11 @@ mod tests {
         let removed = map
             .remove_from_map_like_cpp(not_in_world_guid, true)
             .unwrap();
+        assert!(!removed.was_in_world);
         assert!(removed.creature_zone_script_remove.is_none());
+        assert!(removed.creature_remove_formation.is_none());
+        assert!(removed.creature_unit_remove_from_world.is_none());
+        assert!(removed.creature_vehicle_remove.is_none());
 
         let mut gameobject = test_gameobject_for_spawn(495, 49501);
         gameobject.world_mut().object_mut().remove_from_world();
@@ -17317,7 +17336,8 @@ mod tests {
     }
 
     #[test]
-    fn creature_vehicle_remove_from_map_uninstalls_local_vehicle_kit_like_cpp() {
+    fn creature_vehicle_remove_from_map_unit_remove_from_world_uninstalls_local_vehicle_kit_like_cpp()
+     {
         let mut map = test_map();
         let mut creature = test_creature_for_spawn(46701, 4670101, true);
         creature
@@ -17338,7 +17358,13 @@ mod tests {
 
         let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
 
+        assert!(removed.was_in_world);
         let remove = removed.creature_vehicle_remove.unwrap();
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.guid, guid);
+        assert!(unit_remove.was_in_world);
+        assert_eq!(unit_remove.vehicle_remove, Some(remove));
+        assert!(unit_remove.world_object_removed);
         assert_eq!(remove.kit_id, Some(9101));
         assert!(remove.had_kit);
         assert_eq!(remove.previous_installed, Some(true));
@@ -17372,6 +17398,9 @@ mod tests {
         let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
 
         let remove = removed.creature_vehicle_remove.unwrap();
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.vehicle_remove, Some(remove));
+        assert!(unit_remove.world_object_removed);
         assert_eq!(remove.kit_id, Some(9102));
         assert!(remove.kit_cleared);
         assert!(removed.object.is_none());
@@ -17407,6 +17436,7 @@ mod tests {
 
         let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
 
+        assert!(removed.creature_unit_remove_from_world.is_none());
         assert!(removed.creature_vehicle_remove.is_none());
         assert!(removed.object.is_some());
     }
@@ -17424,6 +17454,7 @@ mod tests {
 
         let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
 
+        assert!(removed.creature_unit_remove_from_world.is_none());
         assert!(removed.creature_vehicle_remove.is_none());
     }
 
