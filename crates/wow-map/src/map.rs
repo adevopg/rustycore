@@ -44,7 +44,7 @@ use wow_entities::{
     GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
     LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
     ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
-    TransportUpdateLikeCpp, Unit, UnitRemoveFromWorldOutcomeLikeCpp,
+    TransportUpdateLikeCpp, Unit, UnitAddToWorldOutcomeLikeCpp, UnitRemoveFromWorldOutcomeLikeCpp,
     UnitSharedVisionSetWorldObjectRequestLikeCpp, VehicleKitAddToWorldResetOutcomeLikeCpp,
     VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, WorldObject,
     WorldObjectEnvironment, WorldObjectHeightQuery,
@@ -7445,6 +7445,7 @@ where
                 inserted_into_cell: false,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                creature_unit_add_to_world: None,
                 creature_search_formation: None,
                 creature_vehicle_reset: None,
                 creature_vehicle_install: None,
@@ -7486,15 +7487,22 @@ where
             insert_object_guid_in_cell_like_cpp(local_cell, kind, is_world_object, guid);
         }
 
-        {
-            let object = record.object_mut();
-            object.set_current_cell(cell.cell_x(), cell.cell_y());
-            object.object_mut().add_to_world();
-            object.object_mut().set_is_new_object(true);
+        let creature_unit_add_to_world = {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let creature_unit_add_to_world = if let Some(creature) = record.creature_mut() {
+                Some(creature.unit_mut().add_to_world_like_cpp())
+            } else {
+                record.object_mut().object_mut().add_to_world();
+                None
+            };
+            record.object_mut().object_mut().set_is_new_object(true);
             // Rust does not emit visibility here yet; keep the flag lifecycle identical to
             // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
-            object.object_mut().set_is_new_object(false);
-        }
+            record.object_mut().object_mut().set_is_new_object(false);
+            creature_unit_add_to_world
+        };
 
         let creature_search_formation = if kind == AccessorObjectKind::Creature {
             record.creature().map(Creature::search_formation_like_cpp)
@@ -7597,6 +7605,7 @@ where
             inserted_into_cell: true,
             gameobject_model_insert,
             gameobject_collision_enable,
+            creature_unit_add_to_world,
             creature_search_formation,
             creature_vehicle_reset,
             creature_vehicle_install,
@@ -9579,6 +9588,7 @@ pub struct AddToMapOutcome {
     pub inserted_into_cell: bool,
     pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub creature_unit_add_to_world: Option<UnitAddToWorldOutcomeLikeCpp>,
     pub creature_search_formation: Option<CreatureSearchFormationOutcomeLikeCpp>,
     pub creature_vehicle_reset: Option<VehicleKitAddToWorldResetOutcomeLikeCpp>,
     pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
@@ -10707,9 +10717,10 @@ mod tests {
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AccessorObjectRef, Creature, CreatureAddToWorldVehicleResetContextLikeCpp,
+        AccessorObjectRef, AppliedAuraRef, Creature, CreatureAddToWorldVehicleResetContextLikeCpp,
         CreatureFormationInfoLikeCpp, GameObject, GameObjectLootSource, GameObjectOwnedLoot,
-        GooberUseSource, ObjectAccessor, ObjectNotifyFlags, Player, Transport, VehicleAccessory,
+        GooberUseSource, ObjectAccessor, ObjectNotifyFlags, Player,
+        SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP, Transport, VehicleAccessory,
         VehicleSeatAddon, VehicleSeatInfo, VehicleSpellImmunity, VehicleSpellImmunityKind,
     };
 
@@ -16795,6 +16806,78 @@ mod tests {
         assert!(removed.creature_remove_formation.is_none());
         assert!(map.creature_group_holder_contains_like_cpp(900480, creature_guid));
         assert_eq!(map.creature_group_holder_member_count_like_cpp(900480), 1);
+    }
+
+    #[test]
+    fn creature_add_to_world_unit_seam_only_for_exact_typed_creature_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(475, 47501, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let caster = ObjectGuid::new(0, 47599);
+        let enter_world_aura = AppliedAuraRef::new(47_510, caster, 1, 0x1);
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .auras
+            .register_applied_aura(
+                enter_world_aura,
+                None,
+                SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP,
+                0,
+            );
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let unit_add = outcome.creature_unit_add_to_world.unwrap();
+        assert_eq!(unit_add.guid, guid);
+        assert!(unit_add.world_object_added);
+        assert!(unit_add.is_in_world_after);
+        assert_eq!(unit_add.removed_enter_world_auras, vec![enter_world_aura]);
+        assert!(
+            unit_add
+                .motion_master_add_to_world
+                .had_initialization_pending
+        );
+        assert!(
+            unit_add
+                .motion_master_add_to_world
+                .direct_initialize_represented
+        );
+        assert!(outcome.creature_zone_script_create.is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some_and(|creature| !creature
+                    .unit()
+                    .subsystems()
+                    .auras
+                    .has_applied(enter_world_aura))
+        );
+
+        let generic_creature = world_object_with_counter(HighGuid::Creature, 47502, 571, 7, false);
+        let generic = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new(AccessorObjectKind::Creature, generic_creature).unwrap(),
+            )
+            .unwrap();
+        assert!(generic.creature_unit_add_to_world.is_none());
+        assert!(generic.creature_search_formation.is_none());
+        assert!(generic.creature_zone_script_create.is_none());
+
+        let gameobject = test_gameobject_for_spawn(47503, 47504);
+        let non_creature = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        assert!(non_creature.creature_unit_add_to_world.is_none());
     }
 
     #[test]

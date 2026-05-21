@@ -2468,6 +2468,25 @@ pub enum MotionMasterUpdateOutcome {
     },
 }
 
+/// Represented local evidence for C++ `MotionMaster::AddToWorld()`
+/// (`MotionMaster.cpp:120-132`).
+///
+/// This preserves the C++ initialization-pending guard and flag transitions,
+/// calls the existing represented `DirectInitialize`/delayed-action helpers,
+/// and does not claim real movement-generator runtime, pathing, packets, or
+/// owner/fanout behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MotionMasterAddToWorldOutcomeLikeCpp {
+    pub had_initialization_pending: bool,
+    pub entered_initializing: bool,
+    pub direct_initialize_represented: bool,
+    pub resolved_delayed_actions: Vec<MotionMasterResolvedDelayedAction>,
+    pub exited_initializing: bool,
+    pub flags_before: u8,
+    pub flags_after: u8,
+    pub current_generator_after: MovementGeneratorKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MotionSubsystem {
     pub default_generator: MovementGeneratorRef,
@@ -2690,8 +2709,46 @@ impl MotionSubsystem {
     }
 
     pub fn add_to_world(&mut self) {
+        let _ = self.add_to_world_like_cpp();
+    }
+
+    pub fn add_to_world_like_cpp(&mut self) -> MotionMasterAddToWorldOutcomeLikeCpp {
+        let flags_before = self.flags;
+        let had_initialization_pending =
+            self.has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING);
+
+        if !had_initialization_pending {
+            return MotionMasterAddToWorldOutcomeLikeCpp {
+                had_initialization_pending,
+                entered_initializing: false,
+                direct_initialize_represented: false,
+                resolved_delayed_actions: Vec::new(),
+                exited_initializing: false,
+                flags_before,
+                flags_after: self.flags,
+                current_generator_after: self.current_generator,
+            };
+        }
+
+        self.flags |= MOTIONMASTER_FLAG_INITIALIZING;
         self.flags &= !MOTIONMASTER_FLAG_INITIALIZATION_PENDING;
+
+        self.direct_initialize_like_cpp();
+        let resolved_delayed_actions = self.resolve_delayed_action_payloads_like_cpp();
+
+        self.flags &= !MOTIONMASTER_FLAG_INITIALIZING;
         self.current_generator = self.current_movement_generator().kind;
+
+        MotionMasterAddToWorldOutcomeLikeCpp {
+            had_initialization_pending,
+            entered_initializing: (flags_before & MOTIONMASTER_FLAG_INITIALIZING) == 0,
+            direct_initialize_represented: true,
+            resolved_delayed_actions,
+            exited_initializing: !self.has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZING),
+            flags_before,
+            flags_after: self.flags,
+            current_generator_after: self.current_generator,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
