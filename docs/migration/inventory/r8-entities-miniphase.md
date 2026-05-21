@@ -5,6 +5,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.507** GameObject `SendGameObjectDespawn` represented session consumption.
+-  Status: represented-complete only for session-side consumption of map-owned GameObject visual-despawn GUID evidence; review `APROBADO`; CI `CI_OK`; no full `SendMessageToSet`, exact cell traversal, ObjectAccessor/global fanout, scripts/AI/DB/PoolMgr, respawn/despawn runtime, or manual-test-ready GameObject runtime claim.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1639-1648`; `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1766-1771`.
+  Rust targets: `crates/wow-map/src/map.rs`, `crates/wow-world/src/session.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: `GameObjectsUpdateSummaryLikeCpp` preserves the existing visual-despawn count and carries explicit non-truncating `generic_visual_despawn_guids`; logged-in `WorldSession::process_pending()` consumes only the canonical Player map/instance summary and sends represented `GameObjectDespawn` only when the typed canonical Player/typed in-world GameObject are in the same map instance, the Player is within `Map::visibility_range()`, and the GUID is already in `client_visible_guids_like_cpp`. Unlike `DestroyForNearbyPlayers`, this slice preserves session-local visibility state after visual despawn and dedupes repeated consumption for the same map update generation.
+
 - [x] **#NEXT.R8.ENTITIES.506** GameObject `DestroyForNearbyPlayers` represented session range/in-world gate.
 -  Status: represented-complete only for the session-side range and in-world gate while consuming map-owned GameObject `UpdateObjectVisibilityOnDestroy` GUID evidence; review `APROBADO`; CI `CI_OK`; no full `DestroyForNearbyPlayers`, exact cell traversal, ObjectAccessor/global fanout, UNIT charmer handling, scripts/AI/DB/PoolMgr, or manual-test-ready GameObject runtime claim.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:3617-3641`; `/home/server/woltk-trinity-legacy/src/server/game/Grids/Notifiers/GridNotifiers.h:1519-1533`; `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:1575-1679`.

@@ -875,6 +875,25 @@ impl GameObjectVisibilityOnDestroyGuidsLikeCpp {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GameObjectVisualDespawnGuidsLikeCpp {
+    guids: Vec<ObjectGuid>,
+}
+
+impl GameObjectVisualDespawnGuidsLikeCpp {
+    pub fn push(&mut self, guid: ObjectGuid) {
+        self.guids.push(guid);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ObjectGuid> {
+        self.guids.iter()
+    }
+
+    pub fn as_slice(&self) -> &[ObjectGuid] {
+        self.guids.as_slice()
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GameObjectsUpdateSummaryLikeCpp {
     pub visited: usize,
     pub updated: usize,
@@ -904,6 +923,7 @@ pub struct GameObjectsUpdateSummaryLikeCpp {
     pub new_flag_drop_owner_not_new_flag: usize,
     pub generic_not_ready: usize,
     pub generic_visual_despawn_represented: usize,
+    pub generic_visual_despawn_guids: GameObjectVisualDespawnGuidsLikeCpp,
     pub generic_flags_restored_represented: usize,
     pub generic_zero_respawn_delay_returns: usize,
     pub generic_despawn_at_action_source_missing: usize,
@@ -5607,6 +5627,9 @@ where
             }
             if outcome.generic_visual_despawn_represented {
                 summary.generic_visual_despawn_represented += 1;
+                summary
+                    .generic_visual_despawn_guids
+                    .push(outcome.game_object_guid);
             }
             if outcome.generic_flags_restored_represented {
                 summary.generic_flags_restored_represented += 1;
@@ -24916,6 +24939,7 @@ mod tests {
         gameobject.set_flags(0x88);
         gameobject.set_respawn_delay_time(0);
         gameobject.set_loot_state(LootState::JustDeactivated, None);
+        let gameobject_guid = gameobject.world().guid();
 
         map.add_map_object_record_to_map_like_cpp(
             MapObjectRecord::new_game_object(gameobject).unwrap(),
@@ -24926,9 +24950,42 @@ mod tests {
 
         assert_eq!(summary.generic_not_ready, 1);
         assert_eq!(summary.generic_visual_despawn_represented, 1);
+        assert_eq!(
+            summary.generic_visual_despawn_guids.as_slice(),
+            &[gameobject_guid]
+        );
         assert_eq!(summary.generic_flags_restored_represented, 1);
         assert_eq!(summary.generic_zero_respawn_delay_returns, 1);
         assert_eq!(summary.despawn_remove_queued, 0);
+    }
+
+    #[test]
+    fn gameobject_visual_despawn_summary_guids_are_not_truncated_like_cpp() {
+        let mut map = test_map();
+        let mut expected_guids = Vec::new();
+        for index in 0..300 {
+            let mut gameobject = game_object_with_counter(4630601 + index, 571, 7, false);
+            gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+            gameobject.set_go_anim_progress_like_cpp(1);
+            gameobject.set_represented_baseline_flags_like_cpp(Some(0x08));
+            gameobject.set_flags(0x88);
+            gameobject.set_respawn_delay_time(0);
+            gameobject.set_loot_state(LootState::JustDeactivated, None);
+            expected_guids.push(gameobject.world().guid());
+            map.add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.generic_visual_despawn_represented, 300);
+        assert_eq!(summary.generic_visual_despawn_guids.as_slice().len(), 300);
+        let mut actual_guids = summary.generic_visual_despawn_guids.as_slice().to_vec();
+        actual_guids.sort_by_key(|guid| guid.counter());
+        expected_guids.sort_by_key(|guid| guid.counter());
+        assert_eq!(actual_guids, expected_guids);
     }
 
     #[test]
