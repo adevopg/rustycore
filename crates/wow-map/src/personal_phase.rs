@@ -8,6 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use wow_core::ObjectGuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp {
+    pub phase_owner: ObjectGuid,
+    pub object: ObjectGuid,
+    pub attempted: bool,
+    pub tracker_found: bool,
+    pub removed: bool,
+    pub removed_owner_tracker: bool,
+}
+
 use crate::grid::NGrid;
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoadCounts, ObjectGridLoader};
 
@@ -87,11 +97,13 @@ impl PlayerPersonalPhasesTracker {
             .insert(object);
     }
 
-    pub fn unregister_tracked_object(&mut self, object: ObjectGuid) {
+    pub fn unregister_tracked_object(&mut self, object: ObjectGuid) -> bool {
+        let mut removed = false;
         for spawns in self.spawns.values_mut() {
-            spawns.objects.remove(&object);
+            removed |= spawns.objects.remove(&object);
         }
         self.spawns.retain(|_, spawns| !spawns.is_empty());
+        removed
     }
 
     pub fn on_owner_phases_changed(&mut self, phase_shift: &PhaseShift) {
@@ -235,10 +247,47 @@ impl MultiPersonalPhaseTracker {
     }
 
     pub fn unregister_tracked_object(&mut self, phase_owner: ObjectGuid, object: ObjectGuid) {
+        let _ = self.unregister_tracked_object_for_phase_owner_like_cpp(phase_owner, object);
+    }
+
+    /// Mirrors C++ `MultiPersonalPhaseTracker::UnregisterTrackedObject(object)`
+    /// ownership shape after the caller resolves
+    /// `object->GetPhaseShift().GetPersonalGuid()`. Only that owner tracker is
+    /// inspected; empty owners and absent trackers are no-op evidence.
+    pub fn unregister_tracked_object_for_phase_owner_like_cpp(
+        &mut self,
+        phase_owner: ObjectGuid,
+        object: ObjectGuid,
+    ) -> PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp {
+        if phase_owner == ObjectGuid::EMPTY {
+            return PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp {
+                phase_owner,
+                object,
+                attempted: false,
+                tracker_found: false,
+                removed: false,
+                removed_owner_tracker: false,
+            };
+        }
+
+        let mut tracker_found = false;
+        let mut removed = false;
+        let mut removed_owner_tracker = false;
         if let Some(tracker) = self.player_data.get_mut(&phase_owner) {
-            tracker.unregister_tracked_object(object);
+            tracker_found = true;
+            removed = tracker.unregister_tracked_object(object);
+            removed_owner_tracker = tracker.is_empty();
         }
         self.player_data.retain(|_, tracker| !tracker.is_empty());
+
+        PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp {
+            phase_owner,
+            object,
+            attempted: true,
+            tracker_found,
+            removed,
+            removed_owner_tracker,
+        }
     }
 
     pub fn on_owner_phase_changed<Filter>(
@@ -402,5 +451,50 @@ mod tests {
         player.mark_all_phases_for_deletion();
         assert!(player.update(59_999).is_empty());
         assert_eq!(player.update(1), vec![object]);
+    }
+
+    #[test]
+    fn unregister_tracked_object_for_phase_owner_like_cpp_removes_only_resolved_owner() {
+        let owner = owner_guid();
+        let other_owner = ObjectGuid::create_player(1, 101);
+        let object = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 1, 42, 100);
+        let mut tracker = MultiPersonalPhaseTracker::default();
+        tracker.register_tracked_object(9, owner, object);
+        tracker.register_tracked_object(9, other_owner, object);
+
+        let outcome = tracker.unregister_tracked_object_for_phase_owner_like_cpp(owner, object);
+
+        assert_eq!(
+            outcome,
+            PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp {
+                phase_owner: owner,
+                object,
+                attempted: true,
+                tracker_found: true,
+                removed: true,
+                removed_owner_tracker: true,
+            }
+        );
+        assert_eq!(tracker.tracker_count(), 1);
+    }
+
+    #[test]
+    fn unregister_tracked_object_for_phase_owner_like_cpp_empty_or_absent_owner_noops() {
+        let object = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 1, 42, 100);
+        let mut tracker = MultiPersonalPhaseTracker::default();
+
+        let empty =
+            tracker.unregister_tracked_object_for_phase_owner_like_cpp(ObjectGuid::EMPTY, object);
+        assert!(!empty.attempted);
+        assert!(!empty.tracker_found);
+        assert!(!empty.removed);
+
+        let missing_owner = ObjectGuid::create_player(1, 102);
+        let missing =
+            tracker.unregister_tracked_object_for_phase_owner_like_cpp(missing_owner, object);
+        assert!(missing.attempted);
+        assert!(!missing.tracker_found);
+        assert!(!missing.removed);
+        assert_eq!(tracker.tracker_count(), 0);
     }
 }

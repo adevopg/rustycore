@@ -9,6 +9,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.484** Map::RemoveFromMap generic tail personal-phase unregister + visibility-on-destroy evidence seam.
+  Status: represented-complete bounded slice; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #484 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:933-951`, `/home/server/woltk-trinity-legacy/src/server/game/Phasing/PersonalPhaseTracker.cpp:35-39,171-175`.
+  Rust targets: `crates/wow-map/src/personal_phase.rs`, `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: represented-complete only for the generic `Map::RemoveFromMap<T>` tail after per-type RemoveFromWorld helpers. `Map::remove_from_map_like_cpp` now records the C++ `inWorld` boolean separately from raw `was_in_world`, unregisters the removed object from map-owned `MultiPersonalPhaseTracker` by the object's own `PhaseShift::personal_guid`, and records represented `UpdateObjectVisibilityOnDestroy` evidence only when that C++ `inWorld` boolean is false. Empty personal owner, missing owner tracker, missing object-in-tracker, unsupported non-Unit/GameObject type paths, and not-in-world eligible records are explicit no-panic outcomes. Boundaries: no real visibility/fanout packets, ObjectAccessor/session runtime, full personal-phase visibility runtime, exact active-list runtime, DeleteFromWorld, DB, scripts/AI, or full object removal parity. Checks: `cargo fmt --check`; `cargo test -p wow-map remove_from_map --lib -- --nocapture` (26 passed); `PROTOC=/home/cdmonio/.local/protoc/bin/protoc cargo check -p world-server`; `git diff --check`; TSV 9-column check.
+
 - [x] **#NEXT.R8.ENTITIES.483** GameObject::RemoveFromWorld linked-trap ordering/evidence correction.
   Status: represented-complete bounded slice; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #483 HEAD`; no push/install/restart.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:926-948`, `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:933-951`.

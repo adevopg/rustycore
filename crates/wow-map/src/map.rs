@@ -19,7 +19,9 @@ use crate::grid_unload::{
     apply_grid_unload_actions,
 };
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
-use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
+use crate::personal_phase::{
+    MultiPersonalPhaseTracker, PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp, PhaseShift,
+};
 use crate::pool::{
     PoolInitForMapPlanLikeCpp, PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolMgrPlanErrorLikeCpp,
     PoolObjectLikeCpp, PoolSpawnObjectActionLikeCpp, PoolSpawnObjectPlanLikeCpp,
@@ -8192,11 +8194,26 @@ where
             let was_world_object_like_cpp = map_record_is_world_object_like_cpp(&record);
             let mut object = record.into_object();
             let was_in_world = remove_from_map_was_in_world;
+            let cxx_in_world =
+                was_in_world && remove_from_map_in_world_eligible_type_like_cpp(kind);
+            let personal_phase_owner = object.phase_shift().personal_guid_like_cpp();
             let was_active = is_active_object_like_cpp(kind, &object);
             let cell = Cell::from_world(object.position().x, object.position().y);
             let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
 
             object.object_mut().remove_from_world();
+            if was_active {
+                self.unmark_active_cell(cell.cell_coord());
+            }
+            let personal_phase_unregister = self
+                .personal_phase_tracker
+                .unregister_tracked_object_for_phase_owner_like_cpp(personal_phase_owner, guid);
+            let visibility_on_destroy = RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp {
+                guid,
+                cxx_in_world,
+                update_object_visibility_on_destroy_represented: !cxx_in_world,
+                update_object_visibility_on_destroy_runtime_gap: !cxx_in_world,
+            };
             let removed_from_cell = remove_object_guid_from_cell_like_cpp(
                 self,
                 grid,
@@ -8205,9 +8222,6 @@ where
                 was_world_object_like_cpp,
                 guid,
             );
-            if was_active {
-                self.unmark_active_cell(cell.cell_coord());
-            }
 
             object.clear_current_cell();
             object.reset_map().map_err(RemoveFromMapError::ResetMap)?;
@@ -8217,6 +8231,7 @@ where
                 cell: cell.cell_coord(),
                 grid,
                 was_in_world,
+                cxx_in_world,
                 was_active,
                 removed_from_cell,
                 delete_from_world,
@@ -8230,6 +8245,8 @@ where
                 creature_vehicle_remove,
                 creature_unit_remove_from_world,
                 creature_remove_formation,
+                personal_phase_unregister,
+                visibility_on_destroy,
                 object: if delete_from_world {
                     None
                 } else {
@@ -10157,12 +10174,21 @@ impl From<MapObjectStoreError> for AddToMapError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub cxx_in_world: bool,
+    pub update_object_visibility_on_destroy_represented: bool,
+    pub update_object_visibility_on_destroy_runtime_gap: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoveFromMapOutcome {
     pub guid: ObjectGuid,
     pub cell: CellCoord,
     pub grid: GridCoord,
     pub was_in_world: bool,
+    pub cxx_in_world: bool,
     pub was_active: bool,
     pub removed_from_cell: bool,
     pub delete_from_world: bool,
@@ -10176,6 +10202,8 @@ pub struct RemoveFromMapOutcome {
     pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
     pub creature_unit_remove_from_world: Option<UnitRemoveFromWorldOutcomeLikeCpp>,
     pub creature_remove_formation: Option<CreatureRemoveFormationOutcomeLikeCpp>,
+    pub personal_phase_unregister: PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp,
+    pub visibility_on_destroy: RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp,
     pub object: Option<WorldObject>,
 }
 
@@ -10702,6 +10730,17 @@ pub struct MapObjectMoveListPlan {
 
 fn is_active_object_like_cpp(kind: AccessorObjectKind, object: &WorldObject) -> bool {
     kind == AccessorObjectKind::Player || object.is_active()
+}
+
+fn remove_from_map_in_world_eligible_type_like_cpp(kind: AccessorObjectKind) -> bool {
+    matches!(
+        kind,
+        AccessorObjectKind::Player
+            | AccessorObjectKind::Creature
+            | AccessorObjectKind::Pet
+            | AccessorObjectKind::GameObject
+            | AccessorObjectKind::Transport
+    )
 }
 
 fn move_list_family_accepts_kind_like_cpp(
@@ -13720,6 +13759,47 @@ mod tests {
         gameobject.world_mut().object_mut().add_to_world();
         gameobject.set_spawn_id(spawn_id);
         gameobject
+    }
+
+    fn test_transport(counter: i64, in_world: bool) -> wow_entities::Transport {
+        let mut transport = wow_entities::Transport::new();
+        transport
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Transport, counter));
+        transport.world_mut().set_map(571, 7).unwrap();
+        transport.world_mut().relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            transport.world_mut().object_mut().add_to_world();
+        }
+        transport
+    }
+
+    fn test_pet(counter: i64, in_world: bool) -> wow_entities::Pet {
+        let owner = ObjectGuid::create_player(1, 484_000);
+        let mut pet = wow_entities::Pet::new(owner, wow_entities::PetType::Hunter);
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Pet, counter));
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .set_map(571, 7)
+            .unwrap();
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            pet.creature_mut()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .add_to_world();
+        }
+        pet
     }
 
     fn test_area_trigger_for_spawn(spawn_id: SpawnId, counter: i64) -> AreaTrigger {
@@ -18892,6 +18972,7 @@ mod tests {
         assert_eq!(removed.guid, guid);
         assert_eq!(removed.cell, added.cell);
         assert!(removed.was_in_world);
+        assert!(removed.cxx_in_world);
         assert!(!removed.was_active);
         assert!(removed.removed_from_cell);
         assert!(!removed.delete_from_world);
@@ -18911,6 +18992,221 @@ mod tests {
         assert!(!object.object().is_in_grid());
         assert!(!object.has_current_map());
         assert_eq!(object.current_cell(), None);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_unregisters_personal_phase_tracker_from_object_owner_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 48401);
+        let mut gameobject = test_gameobject_for_spawn(48401, 4840101);
+        gameobject
+            .world_mut()
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(owner);
+        let guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        map.register_personal_phase_object_for_test(84, owner, guid);
+        assert_eq!(map.personal_phase_tracker().tracker_count(), 1);
+
+        let outcome = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert_eq!(outcome.personal_phase_unregister.phase_owner, owner);
+        assert!(outcome.personal_phase_unregister.attempted);
+        assert!(outcome.personal_phase_unregister.tracker_found);
+        assert!(outcome.personal_phase_unregister.removed);
+        assert!(outcome.personal_phase_unregister.removed_owner_tracker);
+        assert_eq!(map.personal_phase_tracker().tracker_count(), 0);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_personal_phase_empty_or_missing_owner_noops_like_cpp() {
+        let mut empty_owner_map = test_map();
+        let empty_owner_gameobject = test_gameobject_for_spawn(48402, 4840201);
+        let empty_owner_guid = empty_owner_gameobject.world().guid();
+        empty_owner_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(empty_owner_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let empty_owner = empty_owner_map
+            .remove_from_map_like_cpp(empty_owner_guid, false)
+            .unwrap();
+        assert_eq!(
+            empty_owner.personal_phase_unregister.phase_owner,
+            ObjectGuid::EMPTY
+        );
+        assert!(!empty_owner.personal_phase_unregister.attempted);
+        assert!(!empty_owner.personal_phase_unregister.tracker_found);
+        assert!(!empty_owner.personal_phase_unregister.removed);
+
+        let mut missing_tracker_map = test_map();
+        let missing_owner = ObjectGuid::create_player(1, 48403);
+        let mut missing_tracker_gameobject = test_gameobject_for_spawn(48403, 4840301);
+        missing_tracker_gameobject
+            .world_mut()
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(missing_owner);
+        let missing_tracker_guid = missing_tracker_gameobject.world().guid();
+        missing_tracker_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(missing_tracker_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let missing_tracker = missing_tracker_map
+            .remove_from_map_like_cpp(missing_tracker_guid, false)
+            .unwrap();
+        assert_eq!(
+            missing_tracker.personal_phase_unregister.phase_owner,
+            missing_owner
+        );
+        assert!(missing_tracker.personal_phase_unregister.attempted);
+        assert!(!missing_tracker.personal_phase_unregister.tracker_found);
+        assert!(!missing_tracker.personal_phase_unregister.removed);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_follows_cpp_in_world_type_range() {
+        let mut dynamic_map = test_map();
+        let dynamic = test_dynamic_object_for_viewpoint(4840401);
+        let dynamic_guid = dynamic.world().guid();
+        dynamic_map
+            .insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic).unwrap())
+            .unwrap();
+        let dynamic_removed = dynamic_map
+            .remove_from_map_like_cpp(dynamic_guid, false)
+            .unwrap();
+        assert!(dynamic_removed.was_in_world);
+        assert!(!dynamic_removed.cxx_in_world);
+        assert!(
+            dynamic_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut area_map = test_map();
+        let area_trigger = test_area_trigger_for_spawn(48405, 4840501);
+        let area_guid = area_trigger.world().guid();
+        area_map
+            .insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+        let area_removed = area_map.remove_from_map_like_cpp(area_guid, false).unwrap();
+        assert!(area_removed.was_in_world);
+        assert!(!area_removed.cxx_in_world);
+        assert!(
+            area_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_skips_in_world_eligible_records() {
+        let mut gameobject_map = test_map();
+        let gameobject = test_gameobject_for_spawn(48406, 4840601);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        let gameobject_removed = gameobject_map
+            .remove_from_map_like_cpp(gameobject_guid, false)
+            .unwrap();
+        assert!(gameobject_removed.cxx_in_world);
+        assert!(
+            !gameobject_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut creature_map = test_map();
+        let creature = test_creature_for_spawn(48407, 4840701, true);
+        let creature_guid = creature.guid();
+        creature_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let creature_removed = creature_map
+            .remove_from_map_like_cpp(creature_guid, false)
+            .unwrap();
+        assert!(creature_removed.cxx_in_world);
+        assert!(
+            !creature_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut player_map = test_map();
+        let player = test_player_for_viewpoint(4840801);
+        let player_guid = player.guid();
+        player_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        let player_removed = player_map
+            .remove_from_map_like_cpp(player_guid, false)
+            .unwrap();
+        assert!(player_removed.cxx_in_world);
+        assert!(
+            !player_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut pet_map = test_map();
+        let pet = test_pet(4840901, true);
+        let pet_guid = pet.creature().guid();
+        pet_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_pet(pet).unwrap())
+            .unwrap();
+        let pet_removed = pet_map.remove_from_map_like_cpp(pet_guid, false).unwrap();
+        assert!(pet_removed.cxx_in_world);
+        assert!(
+            !pet_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut transport_map = test_map();
+        let transport = test_transport(4841001, true);
+        let transport_guid = transport.world().guid();
+        transport_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_transport(transport).unwrap(),
+            )
+            .unwrap();
+        let transport_removed = transport_map
+            .remove_from_map_like_cpp(transport_guid, false)
+            .unwrap();
+        assert!(transport_removed.cxx_in_world);
+        assert!(
+            !transport_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_runs_for_not_in_world_gameobject_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(48411, 4841101);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let guid = gameobject.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(!removed.was_in_world);
+        assert!(!removed.cxx_in_world);
+        assert!(
+            removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
     }
 
     #[test]
