@@ -412,6 +412,7 @@ impl DynamicObject {
         self.dynamic_object_data_changes
             .set(DYNAMIC_OBJECT_DATA_PARENT_BIT);
         self.dynamic_object_data_changes.set(bit);
+        self.world.object_mut().add_to_object_update_if_needed();
     }
 }
 
@@ -477,6 +478,58 @@ mod tests {
         assert_eq!(dyn_object.owner_guid(), caster_guid());
         assert_eq!(dyn_object.spell_id(), 1337);
         assert_eq!(dyn_object.radius(), 8.5);
+    }
+
+    #[test]
+    fn dynamic_object_data_setter_after_add_to_world_enqueues_object_update_like_cpp() {
+        let mut dyn_object = DynamicObject::new(true);
+        dyn_object.world_mut().object_mut().add_to_world();
+        assert!(!dyn_object.world().object().is_object_updated());
+
+        dyn_object.set_radius(8.5);
+
+        assert!(dyn_object.world().object().is_object_updated());
+        assert!(
+            dyn_object
+                .dynamic_object_data_changes_mask()
+                .is_set(DYNAMIC_OBJECT_DATA_PARENT_BIT)
+        );
+        assert!(
+            dyn_object
+                .dynamic_object_data_changes_mask()
+                .is_set(DYNAMIC_OBJECT_DATA_RADIUS_BIT)
+        );
+    }
+
+    #[test]
+    fn dynamic_object_data_setter_before_add_to_world_does_not_enqueue_like_cpp() {
+        let mut dyn_object = DynamicObject::new(true);
+
+        dyn_object.set_radius(8.5);
+
+        assert!(!dyn_object.world().object().is_object_updated());
+        assert!(
+            dyn_object
+                .dynamic_object_data_changes_mask()
+                .is_set(DYNAMIC_OBJECT_DATA_PARENT_BIT)
+        );
+        assert!(
+            dyn_object
+                .dynamic_object_data_changes_mask()
+                .is_set(DYNAMIC_OBJECT_DATA_RADIUS_BIT)
+        );
+    }
+
+    #[test]
+    fn dynamic_object_data_same_value_does_not_requeue_like_cpp() {
+        let mut dyn_object = DynamicObject::new(true);
+        dyn_object.set_radius(8.5);
+        dyn_object.world_mut().object_mut().add_to_world();
+        assert!(!dyn_object.world().object().is_object_updated());
+
+        dyn_object.set_radius(8.5);
+
+        assert!(!dyn_object.world().object().is_object_updated());
     }
 
     #[test]

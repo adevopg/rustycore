@@ -3640,6 +3640,9 @@ where
             // `ClearUpdateMask(false)`. Visible player iteration,
             // `UpdateDataMapType`, packet construction, and direct sends remain
             // open fanout gaps.
+            if let Some(dynamic_object) = record.dynamic_object_mut() {
+                dynamic_object.clear_dynamic_object_data_changes();
+            }
             record.object_mut().object_mut().clear_update_mask(false);
             summary.processed += 1;
             summary.cleared_update_masks += 1;
@@ -20390,6 +20393,50 @@ mod tests {
             .relocate(Position::xyz(11.0, 21.0, 31.0));
         dynamic_object.world_mut().object_mut().add_to_world();
         dynamic_object
+    }
+
+    #[test]
+    fn send_object_updates_processes_dynamic_object_data_update_like_cpp() {
+        let mut map = test_map();
+        let dynamic_object = test_dynamic_object_for_viewpoint(501001);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let record = map.map_objects.get_mut(&dynamic_object_guid).unwrap();
+        assert!(!record.object().object().is_object_updated());
+        record.dynamic_object_mut().unwrap().set_radius(12.5);
+        assert!(record.object().object().is_object_updated());
+        assert!(
+            record
+                .dynamic_object()
+                .unwrap()
+                .dynamic_object_data_changes_mask()
+                .is_any_set()
+        );
+
+        let summary = map.send_object_updates_like_cpp();
+
+        assert_eq!(summary.queued_before, 1);
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.cleared_update_masks, 1);
+        assert_eq!(summary.skipped_not_in_world, 0);
+        assert_eq!(summary.missing_or_stale, 0);
+        assert!(
+            !map.map_object_record(dynamic_object_guid)
+                .unwrap()
+                .object()
+                .object()
+                .is_object_updated()
+        );
+        assert!(
+            !map.map_object_record(dynamic_object_guid)
+                .unwrap()
+                .dynamic_object()
+                .unwrap()
+                .dynamic_object_data_changes_mask()
+                .is_any_set()
+        );
     }
 
     #[test]

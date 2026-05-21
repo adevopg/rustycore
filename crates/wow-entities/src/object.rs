@@ -339,7 +339,7 @@ impl EntityObject {
         }
     }
 
-    fn add_to_object_update_if_needed(&mut self) {
+    pub(crate) fn add_to_object_update_if_needed(&mut self) {
         if self.in_world && !self.object_updated {
             self.object_updated = self.add_to_object_update();
         }
