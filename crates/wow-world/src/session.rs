@@ -14403,15 +14403,46 @@ impl WorldSession {
         manager
             .find_map(key.map_id, key.instance_id)
             .and_then(|managed| managed.map().map_object_record(target))
-            .is_some_and(|record| {
-                matches!(
-                    record.kind(),
-                    AccessorObjectKind::Player
-                        | AccessorObjectKind::Creature
-                        | AccessorObjectKind::Pet
-                        | AccessorObjectKind::DynamicObject
-                )
-            })
+            .is_some_and(|record| Self::is_represented_seer_kind_like_cpp(record.kind()))
+    }
+
+    fn is_represented_seer_kind_like_cpp(kind: AccessorObjectKind) -> bool {
+        matches!(
+            kind,
+            AccessorObjectKind::Player
+                | AccessorObjectKind::Creature
+                | AccessorObjectKind::Pet
+                | AccessorObjectKind::DynamicObject
+        )
+    }
+
+    pub(crate) fn represented_visibility_source_position_like_cpp(&self) -> Option<Position> {
+        let player_position = self.player_position_like_cpp()?;
+        let Some(player_guid) = self.player_guid() else {
+            return Some(player_position);
+        };
+        let Some(seer_guid) = self.represented_seer_guid_like_cpp else {
+            return Some(player_position);
+        };
+        if seer_guid.is_empty() || seer_guid == player_guid {
+            return Some(player_position);
+        }
+
+        let Some(key) = self.current_canonical_player_map_key_like_cpp() else {
+            return Some(player_position);
+        };
+        let Some(manager) = self.canonical_map_manager.as_ref() else {
+            return Some(player_position);
+        };
+        let Ok(manager) = manager.lock() else {
+            return Some(player_position);
+        };
+        manager
+            .find_map(key.map_id, key.instance_id)
+            .and_then(|managed| managed.map().map_object_record(seer_guid))
+            .filter(|record| Self::is_represented_seer_kind_like_cpp(record.kind()))
+            .map(|record| record.object().position())
+            .or(Some(player_position))
     }
 
     pub(crate) fn apply_far_sight_like_cpp(&mut self, enable: bool) {
@@ -17462,6 +17493,192 @@ mod tests {
             send_rx.try_recv().is_ok(),
             "map-driven visibility should send create data without DB"
         );
+    }
+
+    #[tokio::test]
+    async fn far_sight_update_visibility_uses_represented_seer_position_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 492);
+        let seer_guid = test_creature_guid(4920);
+        let visible_creature_guid = test_creature_guid(4921);
+        let visible_go_guid = test_gameobject_guid(4922, 4922);
+        let player_position = Position::new(0.0, 0.0, 0.0, 0.0);
+        let seer_position = Position::new(3000.0, 3000.0, 0.0, 0.0);
+        let visible_position = Position::new(3010.0, 3010.0, 0.0, 0.0);
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "FarsightVisibility".to_string(),
+            player_position,
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        session
+            .ensure_canonical_world_map_for_current_player_like_cpp()
+            .expect("canonical player map");
+        add_canonical_test_creature(&canonical, seer_guid, 4920, seer_position, 0);
+
+        let (grid_x, grid_y) =
+            crate::map_manager::world_to_grid_coords(visible_position.x, visible_position.y);
+        manager.write().unwrap().add_creature(
+            571,
+            0,
+            grid_x,
+            grid_y,
+            crate::map_manager::WorldCreature::new(
+                visible_creature_guid,
+                4921,
+                visible_position,
+                100,
+                80,
+                1,
+                2,
+                0.0,
+                1,
+                35,
+                0,
+                0,
+            ),
+        );
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            visible_go_guid,
+            4922,
+            visible_position,
+            3,
+        );
+        session.record_represented_gameobject_display_model_like_cpp(
+            visible_go_guid,
+            7492,
+            1.0,
+            [0.0, 0.0, 0.0, 1.0],
+        );
+
+        session.represented_seer_guid_like_cpp = Some(seer_guid);
+
+        assert_eq!(
+            session.represented_visibility_source_position_like_cpp(),
+            Some(seer_position)
+        );
+
+        session.update_visibility().await;
+
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&visible_creature_guid),
+            "visibility should scan around represented m_seer position"
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&visible_go_guid),
+            "canonical GO visibility should use represented m_seer position"
+        );
+        assert_eq!(session.last_visibility_pos, Some(seer_position));
+    }
+
+    #[tokio::test]
+    async fn far_sight_update_visibility_falls_back_for_unsupported_seer_like_cpp() {
+        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let manager = shared_map_manager();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 493);
+        let gameobject_seer_guid = test_gameobject_guid(4930, 4930);
+        let far_creature_guid = test_creature_guid(4931);
+        let player_position = Position::new(0.0, 0.0, 0.0, 0.0);
+        let unsupported_seer_position = Position::new(3000.0, 3000.0, 0.0, 0.0);
+        let far_creature_position = Position::new(3010.0, 3010.0, 0.0, 0.0);
+
+        session.set_map_manager(Arc::clone(&manager));
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.set_map_store(Arc::new(wow_data::MapStore::from_entries([
+            wow_data::MapEntry {
+                id: 571,
+                instance_type: wow_data::map::MAP_COMMON,
+                parent_map_id: -1,
+                cosmetic_parent_map_id: -1,
+                flags1: 0,
+            },
+        ])));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "UnsupportedFarsightVisibility".to_string(),
+            player_position,
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        session
+            .ensure_canonical_world_map_for_current_player_like_cpp()
+            .expect("canonical player map");
+        session.record_represented_gameobject_runtime_state_like_cpp(
+            571,
+            gameobject_seer_guid,
+            4930,
+            unsupported_seer_position,
+            3,
+        );
+
+        let (grid_x, grid_y) = crate::map_manager::world_to_grid_coords(
+            far_creature_position.x,
+            far_creature_position.y,
+        );
+        manager.write().unwrap().add_creature(
+            571,
+            0,
+            grid_x,
+            grid_y,
+            crate::map_manager::WorldCreature::new(
+                far_creature_guid,
+                4931,
+                far_creature_position,
+                100,
+                80,
+                1,
+                2,
+                0.0,
+                1,
+                35,
+                0,
+                0,
+            ),
+        );
+
+        session.represented_seer_guid_like_cpp = Some(gameobject_seer_guid);
+
+        assert_eq!(
+            session.represented_visibility_source_position_like_cpp(),
+            Some(player_position)
+        );
+
+        session.update_visibility().await;
+
+        assert!(
+            !session
+                .client_visible_guids_like_cpp
+                .contains(&far_creature_guid),
+            "unsupported GameObject m_seer must not become the visibility source"
+        );
+        assert_eq!(session.last_visibility_pos, Some(player_position));
     }
 
     #[tokio::test]

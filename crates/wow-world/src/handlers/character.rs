@@ -3287,7 +3287,7 @@ impl WorldSession {
         use std::collections::HashSet;
 
         // ── Position & threshold check ──────────────────────────────────
-        let pos = match self.player_position_like_cpp() {
+        let pos = match self.represented_visibility_source_position_like_cpp() {
             Some(p) => p,
             None => return,
         };
