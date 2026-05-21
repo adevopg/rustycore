@@ -7413,6 +7413,74 @@ where
         })
     }
 
+    fn represent_add_to_map_post_add_to_world_tail_like_cpp(
+        &mut self,
+        kind: AccessorObjectKind,
+        guid: ObjectGuid,
+        active_object: bool,
+    ) -> Option<AddToMapPostAddToWorldOutcomeLikeCpp> {
+        let pending_move_state = match kind {
+            AccessorObjectKind::Creature => {
+                if self
+                    .map_object_record(guid)
+                    .is_some_and(|record| record.creature().is_some())
+                {
+                    self.creature_move_states.remove(&guid)
+                } else {
+                    return None;
+                }
+            }
+            AccessorObjectKind::GameObject => {
+                if self
+                    .map_object_record(guid)
+                    .is_some_and(|record| record.game_object().is_some())
+                {
+                    self.gameobject_move_states.remove(&guid)
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+
+        if pending_move_state.is_some() {
+            match kind {
+                AccessorObjectKind::Creature => {
+                    self.creatures_to_move.retain(|queued| *queued != guid)
+                }
+                AccessorObjectKind::GameObject => {
+                    self.gameobjects_to_move.retain(|queued| *queued != guid);
+                }
+                _ => {}
+            }
+        }
+
+        let mut set_true = false;
+        let mut set_false = false;
+        let final_is_new_object = if let Some(record) = self.map_objects.get_mut(&guid) {
+            record.object_mut().object_mut().set_is_new_object(true);
+            set_true = true;
+            record.object_mut().object_mut().set_is_new_object(false);
+            set_false = true;
+            record.object().object().is_new_object()
+        } else {
+            false
+        };
+
+        Some(AddToMapPostAddToWorldOutcomeLikeCpp {
+            initialize_object_represented: true,
+            pending_move_state_cleared: pending_move_state.is_some(),
+            no_pending_move_state: pending_move_state.is_none(),
+            add_to_active_represented: active_object,
+            add_to_active_skipped_runtime_gap: active_object,
+            set_is_new_object_true: set_true,
+            update_object_visibility_on_create_represented: true,
+            update_object_visibility_on_create_runtime_gap: true,
+            set_is_new_object_false: set_false,
+            final_is_new_object,
+        })
+    }
+
     pub fn add_to_map_like_cpp(
         &mut self,
         kind: AccessorObjectKind,
@@ -7453,6 +7521,7 @@ where
                 creature_vehicle_reset: None,
                 creature_vehicle_install: None,
                 creature_zone_script_create: None,
+                add_to_map_tail: None,
             });
         }
 
@@ -7515,13 +7584,6 @@ where
                 .get_mut(&guid)
                 .and_then(MapObjectRecord::creature_mut)
                 .map(|creature| creature.unit_mut().add_to_world_like_cpp());
-            if let Some(canonical) = self.map_objects.get_mut(&guid) {
-                canonical.object_mut().object_mut().set_is_new_object(true);
-                // Rust does not emit visibility here yet; keep the flag lifecycle identical to
-                // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
-                canonical.object_mut().object_mut().set_is_new_object(false);
-            }
-
             let creature_search_formation = self
                 .map_object_record(guid)
                 .and_then(MapObjectRecord::creature)
@@ -7576,6 +7638,11 @@ where
                     represented_callback: true,
                     script_dispatch_represented: false,
                 });
+            let add_to_map_tail = self.represent_add_to_map_post_add_to_world_tail_like_cpp(
+                kind,
+                guid,
+                active_object,
+            );
 
             return Ok(AddToMapOutcome {
                 guid,
@@ -7600,6 +7667,7 @@ where
                 creature_vehicle_reset,
                 creature_vehicle_install,
                 creature_zone_script_create,
+                add_to_map_tail,
             });
         }
 
@@ -7716,6 +7784,8 @@ where
             };
 
         let previous = self.insert_map_object_record(record)?;
+        let add_to_map_tail =
+            self.represent_add_to_map_post_add_to_world_tail_like_cpp(kind, guid, active_object);
         Ok(AddToMapOutcome {
             guid,
             cell: cell.cell_coord(),
@@ -7735,6 +7805,7 @@ where
             creature_vehicle_reset,
             creature_vehicle_install,
             creature_zone_script_create,
+            add_to_map_tail,
         })
     }
 
@@ -9701,6 +9772,20 @@ pub struct CreatureZoneScriptRemoveOutcomeLikeCpp {
     pub script_dispatch_represented: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddToMapPostAddToWorldOutcomeLikeCpp {
+    pub initialize_object_represented: bool,
+    pub pending_move_state_cleared: bool,
+    pub no_pending_move_state: bool,
+    pub add_to_active_represented: bool,
+    pub add_to_active_skipped_runtime_gap: bool,
+    pub set_is_new_object_true: bool,
+    pub update_object_visibility_on_create_represented: bool,
+    pub update_object_visibility_on_create_runtime_gap: bool,
+    pub set_is_new_object_false: bool,
+    pub final_is_new_object: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddToMapOutcome {
     pub guid: ObjectGuid,
@@ -9721,6 +9806,7 @@ pub struct AddToMapOutcome {
     pub creature_vehicle_reset: Option<VehicleKitAddToWorldResetOutcomeLikeCpp>,
     pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
     pub creature_zone_script_create: Option<CreatureZoneScriptCreateOutcomeLikeCpp>,
+    pub add_to_map_tail: Option<AddToMapPostAddToWorldOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17490,6 +17576,191 @@ mod tests {
         let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
         assert_eq!(kit.kit_id, 9002);
         assert!(!kit.installed);
+    }
+
+    #[test]
+    fn creature_add_to_world_add_to_map_tail_initializes_clears_move_and_visibility_flags_like_cpp()
+    {
+        let mut map = test_map();
+        let mut stale_creature = test_creature_for_spawn(478, 47801, true);
+        stale_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = stale_creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(stale_creature).unwrap())
+            .unwrap();
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, Position::xyz(40.0, 41.0, 42.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+                .is_some()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            1
+        );
+
+        let mut creature = test_creature_for_spawn(478, 47801, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900478)));
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9478);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.creature_unit_add_to_world.is_some());
+        assert!(outcome.creature_search_formation.is_some());
+        assert!(outcome.creature_aim_initialize.is_some());
+        assert!(outcome.creature_vehicle_reset.is_some());
+        assert!(outcome.creature_vehicle_install.is_some());
+        assert!(outcome.creature_zone_script_create.is_some());
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.initialize_object_represented);
+        assert!(tail.pending_move_state_cleared);
+        assert!(!tail.no_pending_move_state);
+        assert!(!tail.add_to_active_represented);
+        assert!(!tail.add_to_active_skipped_runtime_gap);
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.update_object_visibility_on_create_represented);
+        assert!(tail.update_object_visibility_on_create_runtime_gap);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+                .is_none()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            0
+        );
+        let drain = map.move_all_creatures_in_move_list_like_cpp();
+        assert_eq!(drain.processed, 0);
+        assert_eq!(drain.relocated, 0);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        assert!(!stored.unit().world().object().is_new_object());
+    }
+
+    #[test]
+    fn add_to_map_typed_gameobject_tail_initializes_and_clears_move_like_cpp() {
+        let mut map = test_map();
+        let mut stale_gameobject = test_gameobject_for_spawn(478, 47802);
+        stale_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = stale_gameobject.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(stale_gameobject).unwrap())
+            .unwrap();
+        assert_eq!(
+            map.add_game_object_to_move_list_like_cpp(guid, Position::xyz(50.0, 51.0, 52.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+
+        let mut gameobject = test_gameobject_for_spawn(478, 47802);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.initialize_object_represented);
+        assert!(tail.pending_move_state_cleared);
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.update_object_visibility_on_create_represented);
+        assert!(tail.update_object_visibility_on_create_runtime_gap);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject, guid)
+                .is_none()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject),
+            0
+        );
+        let drain = map.move_all_game_objects_in_move_list_like_cpp();
+        assert_eq!(drain.processed, 0);
+        assert_eq!(drain.relocated, 0);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(stored.world().object().is_in_world());
+        assert!(!stored.world().object().is_new_object());
+    }
+
+    #[test]
+    fn add_to_map_generic_creature_and_already_in_world_do_not_overclaim_tail_like_cpp() {
+        let mut map = test_map();
+        let generic = world_object_with_counter(HighGuid::Creature, 47803, 571, 7, false);
+        let generic_guid = generic.guid();
+        map.insert_map_object(AccessorObjectKind::Creature, generic)
+            .unwrap();
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(generic_guid, Position::xyz(60.0, 61.0, 62.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        let generic_again = world_object_with_counter(HighGuid::Creature, 47803, 571, 7, false);
+
+        let generic_outcome = map
+            .add_to_map_like_cpp(AccessorObjectKind::Creature, generic_again)
+            .unwrap();
+
+        assert!(generic_outcome.creature_unit_add_to_world.is_none());
+        assert!(generic_outcome.creature_search_formation.is_none());
+        assert!(generic_outcome.creature_aim_initialize.is_none());
+        assert!(generic_outcome.creature_vehicle_reset.is_none());
+        assert!(generic_outcome.creature_vehicle_install.is_none());
+        assert!(generic_outcome.creature_zone_script_create.is_none());
+        assert!(generic_outcome.add_to_map_tail.is_none());
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, generic_guid)
+                .is_some()
+        );
+
+        let mut creature = test_creature_for_spawn(479, 47901, true);
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900479)));
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9479);
+        let already_guid = creature.guid();
+        let already = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(already.already_in_world);
+        assert!(already.creature_unit_add_to_world.is_none());
+        assert!(already.creature_search_formation.is_none());
+        assert!(already.creature_aim_initialize.is_none());
+        assert!(already.creature_vehicle_reset.is_none());
+        assert!(already.creature_vehicle_install.is_none());
+        assert!(already.creature_zone_script_create.is_none());
+        assert!(already.add_to_map_tail.is_none());
+        let stored = map
+            .map_object_record(already_guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        assert!(!stored.unit().world().object().is_new_object());
     }
 
     #[test]
