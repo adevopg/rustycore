@@ -7513,6 +7513,8 @@ where
                 inserted_into_cell: false,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                gameobject_store_inserted_before_add_to_world: None,
+                gameobject_spawn_indexed_before_add_to_world: None,
                 creature_store_inserted_before_add_to_world: None,
                 creature_spawn_indexed_before_add_to_world: None,
                 creature_unit_add_to_world: None,
@@ -7655,6 +7657,8 @@ where
                 inserted_into_cell: true,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                gameobject_store_inserted_before_add_to_world: None,
+                gameobject_spawn_indexed_before_add_to_world: None,
                 creature_store_inserted_before_add_to_world: Some(
                     creature_store_inserted_before_add_to_world,
                 ),
@@ -7667,6 +7671,107 @@ where
                 creature_vehicle_reset,
                 creature_vehicle_install,
                 creature_zone_script_create,
+                add_to_map_tail,
+            });
+        }
+
+        if kind == AccessorObjectKind::GameObject && record.game_object().is_some() {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let previous = self.insert_map_object_record(record)?;
+
+            let gameobject_store_inserted_before_add_to_world = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.game_object().is_some());
+            let gameobject_spawn_indexed_before_add_to_world = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some_and(|game_object| {
+                    let spawn_id = game_object.spawn_id();
+                    spawn_id != 0
+                        && self
+                            .gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                            .contains(&guid)
+                });
+            let has_represented_model = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some_and(GameObject::has_represented_gameobject_model_like_cpp);
+            let (gameobject_model_insert, gameobject_collision_enable) = if has_represented_model {
+                let gameobject_model_insert =
+                    self.insert_gameobject_model_like_cpp(RepresentedGameObjectModelKeyLikeCpp {
+                        owner_guid: guid,
+                    });
+                let gameobject_collision_enable = self
+                    .map_objects
+                    .get_mut(&guid)
+                    .and_then(MapObjectRecord::game_object_mut)
+                    .map(|game_object| {
+                        // C++ `GameObject::AddToWorld()` computes toggledState before
+                        // `EnableCollision(toggledState)`: chests use `getLootState() == GO_READY`,
+                        // exact non-Transport GameObjects use `GetGoState() == GO_STATE_READY`.
+                        // `MapObjectRecord::Transport` is handled outside this exact-typed
+                        // GameObject branch and remains a delayed-add runtime gap for this
+                        // represented seam.
+                        let toggled_state =
+                            if game_object.data().type_id as u32 == GAMEOBJECT_TYPE_CHEST {
+                                game_object.loot_state() == LootState::Ready
+                            } else {
+                                game_object.data().state == GoState::Ready as i8
+                            };
+                        let collision = game_object
+                            .enable_represented_gameobject_collision_like_cpp(toggled_state);
+                        GameObjectCollisionEnableOutcomeLikeCpp {
+                            requested_enable: collision.requested_enable,
+                            represented_model_present: collision.represented_model_present,
+                            previous_collision_enabled: collision.previous_collision_enabled,
+                            new_collision_enabled: collision.new_collision_enabled,
+                        }
+                    });
+                (Some(gameobject_model_insert), gameobject_collision_enable)
+            } else {
+                (None, None)
+            };
+
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::game_object_mut)
+            {
+                game_object.world_mut().object_mut().add_to_world();
+            }
+            let add_to_map_tail = self.represent_add_to_map_post_add_to_world_tail_like_cpp(
+                kind,
+                guid,
+                active_object,
+            );
+
+            return Ok(AddToMapOutcome {
+                guid,
+                cell: cell.cell_coord(),
+                grid,
+                inserted: previous.is_none(),
+                already_in_world: false,
+                grid_created,
+                grid_loaded,
+                inserted_into_cell: true,
+                gameobject_model_insert,
+                gameobject_collision_enable,
+                gameobject_store_inserted_before_add_to_world: Some(
+                    gameobject_store_inserted_before_add_to_world,
+                ),
+                gameobject_spawn_indexed_before_add_to_world: Some(
+                    gameobject_spawn_indexed_before_add_to_world,
+                ),
+                creature_store_inserted_before_add_to_world: None,
+                creature_spawn_indexed_before_add_to_world: None,
+                creature_unit_add_to_world: None,
+                creature_search_formation: None,
+                creature_aim_initialize: None,
+                creature_vehicle_reset: None,
+                creature_vehicle_install: None,
+                creature_zone_script_create: None,
                 add_to_map_tail,
             });
         }
@@ -7797,6 +7902,8 @@ where
             inserted_into_cell: true,
             gameobject_model_insert,
             gameobject_collision_enable,
+            gameobject_store_inserted_before_add_to_world: None,
+            gameobject_spawn_indexed_before_add_to_world: None,
             creature_store_inserted_before_add_to_world: None,
             creature_spawn_indexed_before_add_to_world: None,
             creature_unit_add_to_world,
@@ -9798,6 +9905,8 @@ pub struct AddToMapOutcome {
     pub inserted_into_cell: bool,
     pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub gameobject_store_inserted_before_add_to_world: Option<bool>,
+    pub gameobject_spawn_indexed_before_add_to_world: Option<bool>,
     pub creature_store_inserted_before_add_to_world: Option<bool>,
     pub creature_spawn_indexed_before_add_to_world: Option<bool>,
     pub creature_unit_add_to_world: Option<UnitAddToWorldOutcomeLikeCpp>,
@@ -11206,6 +11315,111 @@ mod tests {
         assert_eq!(collision.previous_collision_enabled, None);
         assert_eq!(collision.new_collision_enabled, Some(false));
         assert!(map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn add_to_map_exact_gameobject_preinserts_canonical_store_and_spawn_index_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(47901, 4790101);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            outcome.gameobject_store_inserted_before_add_to_world,
+            Some(true)
+        );
+        assert_eq!(
+            outcome.gameobject_spawn_indexed_before_add_to_world,
+            Some(true)
+        );
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert!(outcome.gameobject_collision_enable.is_some());
+        assert!(outcome.add_to_map_tail.is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some()
+        );
+        assert!(
+            map.gameobject_spawn_id_store_guids_like_cpp(47901)
+                .contains(&guid)
+        );
+    }
+
+    #[test]
+    fn add_to_map_exact_gameobject_model_collision_and_world_state_mutate_canonical_record_like_cpp()
+     {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(47902, 4790201);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_state(GoState::Ready);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let canonical = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(canonical.world().object().is_in_world());
+        assert!(!canonical.world().object().is_new_object());
+        assert_eq!(
+            canonical.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+    }
+
+    #[test]
+    fn add_to_map_gameobject_non_exact_paths_do_not_emit_typed_preinsert_evidence_like_cpp() {
+        let mut already_map = test_map();
+        let mut already_gameobject = test_gameobject_for_spawn(47903, 4790301);
+        already_gameobject.set_represented_gameobject_model_like_cpp(true);
+        let already_outcome = already_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(already_gameobject).unwrap(),
+            )
+            .unwrap();
+        assert!(already_outcome.already_in_world);
+        assert_eq!(
+            already_outcome.gameobject_store_inserted_before_add_to_world,
+            None
+        );
+        assert_eq!(
+            already_outcome.gameobject_spawn_indexed_before_add_to_world,
+            None
+        );
+
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4790302, 571, 7, false);
+        let generic_outcome = generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+        assert!(!generic_outcome.already_in_world);
+        assert_eq!(
+            generic_outcome.gameobject_store_inserted_before_add_to_world,
+            None
+        );
+        assert_eq!(
+            generic_outcome.gameobject_spawn_indexed_before_add_to_world,
+            None
+        );
     }
 
     #[test]

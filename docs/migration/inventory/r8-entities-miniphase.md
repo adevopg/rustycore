@@ -5,9 +5,15 @@
 
 ## Prepared / Pending Review Tasks
 
-- None.
+- None in this handoff.
 
 ## Closed Tasks
+
+- [x] **#NEXT.R8.ENTITIES.479** GameObject AddToWorld map-owned ObjectsStore/by-spawn pre-WorldObject insertion and canonical model/collision mutation seam.
+  Status: represented-complete bounded slice; review `APROBADO` after one bounded correction; CI `CI_OK`; validation OK; committed locally at `current #479 HEAD`; no push/install/restart.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Maps/Map.cpp:529-576`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:899-923`, `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:926-948`.
+  Rust targets: `crates/wow-map/src/map.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: exact typed `MapObjectRecord::GameObject` on the normal not-already-in-world AddToMap path now inserts/replaces into canonical `Map::map_objects` through `insert_map_object_record` after AddToGrid/current cell but before model insertion, collision enable and represented `WorldObject::AddToWorld`; `gameobjects_by_spawn_id` remains derived only from `insert_map_object_record`. Subsequent represented model/collision/AddToWorld side effects read/mutate the canonical map-owned record, not a stale local copy. Already-in-world, generic kind-only GameObject, non-GameObject and wrong-kind paths emit no typed GameObject pre-insert evidence. GameObject::AddToWorld ZoneScript create ordering/callback remains OPEN/BLOCKED/FUTURE because C++ `/home/server/woltk-trinity-legacy/src/server/game/Entities/GameObject/GameObject.cpp:899-923` executes `m_zoneScript->OnGameObjectCreate(this)` before ObjectsStore/by-spawn insertion and this slice does not represent that earlier callback order. Checks: `cargo fmt --check`; `cargo test -p wow-map add_to_map --lib -- --nocapture` (26 passed); `PROTOC=/home/cdmonio/.local/protoc/bin/protoc cargo check -p world-server`; `git diff --check`; TSV 9-column check. Boundaries: no real ObjectAccessor global registration, no GameObject ZoneScript callback/order/dispatch representation, real GameObjectModel geometry/BIH/collision, transport delayed-add model runtime, packets/session fanout, DB writes or full GameObject runtime.
 
 - [x] **#NEXT.R8.ENTITIES.478** Map::AddToMap InitializeObject + create-visibility represented tail.
   Status: represented-complete bounded only for exact typed Creature/GameObject `Map::AddToMap<T>` post-`AddToWorld` tail; review `APROBADO`; CI `CI_OK`; validation OK; committed locally at `current #478 HEAD`; no push/install/restart.
