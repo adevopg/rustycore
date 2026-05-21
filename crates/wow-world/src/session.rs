@@ -13440,6 +13440,30 @@ impl WorldSession {
         ));
     }
 
+    /// Send represented `ActivePlayerData::FarsightObject` VALUES update after
+    /// the canonical AddFarsight `Player::SetViewpoint(..., true)` success.
+    ///
+    /// C++ anchors: `Player::SetViewpoint` writes
+    /// `UF::ActivePlayerData::FarsightObject`; `ActivePlayerData::WriteUpdate`
+    /// emits the field under parent block `changesMask[0]` and field bit 26.
+    fn send_active_player_farsight_object_values_update_like_cpp(
+        &self,
+        player_guid: ObjectGuid,
+        farsight_guid: ObjectGuid,
+    ) {
+        use wow_packet::packets::update::{ActivePlayerDataValuesUpdate, UpdateObject};
+
+        let mut data = ActivePlayerDataValuesUpdate::default();
+        set_active_player_update_bit_like_cpp(&mut data.active_player_data_mask, 0);
+        set_active_player_update_bit_like_cpp(&mut data.active_player_data_mask, 26);
+        data.farsight_object = farsight_guid;
+        self.send_packet(&UpdateObject::full_active_player_values_update(
+            player_guid,
+            self.player_map_id_like_cpp(),
+            data,
+        ));
+    }
+
     #[cfg(test)]
     pub(crate) fn active_player_local_flags_like_cpp(&self) -> u32 {
         self.active_player_local_flags_like_cpp
@@ -15791,6 +15815,14 @@ impl WorldSession {
             return false;
         }
 
+        let Some(player_guid) = self.player_guid() else {
+            return false;
+        };
+
+        self.send_active_player_farsight_object_values_update_like_cpp(
+            player_guid,
+            dynamic_object_guid,
+        );
         self.represented_seer_guid_like_cpp = Some(dynamic_object_guid);
         player_set_viewpoint.update_visibility_requested
     }
@@ -16183,6 +16215,38 @@ mod tests {
             }
         }
         opcodes
+    }
+
+    fn drain_server_packet_bytes(send_rx: &flume::Receiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        let mut packets = Vec::new();
+        while let Ok(bytes) = send_rx.try_recv() {
+            packets.push(bytes);
+        }
+        packets
+    }
+
+    fn expected_active_player_farsight_object_values_update_like_cpp(
+        player_guid: ObjectGuid,
+        map_id: u16,
+        farsight_guid: ObjectGuid,
+    ) -> Vec<u8> {
+        use wow_packet::packets::update::{ActivePlayerDataValuesUpdate, UpdateObject};
+
+        let mut data = ActivePlayerDataValuesUpdate::default();
+        set_active_player_update_bit_like_cpp(&mut data.active_player_data_mask, 0);
+        set_active_player_update_bit_like_cpp(&mut data.active_player_data_mask, 26);
+        data.farsight_object = farsight_guid;
+        UpdateObject::full_active_player_values_update(player_guid, map_id, data).to_bytes()
+    }
+
+    fn update_object_packet_count_like_cpp(packets: &[Vec<u8>]) -> usize {
+        packets
+            .iter()
+            .filter(|bytes| {
+                wow_packet::WorldPacket::from_bytes(bytes).server_opcode()
+                    == Some(ServerOpcodes::UpdateObject)
+            })
+            .count()
     }
 
     fn test_quest_template(id: u32) -> wow_data::quest::QuestTemplate {
@@ -17750,7 +17814,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_farsight_live_spell_sets_session_seer_to_created_dynamic_object_like_cpp() {
-        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let (mut session, _pkt_tx, send_rx) = make_session();
         let canonical = shared_canonical_map_manager();
         let player_guid = ObjectGuid::create_player(1, 4940);
         let spell_id = 49_400;
@@ -17794,11 +17858,26 @@ mod tests {
         assert_eq!(dynamic_object.caster_guid(), player_guid);
         assert_eq!(dynamic_object.spell_id(), spell_id);
         assert_eq!(dynamic_object.data().spell_visual_id, 678);
+        drop(guard);
+
+        let expected_farsight_update =
+            expected_active_player_farsight_object_values_update_like_cpp(
+                player_guid,
+                session.player_map_id_like_cpp(),
+                seer_guid,
+            );
+        let packets = drain_server_packet_bytes(&send_rx);
+        assert!(
+            packets
+                .iter()
+                .any(|bytes| bytes == &expected_farsight_update),
+            "live AddFarsight SetViewpoint success should send the C++ ActivePlayerData::FarsightObject VALUES update with mask bits 0+26"
+        );
     }
 
     #[tokio::test]
     async fn add_farsight_live_spell_without_destination_keeps_session_seer_like_cpp() {
-        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let (mut session, _pkt_tx, send_rx) = make_session();
         let canonical = shared_canonical_map_manager();
         let player_guid = ObjectGuid::create_player(1, 4941);
         let spell_id = 49_401;
@@ -17836,11 +17915,17 @@ mod tests {
             1,
             "only the canonical player should remain map-owned"
         );
+        let packets = drain_server_packet_bytes(&send_rx);
+        assert_eq!(
+            update_object_packet_count_like_cpp(&packets),
+            0,
+            "missing AddFarsight destination must not emit represented ActivePlayerData::FarsightObject VALUES update"
+        );
     }
 
     #[tokio::test]
     async fn add_farsight_live_spell_already_has_viewpoint_keeps_session_seer_like_cpp() {
-        let (mut session, _pkt_tx, _send_rx) = make_session();
+        let (mut session, _pkt_tx, send_rx) = make_session();
         let canonical = shared_canonical_map_manager();
         let player_guid = ObjectGuid::create_player(1, 4942);
         let spell_id = 49_402;
@@ -17882,6 +17967,13 @@ mod tests {
             .get_typed_player(player_guid)
             .unwrap();
         assert_eq!(player.active_data().farsight_object, existing_viewpoint);
+        drop(guard);
+        let packets = drain_server_packet_bytes(&send_rx);
+        assert_eq!(
+            update_object_packet_count_like_cpp(&packets),
+            0,
+            "AlreadyHasViewpoint must not emit represented ActivePlayerData::FarsightObject VALUES update"
+        );
     }
 
     #[test]
