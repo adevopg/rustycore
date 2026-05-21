@@ -7445,6 +7445,8 @@ where
                 inserted_into_cell: false,
                 gameobject_model_insert: None,
                 gameobject_collision_enable: None,
+                creature_store_inserted_before_add_to_world: None,
+                creature_spawn_indexed_before_add_to_world: None,
                 creature_unit_add_to_world: None,
                 creature_search_formation: None,
                 creature_aim_initialize: None,
@@ -7486,6 +7488,119 @@ where
                 .get_grid_type_mut(cell.cell_x(), cell.cell_y())
                 .expect("cell coordinates must be local to target grid");
             insert_object_guid_in_cell_like_cpp(local_cell, kind, is_world_object, guid);
+        }
+
+        if kind == AccessorObjectKind::Creature && record.creature().is_some() {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let previous = self.insert_map_object_record(record)?;
+
+            let creature_store_inserted_before_add_to_world = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.creature().is_some());
+            let creature_spawn_indexed_before_add_to_world = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some_and(|creature| {
+                    let spawn_id = creature.spawn_id();
+                    spawn_id != 0
+                        && self
+                            .creature_spawn_id_store_guids_like_cpp(spawn_id)
+                            .contains(&guid)
+                });
+
+            let creature_unit_add_to_world = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .map(|creature| creature.unit_mut().add_to_world_like_cpp());
+            if let Some(canonical) = self.map_objects.get_mut(&guid) {
+                canonical.object_mut().object_mut().set_is_new_object(true);
+                // Rust does not emit visibility here yet; keep the flag lifecycle identical to
+                // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
+                canonical.object_mut().object_mut().set_is_new_object(false);
+            }
+
+            let creature_search_formation = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .map(Creature::search_formation_like_cpp);
+            if let Some(outcome) = creature_search_formation {
+                self.apply_creature_search_formation_like_cpp(guid, outcome);
+            }
+
+            let creature_aim_initialize = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .map(Creature::aim_initialize_like_cpp);
+
+            let creature_vehicle_reset = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .and_then(|creature| {
+                    let context = creature
+                        .add_to_world_vehicle_reset_context_like_cpp()?
+                        .clone();
+                    let base_is_alive = creature.is_alive();
+                    creature
+                        .unit_mut()
+                        .subsystems_mut()
+                        .vehicle
+                        .reset_vehicle_kit_for_creature_add_to_world_like_cpp(
+                            &context,
+                            base_is_alive,
+                        )
+                });
+
+            let creature_vehicle_install = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .and_then(|creature| {
+                    let install = creature
+                        .unit_mut()
+                        .subsystems_mut()
+                        .vehicle
+                        .install_vehicle_kit_like_cpp();
+                    install.had_kit.then_some(install)
+                });
+
+            let creature_zone_script_create = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some()
+                .then_some(CreatureZoneScriptCreateOutcomeLikeCpp {
+                    guid,
+                    represented_callback: true,
+                    script_dispatch_represented: false,
+                });
+
+            return Ok(AddToMapOutcome {
+                guid,
+                cell: cell.cell_coord(),
+                grid,
+                inserted: previous.is_none(),
+                already_in_world: false,
+                grid_created,
+                grid_loaded,
+                inserted_into_cell: true,
+                gameobject_model_insert: None,
+                gameobject_collision_enable: None,
+                creature_store_inserted_before_add_to_world: Some(
+                    creature_store_inserted_before_add_to_world,
+                ),
+                creature_spawn_indexed_before_add_to_world: Some(
+                    creature_spawn_indexed_before_add_to_world,
+                ),
+                creature_unit_add_to_world,
+                creature_search_formation,
+                creature_aim_initialize,
+                creature_vehicle_reset,
+                creature_vehicle_install,
+                creature_zone_script_create,
+            });
         }
 
         let creature_unit_add_to_world = {
@@ -7612,6 +7727,8 @@ where
             inserted_into_cell: true,
             gameobject_model_insert,
             gameobject_collision_enable,
+            creature_store_inserted_before_add_to_world: None,
+            creature_spawn_indexed_before_add_to_world: None,
             creature_unit_add_to_world,
             creature_search_formation,
             creature_aim_initialize,
@@ -9596,6 +9713,8 @@ pub struct AddToMapOutcome {
     pub inserted_into_cell: bool,
     pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
     pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub creature_store_inserted_before_add_to_world: Option<bool>,
+    pub creature_spawn_indexed_before_add_to_world: Option<bool>,
     pub creature_unit_add_to_world: Option<UnitAddToWorldOutcomeLikeCpp>,
     pub creature_search_formation: Option<CreatureSearchFormationOutcomeLikeCpp>,
     pub creature_aim_initialize: Option<CreatureAimInitializeOutcomeLikeCpp>,
@@ -16844,6 +16963,14 @@ mod tests {
             .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
             .unwrap();
 
+        assert_eq!(
+            outcome.creature_store_inserted_before_add_to_world,
+            Some(true)
+        );
+        assert_eq!(
+            outcome.creature_spawn_indexed_before_add_to_world,
+            Some(true)
+        );
         let unit_add = outcome.creature_unit_add_to_world.unwrap();
         assert_eq!(unit_add.guid, guid);
         assert!(unit_add.world_object_added);
@@ -16876,6 +17003,12 @@ mod tests {
                 MapObjectRecord::new(AccessorObjectKind::Creature, generic_creature).unwrap(),
             )
             .unwrap();
+        assert!(
+            generic
+                .creature_store_inserted_before_add_to_world
+                .is_none()
+        );
+        assert!(generic.creature_spawn_indexed_before_add_to_world.is_none());
         assert!(generic.creature_unit_add_to_world.is_none());
         assert!(generic.creature_search_formation.is_none());
         assert!(generic.creature_aim_initialize.is_none());
@@ -16887,6 +17020,16 @@ mod tests {
                 MapObjectRecord::new_game_object(gameobject).unwrap(),
             )
             .unwrap();
+        assert!(
+            non_creature
+                .creature_store_inserted_before_add_to_world
+                .is_none()
+        );
+        assert!(
+            non_creature
+                .creature_spawn_indexed_before_add_to_world
+                .is_none()
+        );
         assert!(non_creature.creature_unit_add_to_world.is_none());
         assert!(non_creature.creature_aim_initialize.is_none());
     }
