@@ -731,6 +731,28 @@ pub struct DynamicObjectCasterViewpointOutcomeLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp {
+    RemovedUnitViewpoint,
+    RemovedDynamicObjectViewpoint,
+    RemovedPlayerViewpoint,
+    MissingTarget,
+    TargetNotInWorld,
+    TargetNotSeer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp {
+    pub player_guid: ObjectGuid,
+    pub viewpoint_guid: ObjectGuid,
+    pub status: PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp,
+    pub player_set_viewpoint: Option<PlayerSetViewpointOutcomeLikeCpp>,
+    pub dynamic_object_caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
+    pub update_visibility_requested: bool,
+    pub set_seer_requested: bool,
+    pub object_accessor_fanout_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DynamicObjectUpdateStatusLikeCpp {
     Updated,
     ExpiredRemoveQueued,
@@ -8396,6 +8418,183 @@ where
         })
     }
 
+    /// Bounded map-owned cleanup for the late C++ `Player::RemoveFromWorld()`
+    /// `GetViewpoint()` -> `SetViewpoint(viewpoint, false)` branch.
+    ///
+    /// Source-of-truth anchors:
+    /// - `Player.cpp:1567-1585` runs this after `Unit::RemoveFromWorld()` and
+    ///   item cleanup while the Player still exists.
+    /// - `Player.cpp:25344-25387` clears `FarsightObject`, removes Unit shared
+    ///   vision for Unit targets, requests `SetSeer(this)`, and does not request
+    ///   `UpdateVisibilityOf` on remove.
+    /// - `Player.cpp:25389-25395` resolves `GetViewpoint()` from
+    ///   `FarsightObject` through `TYPEMASK_SEER`.
+    ///
+    /// Ownership: only canonical same-map `Map::map_objects` typed records are
+    /// consulted/mutated. DynamicObject targets clear only the removing Player's
+    /// `FarsightObject` when it still equals the target GUID; this branch never
+    /// resolves `DynamicObject::bound_caster()` or toggles DynamicObject caster
+    /// viewpoint state because that lifecycle belongs to DynamicObject removal.
+    /// There is no ObjectAccessor/session fallback, no packet fanout, and no real
+    /// SetSeer implementation in this seam. Vehicle-base skipping stays open
+    /// because this map-owned cleanup has no Player vehicle base runtime; the Unit
+    /// helper is called with `vehicle_base_guid: None`.
+    fn cleanup_player_remove_from_world_viewpoint_like_cpp(
+        &mut self,
+        player_guid: ObjectGuid,
+    ) -> Option<PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp> {
+        let player_record = self.map_object_record(player_guid)?;
+        if player_record.kind() != AccessorObjectKind::Player
+            || !player_record.object().object().is_in_world()
+        {
+            return None;
+        }
+
+        let viewpoint_guid = player_record
+            .player()
+            .map(|player| player.active_data().farsight_object)?;
+        if viewpoint_guid.is_empty() {
+            return None;
+        }
+
+        let outcome = |status,
+                       player_set_viewpoint: Option<PlayerSetViewpointOutcomeLikeCpp>,
+                       dynamic_object_caster_viewpoint: Option<
+            DynamicObjectCasterViewpointOutcomeLikeCpp,
+        >,
+                       update_visibility_requested,
+                       set_seer_requested| {
+            PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp {
+                player_guid,
+                viewpoint_guid,
+                status,
+                player_set_viewpoint,
+                dynamic_object_caster_viewpoint,
+                update_visibility_requested,
+                set_seer_requested,
+                object_accessor_fanout_represented: false,
+            }
+        };
+
+        let Some(target_record) = self.map_object_record(viewpoint_guid) else {
+            return Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::MissingTarget,
+                None,
+                None,
+                false,
+                false,
+            ));
+        };
+        let target_kind = target_record.kind();
+        if !target_record.object().object().is_in_world() {
+            return Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotInWorld,
+                None,
+                None,
+                false,
+                false,
+            ));
+        }
+
+        match target_kind {
+            AccessorObjectKind::Creature | AccessorObjectKind::Pet => {
+                let player_set_viewpoint = self.apply_player_set_viewpoint_unit_like_cpp(
+                    player_guid,
+                    viewpoint_guid,
+                    false,
+                    None,
+                );
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedUnitViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            AccessorObjectKind::DynamicObject => {
+                let player_set_viewpoint = match self.get_typed_player_mut(player_guid) {
+                    Some(player) if player.active_data().farsight_object == viewpoint_guid => {
+                        player.set_farsight_object_like_cpp(ObjectGuid::EMPTY);
+                        Self::player_set_viewpoint_outcome_like_cpp(
+                            player_guid,
+                            viewpoint_guid,
+                            false,
+                            PlayerSetViewpointStatusLikeCpp::Removed,
+                            None,
+                            false,
+                            true,
+                        )
+                    }
+                    Some(_) => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::ViewpointMismatch,
+                        None,
+                        false,
+                        false,
+                    ),
+                    None => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::MissingPlayer,
+                        None,
+                        false,
+                        false,
+                    ),
+                };
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            AccessorObjectKind::Player => {
+                let player_set_viewpoint = match self.get_typed_player_mut(player_guid) {
+                    Some(player) if player.active_data().farsight_object == viewpoint_guid => {
+                        player.set_farsight_object_like_cpp(ObjectGuid::EMPTY);
+                        Self::player_set_viewpoint_outcome_like_cpp(
+                            player_guid,
+                            viewpoint_guid,
+                            false,
+                            PlayerSetViewpointStatusLikeCpp::Removed,
+                            None,
+                            false,
+                            true,
+                        )
+                    }
+                    _ => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::ViewpointMismatch,
+                        None,
+                        false,
+                        false,
+                    ),
+                };
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedPlayerViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            _ => Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotSeer,
+                None,
+                None,
+                false,
+                false,
+            )),
+        }
+    }
+
     pub fn remove_from_map_like_cpp(
         &mut self,
         guid: ObjectGuid,
@@ -8512,6 +8711,8 @@ where
             let creature_vehicle_remove = creature_unit_remove_from_world
                 .as_ref()
                 .and_then(|outcome| outcome.vehicle_remove);
+            let player_viewpoint_cleanup =
+                self.cleanup_player_remove_from_world_viewpoint_like_cpp(guid);
             let (kind, was_active) = self
                 .map_object_record(guid)
                 .map(|record| {
@@ -8574,6 +8775,7 @@ where
                 gameobject_linked_trap_remove,
                 creature_zone_script_remove,
                 creature_vehicle_remove,
+                player_viewpoint_cleanup,
                 creature_unit_remove_from_world,
                 creature_remove_formation,
                 personal_phase_unregister,
@@ -10647,6 +10849,7 @@ pub struct RemoveFromMapOutcome {
     pub gameobject_linked_trap_remove: Option<GameObjectRemoveLinkedTrapOutcomeLikeCpp>,
     pub creature_zone_script_remove: Option<CreatureZoneScriptRemoveOutcomeLikeCpp>,
     pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
+    pub player_viewpoint_cleanup: Option<PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp>,
     pub creature_unit_remove_from_world: Option<UnitRemoveFromWorldOutcomeLikeCpp>,
     pub creature_remove_formation: Option<CreatureRemoveFormationOutcomeLikeCpp>,
     pub personal_phase_unregister: PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp,
@@ -22812,6 +23015,300 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(map.pending_switch_like_cpp(target_guid), None);
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_dynamic_object_cleans_before_extract_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4930101);
+        let player_guid = player.guid();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4930102);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        player.set_farsight_object_like_cpp(dynamic_object_guid);
+        dynamic_object.set_caster_guid(player_guid);
+        dynamic_object.bind_to_caster(player_guid);
+        dynamic_object.set_caster_viewpoint();
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(player_guid, false).unwrap();
+
+        let cleanup = removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(cleanup.player_guid, player_guid);
+        assert_eq!(cleanup.viewpoint_guid, dynamic_object_guid);
+        assert_eq!(
+            cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert!(!cleanup.update_visibility_requested);
+        assert!(cleanup.set_seer_requested);
+        assert!(!cleanup.object_accessor_fanout_represented);
+        assert_eq!(cleanup.dynamic_object_caster_viewpoint, None);
+        let player_set_viewpoint = cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(player_set_viewpoint.player_guid, player_guid);
+        assert_eq!(player_set_viewpoint.target_guid, dynamic_object_guid);
+        assert!(!player_set_viewpoint.apply);
+        assert_eq!(
+            player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(!player_set_viewpoint.update_visibility_requested);
+        assert!(player_set_viewpoint.set_seer_requested);
+        assert!(map.map_object_record(player_guid).is_none());
+        assert!(map.map_object_record(dynamic_object_guid).is_some());
+        assert!(
+            map.get_typed_dynamic_object(dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+        assert!(!removed.object.unwrap().object().is_in_world());
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_dynamic_object_ignores_bound_caster_like_cpp() {
+        let mut missing_caster_map = test_map();
+        let mut missing_caster_player = test_player_for_viewpoint(4930111);
+        let missing_caster_player_guid = missing_caster_player.guid();
+        let mut missing_caster_dynamic_object = test_dynamic_object_for_viewpoint(4930112);
+        let missing_caster_dynamic_object_guid = missing_caster_dynamic_object.world().guid();
+        missing_caster_player.set_farsight_object_like_cpp(missing_caster_dynamic_object_guid);
+        missing_caster_dynamic_object.set_caster_viewpoint();
+        missing_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(missing_caster_player).unwrap())
+            .unwrap();
+        missing_caster_map
+            .insert_map_object_record(
+                MapObjectRecord::new_dynamic_object(missing_caster_dynamic_object).unwrap(),
+            )
+            .unwrap();
+
+        let missing_caster_removed = missing_caster_map
+            .remove_from_map_like_cpp(missing_caster_player_guid, false)
+            .unwrap();
+
+        let missing_caster_cleanup = missing_caster_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            missing_caster_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert_eq!(missing_caster_cleanup.dynamic_object_caster_viewpoint, None);
+        let missing_caster_set_viewpoint = missing_caster_cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(
+            missing_caster_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(missing_caster_set_viewpoint.set_seer_requested);
+        assert!(
+            missing_caster_map
+                .get_typed_dynamic_object(missing_caster_dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+
+        let mut other_caster_map = test_map();
+        let mut removed_player = test_player_for_viewpoint(4930121);
+        let removed_player_guid = removed_player.guid();
+        let mut other_player = test_player_for_viewpoint(4930122);
+        let other_player_guid = other_player.guid();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4930123);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        removed_player.set_farsight_object_like_cpp(dynamic_object_guid);
+        other_player.set_farsight_object_like_cpp(dynamic_object_guid);
+        dynamic_object.set_caster_guid(other_player_guid);
+        dynamic_object.bind_to_caster(other_player_guid);
+        dynamic_object.set_caster_viewpoint();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(removed_player).unwrap())
+            .unwrap();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(other_player).unwrap())
+            .unwrap();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let other_caster_removed = other_caster_map
+            .remove_from_map_like_cpp(removed_player_guid, false)
+            .unwrap();
+
+        let other_caster_cleanup = other_caster_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            other_caster_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert_eq!(other_caster_cleanup.dynamic_object_caster_viewpoint, None);
+        let other_caster_set_viewpoint = other_caster_cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(other_caster_set_viewpoint.player_guid, removed_player_guid);
+        assert_eq!(
+            other_caster_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(other_caster_set_viewpoint.set_seer_requested);
+        assert_eq!(
+            other_caster_map
+                .get_typed_player(other_player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            dynamic_object_guid
+        );
+        assert!(
+            other_caster_map
+                .get_typed_dynamic_object(dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_creature_consumes_shared_vision_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4930201);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 493020, 4930202);
+        player.set_farsight_object_like_cpp(target_guid);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.get_typed_creature_mut(target_guid)
+            .unwrap()
+            .unit_mut()
+            .add_player_to_vision_like_cpp(player_guid);
+
+        let removed = map.remove_from_map_like_cpp(player_guid, false).unwrap();
+
+        let cleanup = removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedUnitViewpoint
+        );
+        let player_set_viewpoint = cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(
+            player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(!player_set_viewpoint.update_visibility_requested);
+        assert!(player_set_viewpoint.set_seer_requested);
+        assert_eq!(
+            player_set_viewpoint.set_world_object,
+            Some(SetWorldObjectOutcomeLikeCpp {
+                guid: target_guid,
+                on: false,
+                status: SetWorldObjectStatusLikeCpp::Delegated(
+                    AddObjectToSwitchListStatusLikeCpp::Queued
+                ),
+            })
+        );
+        assert!(map.map_object_record(player_guid).is_none());
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), Some(false));
+        assert!(removed.object.unwrap().guid() == player_guid);
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_missing_or_unsupported_target_no_cleanup_success_like_cpp()
+     {
+        let mut missing_map = test_map();
+        let mut missing_player = test_player_for_viewpoint(4930301);
+        let missing_player_guid = missing_player.guid();
+        let missing_viewpoint_guid = guid(HighGuid::Creature, 4930302);
+        missing_player.set_farsight_object_like_cpp(missing_viewpoint_guid);
+        missing_map
+            .insert_map_object_record(MapObjectRecord::new_player(missing_player).unwrap())
+            .unwrap();
+
+        let missing_removed = missing_map
+            .remove_from_map_like_cpp(missing_player_guid, false)
+            .unwrap();
+
+        let missing_cleanup = missing_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            missing_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::MissingTarget
+        );
+        assert_eq!(missing_cleanup.player_set_viewpoint, None);
+        assert_eq!(missing_cleanup.dynamic_object_caster_viewpoint, None);
+        assert!(missing_map.map_object_record(missing_player_guid).is_none());
+
+        let mut unsupported_map = test_map();
+        let mut unsupported_player = test_player_for_viewpoint(4930401);
+        let unsupported_player_guid = unsupported_player.guid();
+        let game_object = game_object_with_counter(4930402, 571, 7, true);
+        let game_object_guid = game_object.world().guid();
+        unsupported_player.set_farsight_object_like_cpp(game_object_guid);
+        unsupported_map
+            .insert_map_object_record(MapObjectRecord::new_player(unsupported_player).unwrap())
+            .unwrap();
+        unsupported_map
+            .insert_map_object_record(MapObjectRecord::new_game_object(game_object).unwrap())
+            .unwrap();
+
+        let unsupported_removed = unsupported_map
+            .remove_from_map_like_cpp(unsupported_player_guid, false)
+            .unwrap();
+
+        let unsupported_cleanup = unsupported_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            unsupported_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotSeer
+        );
+        assert_eq!(unsupported_cleanup.player_set_viewpoint, None);
+        assert_eq!(unsupported_cleanup.dynamic_object_caster_viewpoint, None);
+        assert!(
+            unsupported_map
+                .map_object_record(unsupported_player_guid)
+                .is_none()
+        );
+        assert!(
+            unsupported_map
+                .map_object_record(game_object_guid)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn player_remove_from_world_not_in_world_or_empty_farsight_emits_no_cleanup_like_cpp() {
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_player = test_player_for_viewpoint(4930501);
+        let not_in_world_player_guid = not_in_world_player.guid();
+        not_in_world_player.set_farsight_object_like_cpp(guid(HighGuid::Creature, 4930502));
+        not_in_world_player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(MapObjectRecord::new_player(not_in_world_player).unwrap())
+            .unwrap();
+
+        let not_in_world_removed = not_in_world_map
+            .remove_from_map_like_cpp(not_in_world_player_guid, false)
+            .unwrap();
+
+        assert_eq!(not_in_world_removed.player_viewpoint_cleanup, None);
+
+        let mut empty_map = test_map();
+        let empty_player = test_player_for_viewpoint(4930601);
+        let empty_player_guid = empty_player.guid();
+        empty_map
+            .insert_map_object_record(MapObjectRecord::new_player(empty_player).unwrap())
+            .unwrap();
+
+        let empty_removed = empty_map
+            .remove_from_map_like_cpp(empty_player_guid, false)
+            .unwrap();
+
+        assert_eq!(empty_removed.player_viewpoint_cleanup, None);
     }
 
     #[test]
