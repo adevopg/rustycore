@@ -48,6 +48,10 @@
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:994-1062`
 //!   `GameEventMgr::Update()` consumes the helpers before Start/Stop side effects;
 //!   those scheduler/runtime side effects remain out of scope here.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.h:102-110,122-123,169`
+//!   `m_ActiveEvents` is a `std::set<uint16>` with membership insert/erase helpers.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:1763-1782`
+//!   global `IsHolidayActive` / `IsEventActive` read the active-event set only.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -258,6 +262,12 @@ pub enum GameEventNextCheckOutcomeLikeCpp {
     DelaySecs(u64),
     MissingEvent { event_id: u16 },
     InvalidTimingZeroOccurrence { event_id: u16 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventHolidayActiveOutcomeLikeCpp {
+    Active(bool),
+    MissingActiveEvent { event_id: u16 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -518,6 +528,60 @@ impl GameEventDataStoreLikeCpp {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GameEventActiveSetLikeCpp {
+    active_events: BTreeSet<u16>,
+}
+
+#[allow(dead_code)]
+impl GameEventActiveSetLikeCpp {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_active_event_like_cpp(&mut self, event_id: u16) -> bool {
+        self.active_events.insert(event_id)
+    }
+
+    pub fn remove_active_event_like_cpp(&mut self, event_id: u16) -> bool {
+        self.active_events.remove(&event_id)
+    }
+
+    pub fn clear_active_events_like_cpp(&mut self) {
+        self.active_events.clear();
+    }
+
+    pub fn is_active_event_like_cpp(&self, event_id: u16) -> bool {
+        self.active_events.contains(&event_id)
+    }
+
+    pub fn active_event_ids_like_cpp(&self) -> impl Iterator<Item = u16> + '_ {
+        self.active_events.iter().copied()
+    }
+
+    pub fn is_holiday_active_like_cpp(
+        &self,
+        events: &GameEventDataStoreLikeCpp,
+        holiday_id: u32,
+    ) -> GameEventHolidayActiveOutcomeLikeCpp {
+        if holiday_id == 0 {
+            return GameEventHolidayActiveOutcomeLikeCpp::Active(false);
+        }
+
+        for event_id in self.active_event_ids_like_cpp() {
+            let Some(event) = events.event_like_cpp(event_id) else {
+                return GameEventHolidayActiveOutcomeLikeCpp::MissingActiveEvent { event_id };
+            };
+
+            if event.holiday_id == holiday_id {
+                return GameEventHolidayActiveOutcomeLikeCpp::Active(true);
+            }
+        }
+
+        GameEventHolidayActiveOutcomeLikeCpp::Active(false)
+    }
+}
+
 fn periodic_occurence_secs_like_cpp(occurence_minutes: u32) -> Option<u64> {
     (occurence_minutes != 0)
         .then(|| u64::from(occurence_minutes).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP))
@@ -681,6 +745,7 @@ pub struct CanonicalSpawnMetadataLikeCpp {
     linked_respawns: LinkedRespawnStoreLikeCpp,
     pool_mgr: PoolMgrLikeCpp,
     game_events: GameEventDataStoreLikeCpp,
+    game_event_active_set: GameEventActiveSetLikeCpp,
     game_event_pools: GameEventPoolIdsLikeCpp,
     game_event_spawn_guids: GameEventSpawnGuidsLikeCpp,
     creature_runtime_rows: BTreeMap<SpawnId, CreatureSpawnRuntimeRowLikeCpp>,
@@ -699,6 +764,7 @@ impl CanonicalSpawnMetadataLikeCpp {
             linked_respawns: LinkedRespawnStoreLikeCpp::new(),
             pool_mgr: PoolMgrLikeCpp::new(),
             game_events: GameEventDataStoreLikeCpp::default(),
+            game_event_active_set: GameEventActiveSetLikeCpp::default(),
             game_event_pools: GameEventPoolIdsLikeCpp::default(),
             game_event_spawn_guids: GameEventSpawnGuidsLikeCpp::default(),
             creature_runtime_rows: BTreeMap::new(),
@@ -760,6 +826,16 @@ impl CanonicalSpawnMetadataLikeCpp {
     #[allow(dead_code)]
     pub fn game_events_like_cpp(&self) -> &GameEventDataStoreLikeCpp {
         &self.game_events
+    }
+
+    #[allow(dead_code)]
+    pub fn game_event_active_set_like_cpp(&self) -> &GameEventActiveSetLikeCpp {
+        &self.game_event_active_set
+    }
+
+    #[allow(dead_code)]
+    pub fn game_event_active_set_mut_like_cpp(&mut self) -> &mut GameEventActiveSetLikeCpp {
+        &mut self.game_event_active_set
     }
 
     #[allow(dead_code)]
@@ -2620,6 +2696,14 @@ mod tests {
         game_event
     }
 
+    fn event_with_holiday(
+        mut game_event: GameEventDataLikeCpp,
+        holiday_id: u32,
+    ) -> GameEventDataLikeCpp {
+        game_event.holiday_id = holiday_id;
+        game_event
+    }
+
     fn game_event_store(
         events: impl IntoIterator<Item = GameEventDataLikeCpp>,
     ) -> GameEventDataStoreLikeCpp {
@@ -2627,6 +2711,89 @@ mod tests {
             GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(8)),
             GameEventDataStoreLikeCpp::with_event_like_cpp,
         )
+    }
+
+    #[test]
+    fn game_event_active_set_insert_dedupe_order_remove_and_clear_like_cpp() {
+        let mut active = GameEventActiveSetLikeCpp::new();
+
+        assert!(active.add_active_event_like_cpp(7));
+        assert!(active.add_active_event_like_cpp(2));
+        assert!(!active.add_active_event_like_cpp(7));
+        assert!(active.add_active_event_like_cpp(5));
+        assert_eq!(
+            active.active_event_ids_like_cpp().collect::<Vec<_>>(),
+            vec![2, 5, 7]
+        );
+
+        assert!(active.remove_active_event_like_cpp(5));
+        assert!(!active.remove_active_event_like_cpp(5));
+        assert_eq!(
+            active.active_event_ids_like_cpp().collect::<Vec<_>>(),
+            vec![2, 7]
+        );
+
+        active.clear_active_events_like_cpp();
+        assert_eq!(active.active_event_ids_like_cpp().count(), 0);
+    }
+
+    #[test]
+    fn game_event_is_active_event_checks_membership_like_cpp() {
+        let mut active = GameEventActiveSetLikeCpp::new();
+        active.add_active_event_like_cpp(3);
+
+        assert!(active.is_active_event_like_cpp(3));
+        assert!(!active.is_active_event_like_cpp(4));
+    }
+
+    #[test]
+    fn game_event_is_holiday_active_matches_cpp_and_reports_missing_active_event_like_cpp() {
+        let store = game_event_store([
+            event_with_holiday(event(1, GameEventStateLikeCpp::Normal, 0, 0, 0, 0), 141),
+            event_with_holiday(event(2, GameEventStateLikeCpp::Normal, 0, 0, 0, 0), 142),
+        ]);
+        let mut active = GameEventActiveSetLikeCpp::new();
+
+        assert_eq!(
+            active.is_holiday_active_like_cpp(&store, 0),
+            GameEventHolidayActiveOutcomeLikeCpp::Active(false)
+        );
+
+        active.add_active_event_like_cpp(2);
+        assert_eq!(
+            active.is_holiday_active_like_cpp(&store, 142),
+            GameEventHolidayActiveOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            active.is_holiday_active_like_cpp(&store, 141),
+            GameEventHolidayActiveOutcomeLikeCpp::Active(false)
+        );
+
+        active.add_active_event_like_cpp(99);
+        assert_eq!(
+            active.is_holiday_active_like_cpp(&store, 141),
+            GameEventHolidayActiveOutcomeLikeCpp::MissingActiveEvent { event_id: 99 }
+        );
+    }
+
+    #[test]
+    fn game_event_active_set_lives_with_canonical_metadata_like_cpp() {
+        let mut metadata =
+            CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new());
+
+        assert!(
+            !metadata
+                .game_event_active_set_like_cpp()
+                .is_active_event_like_cpp(4)
+        );
+        metadata
+            .game_event_active_set_mut_like_cpp()
+            .add_active_event_like_cpp(4);
+        assert!(
+            metadata
+                .game_event_active_set_like_cpp()
+                .is_active_event_like_cpp(4)
+        );
     }
 
     #[test]
