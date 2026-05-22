@@ -41,13 +41,15 @@
 //!   and deferred holiday DB2 validation / `SetHolidayEventTime`.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:44-80`
 //!   `GameEventMgr::CheckOneGameEvent(uint16)` pure timing/state decision helper.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:331-374`
+//!   `game_event_prerequisite` load into `GameEventData::prerequisite_events`.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:82-119`
 //!   `GameEventMgr::NextCheck(uint16)` pure delay decision helper.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:994-1062`
 //!   `GameEventMgr::Update()` consumes the helpers before Start/Stop side effects;
 //!   those scheduler/runtime side effects remain out of scope here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use wow_core::{ObjectGuid, Position, guid::HighGuid};
@@ -96,6 +98,7 @@ pub struct CanonicalSpawnStoreLoadReport {
     pub linked_respawn: LinkedRespawnLoadReportLikeCpp,
     pub pool_mgr: PoolMgrLoadReportLikeCpp,
     pub game_events: GameEventDataLoadReportLikeCpp,
+    pub game_event_prerequisites: GameEventPrerequisiteLoadReportLikeCpp,
     pub game_event_pools: GameEventPoolLoadReportLikeCpp,
     pub game_event_spawn_guids: GameEventSpawnGuidLoadReportLikeCpp,
     pub creature_formations: CreatureFormationLoadReportLikeCpp,
@@ -149,6 +152,16 @@ pub struct GameEventDataLoadReportLikeCpp {
     pub skipped_out_of_range: usize,
     pub invalid_normal_zero_length: usize,
     pub holiday_validation_deferred: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GameEventPrerequisiteLoadReportLikeCpp {
+    pub rows: usize,
+    pub loaded: usize,
+    pub skipped_out_of_range_event: usize,
+    pub skipped_non_world_event: usize,
+    pub skipped_out_of_range_prerequisite: usize,
+    pub duplicate_ignored: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -232,6 +245,15 @@ pub enum GameEventCheckOutcomeLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventPrerequisiteInsertOutcomeLikeCpp {
+    Loaded,
+    Duplicate,
+    OutOfRangeEvent,
+    NonWorldEvent,
+    OutOfRangePrerequisite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameEventNextCheckOutcomeLikeCpp {
     DelaySecs(u64),
     MissingEvent { event_id: u16 },
@@ -249,6 +271,7 @@ pub struct GameEventDataLikeCpp {
     pub holiday_id: u32,
     pub holiday_stage: u8,
     pub state_raw: u8,
+    pub prerequisite_events: BTreeSet<u16>,
     pub description: String,
     pub announce: u8,
 }
@@ -265,6 +288,7 @@ impl Default for GameEventDataLikeCpp {
             holiday_id: 0,
             holiday_stage: 0,
             state_raw: GameEventStateLikeCpp::Normal as u8,
+            prerequisite_events: BTreeSet::new(),
             description: String::new(),
             announce: 0,
         }
@@ -311,11 +335,49 @@ impl GameEventDataStoreLikeCpp {
         self.events.get(usize::from(event_id))
     }
 
+    pub fn prerequisite_events_like_cpp(&self, event_id: u16) -> Option<&BTreeSet<u16>> {
+        self.event_like_cpp(event_id)
+            .map(|event| &event.prerequisite_events)
+    }
+
+    pub fn insert_prerequisite_event_like_cpp(
+        &mut self,
+        event_id: u16,
+        prerequisite_event: u32,
+    ) -> GameEventPrerequisiteInsertOutcomeLikeCpp {
+        let event_index = usize::from(event_id);
+        if event_index >= self.events.len() {
+            return GameEventPrerequisiteInsertOutcomeLikeCpp::OutOfRangeEvent;
+        }
+
+        let state_raw = self.events[event_index].state_raw;
+        if state_raw == GameEventStateLikeCpp::Normal as u8
+            || state_raw == GameEventStateLikeCpp::Internal as u8
+        {
+            return GameEventPrerequisiteInsertOutcomeLikeCpp::NonWorldEvent;
+        }
+
+        let Ok(prerequisite_event_id) = u16::try_from(prerequisite_event) else {
+            return GameEventPrerequisiteInsertOutcomeLikeCpp::OutOfRangePrerequisite;
+        };
+        if usize::from(prerequisite_event_id) >= self.events.len() {
+            return GameEventPrerequisiteInsertOutcomeLikeCpp::OutOfRangePrerequisite;
+        }
+
+        if self.events[event_index]
+            .prerequisite_events
+            .insert(prerequisite_event_id)
+        {
+            GameEventPrerequisiteInsertOutcomeLikeCpp::Loaded
+        } else {
+            GameEventPrerequisiteInsertOutcomeLikeCpp::Duplicate
+        }
+    }
+
     pub fn check_one_game_event_like_cpp(
         &self,
         event_id: u16,
         current_time_secs: u64,
-        prerequisite_events: &[u16],
     ) -> GameEventCheckOutcomeLikeCpp {
         let Some(event) = self.event_like_cpp(event_id) else {
             return GameEventCheckOutcomeLikeCpp::MissingEvent { event_id };
@@ -329,11 +391,11 @@ impl GameEventDataStoreLikeCpp {
                 GameEventCheckOutcomeLikeCpp::Active(false)
             }
             Some(GameEventStateLikeCpp::WorldInactive) => {
-                if prerequisite_events.is_empty() {
+                if event.prerequisite_events.is_empty() {
                     return GameEventCheckOutcomeLikeCpp::Active(false);
                 }
 
-                for &prerequisite_event_id in prerequisite_events {
+                for &prerequisite_event_id in &event.prerequisite_events {
                     let Some(prerequisite_event) = self.event_like_cpp(prerequisite_event_id)
                     else {
                         return GameEventCheckOutcomeLikeCpp::MissingPrerequisite {
@@ -473,6 +535,12 @@ struct GameEventDataRowLikeCpp {
     description: String,
     state_raw: u8,
     announce: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GameEventPrerequisiteRowLikeCpp {
+    event_id: u16,
+    prerequisite_event: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1085,10 +1153,13 @@ pub async fn load_canonical_spawn_store_like_cpp(
         load_max_game_event_entry_like_cpp(db).await?,
     );
     // C++ `GameEventMgr::LoadFromDB` loads master `game_event` metadata into
-    // `mGameEvent` before later event-specific lists consume the same sizing.
+    // `mGameEvent` before prerequisite and later event-specific lists consume the same sizing.
     // This is read-only startup metadata: no scheduler, active set, DB2 holiday
     // rewrite, persistence, or apply/unapply side effect is performed here.
-    let game_events = load_game_events_like_cpp(db, game_event_sizing, &mut report).await?;
+    let mut game_events = load_game_events_like_cpp(db, game_event_sizing, &mut report).await?;
+    // C++ `GameEventMgr::LoadFromDB` stores prerequisites on the same `mGameEvent`
+    // entries before scheduler helpers read them; no second prerequisite store is created.
+    load_game_event_prerequisites_like_cpp(db, &mut game_events, &mut report).await?;
     // C++ `GameEventMgr` loads `game_event_pool` after PoolMgr validation so
     // `CheckPool(entry)` can gate each row; this is metadata only.
     let game_event_pools =
@@ -1307,6 +1378,55 @@ async fn load_game_events_like_cpp(
     }
 
     Ok(game_events)
+}
+
+async fn load_game_event_prerequisites_like_cpp(
+    db: &WorldDatabase,
+    game_events: &mut GameEventDataStoreLikeCpp,
+    report: &mut CanonicalSpawnStoreLoadReport,
+) -> Result<()> {
+    let stmt = db.prepare(WorldStatements::SEL_GAME_EVENT_PREREQUISITES);
+    let mut result = db.query(&stmt).await?;
+    if result.is_empty() {
+        return Ok(());
+    }
+
+    loop {
+        apply_game_event_prerequisite_row_like_cpp(
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: result.read(0),
+                prerequisite_event: result.read(1),
+            },
+            game_events,
+            &mut report.game_event_prerequisites,
+        );
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_game_event_prerequisite_row_like_cpp(
+    row: GameEventPrerequisiteRowLikeCpp,
+    game_events: &mut GameEventDataStoreLikeCpp,
+    report: &mut GameEventPrerequisiteLoadReportLikeCpp,
+) {
+    report.rows += 1;
+    match game_events.insert_prerequisite_event_like_cpp(row.event_id, row.prerequisite_event) {
+        GameEventPrerequisiteInsertOutcomeLikeCpp::Loaded => report.loaded += 1,
+        GameEventPrerequisiteInsertOutcomeLikeCpp::Duplicate => report.duplicate_ignored += 1,
+        GameEventPrerequisiteInsertOutcomeLikeCpp::OutOfRangeEvent => {
+            report.skipped_out_of_range_event += 1;
+        }
+        GameEventPrerequisiteInsertOutcomeLikeCpp::NonWorldEvent => {
+            report.skipped_non_world_event += 1;
+        }
+        GameEventPrerequisiteInsertOutcomeLikeCpp::OutOfRangePrerequisite => {
+            report.skipped_out_of_range_prerequisite += 1;
+        }
+    }
 }
 
 fn apply_game_event_data_row_like_cpp(
@@ -2458,6 +2578,7 @@ mod tests {
             holiday_id: 0,
             holiday_stage: 0,
             state_raw: state as u8,
+            prerequisite_events: BTreeSet::new(),
             description: String::new(),
             announce: 0,
         }
@@ -2491,6 +2612,14 @@ mod tests {
         game_event
     }
 
+    fn event_with_prerequisites(
+        mut game_event: GameEventDataLikeCpp,
+        prerequisites: impl IntoIterator<Item = u16>,
+    ) -> GameEventDataLikeCpp {
+        game_event.prerequisite_events = prerequisites.into_iter().collect();
+        game_event
+    }
+
     fn game_event_store(
         events: impl IntoIterator<Item = GameEventDataLikeCpp>,
     ) -> GameEventDataStoreLikeCpp {
@@ -2505,19 +2634,19 @@ mod tests {
         let store = game_event_store([event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2)]);
 
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 100, &[]),
+            store.check_one_game_event_like_cpp(1, 100),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 101, &[]),
+            store.check_one_game_event_like_cpp(1, 101),
             GameEventCheckOutcomeLikeCpp::Active(true)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 221, &[]),
+            store.check_one_game_event_like_cpp(1, 221),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 1_000, &[]),
+            store.check_one_game_event_like_cpp(1, 1_000),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
     }
@@ -2527,11 +2656,11 @@ mod tests {
         let store = game_event_store([event_with_raw_state(1, 99, 100, 1_000, 10, 2)]);
 
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 101, &[]),
+            store.check_one_game_event_like_cpp(1, 101),
             GameEventCheckOutcomeLikeCpp::Active(true)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 221, &[]),
+            store.check_one_game_event_like_cpp(1, 221),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
     }
@@ -2546,26 +2675,26 @@ mod tests {
         ]);
 
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 500, &[]),
+            store.check_one_game_event_like_cpp(1, 500),
             GameEventCheckOutcomeLikeCpp::Active(true)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(2, 500, &[]),
+            store.check_one_game_event_like_cpp(2, 500),
             GameEventCheckOutcomeLikeCpp::Active(true)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(3, 500, &[]),
+            store.check_one_game_event_like_cpp(3, 500),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(4, 500, &[]),
+            store.check_one_game_event_like_cpp(4, 500),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
     }
 
     #[test]
     fn game_event_check_inactive_prerequisites_like_cpp() {
-        let store = game_event_store([
+        let base_events = [
             event(1, GameEventStateLikeCpp::WorldInactive, 0, 0, 0, 0),
             event_with_next_start(
                 event(2, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
@@ -2580,26 +2709,59 @@ mod tests {
                 700,
             ),
             event(5, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2),
-        ]);
+        ];
+        let store = game_event_store(base_events.clone());
 
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 600, &[]),
+            store.check_one_game_event_like_cpp(1, 600),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
+
+        let store = game_event_store([
+            event_with_prerequisites(base_events[0].clone(), [2, 3]),
+            base_events[1].clone(),
+            base_events[2].clone(),
+            base_events[3].clone(),
+            base_events[4].clone(),
+        ]);
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 600, &[2, 3]),
+            store.check_one_game_event_like_cpp(1, 600),
             GameEventCheckOutcomeLikeCpp::Active(true)
         );
+
+        let store = game_event_store([
+            event_with_prerequisites(base_events[0].clone(), [5]),
+            base_events[1].clone(),
+            base_events[2].clone(),
+            base_events[3].clone(),
+            base_events[4].clone(),
+        ]);
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 600, &[5]),
+            store.check_one_game_event_like_cpp(1, 600),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
+
+        let store = game_event_store([
+            event_with_prerequisites(base_events[0].clone(), [4]),
+            base_events[1].clone(),
+            base_events[2].clone(),
+            base_events[3].clone(),
+            base_events[4].clone(),
+        ]);
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 600, &[4]),
+            store.check_one_game_event_like_cpp(1, 600),
             GameEventCheckOutcomeLikeCpp::Active(false)
         );
+
+        let store = game_event_store([
+            event_with_prerequisites(base_events[0].clone(), [9]),
+            base_events[1].clone(),
+            base_events[2].clone(),
+            base_events[3].clone(),
+            base_events[4].clone(),
+        ]);
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 600, &[9]),
+            store.check_one_game_event_like_cpp(1, 600),
             GameEventCheckOutcomeLikeCpp::MissingPrerequisite { event_id: 9 }
         );
     }
@@ -2609,12 +2771,73 @@ mod tests {
         let store = game_event_store([event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 0, 2)]);
 
         assert_eq!(
-            store.check_one_game_event_like_cpp(9, 500, &[]),
+            store.check_one_game_event_like_cpp(9, 500),
             GameEventCheckOutcomeLikeCpp::MissingEvent { event_id: 9 }
         );
         assert_eq!(
-            store.check_one_game_event_like_cpp(1, 500, &[]),
+            store.check_one_game_event_like_cpp(1, 500),
             GameEventCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { event_id: 1 }
+        );
+    }
+
+    #[test]
+    fn game_event_prerequisite_loader_accepts_world_events_dedupes_and_sorts_like_cpp() {
+        let mut store = game_event_store([
+            event(1, GameEventStateLikeCpp::WorldInactive, 0, 0, 0, 0),
+            event(2, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
+            event(3, GameEventStateLikeCpp::WorldFinished, 0, 0, 0, 0),
+            event(4, GameEventStateLikeCpp::Normal, 0, 0, 0, 0),
+            event(5, GameEventStateLikeCpp::Internal, 0, 0, 0, 0),
+        ]);
+        let mut report = GameEventPrerequisiteLoadReportLikeCpp::default();
+
+        for row in [
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 1,
+                prerequisite_event: 3,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 1,
+                prerequisite_event: 2,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 1,
+                prerequisite_event: 2,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 4,
+                prerequisite_event: 2,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 5,
+                prerequisite_event: 2,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 99,
+                prerequisite_event: 2,
+            },
+            GameEventPrerequisiteRowLikeCpp {
+                event_id: 1,
+                prerequisite_event: 99,
+            },
+        ] {
+            apply_game_event_prerequisite_row_like_cpp(row, &mut store, &mut report);
+        }
+
+        assert_eq!(report.rows, 7);
+        assert_eq!(report.loaded, 2);
+        assert_eq!(report.duplicate_ignored, 1);
+        assert_eq!(report.skipped_non_world_event, 2);
+        assert_eq!(report.skipped_out_of_range_event, 1);
+        assert_eq!(report.skipped_out_of_range_prerequisite, 1);
+        assert_eq!(
+            store
+                .prerequisite_events_like_cpp(1)
+                .expect("test event exists")
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![2, 3]
         );
     }
 

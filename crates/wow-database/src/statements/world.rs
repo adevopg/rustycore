@@ -119,6 +119,8 @@ pub enum WorldStatements {
     SEL_MAX_GAME_EVENT_ENTRY,
     /// C++ GameEventMgr::LoadFromDB game_event master metadata query.
     SEL_GAME_EVENTS,
+    /// C++ GameEventMgr::LoadFromDB game_event_prerequisite metadata query.
+    SEL_GAME_EVENT_PREREQUISITES,
     /// C++ GameEventMgr::LoadFromDB game_event_pool metadata query.
     SEL_GAME_EVENT_POOLS,
     /// C++ GameEventMgr::LoadFromDB game_event_creature metadata query.
@@ -564,6 +566,9 @@ impl StatementDef for WorldStatements {
             Self::SEL_MAX_GAME_EVENT_ENTRY => "SELECT MAX(eventEntry) FROM game_event",
             Self::SEL_GAME_EVENTS => {
                 "SELECT eventEntry, UNIX_TIMESTAMP(start_time), UNIX_TIMESTAMP(end_time), occurence, length, holiday, holidayStage, description, world_event, announce FROM game_event"
+            }
+            Self::SEL_GAME_EVENT_PREREQUISITES => {
+                "SELECT eventEntry, prerequisite_event FROM game_event_prerequisite"
             }
             Self::SEL_GAME_EVENT_POOLS => concat!(
                 "SELECT pool_template.entry, game_event_pool.eventEntry FROM pool_template",
