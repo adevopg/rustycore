@@ -39,6 +39,13 @@
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:215-285`
 //!   `game_event` master metadata load, reserved id 0, normal zero-length validation,
 //!   and deferred holiday DB2 validation / `SetHolidayEventTime`.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:44-80`
+//!   `GameEventMgr::CheckOneGameEvent(uint16)` pure timing/state decision helper.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:82-119`
+//!   `GameEventMgr::NextCheck(uint16)` pure delay decision helper.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:994-1062`
+//!   `GameEventMgr::Update()` consumes the helpers before Start/Stop side effects;
+//!   those scheduler/runtime side effects remain out of scope here.
 
 use std::collections::BTreeMap;
 
@@ -63,6 +70,9 @@ use wow_map::{
 const DIFFICULTY_NONE_LIKE_CPP: Difficulty = 0;
 const PERSONAL_PHASE_FLAG_LIKE_CPP: u32 = 0x8000_0000;
 const TRANSPORT_MAP_IDS_REPRESENTED: &[u32] = &[];
+const GAME_EVENT_MINUTE_SECS_LIKE_CPP: u64 = 60;
+/// C++ `#define max_ge_check_delay DAY` in `GameEventMgr.h:31`.
+pub const MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SpawnKindLoadReport {
@@ -213,6 +223,21 @@ impl GameEventStateLikeCpp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventCheckOutcomeLikeCpp {
+    Active(bool),
+    MissingEvent { event_id: u16 },
+    MissingPrerequisite { event_id: u16 },
+    InvalidTimingZeroOccurrence { event_id: u16 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventNextCheckOutcomeLikeCpp {
+    DelaySecs(u64),
+    MissingEvent { event_id: u16 },
+    InvalidTimingZeroOccurrence { event_id: u16 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameEventDataLikeCpp {
     pub event_id: u16,
@@ -286,6 +311,134 @@ impl GameEventDataStoreLikeCpp {
         self.events.get(usize::from(event_id))
     }
 
+    pub fn check_one_game_event_like_cpp(
+        &self,
+        event_id: u16,
+        current_time_secs: u64,
+        prerequisite_events: &[u16],
+    ) -> GameEventCheckOutcomeLikeCpp {
+        let Some(event) = self.event_like_cpp(event_id) else {
+            return GameEventCheckOutcomeLikeCpp::MissingEvent { event_id };
+        };
+
+        match event.state_like_cpp() {
+            Some(
+                GameEventStateLikeCpp::WorldConditions | GameEventStateLikeCpp::WorldNextPhase,
+            ) => GameEventCheckOutcomeLikeCpp::Active(true),
+            Some(GameEventStateLikeCpp::WorldFinished | GameEventStateLikeCpp::Internal) => {
+                GameEventCheckOutcomeLikeCpp::Active(false)
+            }
+            Some(GameEventStateLikeCpp::WorldInactive) => {
+                if prerequisite_events.is_empty() {
+                    return GameEventCheckOutcomeLikeCpp::Active(false);
+                }
+
+                for &prerequisite_event_id in prerequisite_events {
+                    let Some(prerequisite_event) = self.event_like_cpp(prerequisite_event_id)
+                    else {
+                        return GameEventCheckOutcomeLikeCpp::MissingPrerequisite {
+                            event_id: prerequisite_event_id,
+                        };
+                    };
+                    let prerequisite_state = prerequisite_event.state_like_cpp();
+                    let prerequisite_done = matches!(
+                        prerequisite_state,
+                        Some(
+                            GameEventStateLikeCpp::WorldNextPhase
+                                | GameEventStateLikeCpp::WorldFinished
+                        )
+                    );
+                    if !prerequisite_done || prerequisite_event.next_start > current_time_secs {
+                        return GameEventCheckOutcomeLikeCpp::Active(false);
+                    }
+                }
+
+                GameEventCheckOutcomeLikeCpp::Active(true)
+            }
+            Some(GameEventStateLikeCpp::Normal) | None => {
+                Self::check_periodic_window_like_cpp(event, current_time_secs)
+            }
+        }
+    }
+
+    pub fn next_check_like_cpp(
+        &self,
+        event_id: u16,
+        current_time_secs: u64,
+    ) -> GameEventNextCheckOutcomeLikeCpp {
+        let Some(event) = self.event_like_cpp(event_id) else {
+            return GameEventNextCheckOutcomeLikeCpp::MissingEvent { event_id };
+        };
+
+        if matches!(
+            event.state_like_cpp(),
+            Some(GameEventStateLikeCpp::WorldNextPhase | GameEventStateLikeCpp::WorldFinished)
+        ) && event.next_start >= current_time_secs
+        {
+            return GameEventNextCheckOutcomeLikeCpp::DelaySecs(
+                event.next_start.saturating_sub(current_time_secs),
+            );
+        }
+
+        if event.state_like_cpp() == Some(GameEventStateLikeCpp::WorldConditions) {
+            return if event.length != 0 {
+                GameEventNextCheckOutcomeLikeCpp::DelaySecs(
+                    u64::from(event.length).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP),
+                )
+            } else {
+                GameEventNextCheckOutcomeLikeCpp::DelaySecs(
+                    MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP,
+                )
+            };
+        }
+
+        if current_time_secs > event.end {
+            return GameEventNextCheckOutcomeLikeCpp::DelaySecs(
+                MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP,
+            );
+        }
+
+        if event.start > current_time_secs {
+            return GameEventNextCheckOutcomeLikeCpp::DelaySecs(event.start - current_time_secs);
+        }
+
+        let Some(period_secs) = periodic_occurence_secs_like_cpp(event.occurence) else {
+            return GameEventNextCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { event_id };
+        };
+        let length_secs = u64::from(event.length).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP);
+        let elapsed_in_period = current_time_secs.saturating_sub(event.start) % period_secs;
+        let delay = if elapsed_in_period < length_secs {
+            length_secs.saturating_sub(elapsed_in_period)
+        } else {
+            period_secs.saturating_sub(elapsed_in_period)
+        };
+        let end_delay = event.end.saturating_sub(current_time_secs);
+        GameEventNextCheckOutcomeLikeCpp::DelaySecs(
+            if event.end < current_time_secs.saturating_add(delay) {
+                end_delay
+            } else {
+                delay
+            },
+        )
+    }
+
+    fn check_periodic_window_like_cpp(
+        event: &GameEventDataLikeCpp,
+        current_time_secs: u64,
+    ) -> GameEventCheckOutcomeLikeCpp {
+        if !(event.start < current_time_secs && current_time_secs < event.end) {
+            return GameEventCheckOutcomeLikeCpp::Active(false);
+        }
+        let Some(period_secs) = periodic_occurence_secs_like_cpp(event.occurence) else {
+            return GameEventCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence {
+                event_id: event.event_id,
+            };
+        };
+        let length_secs = u64::from(event.length).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP);
+        let elapsed_in_period = current_time_secs.saturating_sub(event.start) % period_secs;
+        GameEventCheckOutcomeLikeCpp::Active(elapsed_in_period < length_secs)
+    }
+
     pub fn iter_like_cpp(&self) -> impl Iterator<Item = &GameEventDataLikeCpp> {
         self.events.iter()
     }
@@ -293,6 +446,19 @@ impl GameEventDataStoreLikeCpp {
     fn event_mut_like_cpp(&mut self, event_id: u16) -> Option<&mut GameEventDataLikeCpp> {
         self.events.get_mut(usize::from(event_id))
     }
+
+    #[cfg(test)]
+    fn with_event_like_cpp(mut self, event: GameEventDataLikeCpp) -> Self {
+        if let Some(slot) = self.event_mut_like_cpp(event.event_id) {
+            *slot = event;
+        }
+        self
+    }
+}
+
+fn periodic_occurence_secs_like_cpp(occurence_minutes: u32) -> Option<u64> {
+    (occurence_minutes != 0)
+        .then(|| u64::from(occurence_minutes).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2272,6 +2438,256 @@ mod tests {
             phase_group: 0,
             script_name: String::new(),
         }
+    }
+
+    fn event(
+        event_id: u16,
+        state: GameEventStateLikeCpp,
+        start: u64,
+        end: u64,
+        occurence: u32,
+        length: u32,
+    ) -> GameEventDataLikeCpp {
+        GameEventDataLikeCpp {
+            event_id,
+            start,
+            end,
+            next_start: 0,
+            occurence,
+            length,
+            holiday_id: 0,
+            holiday_stage: 0,
+            state_raw: state as u8,
+            description: String::new(),
+            announce: 0,
+        }
+    }
+
+    fn event_with_raw_state(
+        event_id: u16,
+        state_raw: u8,
+        start: u64,
+        end: u64,
+        occurence: u32,
+        length: u32,
+    ) -> GameEventDataLikeCpp {
+        let mut game_event = event(
+            event_id,
+            GameEventStateLikeCpp::Normal,
+            start,
+            end,
+            occurence,
+            length,
+        );
+        game_event.state_raw = state_raw;
+        game_event
+    }
+
+    fn event_with_next_start(
+        mut game_event: GameEventDataLikeCpp,
+        next_start: u64,
+    ) -> GameEventDataLikeCpp {
+        game_event.next_start = next_start;
+        game_event
+    }
+
+    fn game_event_store(
+        events: impl IntoIterator<Item = GameEventDataLikeCpp>,
+    ) -> GameEventDataStoreLikeCpp {
+        events.into_iter().fold(
+            GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(8)),
+            GameEventDataStoreLikeCpp::with_event_like_cpp,
+        )
+    }
+
+    #[test]
+    fn game_event_check_normal_window_and_strict_start_end_like_cpp() {
+        let store = game_event_store([event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2)]);
+
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 100, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 101, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 221, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 1_000, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+    }
+
+    #[test]
+    fn game_event_check_unknown_raw_state_uses_normal_default_like_cpp() {
+        let store = game_event_store([event_with_raw_state(1, 99, 100, 1_000, 10, 2)]);
+
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 101, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 221, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+    }
+
+    #[test]
+    fn game_event_check_world_state_branches_like_cpp() {
+        let store = game_event_store([
+            event(1, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 0),
+            event(2, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
+            event(3, GameEventStateLikeCpp::WorldFinished, 0, 0, 0, 0),
+            event(4, GameEventStateLikeCpp::Internal, 0, 0, 0, 0),
+        ]);
+
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(2, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(3, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(4, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+    }
+
+    #[test]
+    fn game_event_check_inactive_prerequisites_like_cpp() {
+        let store = game_event_store([
+            event(1, GameEventStateLikeCpp::WorldInactive, 0, 0, 0, 0),
+            event_with_next_start(
+                event(2, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
+                400,
+            ),
+            event_with_next_start(
+                event(3, GameEventStateLikeCpp::WorldFinished, 0, 0, 0, 0),
+                500,
+            ),
+            event_with_next_start(
+                event(4, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
+                700,
+            ),
+            event(5, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2),
+        ]);
+
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 600, &[]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 600, &[2, 3]),
+            GameEventCheckOutcomeLikeCpp::Active(true)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 600, &[5]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 600, &[4]),
+            GameEventCheckOutcomeLikeCpp::Active(false)
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 600, &[9]),
+            GameEventCheckOutcomeLikeCpp::MissingPrerequisite { event_id: 9 }
+        );
+    }
+
+    #[test]
+    fn game_event_check_missing_and_zero_occurrence_are_explicit_like_cpp() {
+        let store = game_event_store([event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 0, 2)]);
+
+        assert_eq!(
+            store.check_one_game_event_like_cpp(9, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::MissingEvent { event_id: 9 }
+        );
+        assert_eq!(
+            store.check_one_game_event_like_cpp(1, 500, &[]),
+            GameEventCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { event_id: 1 }
+        );
+    }
+
+    #[test]
+    fn game_event_next_check_world_phase_and_conditions_like_cpp() {
+        let store = game_event_store([
+            event_with_next_start(
+                event(1, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 0),
+                700,
+            ),
+            event_with_next_start(
+                event(2, GameEventStateLikeCpp::WorldFinished, 0, 0, 0, 0),
+                650,
+            ),
+            event(3, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 7),
+            event(4, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 0),
+        ]);
+
+        assert_eq!(
+            store.next_check_like_cpp(1, 600),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(100)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(2, 600),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(50)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(3, 600),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(420)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(4, 600),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP)
+        );
+    }
+
+    #[test]
+    fn game_event_next_check_periodic_delays_and_end_clamp_like_cpp() {
+        let store = game_event_store([
+            event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2),
+            event(2, GameEventStateLikeCpp::Normal, 900, 1_000, 10, 2),
+            event(3, GameEventStateLikeCpp::Normal, 100, 350, 10, 2),
+            event(4, GameEventStateLikeCpp::Normal, 100, 500, 0, 2),
+        ]);
+
+        assert_eq!(
+            store.next_check_like_cpp(1, 1_001),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(2, 600),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(300)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(1, 150),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(70)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(1, 221),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(479)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(3, 221),
+            GameEventNextCheckOutcomeLikeCpp::DelaySecs(129)
+        );
+        assert_eq!(
+            store.next_check_like_cpp(4, 150),
+            GameEventNextCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { event_id: 4 }
+        );
+        assert_eq!(
+            store.next_check_like_cpp(9, 150),
+            GameEventNextCheckOutcomeLikeCpp::MissingEvent { event_id: 9 }
+        );
     }
 
     #[test]
