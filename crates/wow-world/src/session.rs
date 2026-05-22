@@ -14861,19 +14861,21 @@ impl WorldSession {
                 })
                 .filter(|target_guid| {
                     map.get_typed_player(*target_guid).is_some_and(|target| {
-                        target
-                            .unit()
-                            .subsystems()
-                            .control
-                            .shared_vision_guids
-                            .contains(&player_guid)
+                        target.unit().world().object().is_in_world()
+                            && target
+                                .unit()
+                                .subsystems()
+                                .control
+                                .shared_vision_guids
+                                .contains(&player_guid)
                     }) || map.get_typed_creature(*target_guid).is_some_and(|target| {
-                        target
-                            .unit()
-                            .subsystems()
-                            .control
-                            .shared_vision_guids
-                            .contains(&player_guid)
+                        target.unit().world().object().is_in_world()
+                            && target
+                                .unit()
+                                .subsystems()
+                                .control
+                                .shared_vision_guids
+                                .contains(&player_guid)
                     })
                 })
                 .collect::<Vec<_>>();
@@ -20029,6 +20031,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gameobject_visual_despawn_player_shared_vision_out_of_world_target_no_send_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_559);
+        let target_guid = ObjectGuid::create_player(1, 50_560);
+        let gameobject_guid = test_gameobject_guid(605_076, 50_561);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        add_canonical_test_player_on_map(
+            &canonical,
+            target_guid,
+            Position::new(12.0, 22.0, 32.0, 0.0),
+            571,
+            7,
+        );
+        add_shared_vision_viewer_to_canonical_target_like_cpp(
+            &canonical,
+            571,
+            7,
+            target_guid,
+            viewer_guid,
+        );
+        add_canonical_visual_despawn_gameobject_like_cpp(
+            &canonical,
+            gameobject_guid,
+            605_076,
+            5_050_561,
+            Position::new(11.0, 21.0, 31.0, 0.0),
+            571,
+            7,
+        );
+        assert_eq!(canonical.lock().unwrap().update(60_000), Some(60_000));
+        {
+            let mut guard = canonical.lock().unwrap();
+            guard
+                .find_map_mut(571, 7)
+                .unwrap()
+                .map_mut()
+                .get_typed_player_mut(target_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .remove_from_world();
+        }
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.represented_seer_guid_like_cpp = Some(target_guid);
+
+        assert_eq!(
+            session.send_represented_gameobject_visual_despawn_from_last_update_like_cpp(),
+            0
+        );
+        assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+        assert!(
+            session
+                .represented_gameobject_visual_despawns_delivered_like_cpp
+                .is_empty()
+        );
+
+        {
+            let mut guard = canonical.lock().unwrap();
+            guard
+                .find_map_mut(571, 7)
+                .unwrap()
+                .map_mut()
+                .get_typed_player_mut(target_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .add_to_world();
+        }
+        assert_eq!(
+            session.send_represented_gameobject_visual_despawn_from_last_update_like_cpp(),
+            1
+        );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::GameObjectDespawn]
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+    }
+
+    #[tokio::test]
     async fn gameobject_visual_despawn_creature_shared_vision_viewer_receives_once_like_cpp() {
         let (mut session, _, send_rx) = make_session();
         let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
@@ -20093,6 +20196,110 @@ mod tests {
             0
         );
         assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+    }
+
+    #[tokio::test]
+    async fn gameobject_visual_despawn_creature_shared_vision_out_of_world_target_no_send_like_cpp()
+    {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_562);
+        let target_guid = test_creature_guid(50_563);
+        let gameobject_guid = test_gameobject_guid(605_077, 50_564);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        add_canonical_test_creature_on_map(
+            &canonical,
+            target_guid,
+            605_077,
+            Position::new(12.0, 22.0, 32.0, 0.0),
+            0,
+            571,
+            7,
+        );
+        add_shared_vision_viewer_to_canonical_target_like_cpp(
+            &canonical,
+            571,
+            7,
+            target_guid,
+            viewer_guid,
+        );
+        add_canonical_visual_despawn_gameobject_like_cpp(
+            &canonical,
+            gameobject_guid,
+            605_077,
+            5_050_564,
+            Position::new(11.0, 21.0, 31.0, 0.0),
+            571,
+            7,
+        );
+        assert_eq!(canonical.lock().unwrap().update(60_000), Some(60_000));
+        {
+            let mut guard = canonical.lock().unwrap();
+            guard
+                .find_map_mut(571, 7)
+                .unwrap()
+                .map_mut()
+                .get_typed_creature_mut(target_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .remove_from_world();
+        }
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.represented_seer_guid_like_cpp = Some(target_guid);
+
+        assert_eq!(
+            session.send_represented_gameobject_visual_despawn_from_last_update_like_cpp(),
+            0
+        );
+        assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+        assert!(
+            session
+                .represented_gameobject_visual_despawns_delivered_like_cpp
+                .is_empty()
+        );
+
+        {
+            let mut guard = canonical.lock().unwrap();
+            guard
+                .find_map_mut(571, 7)
+                .unwrap()
+                .map_mut()
+                .get_typed_creature_mut(target_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .add_to_world();
+        }
+        assert_eq!(
+            session.send_represented_gameobject_visual_despawn_from_last_update_like_cpp(),
+            1
+        );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::GameObjectDespawn]
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
     }
 
     #[tokio::test]
