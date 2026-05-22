@@ -7,6 +7,12 @@
 
 ## Closed Tasks
 
+- [x] **#NEXT.R8.ENTITIES.529** GameEventUnspawn pool `DespawnPool` world-server/map-manager consumption seam.
+  Status: represented-complete only for a bounded `world-server` helper that consumes explicit event pool ids and dispatches existing canonical maps by `PoolTemplateDataLikeCpp::MapId` into `Map::despawn_pool_safe_map_actions_like_cpp(..., true)`. Review `APROBADO`; CI `CI_OK`; local commit is this slice closeout.
+  C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:1312-1327`; `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:813-831`; reviewer additionally verified `PoolMgr.h:34-38` and `MapManager.h:168-179`.
+  Rust targets: `crates/world-server/src/main.rs`, `crates/wow-map/src/pool.rs`, `docs/migration/current-session-handoff.md`, `docs/migration/inventory/r8-entities-miniphase.md`, `docs/migration/inventory/r8-entities-miniphase.tsv`.
+  Acceptance: helper reads `CanonicalSpawnMetadataLikeCpp.pool_mgr_like_cpp()`, counts missing templates/no loaded canonical maps/planner errors, filters existing maps by template map id, calls the #528 `Map` facade with `always_delete_respawn_time=true`, and aggregates safe map-local removal/timer summaries. Tests cover map-id filtering, missing-template no-op, and always-delete removal of a non-spawned member timer. Boundaries: no `game_event_pool` DB loader, no full GameEventMgr, no spawn path, no quest/model/equipment/world-state/vendor/scripts/AI, no ObjectMgr grid metadata mutation, no DB save/delete bridge, no sessions/fanout, no push/install/restart, and no manual-test-ready GameEvent/PoolMgr runtime claim.
+
 - [x] **#NEXT.R8.ENTITIES.528** PoolMgr `DespawnPool` top-level map-owned safe-action facade.
   Status: represented-complete only for the bounded `wow-map` facade `Map::despawn_pool_safe_map_actions_like_cpp(...)` over map-owned `SpawnedPoolDataLikeCpp`; review `APROBADO`; CI `CI_OK`; local commit is this slice closeout.
   C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:183-218`; `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:220-257`; `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:259-264`; `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:421-422`; `/home/server/woltk-trinity-legacy/src/server/game/Pools/PoolMgr.cpp:813-831`.

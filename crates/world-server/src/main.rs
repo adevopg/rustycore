@@ -2398,6 +2398,80 @@ fn install_canonical_spawn_group_initializer_like_cpp(
     });
 }
 
+#[derive(Debug, Default, Clone, PartialEq)]
+struct GameEventPoolUnspawnSummaryLikeCpp {
+    event_pool_ids_seen: usize,
+    missing_pool_templates: usize,
+    invalid_template_map_ids: usize,
+    pools_without_loaded_canonical_maps: usize,
+    maps_matched: usize,
+    pool_objects_removed: usize,
+    pool_respawn_timers_removed: usize,
+    pool_respawn_timers_missing: usize,
+    pool_stale_index_entries: usize,
+    pool_remove_errors: usize,
+    pool_unsupported_action_kind: usize,
+    blocked_pool_plan_errors: Vec<wow_map::PoolMgrPlanErrorLikeCpp>,
+}
+
+impl GameEventPoolUnspawnSummaryLikeCpp {
+    fn accumulate_despawn_summary_like_cpp(
+        &mut self,
+        summary: &wow_map::map::ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+    ) {
+        self.pool_objects_removed += summary.pool_objects_removed;
+        self.pool_respawn_timers_removed += summary.pool_respawn_timers_removed;
+        self.pool_respawn_timers_missing += summary.pool_respawn_timers_missing;
+        self.pool_stale_index_entries += summary.pool_stale_index_entries;
+        self.pool_remove_errors += summary.pool_remove_errors;
+        self.pool_unsupported_action_kind += summary.pool_unsupported_action_kind;
+        self.blocked_pool_plan_errors
+            .extend(summary.blocked_pool_plan_errors.iter().copied());
+    }
+}
+
+fn game_event_unspawn_pools_like_cpp(
+    manager: &mut wow_map::MapManager,
+    canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
+    event_pool_ids: &[u32],
+) -> GameEventPoolUnspawnSummaryLikeCpp {
+    let pool_mgr = canonical_spawn_metadata.pool_mgr_like_cpp();
+    let mut summary = GameEventPoolUnspawnSummaryLikeCpp::default();
+
+    for &pool_id in event_pool_ids {
+        summary.event_pool_ids_seen += 1;
+        let Some(pool_template) = pool_mgr.pool_template_like_cpp(pool_id) else {
+            summary.missing_pool_templates += 1;
+            continue;
+        };
+        let Ok(map_id) = u32::try_from(pool_template.map_id) else {
+            summary.invalid_template_map_ids += 1;
+            continue;
+        };
+
+        let mut maps_matched_for_pool = 0usize;
+        manager.do_for_all_maps_mut(|managed_map| {
+            if managed_map.map_id() != map_id {
+                return;
+            }
+            maps_matched_for_pool += 1;
+            match managed_map
+                .map_mut()
+                .despawn_pool_safe_map_actions_like_cpp(pool_mgr, pool_id, true)
+            {
+                Ok(map_summary) => summary.accumulate_despawn_summary_like_cpp(&map_summary),
+                Err(error) => summary.blocked_pool_plan_errors.push(error),
+            }
+        });
+        summary.maps_matched += maps_matched_for_pool;
+        if maps_matched_for_pool == 0 {
+            summary.pools_without_loaded_canonical_maps += 1;
+        }
+    }
+
+    summary
+}
+
 fn apply_canonical_spawn_group_condition_update_loaded_grid_records_like_cpp(
     managed_map: &mut wow_map::ManagedMap,
     canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
@@ -4059,11 +4133,12 @@ mod tests {
         build_loaded_grid_creature_respawn_record_like_cpp,
         build_loaded_grid_creature_spawn_group_spawn_record_like_cpp,
         build_loaded_grid_gameobject_respawn_record_like_cpp,
-        canonical_map_update_tick_set_inactive_like_cpp,
+        canonical_map_update_tick_set_inactive_like_cpp, game_event_unspawn_pools_like_cpp,
         install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
         loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
         persisted_respawn_info_from_row_like_cpp, queue_respawn_db_delete_like_cpp,
-        queue_respawn_db_save_like_cpp, world_config_bool, world_config_u8, world_config_u16,
+        queue_respawn_db_save_like_cpp, spawn_store_loader, world_config_bool, world_config_u8,
+        world_config_u16,
     };
     use std::collections::{BTreeMap, HashSet};
     use std::env;
@@ -4167,6 +4242,164 @@ mod tests {
     }
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn respawn_info_like_cpp(
+        object_type: SpawnObjectType,
+        spawn_id: wow_map::SpawnId,
+        respawn_time: i64,
+    ) -> RespawnInfoLikeCpp {
+        RespawnInfoLikeCpp {
+            object_type,
+            spawn_id,
+            entry: 42,
+            respawn_time,
+            grid_id: 7,
+        }
+    }
+
+    fn canonical_spawn_metadata_with_pool_mgr_like_cpp(
+        pool_mgr: PoolMgrLikeCpp,
+    ) -> spawn_store_loader::CanonicalSpawnMetadataLikeCpp {
+        spawn_store_loader::CanonicalSpawnMetadataLikeCpp::new(SpawnStore::new(), BTreeMap::new())
+            .with_pool_mgr_like_cpp(pool_mgr)
+    }
+
+    fn pool_mgr_with_creature_pool_like_cpp(
+        pool_id: u32,
+        map_id: i32,
+        spawn_id: wow_map::SpawnId,
+    ) -> PoolMgrLikeCpp {
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(pool_id, PoolTemplateDataLikeCpp::new(1, map_id));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, pool_id);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(spawn_id, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, pool_id, group)
+            .expect("test creature pool group");
+        pool_mgr
+    }
+
+    #[test]
+    fn game_event_pool_unspawn_filters_by_pool_template_map_id_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        manager.create_world_map(1, 0);
+        manager.create_world_map(2, 0);
+        let pool_id = 5291;
+        let spawn_id = 529101;
+        let metadata = canonical_spawn_metadata_with_pool_mgr_like_cpp(
+            pool_mgr_with_creature_pool_like_cpp(pool_id, 1, spawn_id),
+        );
+
+        for map_id in [1, 2] {
+            let map = manager
+                .find_map_mut(map_id, 0)
+                .expect("test canonical map")
+                .map_mut();
+            map.add_respawn_info_like_cpp(respawn_info_like_cpp(
+                SpawnObjectType::Creature,
+                spawn_id,
+                200,
+            ));
+            map.pool_data_mut_like_cpp()
+                .add_spawn_like_cpp(SpawnObjectType::Creature, spawn_id, pool_id)
+                .expect("test spawned creature pool data");
+        }
+
+        let summary = game_event_unspawn_pools_like_cpp(&mut manager, &metadata, &[pool_id]);
+
+        assert_eq!(summary.event_pool_ids_seen, 1);
+        assert_eq!(summary.missing_pool_templates, 0);
+        assert_eq!(summary.maps_matched, 1);
+        assert_eq!(summary.pools_without_loaded_canonical_maps, 0);
+        assert_eq!(summary.pool_respawn_timers_removed, 0);
+        assert_eq!(summary.pool_respawn_timers_missing, 0);
+        assert!(summary.blocked_pool_plan_errors.is_empty());
+        let map_1 = manager.find_map(1, 0).expect("test map 1").map();
+        assert_eq!(
+            map_1.get_respawn_time_like_cpp(SpawnObjectType::Creature, spawn_id),
+            200
+        );
+        assert!(
+            !map_1
+                .pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(spawn_id)
+        );
+        let map_2 = manager.find_map(2, 0).expect("test map 2").map();
+        assert_eq!(
+            map_2.get_respawn_time_like_cpp(SpawnObjectType::Creature, spawn_id),
+            200
+        );
+        assert!(
+            map_2
+                .pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(spawn_id)
+        );
+    }
+
+    #[test]
+    fn game_event_pool_unspawn_missing_pool_template_is_counted_noop_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        manager.create_world_map(1, 0);
+        let spawn_id = 529201;
+        let map = manager.find_map_mut(1, 0).expect("test map").map_mut();
+        map.add_respawn_info_like_cpp(respawn_info_like_cpp(
+            SpawnObjectType::Creature,
+            spawn_id,
+            300,
+        ));
+        let metadata = canonical_spawn_metadata_with_pool_mgr_like_cpp(PoolMgrLikeCpp::new());
+
+        let summary = game_event_unspawn_pools_like_cpp(&mut manager, &metadata, &[5292]);
+
+        assert_eq!(summary.event_pool_ids_seen, 1);
+        assert_eq!(summary.missing_pool_templates, 1);
+        assert_eq!(summary.maps_matched, 0);
+        assert_eq!(summary.pool_respawn_timers_removed, 0);
+        assert!(summary.blocked_pool_plan_errors.is_empty());
+        assert_eq!(
+            manager
+                .find_map(1, 0)
+                .expect("test map")
+                .map()
+                .get_respawn_time_like_cpp(SpawnObjectType::Creature, spawn_id),
+            300
+        );
+    }
+
+    #[test]
+    fn game_event_pool_unspawn_always_delete_removes_non_spawned_member_timer_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        manager.create_world_map(1, 0);
+        let pool_id = 5293;
+        let spawn_id = 529301;
+        let metadata = canonical_spawn_metadata_with_pool_mgr_like_cpp(
+            pool_mgr_with_creature_pool_like_cpp(pool_id, 1, spawn_id),
+        );
+        manager
+            .find_map_mut(1, 0)
+            .expect("test map")
+            .map_mut()
+            .add_respawn_info_like_cpp(respawn_info_like_cpp(
+                SpawnObjectType::Creature,
+                spawn_id,
+                400,
+            ));
+
+        let summary = game_event_unspawn_pools_like_cpp(&mut manager, &metadata, &[pool_id]);
+
+        assert_eq!(summary.maps_matched, 1);
+        assert_eq!(summary.pool_objects_removed, 0);
+        assert_eq!(summary.pool_respawn_timers_removed, 1);
+        assert_eq!(summary.pool_respawn_timers_missing, 0);
+        assert_eq!(
+            manager
+                .find_map(1, 0)
+                .expect("test map")
+                .map()
+                .get_respawn_time_like_cpp(SpawnObjectType::Creature, spawn_id),
+            0
+        );
+    }
 
     #[test]
     fn world_config_resolution_prefers_lowercase_cpp_name() {

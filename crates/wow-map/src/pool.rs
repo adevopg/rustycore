@@ -292,6 +292,11 @@ impl PoolMgrLikeCpp {
         self.templates.insert(pool_id, template);
     }
 
+    #[must_use]
+    pub fn pool_template_like_cpp(&self, pool_id: u32) -> Option<&PoolTemplateDataLikeCpp> {
+        self.templates.get(&pool_id)
+    }
+
     pub fn insert_or_replace_group_like_cpp(
         &mut self,
         kind: PoolMemberKindLikeCpp,
