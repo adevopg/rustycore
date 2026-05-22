@@ -14729,12 +14729,13 @@ impl WorldSession {
                 return 0;
             };
             let map = managed_map.map();
-            let Some(player_world) = map
-                .get_typed_player(player_guid)
-                .map(|player| player.unit().world().clone())
-            else {
+            let Some(player) = map.get_typed_player(player_guid) else {
                 return 0;
             };
+            if !player.unit().world().object().is_in_world() {
+                return 0;
+            }
+            let player_world = player.unit().world().clone();
             let player_phase_shift = player_world.phase_shift().clone();
             let visibility_range = map.visibility_range();
             let represented_gameobject_phase_shifts = &self.represented_gameobject_phase_shifts;
@@ -19290,6 +19291,70 @@ mod tests {
         );
         assert!(
             !session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn gameobject_visibility_on_destroy_not_in_world_player_no_send_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let player_guid = ObjectGuid::create_player(1, 50_567);
+        let gameobject_guid = test_gameobject_guid(605_067, 50_568);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            player_guid,
+            571,
+            7,
+        );
+        add_canonical_visibility_on_destroy_gameobject_like_cpp(
+            &canonical,
+            gameobject_guid,
+            605_067,
+            5_050_568,
+            Position::new(11.0, 21.0, 31.0, 0.0),
+            571,
+            7,
+        );
+        assert_eq!(canonical.lock().unwrap().update(60_000), Some(60_000));
+        assert_eq!(
+            canonical
+                .lock()
+                .unwrap()
+                .find_map(571, 7)
+                .unwrap()
+                .last_game_objects_update_summary()
+                .generic_visibility_on_destroy_guids
+                .as_slice(),
+            &[gameobject_guid]
+        );
+        {
+            let mut guard = canonical.lock().unwrap();
+            guard
+                .find_map_mut(571, 7)
+                .unwrap()
+                .map_mut()
+                .get_typed_player_mut(player_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .remove_from_world();
+        }
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+
+        assert_eq!(
+            session.send_represented_gameobject_visibility_on_destroy_from_last_update_like_cpp(),
+            0
+        );
+        assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+        assert!(
+            session
                 .client_visible_guids_like_cpp
                 .contains(&gameobject_guid)
         );
