@@ -14512,10 +14512,11 @@ impl WorldSession {
     ///
     /// Source of truth remains canonical `Map::map_objects` as snapshotted by
     /// `ManagedMap::last_send_object_updates_summary_like_cpp()`. This helper
-    /// gates snapshot delivery through represented direct Player or
-    /// DynamicObjectMapType receiver-source evidence before the final session
-    /// `HaveAtClient` visibility check, and never reads live DynamicObject
-    /// changed masks or mutates canonical map state.
+    /// gates snapshot delivery through represented direct Player,
+    /// PlayerMapType/CreatureMapType shared-vision, or DynamicObjectMapType
+    /// receiver-source evidence before the final session `HaveAtClient`
+    /// visibility check, and never reads live DynamicObject changed masks or
+    /// mutates canonical map state.
     pub(crate) fn send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(
         &mut self,
     ) -> usize {
@@ -14547,6 +14548,30 @@ impl WorldSession {
             let player_phase_shift = player_world.phase_shift().clone();
             let player_position = player_world.position();
             let visibility_range = map.visibility_range();
+            let shared_vision_source_guids = map
+                .typed_combat_unit_guids_like_cpp()
+                .into_iter()
+                .filter(|source_guid| *source_guid != player_guid)
+                .filter(|source_guid| {
+                    map.get_typed_player(*source_guid).is_some_and(|source| {
+                        source.unit().world().object().is_in_world()
+                            && source
+                                .unit()
+                                .subsystems()
+                                .control
+                                .shared_vision_guids
+                                .contains(&player_guid)
+                    }) || map.get_typed_creature(*source_guid).is_some_and(|source| {
+                        source.unit().world().object().is_in_world()
+                            && source
+                                .unit()
+                                .subsystems()
+                                .control
+                                .shared_vision_guids
+                                .contains(&player_guid)
+                    })
+                })
+                .collect::<Vec<_>>();
             let dynamic_object_seer_guid = represented_seer_guid.filter(|seer_guid| {
                 if !seer_guid.is_dynamic_object() {
                     return false;
@@ -14583,6 +14608,29 @@ impl WorldSession {
                             .position()
                             .is_within_dist(&player_position, visibility_range);
                     if direct_player_allows {
+                        return true;
+                    }
+                    if shared_vision_source_guids.iter().any(|source_guid| {
+                        if let Some(source) = map.get_typed_player(*source_guid) {
+                            let source_world = source.unit().world();
+                            source_world
+                                .phase_shift()
+                                .can_see(updated_world.phase_shift())
+                                && updated_world
+                                    .position()
+                                    .is_within_dist(&source_world.position(), visibility_range)
+                        } else if let Some(source) = map.get_typed_creature(*source_guid) {
+                            let source_world = source.unit().world();
+                            source_world
+                                .phase_shift()
+                                .can_see(updated_world.phase_shift())
+                                && updated_world
+                                    .position()
+                                    .is_within_dist(&source_world.position(), visibility_range)
+                        } else {
+                            false
+                        }
+                    }) {
                         return true;
                     }
                     dynamic_object_seer_guid.is_some_and(|seer_guid| {
@@ -18774,6 +18822,291 @@ mod tests {
             0
         );
 
+        assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&dynamic_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_object_values_snapshot_player_shared_vision_no_seer_gate_sends_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_526);
+        let source_guid = ObjectGuid::create_player(1, 50_527);
+        let dynamic_guid = test_dynamic_object_guid(601_526, 50_528);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        let visibility_range = canonical
+            .lock()
+            .unwrap()
+            .find_map(571, 7)
+            .unwrap()
+            .map()
+            .visibility_range();
+        let updated_position = Position::new(10.0 + visibility_range + 25.0, 20.0, 30.0, 0.0);
+        add_canonical_test_player_on_map(
+            &canonical,
+            source_guid,
+            Position::new(
+                updated_position.x + 1.0,
+                updated_position.y,
+                updated_position.z,
+                0.0,
+            ),
+            571,
+            7,
+        );
+        add_shared_vision_viewer_to_canonical_target_like_cpp(
+            &canonical,
+            571,
+            7,
+            source_guid,
+            viewer_guid,
+        );
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            dynamic_guid,
+            source_guid,
+            601_526,
+            updated_position,
+            571,
+            7,
+        );
+        prepare_dynamic_object_values_snapshot_like_cpp(&canonical, 571, 7, dynamic_guid, 41.5);
+        session.represented_seer_guid_like_cpp = Some(viewer_guid);
+        session.client_visible_guids_like_cpp.insert(dynamic_guid);
+
+        assert_eq!(
+            session.send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(),
+            1
+        );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::UpdateObject]
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&dynamic_guid)
+        );
+        assert_eq!(
+            session.send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_object_values_snapshot_creature_shared_vision_sends_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_529);
+        let source_guid = test_creature_guid(50_530);
+        let dynamic_guid = test_dynamic_object_guid(601_529, 50_531);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        let visibility_range = canonical
+            .lock()
+            .unwrap()
+            .find_map(571, 7)
+            .unwrap()
+            .map()
+            .visibility_range();
+        let updated_position = Position::new(10.0 + visibility_range + 25.0, 20.0, 30.0, 0.0);
+        add_canonical_test_creature_on_map(
+            &canonical,
+            source_guid,
+            601_529,
+            Position::new(
+                updated_position.x + 1.0,
+                updated_position.y,
+                updated_position.z,
+                0.0,
+            ),
+            0,
+            571,
+            7,
+        );
+        add_shared_vision_viewer_to_canonical_target_like_cpp(
+            &canonical,
+            571,
+            7,
+            source_guid,
+            viewer_guid,
+        );
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            dynamic_guid,
+            viewer_guid,
+            601_529,
+            updated_position,
+            571,
+            7,
+        );
+        prepare_dynamic_object_values_snapshot_like_cpp(&canonical, 571, 7, dynamic_guid, 42.5);
+        session.client_visible_guids_like_cpp.insert(dynamic_guid);
+
+        assert_eq!(
+            session.send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(),
+            1
+        );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::UpdateObject]
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&dynamic_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_object_values_snapshot_shared_vision_requires_source_lists_viewer_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_532);
+        let source_guid = ObjectGuid::create_player(1, 50_533);
+        let dynamic_guid = test_dynamic_object_guid(601_532, 50_534);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        let visibility_range = canonical
+            .lock()
+            .unwrap()
+            .find_map(571, 7)
+            .unwrap()
+            .map()
+            .visibility_range();
+        let updated_position = Position::new(10.0 + visibility_range + 25.0, 20.0, 30.0, 0.0);
+        add_canonical_test_player_on_map(
+            &canonical,
+            source_guid,
+            Position::new(
+                updated_position.x + 1.0,
+                updated_position.y,
+                updated_position.z,
+                0.0,
+            ),
+            571,
+            7,
+        );
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            dynamic_guid,
+            source_guid,
+            601_532,
+            updated_position,
+            571,
+            7,
+        );
+        prepare_dynamic_object_values_snapshot_like_cpp(&canonical, 571, 7, dynamic_guid, 43.5);
+        session.client_visible_guids_like_cpp.insert(dynamic_guid);
+
+        assert_eq!(
+            session.send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(),
+            0
+        );
+        assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&dynamic_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_object_values_snapshot_shared_vision_phase_mismatch_no_send_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let viewer_guid = ObjectGuid::create_player(1, 50_535);
+        let source_guid = test_creature_guid(50_536);
+        let dynamic_guid = test_dynamic_object_guid(601_535, 50_537);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            viewer_guid,
+            571,
+            7,
+        );
+        let visibility_range = canonical
+            .lock()
+            .unwrap()
+            .find_map(571, 7)
+            .unwrap()
+            .map()
+            .visibility_range();
+        let updated_position = Position::new(10.0 + visibility_range + 25.0, 20.0, 30.0, 0.0);
+        add_canonical_test_creature_on_map(
+            &canonical,
+            source_guid,
+            601_535,
+            Position::new(
+                updated_position.x + 1.0,
+                updated_position.y,
+                updated_position.z,
+                0.0,
+            ),
+            0,
+            571,
+            7,
+        );
+        add_shared_vision_viewer_to_canonical_target_like_cpp(
+            &canonical,
+            571,
+            7,
+            source_guid,
+            viewer_guid,
+        );
+        add_canonical_test_dynamic_object_on_map(
+            &canonical,
+            dynamic_guid,
+            viewer_guid,
+            601_535,
+            updated_position,
+            571,
+            7,
+        );
+        {
+            let mut guard = canonical.lock().unwrap();
+            let map = guard.find_map_mut(571, 7).unwrap().map_mut();
+            *map.get_typed_creature_mut(source_guid)
+                .unwrap()
+                .unit_mut()
+                .world_mut()
+                .phase_shift_mut() = PhaseShift::from_phases([10]);
+            *map.get_typed_dynamic_object_mut(dynamic_guid)
+                .unwrap()
+                .world_mut()
+                .phase_shift_mut() = PhaseShift::from_phases([20]);
+        }
+        prepare_dynamic_object_values_snapshot_like_cpp(&canonical, 571, 7, dynamic_guid, 44.5);
+        session.client_visible_guids_like_cpp.insert(dynamic_guid);
+
+        assert_eq!(
+            session.send_represented_dynamic_object_values_updates_from_last_map_send_object_updates_like_cpp(),
+            0
+        );
         assert_eq!(drain_server_opcodes(&send_rx), Vec::<ServerOpcodes>::new());
         assert!(
             session
