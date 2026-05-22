@@ -1552,7 +1552,14 @@ async fn main() -> Result<()> {
                 side_effect_summary.change_equip_or_model_live_creatures_mutated,
             change_equip_or_model_model_validation_unavailable =
                 side_effect_summary.change_equip_or_model_model_validation_unavailable,
-            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel model/equipment metadata side effects; full ConditionMgr world-event runtime and unsupported ApplyNewEvent/UnApplyEvent side effects remain pending"
+            update_npc_flags_actions = side_effect_summary.update_npc_flags_actions,
+            update_npc_flags_records_seen = side_effect_summary.update_npc_flags_records_seen,
+            update_npc_flags_maps_matched = side_effect_summary.update_npc_flags_maps_matched,
+            update_npc_flags_live_creatures_mutated =
+                side_effect_summary.update_npc_flags_live_creatures_mutated,
+            update_npc_flags2_unrepresented_nonzero =
+                side_effect_summary.update_npc_flags2_unrepresented_nonzero,
+            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel and UpdateEventNPCFlags side effects; full ConditionMgr world-event runtime and unsupported ApplyNewEvent/UnApplyEvent side effects remain pending"
         );
         CanonicalGameEventSchedulerLikeCpp::start_system(
             game_event_outcome.next_update_delay_millis,
@@ -3457,6 +3464,7 @@ enum GameEventLiveUpdateActionLikeCpp {
     Spawn(i16),
     Unspawn(i16),
     ChangeEquipOrModel { event_id: u16, activate: bool },
+    UpdateNpcFlags { event_id: u16 },
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -3474,6 +3482,17 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     change_equip_or_model_live_creatures_mutated: usize,
     change_equip_or_model_stale_index_or_wrong_kind: usize,
     change_equip_or_model_model_validation_unavailable: usize,
+    update_npc_flags_actions: usize,
+    update_npc_flags_records_seen: usize,
+    update_npc_flags_missing_event_buckets: usize,
+    update_npc_flags_missing_spawn_metadata: usize,
+    update_npc_flags_template_npcflag_missing: usize,
+    update_npc_flags_maps_matched: usize,
+    update_npc_flags_indexed_guids: usize,
+    update_npc_flags_live_creatures_mutated: usize,
+    update_npc_flags_stale_index_or_wrong_kind: usize,
+    update_npc_flags_low_applied: usize,
+    update_npc_flags2_unrepresented_nonzero: usize,
 }
 
 fn game_event_signed_id_like_cpp(event_id: u16) -> i16 {
@@ -3497,6 +3516,9 @@ fn game_event_live_update_actions_like_cpp(
                     event_id: summary.event_id,
                     activate: true,
                 });
+                actions.push(GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags {
+                    event_id: summary.event_id,
+                });
             }
         }
     }
@@ -3509,6 +3531,9 @@ fn game_event_live_update_actions_like_cpp(
                 actions.push(GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
                     event_id: summary.event_id,
                     activate: false,
+                });
+                actions.push(GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags {
+                    event_id: summary.event_id,
                 });
             }
         }
@@ -3577,6 +3602,57 @@ fn game_event_change_equip_or_model_like_cpp(
     summary
 }
 
+fn game_event_update_npc_flags_like_cpp(
+    manager: &mut wow_map::MapManager,
+    canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
+    event_id: u16,
+    active_event_ids: &[u16],
+) -> GameEventLiveUpdateSideEffectSummaryLikeCpp {
+    let mut summary = GameEventLiveUpdateSideEffectSummaryLikeCpp::default();
+    let Some(records) = canonical_spawn_metadata.game_event_npc_flags_like_cpp(event_id) else {
+        summary.update_npc_flags_missing_event_buckets += 1;
+        return summary;
+    };
+    summary.update_npc_flags_records_seen = records.len();
+
+    for record in records {
+        let Some(spawn_data) = canonical_spawn_metadata
+            .spawn_store()
+            .spawn_data(wow_map::SpawnObjectType::Creature, record.spawn_id)
+        else {
+            summary.update_npc_flags_missing_spawn_metadata += 1;
+            continue;
+        };
+        summary.update_npc_flags_template_npcflag_missing += 1;
+        let overlay = canonical_spawn_metadata
+            .game_event_npc_flag_mask_like_cpp(record.spawn_id, active_event_ids);
+        let npcflag_mask_with_template = overlay | 0;
+
+        let mut maps_matched_for_record = 0usize;
+        manager.do_for_all_maps_mut(|map| {
+            if map.map_id() == spawn_data.map_id {
+                maps_matched_for_record += 1;
+                let outcome = map
+                    .map_mut()
+                    .update_game_event_npc_flags_by_spawn_id_like_cpp(
+                        record.spawn_id,
+                        npcflag_mask_with_template,
+                    );
+                summary.update_npc_flags_indexed_guids += outcome.indexed_guids;
+                summary.update_npc_flags_live_creatures_mutated += outcome.live_creatures_mutated;
+                summary.update_npc_flags_stale_index_or_wrong_kind +=
+                    outcome.stale_index_or_wrong_kind;
+                summary.update_npc_flags_low_applied += outcome.npc_flags_low_applied;
+                summary.update_npc_flags2_unrepresented_nonzero +=
+                    outcome.npc_flags2_unrepresented_nonzero;
+            }
+        });
+        summary.update_npc_flags_maps_matched += maps_matched_for_record;
+    }
+
+    summary
+}
+
 fn consume_game_event_live_update_side_effects_like_cpp(
     manager: &mut wow_map::MapManager,
     canonical_spawn_metadata: &mut spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
@@ -3635,6 +3711,35 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     change_summary.change_equip_or_model_stale_index_or_wrong_kind;
                 summary.change_equip_or_model_model_validation_unavailable +=
                     change_summary.change_equip_or_model_model_validation_unavailable;
+            }
+            GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags { event_id } => {
+                let npc_flag_summary = game_event_update_npc_flags_like_cpp(
+                    manager,
+                    canonical_spawn_metadata,
+                    event_id,
+                    active_event_ids,
+                );
+                summary.update_npc_flags_actions += 1;
+                summary.update_npc_flags_records_seen +=
+                    npc_flag_summary.update_npc_flags_records_seen;
+                summary.update_npc_flags_missing_event_buckets +=
+                    npc_flag_summary.update_npc_flags_missing_event_buckets;
+                summary.update_npc_flags_missing_spawn_metadata +=
+                    npc_flag_summary.update_npc_flags_missing_spawn_metadata;
+                summary.update_npc_flags_template_npcflag_missing +=
+                    npc_flag_summary.update_npc_flags_template_npcflag_missing;
+                summary.update_npc_flags_maps_matched +=
+                    npc_flag_summary.update_npc_flags_maps_matched;
+                summary.update_npc_flags_indexed_guids +=
+                    npc_flag_summary.update_npc_flags_indexed_guids;
+                summary.update_npc_flags_live_creatures_mutated +=
+                    npc_flag_summary.update_npc_flags_live_creatures_mutated;
+                summary.update_npc_flags_stale_index_or_wrong_kind +=
+                    npc_flag_summary.update_npc_flags_stale_index_or_wrong_kind;
+                summary.update_npc_flags_low_applied +=
+                    npc_flag_summary.update_npc_flags_low_applied;
+                summary.update_npc_flags2_unrepresented_nonzero +=
+                    npc_flag_summary.update_npc_flags2_unrepresented_nonzero;
             }
         }
     }
@@ -4600,7 +4705,16 @@ fn spawn_canonical_map_update_loop(
                         side_effect_summary.change_equip_or_model_live_creatures_mutated,
                     change_equip_or_model_model_validation_unavailable =
                         side_effect_summary.change_equip_or_model_model_validation_unavailable,
-                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel model/equipment side effects; ConditionMgr world-event rows, DB state writes, announcements, quests/vendors/worldstates/NPC flags/SAI/seasonal reset and ForceGameEventUpdate command caller remain pending"
+                    update_npc_flags_actions = side_effect_summary.update_npc_flags_actions,
+                    update_npc_flags_records_seen =
+                        side_effect_summary.update_npc_flags_records_seen,
+                    update_npc_flags_maps_matched =
+                        side_effect_summary.update_npc_flags_maps_matched,
+                    update_npc_flags_live_creatures_mutated =
+                        side_effect_summary.update_npc_flags_live_creatures_mutated,
+                    update_npc_flags2_unrepresented_nonzero =
+                        side_effect_summary.update_npc_flags2_unrepresented_nonzero,
+                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel and UpdateEventNPCFlags side effects; ConditionMgr world-event rows, DB state writes, announcements, quests/vendors/worldstates/SAI/seasonal reset and ForceGameEventUpdate command caller remain pending"
                 );
             }
 
@@ -5197,8 +5311,9 @@ mod tests {
         game_event_spawn_pools_like_cpp,
         game_event_unspawn_creatures_and_gameobjects_for_event_like_cpp,
         game_event_unspawn_for_event_like_cpp, game_event_unspawn_pools_for_event_like_cpp,
-        game_event_unspawn_pools_like_cpp, install_canonical_spawn_group_initializer_like_cpp,
-        load_world_config_from, loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
+        game_event_unspawn_pools_like_cpp, game_event_update_npc_flags_like_cpp,
+        install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
+        loot_drop_rates_like_cpp, mmap_runtime_config_like_cpp,
         persisted_respawn_info_from_row_like_cpp, queue_respawn_db_delete_like_cpp,
         queue_respawn_db_save_like_cpp, spawn_store_loader, world_config_bool, world_config_u8,
         world_config_u16,
@@ -7826,14 +7941,117 @@ mmap.enablePathFinding = 0
                     event_id: 2,
                     activate: true,
                 },
+                GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags { event_id: 2 },
                 GameEventLiveUpdateActionLikeCpp::Unspawn(3),
                 GameEventLiveUpdateActionLikeCpp::Spawn(-3),
                 GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
                     event_id: 3,
                     activate: false,
                 },
+                GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags { event_id: 3 },
             ]
         );
+    }
+
+    fn live_npc_flags_like_cpp(
+        manager: &wow_map::MapManager,
+        map_id: u32,
+        spawn_id: wow_map::SpawnId,
+    ) -> u32 {
+        manager
+            .find_map(map_id, 0)
+            .expect("test map")
+            .map()
+            .get_creature_by_spawn_id_like_cpp(spawn_id)
+            .expect("test live creature")
+            .ai_ownership()
+            .npc_flags
+    }
+
+    #[test]
+    fn game_event_npc_flag_live_activation_applies_active_overlay_without_template_base_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        manager.create_world_map(1, 0);
+        manager.create_world_map(2, 0);
+        let spawn_id = 547101;
+        insert_live_creature_for_spawn_like_cpp(&mut manager, 1, spawn_id, 547101);
+        let mut store = SpawnStore::new();
+        add_spawn_data_like_cpp(&mut store, SpawnObjectType::Creature, spawn_id, 1);
+        let mut npc_flags =
+            spawn_store_loader::GameEventNpcFlagsLikeCpp::from_game_event_max_entry_like_cpp(Some(
+                2,
+            ));
+        assert!(npc_flags.push_record_like_cpp(
+            1,
+            spawn_store_loader::GameEventNpcFlagRecordLikeCpp {
+                spawn_id,
+                npcflag: 0x20,
+            },
+        ));
+        assert!(npc_flags.push_record_like_cpp(
+            2,
+            spawn_store_loader::GameEventNpcFlagRecordLikeCpp {
+                spawn_id,
+                npcflag: 0x1_0000_0040,
+            },
+        ));
+        let metadata =
+            spawn_store_loader::CanonicalSpawnMetadataLikeCpp::new(store, BTreeMap::new())
+                .with_game_event_npc_flags_like_cpp(npc_flags);
+
+        let summary = game_event_update_npc_flags_like_cpp(&mut manager, &metadata, 1, &[1, 2]);
+
+        assert_eq!(summary.update_npc_flags_records_seen, 1);
+        assert_eq!(summary.update_npc_flags_template_npcflag_missing, 1);
+        assert_eq!(summary.update_npc_flags_maps_matched, 1);
+        assert_eq!(summary.update_npc_flags_live_creatures_mutated, 1);
+        assert_eq!(summary.update_npc_flags_low_applied, 1);
+        assert_eq!(summary.update_npc_flags2_unrepresented_nonzero, 1);
+        assert_eq!(live_npc_flags_like_cpp(&manager, 1, spawn_id), 0x60);
+    }
+
+    #[test]
+    fn game_event_npc_flag_live_deactivation_recomputes_from_remaining_active_events_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        manager.create_world_map(1, 0);
+        let spawn_id = 547201;
+        insert_live_creature_for_spawn_like_cpp(&mut manager, 1, spawn_id, 547201);
+        let mut store = SpawnStore::new();
+        add_spawn_data_like_cpp(&mut store, SpawnObjectType::Creature, spawn_id, 1);
+        let mut npc_flags =
+            spawn_store_loader::GameEventNpcFlagsLikeCpp::from_game_event_max_entry_like_cpp(Some(
+                2,
+            ));
+        assert!(npc_flags.push_record_like_cpp(
+            1,
+            spawn_store_loader::GameEventNpcFlagRecordLikeCpp {
+                spawn_id,
+                npcflag: 0x20,
+            },
+        ));
+        assert!(npc_flags.push_record_like_cpp(
+            2,
+            spawn_store_loader::GameEventNpcFlagRecordLikeCpp {
+                spawn_id,
+                npcflag: 0x40,
+            },
+        ));
+        let metadata =
+            spawn_store_loader::CanonicalSpawnMetadataLikeCpp::new(store, BTreeMap::new())
+                .with_game_event_npc_flags_like_cpp(npc_flags);
+
+        let start_summary =
+            game_event_update_npc_flags_like_cpp(&mut manager, &metadata, 1, &[1, 2]);
+        assert_eq!(start_summary.update_npc_flags_live_creatures_mutated, 1);
+        assert_eq!(start_summary.update_npc_flags_template_npcflag_missing, 1);
+        assert_eq!(live_npc_flags_like_cpp(&manager, 1, spawn_id), 0x60);
+
+        let stop_summary = game_event_update_npc_flags_like_cpp(&mut manager, &metadata, 1, &[2]);
+
+        assert_eq!(stop_summary.update_npc_flags_records_seen, 1);
+        assert_eq!(stop_summary.update_npc_flags_template_npcflag_missing, 1);
+        assert_eq!(stop_summary.update_npc_flags_live_creatures_mutated, 1);
+        assert_eq!(live_npc_flags_like_cpp(&manager, 1, spawn_id), 0x40);
     }
 
     #[test]
