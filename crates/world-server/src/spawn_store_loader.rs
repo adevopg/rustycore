@@ -309,6 +309,42 @@ pub struct GameEventStopSummaryLikeCpp {
     pub delete_condition_saves_requested: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameEventWorldStateSaveEvidenceLikeCpp {
+    pub event_id: u16,
+    pub state_after_raw: u8,
+    pub next_start_after: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameEventWorldNextPhaseFinishedLikeCpp {
+    pub event_id: u16,
+    pub was_active_before_queue: bool,
+    pub state_before_raw: u8,
+    pub state_after_raw: u8,
+    pub next_start_before: u64,
+    pub next_start_after: u64,
+    pub save_state_requested: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameEventUpdateOutcomeLikeCpp {
+    pub scanned_event_ids: Vec<u16>,
+    pub check_outcomes: Vec<(u16, GameEventCheckOutcomeLikeCpp)>,
+    pub next_check_outcomes: Vec<(u16, GameEventNextCheckOutcomeLikeCpp)>,
+    pub queued_activation_event_ids: Vec<u16>,
+    pub queued_deactivation_event_ids: Vec<u16>,
+    pub start_outcomes: Vec<GameEventStartOutcomeLikeCpp>,
+    pub stop_outcomes: Vec<GameEventStopOutcomeLikeCpp>,
+    pub negative_spawn_event_ids: Vec<i16>,
+    pub world_nextphase_finished: Vec<GameEventWorldNextPhaseFinishedLikeCpp>,
+    pub world_conditions_save_requested: Vec<GameEventWorldStateSaveEvidenceLikeCpp>,
+    pub invalid_check_outcomes: Vec<GameEventCheckOutcomeLikeCpp>,
+    pub invalid_next_check_outcomes: Vec<GameEventNextCheckOutcomeLikeCpp>,
+    pub next_event_delay_secs_before_padding: u64,
+    pub next_update_delay_millis: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameEventDataLikeCpp {
     pub event_id: u16,
@@ -993,6 +1029,191 @@ impl CanonicalSpawnMetadataLikeCpp {
             delete_world_event_state_requested,
             delete_condition_saves_requested,
         })
+    }
+
+    pub fn update_game_events_like_cpp<F>(
+        &mut self,
+        current_time_secs: u64,
+        is_system_init: bool,
+        mut world_conditions_met: F,
+    ) -> GameEventUpdateOutcomeLikeCpp
+    where
+        F: FnMut(u16) -> bool,
+    {
+        let mut scanned_event_ids = Vec::new();
+        let mut check_outcomes = Vec::new();
+        let mut next_check_outcomes = Vec::new();
+        let mut activate = BTreeSet::new();
+        let mut deactivate = BTreeSet::new();
+        let mut negative_spawn_event_ids = Vec::new();
+        let mut world_nextphase_finished = Vec::new();
+        let mut world_conditions_save_requested = Vec::new();
+        let mut invalid_check_outcomes = Vec::new();
+        let mut invalid_next_check_outcomes = Vec::new();
+        let mut start_conditions_met = BTreeMap::new();
+        let mut next_event_delay_secs = MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP;
+
+        for event_index in 1..self.game_events.len_like_cpp() {
+            let Ok(event_id) = u16::try_from(event_index) else {
+                continue;
+            };
+            scanned_event_ids.push(event_id);
+
+            let check_outcome = self
+                .game_events
+                .check_one_game_event_like_cpp(event_id, current_time_secs);
+            check_outcomes.push((event_id, check_outcome));
+
+            match check_outcome {
+                GameEventCheckOutcomeLikeCpp::Active(true) => {
+                    let active_before_queue = self
+                        .game_event_active_set
+                        .is_active_event_like_cpp(event_id);
+
+                    let mut nextphase_finished = false;
+                    if let Some(event) = self.game_events.event_mut_like_cpp(event_id) {
+                        if event.state_raw == GameEventStateLikeCpp::WorldNextPhase as u8
+                            && event.next_start <= current_time_secs
+                        {
+                            let state_before_raw = event.state_raw;
+                            let next_start_before = event.next_start;
+                            event.state_raw = GameEventStateLikeCpp::WorldFinished as u8;
+                            event.next_start = 0;
+                            world_nextphase_finished.push(GameEventWorldNextPhaseFinishedLikeCpp {
+                                event_id,
+                                was_active_before_queue: active_before_queue,
+                                state_before_raw,
+                                state_after_raw: event.state_raw,
+                                next_start_before,
+                                next_start_after: event.next_start,
+                                save_state_requested: true,
+                            });
+                            if active_before_queue {
+                                deactivate.insert(event_id);
+                            }
+                            nextphase_finished = true;
+                        }
+                    }
+                    if nextphase_finished {
+                        continue;
+                    }
+
+                    let mut condition_met_for_start = false;
+                    let mut condition_checked_during_scan = false;
+                    if let Some(event) = self.game_events.event_mut_like_cpp(event_id) {
+                        if event.state_raw == GameEventStateLikeCpp::WorldConditions as u8 {
+                            condition_checked_during_scan = true;
+                            if world_conditions_met(event_id) {
+                                event.state_raw = GameEventStateLikeCpp::WorldNextPhase as u8;
+                                if event.next_start == 0 {
+                                    event.next_start = current_time_secs.saturating_add(
+                                        u64::from(event.length)
+                                            .saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP),
+                                    );
+                                }
+                                world_conditions_save_requested.push(
+                                    GameEventWorldStateSaveEvidenceLikeCpp {
+                                        event_id,
+                                        state_after_raw: event.state_raw,
+                                        next_start_after: event.next_start,
+                                    },
+                                );
+                                condition_met_for_start = true;
+                            }
+                        }
+                    }
+                    if condition_checked_during_scan {
+                        start_conditions_met.insert(event_id, condition_met_for_start);
+                    }
+
+                    if !active_before_queue {
+                        activate.insert(event_id);
+                    }
+                }
+                GameEventCheckOutcomeLikeCpp::Active(false) => {
+                    if self
+                        .game_event_active_set
+                        .is_active_event_like_cpp(event_id)
+                    {
+                        deactivate.insert(event_id);
+                    } else if !is_system_init {
+                        negative_spawn_event_ids.push(-i16::try_from(event_id).unwrap_or(i16::MAX));
+                    }
+                }
+                invalid @ (GameEventCheckOutcomeLikeCpp::MissingEvent { .. }
+                | GameEventCheckOutcomeLikeCpp::MissingPrerequisite { .. }
+                | GameEventCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { .. }) => {
+                    invalid_check_outcomes.push(invalid);
+                    continue;
+                }
+            }
+
+            let next_check_outcome = self
+                .game_events
+                .next_check_like_cpp(event_id, current_time_secs);
+            next_check_outcomes.push((event_id, next_check_outcome));
+            match next_check_outcome {
+                GameEventNextCheckOutcomeLikeCpp::DelaySecs(delay_secs) => {
+                    next_event_delay_secs = next_event_delay_secs.min(delay_secs);
+                }
+                invalid @ (GameEventNextCheckOutcomeLikeCpp::MissingEvent { .. }
+                | GameEventNextCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence {
+                    ..
+                }) => {
+                    invalid_next_check_outcomes.push(invalid);
+                }
+            }
+        }
+
+        let queued_activation_event_ids = activate.iter().copied().collect::<Vec<_>>();
+        let queued_deactivation_event_ids = deactivate.iter().copied().collect::<Vec<_>>();
+
+        let mut start_outcomes = Vec::new();
+        for event_id in queued_activation_event_ids.iter().copied() {
+            let start_outcome = self.start_game_event_like_cpp(
+                event_id,
+                false,
+                current_time_secs,
+                start_conditions_met
+                    .get(&event_id)
+                    .copied()
+                    .unwrap_or_else(|| world_conditions_met(event_id)),
+            );
+            if matches!(
+                start_outcome,
+                GameEventStartOutcomeLikeCpp::Started(GameEventStartSummaryLikeCpp {
+                    completed: true,
+                    ..
+                })
+            ) {
+                next_event_delay_secs = 0;
+            }
+            start_outcomes.push(start_outcome);
+        }
+
+        let mut stop_outcomes = Vec::new();
+        for event_id in queued_deactivation_event_ids.iter().copied() {
+            stop_outcomes.push(self.stop_game_event_like_cpp(event_id, false, current_time_secs));
+        }
+
+        GameEventUpdateOutcomeLikeCpp {
+            scanned_event_ids,
+            check_outcomes,
+            next_check_outcomes,
+            queued_activation_event_ids,
+            queued_deactivation_event_ids,
+            start_outcomes,
+            stop_outcomes,
+            negative_spawn_event_ids,
+            world_nextphase_finished,
+            world_conditions_save_requested,
+            invalid_check_outcomes,
+            invalid_next_check_outcomes,
+            next_event_delay_secs_before_padding: next_event_delay_secs,
+            next_update_delay_millis: next_event_delay_secs
+                .saturating_add(1)
+                .saturating_mul(1_000),
+        }
     }
 
     #[allow(dead_code)]
@@ -2864,8 +3085,15 @@ mod tests {
     fn game_event_store(
         events: impl IntoIterator<Item = GameEventDataLikeCpp>,
     ) -> GameEventDataStoreLikeCpp {
+        game_event_store_with_max(8, events)
+    }
+
+    fn game_event_store_with_max(
+        max_event_entry: u32,
+        events: impl IntoIterator<Item = GameEventDataLikeCpp>,
+    ) -> GameEventDataStoreLikeCpp {
         events.into_iter().fold(
-            GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(8)),
+            GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(max_event_entry)),
             GameEventDataStoreLikeCpp::with_event_like_cpp,
         )
     }
@@ -3270,6 +3498,214 @@ mod tests {
                 .active_event_ids_like_cpp()
                 .collect::<Vec<_>>(),
             active_before
+        );
+    }
+
+    #[test]
+    fn game_event_update_queues_starts_before_stops_sorted_and_updates_active_set_like_cpp() {
+        let mut metadata =
+            CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new())
+                .with_game_events_like_cpp(game_event_store_with_max(
+                    3,
+                    [
+                        event(1, GameEventStateLikeCpp::Normal, 200, 1_000, 10, 2),
+                        event(2, GameEventStateLikeCpp::Normal, 0, 1_000, 10, 2),
+                        event(3, GameEventStateLikeCpp::Normal, 0, 1_000, 10, 2),
+                    ],
+                ));
+        metadata
+            .game_event_active_set_mut_like_cpp()
+            .add_active_event_like_cpp(3);
+        metadata
+            .game_event_active_set_mut_like_cpp()
+            .add_active_event_like_cpp(2);
+
+        let outcome = metadata.update_game_events_like_cpp(250, true, |_| false);
+
+        assert_eq!(outcome.scanned_event_ids, vec![1, 2, 3]);
+        assert_eq!(outcome.queued_activation_event_ids, vec![1]);
+        assert_eq!(outcome.queued_deactivation_event_ids, vec![2, 3]);
+        assert!(matches!(
+            outcome.start_outcomes.as_slice(),
+            [GameEventStartOutcomeLikeCpp::Started(
+                GameEventStartSummaryLikeCpp {
+                    event_id: 1,
+                    active_added: true,
+                    ..
+                }
+            )]
+        ));
+        assert!(matches!(
+            outcome.stop_outcomes.as_slice(),
+            [
+                GameEventStopOutcomeLikeCpp::Stopped(GameEventStopSummaryLikeCpp {
+                    event_id: 2,
+                    active_removed: true,
+                    ..
+                }),
+                GameEventStopOutcomeLikeCpp::Stopped(GameEventStopSummaryLikeCpp {
+                    event_id: 3,
+                    active_removed: true,
+                    ..
+                })
+            ]
+        ));
+        assert_eq!(
+            metadata
+                .game_event_active_set_like_cpp()
+                .active_event_ids_like_cpp()
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn game_event_update_world_nextphase_finish_saves_stops_and_skips_nextcheck_like_cpp() {
+        let mut metadata =
+            CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new())
+                .with_game_events_like_cpp(game_event_store_with_max(
+                    2,
+                    [
+                        event_with_next_start(
+                            event(1, GameEventStateLikeCpp::WorldNextPhase, 0, 0, 0, 5),
+                            500,
+                        ),
+                        event(2, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2),
+                    ],
+                ));
+        metadata
+            .game_event_active_set_mut_like_cpp()
+            .add_active_event_like_cpp(1);
+
+        let outcome = metadata.update_game_events_like_cpp(500, true, |_| false);
+
+        assert_eq!(
+            outcome.world_nextphase_finished,
+            vec![GameEventWorldNextPhaseFinishedLikeCpp {
+                event_id: 1,
+                was_active_before_queue: true,
+                state_before_raw: GameEventStateLikeCpp::WorldNextPhase as u8,
+                state_after_raw: GameEventStateLikeCpp::WorldFinished as u8,
+                next_start_before: 500,
+                next_start_after: 0,
+                save_state_requested: true,
+            }]
+        );
+        assert_eq!(outcome.queued_deactivation_event_ids, vec![1]);
+        assert!(
+            !outcome
+                .next_check_outcomes
+                .iter()
+                .any(|(event_id, _)| *event_id == 1)
+        );
+        let event = metadata.game_event_like_cpp(1).unwrap();
+        assert_eq!(event.state_raw, GameEventStateLikeCpp::WorldFinished as u8);
+        assert_eq!(event.next_start, 0);
+        assert!(
+            !metadata
+                .game_event_active_set_like_cpp()
+                .is_active_event_like_cpp(1)
+        );
+    }
+
+    #[test]
+    fn game_event_update_inactive_not_active_records_negative_spawn_only_after_init_like_cpp() {
+        for (is_system_init, expected_negative_spawns) in [(false, vec![-1]), (true, vec![])] {
+            let mut metadata =
+                CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new())
+                    .with_game_events_like_cpp(game_event_store_with_max(
+                        1,
+                        [event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 10, 2)],
+                    ));
+
+            let outcome = metadata.update_game_events_like_cpp(650, is_system_init, |_| false);
+
+            assert_eq!(outcome.negative_spawn_event_ids, expected_negative_spawns);
+            assert!(outcome.queued_activation_event_ids.is_empty());
+            assert!(outcome.queued_deactivation_event_ids.is_empty());
+            assert!(
+                metadata
+                    .game_event_active_set_like_cpp()
+                    .active_event_ids_like_cpp()
+                    .collect::<Vec<_>>()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn game_event_update_world_conditions_true_saves_starts_completed_and_forces_delay_like_cpp() {
+        let mut metadata =
+            CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new())
+                .with_game_events_like_cpp(game_event_store_with_max(
+                    1,
+                    [event(1, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 7)],
+                ));
+
+        let outcome = metadata.update_game_events_like_cpp(500, true, |event_id| event_id == 1);
+
+        assert_eq!(
+            outcome.world_conditions_save_requested,
+            vec![GameEventWorldStateSaveEvidenceLikeCpp {
+                event_id: 1,
+                state_after_raw: GameEventStateLikeCpp::WorldNextPhase as u8,
+                next_start_after: 920,
+            }]
+        );
+        assert_eq!(outcome.queued_activation_event_ids, vec![1]);
+        assert!(matches!(
+            outcome.start_outcomes.as_slice(),
+            [GameEventStartOutcomeLikeCpp::Started(
+                GameEventStartSummaryLikeCpp {
+                    event_id: 1,
+                    completed: true,
+                    save_world_event_state_requested: true,
+                    ..
+                }
+            )]
+        ));
+        assert_eq!(outcome.next_event_delay_secs_before_padding, 0);
+        assert_eq!(outcome.next_update_delay_millis, 1_000);
+        let event = metadata.game_event_like_cpp(1).unwrap();
+        assert_eq!(event.state_raw, GameEventStateLikeCpp::WorldNextPhase as u8);
+        assert_eq!(event.next_start, 920);
+        assert!(
+            metadata
+                .game_event_active_set_like_cpp()
+                .is_active_event_like_cpp(1)
+        );
+    }
+
+    #[test]
+    fn game_event_update_invalid_zero_occurrence_surfaces_without_fake_start_or_stop_like_cpp() {
+        let mut metadata =
+            CanonicalSpawnMetadataLikeCpp::new(SpawnStore::default(), BTreeMap::new())
+                .with_game_events_like_cpp(game_event_store_with_max(
+                    1,
+                    [event(1, GameEventStateLikeCpp::Normal, 100, 1_000, 0, 2)],
+                ));
+
+        let outcome = metadata.update_game_events_like_cpp(200, false, |_| false);
+
+        assert_eq!(
+            outcome.invalid_check_outcomes,
+            vec![GameEventCheckOutcomeLikeCpp::InvalidTimingZeroOccurrence { event_id: 1 }]
+        );
+        assert!(outcome.start_outcomes.is_empty());
+        assert!(outcome.stop_outcomes.is_empty());
+        assert!(outcome.queued_activation_event_ids.is_empty());
+        assert!(outcome.queued_deactivation_event_ids.is_empty());
+        assert!(outcome.negative_spawn_event_ids.is_empty());
+        assert_eq!(
+            outcome.next_event_delay_secs_before_padding,
+            MAX_GAME_EVENT_CHECK_DELAY_SECS_LIKE_CPP
+        );
+        assert_eq!(
+            metadata
+                .game_event_active_set_like_cpp()
+                .active_event_ids_like_cpp()
+                .collect::<Vec<_>>(),
+            Vec::<u16>::new()
         );
     }
 
