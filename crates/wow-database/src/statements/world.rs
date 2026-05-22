@@ -87,6 +87,8 @@ pub enum WorldStatements {
     SEL_CREATURES_IN_RANGE,
     /// Load all creature spawn rows into the C++ ObjectMgr-style spawn store.
     SEL_CREATURE_SPAWNS,
+    /// C++ FormationMgr::LoadCreatureFormations startup query.
+    SEL_CREATURE_FORMATIONS,
     /// Load creature template for query response (name, type, display, etc.).
     SEL_CREATURE_QUERY_RESPONSE,
     /// Load creature display models for a template entry.
@@ -113,6 +115,24 @@ pub enum WorldStatements {
     SEL_POOL_MEMBERS_BY_TYPE,
     /// Load C++ PoolMgr default autospawn candidates.
     SEL_POOL_AUTOSPAWN_CANDIDATES,
+    /// C++ GameEventMgr::Initialize max game_event entry sizing query.
+    SEL_MAX_GAME_EVENT_ENTRY,
+    /// C++ GameEventMgr::LoadFromDB game_event master metadata query.
+    SEL_GAME_EVENTS,
+    /// C++ GameEventMgr::LoadFromDB game_event_prerequisite metadata query.
+    SEL_GAME_EVENT_PREREQUISITES,
+    /// C++ GameEventMgr::LoadFromDB game_event_pool metadata query.
+    SEL_GAME_EVENT_POOLS,
+    /// C++ GameEventMgr::LoadFromDB game_event_creature metadata query.
+    SEL_GAME_EVENT_CREATURES,
+    /// C++ GameEventMgr::LoadFromDB game_event_gameobject metadata query.
+    SEL_GAME_EVENT_GAMEOBJECTS,
+    /// C++ ObjectMgr::GetEquipmentInfo existence keys for game_event_model_equip validation.
+    SEL_CREATURE_EQUIP_TEMPLATE_IDS,
+    /// C++ GameEventMgr::LoadFromDB game_event_model_equip metadata query.
+    SEL_GAME_EVENT_MODEL_EQUIP,
+    /// C++ GameEventMgr::LoadFromDB game_event_npcflag metadata query.
+    SEL_GAME_EVENT_NPC_FLAGS,
     /// Load C++ instance spawn groups.
     SEL_INSTANCE_SPAWN_GROUPS,
     /// Load gameobject template for query response.
@@ -482,6 +502,9 @@ impl StatementDef for WorldStatements {
                 "LEFT OUTER JOIN game_event_creature ON creature.guid = game_event_creature.guid ",
                 "LEFT OUTER JOIN pool_members ON pool_members.type = 0 AND creature.guid = pool_members.spawnId",
             ),
+            Self::SEL_CREATURE_FORMATIONS => {
+                "SELECT leaderGUID, memberGUID, dist, angle, groupAI, point_1, point_2 FROM creature_formations ORDER BY leaderGUID"
+            }
             Self::SEL_CREATURE_QUERY_RESPONSE => concat!(
                 "SELECT ct.entry, ct.name, ct.femaleName, ct.subname, ct.TitleAlt, ct.IconName, ",
                 "ct.type, ct.family, ct.Classification, ct.KillCredit1, ct.KillCredit2, ",
@@ -546,6 +569,32 @@ impl StatementDef for WorldStatements {
                 " LEFT JOIN game_event_pool ON pool_template.entry = game_event_pool.pool_entry",
                 " LEFT JOIN pool_members ON pool_members.type = 2 AND pool_template.entry = pool_members.spawnId WHERE game_event_pool.pool_entry IS NULL",
             ),
+            Self::SEL_MAX_GAME_EVENT_ENTRY => "SELECT MAX(eventEntry) FROM game_event",
+            Self::SEL_GAME_EVENTS => {
+                "SELECT eventEntry, UNIX_TIMESTAMP(start_time), UNIX_TIMESTAMP(end_time), occurence, length, holiday, holidayStage, description, world_event, announce FROM game_event"
+            }
+            Self::SEL_GAME_EVENT_PREREQUISITES => {
+                "SELECT eventEntry, prerequisite_event FROM game_event_prerequisite"
+            }
+            Self::SEL_GAME_EVENT_POOLS => concat!(
+                "SELECT pool_template.entry, game_event_pool.eventEntry FROM pool_template",
+                " JOIN game_event_pool ON pool_template.entry = game_event_pool.pool_entry",
+            ),
+            Self::SEL_GAME_EVENT_CREATURES => "SELECT guid, eventEntry FROM game_event_creature",
+            Self::SEL_GAME_EVENT_GAMEOBJECTS => {
+                "SELECT guid, eventEntry FROM game_event_gameobject"
+            }
+            Self::SEL_CREATURE_EQUIP_TEMPLATE_IDS => {
+                "SELECT CreatureID, ID FROM creature_equip_template"
+            }
+            Self::SEL_GAME_EVENT_MODEL_EQUIP => concat!(
+                "SELECT creature.guid, creature.id, game_event_model_equip.eventEntry, ",
+                "game_event_model_equip.modelid, game_event_model_equip.equipment_id ",
+                "FROM creature JOIN game_event_model_equip ON creature.guid = game_event_model_equip.guid",
+            ),
+            Self::SEL_GAME_EVENT_NPC_FLAGS => {
+                "SELECT guid, eventEntry, npcflag FROM game_event_npcflag"
+            }
             Self::SEL_INSTANCE_SPAWN_GROUPS => {
                 "SELECT instanceMapId, bossStateId, bossStates, spawnGroupId, flags FROM instance_spawn_groups"
             }

@@ -1,7 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use wow_constants::{SpellState, UnitState};
-use wow_core::ObjectGuid;
+use wow_constants::{SpellState, TypeId, UnitState};
+use wow_core::{ObjectGuid, Position};
+
+use crate::{
+    CreatureAddToWorldVehicleResetContextLikeCpp, Vehicle, VehicleResetPlan, VehicleSeatAddon,
+    VehicleSeatInfo,
+};
 
 /// Minimal bridge for TrinityCore `Unit` aura containers.
 ///
@@ -2463,6 +2468,25 @@ pub enum MotionMasterUpdateOutcome {
     },
 }
 
+/// Represented local evidence for C++ `MotionMaster::AddToWorld()`
+/// (`MotionMaster.cpp:120-132`).
+///
+/// This preserves the C++ initialization-pending guard and flag transitions,
+/// calls the existing represented `DirectInitialize`/delayed-action helpers,
+/// and does not claim real movement-generator runtime, pathing, packets, or
+/// owner/fanout behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MotionMasterAddToWorldOutcomeLikeCpp {
+    pub had_initialization_pending: bool,
+    pub entered_initializing: bool,
+    pub direct_initialize_represented: bool,
+    pub resolved_delayed_actions: Vec<MotionMasterResolvedDelayedAction>,
+    pub exited_initializing: bool,
+    pub flags_before: u8,
+    pub flags_after: u8,
+    pub current_generator_after: MovementGeneratorKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MotionSubsystem {
     pub default_generator: MovementGeneratorRef,
@@ -2685,8 +2709,46 @@ impl MotionSubsystem {
     }
 
     pub fn add_to_world(&mut self) {
+        let _ = self.add_to_world_like_cpp();
+    }
+
+    pub fn add_to_world_like_cpp(&mut self) -> MotionMasterAddToWorldOutcomeLikeCpp {
+        let flags_before = self.flags;
+        let had_initialization_pending =
+            self.has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING);
+
+        if !had_initialization_pending {
+            return MotionMasterAddToWorldOutcomeLikeCpp {
+                had_initialization_pending,
+                entered_initializing: false,
+                direct_initialize_represented: false,
+                resolved_delayed_actions: Vec::new(),
+                exited_initializing: false,
+                flags_before,
+                flags_after: self.flags,
+                current_generator_after: self.current_generator,
+            };
+        }
+
+        self.flags |= MOTIONMASTER_FLAG_INITIALIZING;
         self.flags &= !MOTIONMASTER_FLAG_INITIALIZATION_PENDING;
+
+        self.direct_initialize_like_cpp();
+        let resolved_delayed_actions = self.resolve_delayed_action_payloads_like_cpp();
+
+        self.flags &= !MOTIONMASTER_FLAG_INITIALIZING;
         self.current_generator = self.current_movement_generator().kind;
+
+        MotionMasterAddToWorldOutcomeLikeCpp {
+            had_initialization_pending,
+            entered_initializing: (flags_before & MOTIONMASTER_FLAG_INITIALIZING) == 0,
+            direct_initialize_represented: true,
+            resolved_delayed_actions,
+            exited_initializing: !self.has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZING),
+            flags_before,
+            flags_after: self.flags,
+            current_generator_after: self.current_generator,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -3578,18 +3640,96 @@ pub struct ControlledOwnerAttackedNotification {
     pub victim: ObjectGuid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VehicleKitState {
     pub kit_id: u32,
     pub active: bool,
+    pub installed: bool,
+    pub vehicle: Option<Vehicle>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+impl VehicleKitState {
+    pub const fn kit_id(&self) -> u32 {
+        self.kit_id
+    }
+
+    pub const fn active(&self) -> bool {
+        self.active
+    }
+
+    pub const fn installed(&self) -> bool {
+        self.installed
+    }
+
+    pub const fn vehicle(&self) -> Option<&Vehicle> {
+        self.vehicle.as_ref()
+    }
+
+    pub fn seat_count(&self) -> usize {
+        self.vehicle
+            .as_ref()
+            .map_or(0, |vehicle| vehicle.seats().len())
+    }
+
+    pub fn usable_seat_num(&self) -> u32 {
+        self.vehicle.as_ref().map_or(0, Vehicle::usable_seat_num)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleKitCreateOutcomeLikeCpp {
+    pub kit_id: Option<u32>,
+    pub created: bool,
+    pub loading: bool,
+    pub seat_count: usize,
+    pub usable_seat_num: u32,
+    pub unit_update_flag_vehicle_represented: bool,
+    pub unit_type_mask_vehicle_represented: bool,
+    pub send_set_vehicle_rec_id_represented: bool,
+    pub set_spellclick_or_player_vehicle_npc_flag_represented: bool,
+    pub remove_spellclick_or_player_vehicle_npc_flag_represented: bool,
+    pub update_display_power_represented: bool,
+    pub init_movement_info_for_base_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleKitInstallOutcomeLikeCpp {
+    pub kit_id: Option<u32>,
+    pub had_kit: bool,
+    pub previous_installed: Option<bool>,
+    pub installed: bool,
+    pub script_on_install_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VehicleKitRemoveOutcomeLikeCpp {
+    pub kit_id: Option<u32>,
+    pub had_kit: bool,
+    pub previous_installed: Option<bool>,
+    pub on_remove_from_world: bool,
+    pub send_set_vehicle_rec_id_zero_represented: bool,
+    pub uninstall_represented: bool,
+    pub remove_all_passengers_represented: bool,
+    pub script_on_uninstall_represented: bool,
+    pub kit_cleared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleKitAddToWorldResetOutcomeLikeCpp {
+    pub kit_id: u32,
+    pub aim_create_represented: bool,
+    pub ai_initialize_represented: bool,
+    pub reset_evading: bool,
+    pub reset_plan: VehicleResetPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct VehicleSubsystem {
     pub vehicle_guid: Option<ObjectGuid>,
     pub base_vehicle_guid: Option<ObjectGuid>,
     pub seat_id: Option<i8>,
     pub kit: Option<VehicleKitState>,
+    pub last_create_outcome: Option<VehicleKitCreateOutcomeLikeCpp>,
 }
 
 impl VehicleSubsystem {
@@ -3604,7 +3744,179 @@ impl VehicleSubsystem {
     }
 
     pub fn set_vehicle_kit(&mut self, kit_id: u32, active: bool) {
-        self.kit = Some(VehicleKitState { kit_id, active });
+        self.kit = Some(VehicleKitState {
+            kit_id,
+            active,
+            installed: false,
+            vehicle: None,
+        });
+    }
+
+    pub fn create_vehicle_kit_like_cpp(
+        &mut self,
+        base_guid: ObjectGuid,
+        base_position: Position,
+        vehicle_id: Option<u32>,
+        creature_entry: u32,
+        loading: bool,
+        seat_defs: Option<Vec<(i8, VehicleSeatInfo, VehicleSeatAddon)>>,
+    ) -> VehicleKitCreateOutcomeLikeCpp {
+        let Some(kit_id) = vehicle_id else {
+            let outcome = VehicleKitCreateOutcomeLikeCpp {
+                kit_id: None,
+                created: false,
+                loading,
+                seat_count: 0,
+                usable_seat_num: 0,
+                unit_update_flag_vehicle_represented: false,
+                unit_type_mask_vehicle_represented: false,
+                send_set_vehicle_rec_id_represented: false,
+                set_spellclick_or_player_vehicle_npc_flag_represented: false,
+                remove_spellclick_or_player_vehicle_npc_flag_represented: false,
+                update_display_power_represented: false,
+                init_movement_info_for_base_represented: false,
+            };
+            self.last_create_outcome = Some(outcome.clone());
+            return outcome;
+        };
+        let Some(seat_defs) = seat_defs else {
+            let outcome = VehicleKitCreateOutcomeLikeCpp {
+                kit_id: Some(kit_id),
+                created: false,
+                loading,
+                seat_count: 0,
+                usable_seat_num: 0,
+                unit_update_flag_vehicle_represented: false,
+                unit_type_mask_vehicle_represented: false,
+                send_set_vehicle_rec_id_represented: false,
+                set_spellclick_or_player_vehicle_npc_flag_represented: false,
+                remove_spellclick_or_player_vehicle_npc_flag_represented: false,
+                update_display_power_represented: false,
+                init_movement_info_for_base_represented: false,
+            };
+            self.last_create_outcome = Some(outcome.clone());
+            return outcome;
+        };
+
+        let vehicle = Vehicle::new(
+            base_guid,
+            TypeId::Unit,
+            base_position,
+            kit_id,
+            creature_entry,
+            seat_defs,
+        );
+        let seat_count = vehicle.seats().len();
+        let usable_seat_num = vehicle.usable_seat_num();
+        self.kit = Some(VehicleKitState {
+            kit_id,
+            active: true,
+            installed: false,
+            vehicle: Some(vehicle),
+        });
+        let outcome = VehicleKitCreateOutcomeLikeCpp {
+            kit_id: Some(kit_id),
+            created: true,
+            loading,
+            seat_count,
+            usable_seat_num,
+            unit_update_flag_vehicle_represented: true,
+            unit_type_mask_vehicle_represented: true,
+            send_set_vehicle_rec_id_represented: !loading,
+            set_spellclick_or_player_vehicle_npc_flag_represented: usable_seat_num != 0,
+            remove_spellclick_or_player_vehicle_npc_flag_represented: usable_seat_num == 0,
+            update_display_power_represented: true,
+            init_movement_info_for_base_represented: true,
+        };
+        self.last_create_outcome = Some(outcome.clone());
+        outcome
+    }
+
+    pub fn install_vehicle_kit_like_cpp(&mut self) -> VehicleKitInstallOutcomeLikeCpp {
+        let Some(kit) = self.kit.as_mut() else {
+            return VehicleKitInstallOutcomeLikeCpp {
+                kit_id: None,
+                had_kit: false,
+                previous_installed: None,
+                installed: false,
+                script_on_install_represented: false,
+            };
+        };
+
+        let previous_installed = kit.installed;
+        if !kit.installed {
+            kit.installed = true;
+            if let Some(vehicle) = kit.vehicle.as_mut() {
+                vehicle.install();
+            }
+        }
+
+        VehicleKitInstallOutcomeLikeCpp {
+            kit_id: Some(kit.kit_id),
+            had_kit: true,
+            previous_installed: Some(previous_installed),
+            installed: kit.installed,
+            script_on_install_represented: true,
+        }
+    }
+
+    pub fn reset_vehicle_kit_for_creature_add_to_world_like_cpp(
+        &mut self,
+        context: &CreatureAddToWorldVehicleResetContextLikeCpp,
+        base_is_alive: bool,
+    ) -> Option<VehicleKitAddToWorldResetOutcomeLikeCpp> {
+        let kit = self.kit.as_mut()?;
+        let vehicle = kit.vehicle.as_mut()?;
+        let reset_plan = vehicle.reset_plan_like_cpp(
+            false,
+            base_is_alive,
+            context.is_mechanical_creature,
+            context.is_world_boss,
+            &context.accessories,
+        )?;
+
+        Some(VehicleKitAddToWorldResetOutcomeLikeCpp {
+            kit_id: kit.kit_id,
+            aim_create_represented: true,
+            ai_initialize_represented: true,
+            reset_evading: false,
+            reset_plan,
+        })
+    }
+
+    pub fn remove_vehicle_kit_like_cpp(
+        &mut self,
+        on_remove_from_world: bool,
+    ) -> VehicleKitRemoveOutcomeLikeCpp {
+        let Some(kit) = self.kit.take() else {
+            return VehicleKitRemoveOutcomeLikeCpp {
+                kit_id: None,
+                had_kit: false,
+                previous_installed: None,
+                on_remove_from_world,
+                send_set_vehicle_rec_id_zero_represented: false,
+                uninstall_represented: false,
+                remove_all_passengers_represented: false,
+                script_on_uninstall_represented: false,
+                kit_cleared: false,
+            };
+        };
+
+        if let Some(mut vehicle) = kit.vehicle {
+            vehicle.uninstall();
+        }
+
+        VehicleKitRemoveOutcomeLikeCpp {
+            kit_id: Some(kit.kit_id),
+            had_kit: true,
+            previous_installed: Some(kit.installed),
+            on_remove_from_world,
+            send_set_vehicle_rec_id_zero_represented: !on_remove_from_world,
+            uninstall_represented: true,
+            remove_all_passengers_represented: true,
+            script_on_uninstall_represented: true,
+            kit_cleared: true,
+        }
     }
 
     pub fn clear_vehicle_kit(&mut self) {
@@ -5259,6 +5571,46 @@ mod unit_subsystems_tests {
     }
 
     #[test]
+    fn vehicle_remove_kit_without_kit_returns_before_send_like_cpp() {
+        let mut vehicle = VehicleSubsystem::default();
+
+        let remove = vehicle.remove_vehicle_kit_like_cpp(false);
+
+        assert_eq!(remove.kit_id, None);
+        assert!(!remove.had_kit);
+        assert_eq!(remove.previous_installed, None);
+        assert!(!remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(!remove.uninstall_represented);
+        assert!(!remove.remove_all_passengers_represented);
+        assert!(!remove.script_on_uninstall_represented);
+        assert!(!remove.kit_cleared);
+        assert_eq!(vehicle.kit, None);
+    }
+
+    #[test]
+    fn vehicle_remove_existing_kit_sends_rec_id_zero_before_uninstall_like_cpp() {
+        let mut vehicle = VehicleSubsystem::default();
+        vehicle.set_vehicle_kit(467, true);
+        let install = vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(install.kit_id, Some(467));
+        assert!(install.installed);
+
+        let remove = vehicle.remove_vehicle_kit_like_cpp(false);
+
+        assert_eq!(remove.kit_id, Some(467));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(!remove.on_remove_from_world);
+        assert!(remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert_eq!(vehicle.kit, None);
+    }
+
+    #[test]
     fn motion_charm_vehicle_and_ai_helpers_roundtrip() {
         let mut subsystems = UnitSubsystems::default();
         let controller = guid(20);
@@ -5301,11 +5653,64 @@ mod unit_subsystems_tests {
         subsystems.vehicle.set_vehicle_kit(42, true);
         assert_eq!(subsystems.vehicle.vehicle_guid, Some(vehicle));
         assert_eq!(subsystems.vehicle.seat_id, Some(1));
-        assert_eq!(subsystems.vehicle.kit.map(|kit| kit.kit_id), Some(42));
+        assert_eq!(
+            subsystems.vehicle.kit.as_ref().map(|kit| kit.kit_id),
+            Some(42)
+        );
+        assert_eq!(
+            subsystems.vehicle.kit.as_ref().map(|kit| kit.installed),
+            Some(false)
+        );
+        let install = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(install.kit_id, Some(42));
+        assert!(install.had_kit);
+        assert_eq!(install.previous_installed, Some(false));
+        assert!(install.installed);
+        assert!(install.script_on_install_represented);
+        let reinstall = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(reinstall.previous_installed, Some(true));
+        assert!(reinstall.installed);
         subsystems.vehicle.exit_vehicle();
         subsystems.vehicle.clear_vehicle_kit();
         assert_eq!(subsystems.vehicle.vehicle_guid, None);
         assert_eq!(subsystems.vehicle.kit, None);
+        let missing_install = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert_eq!(missing_install.kit_id, None);
+        assert!(!missing_install.had_kit);
+        assert_eq!(missing_install.previous_installed, None);
+        assert!(!missing_install.installed);
+        assert!(!missing_install.script_on_install_represented);
+
+        subsystems.vehicle.set_vehicle_kit(43, true);
+        let install_before_remove = subsystems.vehicle.install_vehicle_kit_like_cpp();
+        assert!(install_before_remove.installed);
+        subsystems.vehicle.vehicle_guid = Some(vehicle);
+        subsystems.vehicle.base_vehicle_guid = Some(vehicle);
+        subsystems.vehicle.seat_id = Some(2);
+        let remove = subsystems.vehicle.remove_vehicle_kit_like_cpp(true);
+        assert_eq!(remove.kit_id, Some(43));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert_eq!(subsystems.vehicle.kit, None);
+        assert_eq!(subsystems.vehicle.vehicle_guid, Some(vehicle));
+        assert_eq!(subsystems.vehicle.base_vehicle_guid, Some(vehicle));
+        assert_eq!(subsystems.vehicle.seat_id, Some(2));
+        let missing_remove = subsystems.vehicle.remove_vehicle_kit_like_cpp(true);
+        assert_eq!(missing_remove.kit_id, None);
+        assert!(!missing_remove.had_kit);
+        assert_eq!(missing_remove.previous_installed, None);
+        assert!(missing_remove.on_remove_from_world);
+        assert!(!missing_remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(!missing_remove.uninstall_represented);
+        assert!(!missing_remove.remove_all_passengers_represented);
+        assert!(!missing_remove.script_on_uninstall_represented);
+        assert!(!missing_remove.kit_cleared);
 
         subsystems.ai.set_active(Some("NullAI"));
         subsystems.ai.push("CombatAI");

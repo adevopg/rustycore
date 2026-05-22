@@ -4,14 +4,14 @@
 //! - `game/Maps/Map.h`
 //! - `game/Maps/Map.cpp`
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use crate::cell::{Cell, GridObjectGuids, WorldObjectGuids, calculate_cell_area_like_cpp};
 use crate::coords::{
     CellCoord, GridCoord, MAX_NUMBER_OF_CELLS, MAX_NUMBER_OF_GRIDS, SIZE_OF_GRID_CELL,
-    TOTAL_NUMBER_OF_CELLS_PER_MAP, compute_cell_coord, is_valid_map_coord_2d,
+    TOTAL_NUMBER_OF_CELLS_PER_MAP, compute_cell_coord, compute_grid_coord, is_valid_map_coord_2d,
 };
 use crate::grid::{GridStateKind, MapGridHost, NGrid, update_grid_state};
 use crate::grid_unload::{
@@ -19,11 +19,14 @@ use crate::grid_unload::{
     apply_grid_unload_actions,
 };
 use crate::object_grid_loader::{GridSpawnLoadFilter, ObjectGridLoader};
-use crate::personal_phase::{MultiPersonalPhaseTracker, PhaseShift};
+use crate::personal_phase::{
+    MultiPersonalPhaseTracker, PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp, PhaseShift,
+};
 use crate::pool::{
-    PoolInitForMapPlanLikeCpp, PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolMgrPlanErrorLikeCpp,
-    PoolObjectLikeCpp, PoolSpawnObjectActionLikeCpp, PoolSpawnObjectPlanLikeCpp,
-    PoolTypedSpawnPlanLikeCpp,
+    PoolDespawnObjectPlanLikeCpp, PoolDespawnPoolPlanLikeCpp, PoolInitForMapPlanLikeCpp,
+    PoolMemberKindLikeCpp, PoolMgrLikeCpp, PoolMgrPlanErrorLikeCpp, PoolObjectLikeCpp,
+    PoolSpawnObjectActionLikeCpp, PoolSpawnObjectPlanLikeCpp, PoolSpawnPoolPlanLikeCpp,
+    PoolTypedDespawnPlanLikeCpp, PoolTypedSpawnPlanLikeCpp,
 };
 use crate::spawn::{
     AddRespawnInfoOutcomeLikeCpp, CheckRespawnOutcomeLikeCpp,
@@ -35,14 +38,27 @@ use crate::spawn::{
 use wow_core::{ObjectGuid, ObjectGuidGenerator, Position, guid::HighGuid};
 use wow_entities::{
     AccessorObjectKind, AreaTrigger, CombatBeginContextLikeCpp, CombatSubsystem, Conversation,
-    Corpse, Creature, DynamicObject, DynamicObjectType, GameObject, INVALID_HEIGHT,
-    LineOfSightQuery, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
-    ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject, Unit,
-    UnitSharedVisionSetWorldObjectRequestLikeCpp, WorldObject, WorldObjectEnvironment,
-    WorldObjectHeightQuery,
+    Corpse, Creature, CreatureAimInitializeOutcomeLikeCpp, CreatureRuntimePlan,
+    CreatureRuntimeUpdateContext, CreatureSearchFormationOutcomeLikeCpp, DynamicObject,
+    DynamicObjectType, DynamicObjectValuesUpdate, GAMEOBJECT_TYPE_CHEST, GAMEOBJECT_TYPE_DOOR,
+    GAMEOBJECT_TYPE_GOOBER, GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT, GAMEOBJECT_TYPE_NEW_FLAG,
+    GAMEOBJECT_TYPE_NEW_FLAG_DROP, GAMEOBJECT_TYPE_TRANSPORT, GO_FLAG_NODESPAWN, GameObject,
+    GameObjectUpdateOutcomeLikeCpp as EntityGameObjectUpdateOutcomeLikeCpp,
+    GameObjectUpdateStatusLikeCpp as EntityGameObjectUpdateStatusLikeCpp, GoState, INVALID_HEIGHT,
+    LineOfSightQuery, LootState, MAX_VISIBILITY_DISTANCE, MapBindingError, MapObjectRecord,
+    ObjectAccessorError, ObjectAccessorMapSource, ObjectNotifyFlags, Player, SceneObject,
+    TransportUpdateLikeCpp, Unit, UnitAddToWorldOutcomeLikeCpp, UnitRemoveFromWorldOutcomeLikeCpp,
+    UnitSharedVisionSetWorldObjectRequestLikeCpp, VehicleKitAddToWorldResetOutcomeLikeCpp,
+    VehicleKitInstallOutcomeLikeCpp, VehicleKitRemoveOutcomeLikeCpp, WorldObject,
+    WorldObjectEnvironment, WorldObjectHeightQuery,
 };
 
 const GRID_SLOT_COUNT: usize = (MAX_NUMBER_OF_GRIDS * MAX_NUMBER_OF_GRIDS) as usize;
+#[cfg(test)]
+const GAMEOBJECT_TYPE_GENERIC_LIKE_CPP: u32 = 5;
+/// C++ `DynamicTree.cpp:34-38` `CHECK_TREE_PERIOD = 200`.
+const DYNAMIC_MAP_TREE_CHECK_PERIOD_MS_LIKE_CPP: u32 = 200;
+const WEATHER_UPDATE_INTERVAL_MS_LIKE_CPP: u32 = 1_000;
 
 #[derive(Clone, Copy)]
 struct CombatUnitSnapshotLikeCpp<'a> {
@@ -136,6 +152,212 @@ pub struct SpawnedPoolDataLikeCpp {
     spawned_creatures: HashSet<SpawnId>,
     spawned_gameobjects: HashSet<SpawnId>,
     spawned_pools: HashMap<u32, u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MapUpdateMetricsSummaryLikeCpp {
+    pub creature_count: usize,
+    pub gameobject_count: usize,
+    pub map_id: u32,
+    pub instance_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GridStatesUpdateSummaryLikeCpp {
+    pub diff_ms: u32,
+    pub visited: usize,
+    pub updated: usize,
+    pub unloaded: usize,
+    pub missing_after_snapshot: usize,
+    pub skipped_invalid: usize,
+    pub active_to_idle: usize,
+    pub idle_to_removal: usize,
+    pub removal_unloaded: usize,
+    pub removal_deferred_or_reset: usize,
+    pub skipped_battleground_or_arena: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GameEventChangeEquipOrModelLiveOutcomeLikeCpp {
+    pub spawn_id: SpawnId,
+    pub indexed_guids: usize,
+    pub live_creatures_mutated: usize,
+    pub stale_index_or_wrong_kind: usize,
+    pub equipment_changed: usize,
+    pub display_changed: usize,
+    pub model_validation_unavailable: usize,
+}
+
+/// Represented key for the map-owned C++ `_dynamicTree` model-registration seam.
+///
+/// C++ `DynamicMapTree` stores `GameObjectModel` object references/pointers. Rust does
+/// not model real `GameObjectModel` or collision geometry in this bounded slice, so
+/// the deterministic stand-in key is the owning object GUID. Duplicate insertion is
+/// guarded as a no-op to avoid count drift; this is intentionally safer than raw
+/// pointer duplicate behavior and is not a claim of exact model object identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RepresentedGameObjectModelKeyLikeCpp {
+    pub owner_guid: ObjectGuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicMapTreeModelMutationStatusLikeCpp {
+    Inserted,
+    AlreadyPresent,
+    Removed,
+    Missing,
+}
+
+/// Represented result for C++ `DynamicMapTree::{insert,remove}` via Map facades.
+///
+/// Anchors: `DynamicTree.cpp:72-82,115-127`, `Map.h:457-460`.
+/// Real `GameObjectModel`, RegularGrid/BIH, LOS/intersection/height,
+/// AddToWorld/RemoveFromWorld wiring, transport delayed-add, `GO_FLAG_MAP_OBJECT`,
+/// collision enable/disable, ObjectAccessor/session/fanout/scripts/AI/DB remain out
+/// of scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DynamicMapTreeModelMutationOutcomeLikeCpp {
+    pub key: RepresentedGameObjectModelKeyLikeCpp,
+    pub status: DynamicMapTreeModelMutationStatusLikeCpp,
+    pub model_count_before: usize,
+    pub model_count_after: usize,
+    pub unbalanced_before: u32,
+    pub unbalanced_after: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateModelStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+    NotInWorld,
+}
+
+/// Represented map-owned result for C++ `GameObject::UpdateModel()`.
+///
+/// C++ anchor: `GameObject.cpp:3867-3880`. This helper operates only on the
+/// canonical `Map::map_objects` exact typed GameObject record, consumes explicit
+/// caller-provided `CreateModel()` evidence, and mutates only represented local
+/// model/flag/collision evidence plus the map-owned represented DynamicMapTree
+/// key set. It does not infer from display/template/DB and does not call
+/// `EnableCollision()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateModelOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectUpdateModelStatusLikeCpp,
+    pub old_model_present: bool,
+    pub old_model_registered: bool,
+    pub old_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub new_has_model: bool,
+    pub new_is_map_object: bool,
+    pub new_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectSetDisplayIdStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+}
+
+/// Represented map-owned result for C++ `GameObject::SetDisplayId(uint32)`.
+///
+/// C++ anchor: `GameObject.cpp:3817-3820`. This preserves statement order over
+/// canonical exact typed `Map::map_objects` GameObject records: write
+/// `GameObjectData::DisplayID` first, then call represented `UpdateModel()`.
+/// The model creation evidence remains caller-provided and is never inferred
+/// from display/template/DB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectSetDisplayIdOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectSetDisplayIdStatusLikeCpp,
+    pub previous_display_id: Option<i32>,
+    pub new_display_id: Option<i32>,
+    pub update_model: Option<GameObjectUpdateModelOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectSetGoStateStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+}
+
+/// Represented map-owned result for C++ `GameObject::SetGoState(GOState)`.
+///
+/// C++ anchor: `GameObject.cpp:3771-3793`. This preserves statement order over
+/// canonical exact typed `Map::map_objects` GameObject records: capture old state,
+/// write `GameObjectData::State`, then run only the represented `m_model &&
+/// !IsTransport() && IsInWorld()` collision branch. AI/type implementation hooks,
+/// real `GameObjectModel`, BIH/LOS, ObjectAccessor/session fanout, scripts and DB
+/// inference remain out of scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectSetGoStateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectSetGoStateStatusLikeCpp,
+    pub previous_state: Option<i8>,
+    pub new_state: Option<i8>,
+    pub represented_model_present: bool,
+    pub transport_type: bool,
+    pub in_world_for_collision_branch: Option<bool>,
+    pub collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectSetLootStateStatusLikeCpp {
+    Updated,
+    MissingGameObject,
+    WrongKind,
+}
+
+/// Represented map-owned result for C++ `GameObject::SetLootState(LootState, Unit*)`.
+///
+/// C++ anchor: `GameObject.cpp:3683-3709`. This preserves statement order over
+/// canonical exact typed `Map::map_objects` GameObject records: write local loot
+/// state/unit GUID first, expose the unimplemented AI hook as evidence, then
+/// represent only explicit-caller-evidence restock and represented `m_model` collision.
+/// It does not execute real AI, infer `Loot::IsChanged()`, create real
+/// `GameObjectModel`/BIH geometry, fan out ObjectAccessor/session/script/DB effects, or
+/// resolve a real `Unit*` from the supplied GUID evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectSetLootStateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: GameObjectSetLootStateStatusLikeCpp,
+    pub previous_loot_state: Option<LootState>,
+    pub new_loot_state: Option<LootState>,
+    pub previous_loot_state_unit_guid: Option<ObjectGuid>,
+    pub new_loot_state_unit_guid: Option<ObjectGuid>,
+    pub previous_restock_time: Option<i64>,
+    pub new_restock_time: Option<i64>,
+    pub ai_on_loot_state_changed_not_represented: bool,
+    pub restock_armed: bool,
+    pub represented_model_present: bool,
+    pub door_type_early_return: bool,
+    pub collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+}
+
+fn gameobject_type_is_transport_like_cpp(type_id: i8) -> bool {
+    type_id == GAMEOBJECT_TYPE_TRANSPORT as i8 || type_id == GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT as i8
+}
+
+/// Represented result for C++ `DynamicMapTree::update(t_diff)`.
+///
+/// Anchors: `Map.cpp:666-668`, `DynamicTree.cpp:34-38,66-101,115-138`.
+/// This exposes only the map-owned model-key registration, timer and unbalanced
+/// seam. It does not claim real `GameObjectModel`, RegularGrid/BIH balance,
+/// LOS/intersection/height, AddToWorld/RemoveFromWorld registration,
+/// ObjectAccessor/session/fanout, DB, scripts, AI, or collision runtime parity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DynamicMapTreeUpdateSummaryLikeCpp {
+    pub diff_ms: u32,
+    pub empty: bool,
+    pub timer_before_ms: u32,
+    pub timer_after_ms: u32,
+    pub timer_passed: bool,
+    pub timer_reset_to_ms: Option<u32>,
+    pub unbalanced_before: u32,
+    pub balanced: bool,
+    pub unbalanced_after: u32,
 }
 
 impl SpawnedPoolDataLikeCpp {
@@ -309,6 +531,155 @@ pub struct AddObjectToRemoveListOutcomeLikeCpp {
     pub cleanup_before_delete_count: usize,
 }
 
+pub type RemoveListOutcomeLikeCpp = AddObjectToRemoveListOutcomeLikeCpp;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PersonalPhaseTrackerUpdateSummaryLikeCpp {
+    pub expired_objects: usize,
+    pub remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub unsupported_kinds: usize,
+    pub duplicate_queued: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepresentedDynamicObjectValuesUpdateLikeCpp {
+    pub guid: ObjectGuid,
+    pub values_update: DynamicObjectValuesUpdate,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct SendObjectUpdatesSummaryLikeCpp {
+    /// Objects in canonical `Map::map_objects` with represented
+    /// `Object::m_objectUpdated` set at snapshot time. Rust does not yet own the
+    /// exact C++ `_updateObjects` pointer set, so this is a represented snapshot.
+    pub queued_before: usize,
+    /// In-world updated objects consumed through the represented BuildUpdate seam.
+    pub processed: usize,
+    /// Objects whose update masks were cleared via `ClearUpdateMask(false)`.
+    pub cleared_update_masks: usize,
+    /// Defense for impossible/stale Rust state where the represented update queue
+    /// contains a not-in-world object. C++ asserts in `Map::SendObjectUpdates`.
+    pub skipped_not_in_world: usize,
+    /// Snapshot GUIDs that disappeared before mutable consumption; this should
+    /// not happen in the current single-threaded map owner but stays non-panicking.
+    pub missing_or_stale: usize,
+    /// Evidence that C++ `UpdateDataMapType` player fanout/packet send is still
+    /// intentionally not represented by this seam.
+    pub fanout_not_represented: usize,
+    /// Stable represented DynamicObject VALUES snapshots captured from canonical
+    /// map-owned objects before the represented `BuildUpdate` clear. This is not
+    /// session fanout and must not be read from live masks after clear.
+    pub dynamic_object_values_updates: Vec<RepresentedDynamicObjectValuesUpdateLikeCpp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepresentedZoneDefaultWeatherLikeCpp {
+    update_call_diffs_ms: Vec<u32>,
+    next_update_returns_alive: bool,
+}
+
+impl Default for RepresentedZoneDefaultWeatherLikeCpp {
+    fn default() -> Self {
+        Self {
+            update_call_diffs_ms: Vec::new(),
+            next_update_returns_alive: true,
+        }
+    }
+}
+
+impl RepresentedZoneDefaultWeatherLikeCpp {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update_call_diffs_ms(&self) -> &[u32] {
+        &self.update_call_diffs_ms
+    }
+
+    pub const fn next_update_returns_alive(&self) -> bool {
+        self.next_update_returns_alive
+    }
+
+    pub fn set_next_update_returns_alive(&mut self, alive: bool) {
+        self.next_update_returns_alive = alive;
+    }
+
+    fn update_like_cpp(&mut self, diff_ms: u32) -> bool {
+        self.update_call_diffs_ms.push(diff_ms);
+        let alive = self.next_update_returns_alive;
+        self.next_update_returns_alive = true;
+        alive
+    }
+}
+
+/// Represented durable subset of C++ `ZoneDynamicInfo` (`Map.cpp:72-73`).
+///
+/// `DefaultWeather` is map-owned and optional like the C++ unique pointer. This
+/// does not represent WeatherMgr creation, DB weather data, player counts,
+/// packet fanout, script callbacks, regeneration, or zone messaging.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepresentedZoneDynamicInfoLikeCpp {
+    pub default_weather: Option<RepresentedZoneDefaultWeatherLikeCpp>,
+    pub weather_id: u32,
+    pub intensity: f32,
+}
+
+impl Default for RepresentedZoneDynamicInfoLikeCpp {
+    fn default() -> Self {
+        Self {
+            default_weather: None,
+            weather_id: 0,
+            intensity: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WeatherUpdateSummaryLikeCpp {
+    pub interval_ms: u32,
+    pub timer_current_before: u32,
+    pub timer_current_after_update: u32,
+    pub timer_current_after_reset: u32,
+    pub timer_passed: bool,
+    pub zones_seen: usize,
+    pub zones_without_default_weather: usize,
+    pub default_weather_updated: usize,
+    pub default_weather_removed: usize,
+    pub weather_update_call_diff_ms: Option<u32>,
+    pub script_update_regeneration_fanout_not_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepresentedScriptScheduleActionLikeCpp {
+    pub source_guid: ObjectGuid,
+    pub target_guid: ObjectGuid,
+    pub owner_guid: ObjectGuid,
+    /// Opaque represented command/script identifier only. This is not a real
+    /// `ScriptInfo` pointer and must not trigger command side effects.
+    pub command_id: u32,
+    pub due_time_secs: i64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScriptScheduleProcessSummaryLikeCpp {
+    pub queued_before: usize,
+    pub processed: usize,
+    pub remaining: usize,
+    pub represented_decrease_count: usize,
+    pub lock_entered: bool,
+    pub empty_noop: bool,
+    pub processed_actions: Vec<RepresentedScriptScheduleActionLikeCpp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptScheduleStartOutcomeLikeCpp {
+    pub scheduled: RepresentedScriptScheduleActionLikeCpp,
+    pub represented_increase_count: usize,
+    pub remaining_after_schedule: usize,
+    pub immediate_process: Option<ScriptScheduleProcessSummaryLikeCpp>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddObjectToSwitchListStatusLikeCpp {
     Queued,
@@ -382,6 +753,28 @@ pub struct DynamicObjectCasterViewpointOutcomeLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp {
+    RemovedUnitViewpoint,
+    RemovedDynamicObjectViewpoint,
+    RemovedPlayerViewpoint,
+    MissingTarget,
+    TargetNotInWorld,
+    TargetNotSeer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp {
+    pub player_guid: ObjectGuid,
+    pub viewpoint_guid: ObjectGuid,
+    pub status: PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp,
+    pub player_set_viewpoint: Option<PlayerSetViewpointOutcomeLikeCpp>,
+    pub dynamic_object_caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
+    pub update_visibility_requested: bool,
+    pub set_seer_requested: bool,
+    pub object_accessor_fanout_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DynamicObjectUpdateStatusLikeCpp {
     Updated,
     ExpiredRemoveQueued,
@@ -401,6 +794,350 @@ pub struct DynamicObjectUpdateOutcomeLikeCpp {
     pub aura_update_owner_calls_after: Option<u32>,
     pub script_update_would_run: bool,
     pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DynamicObjectsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub expired_remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_dynamic_object: usize,
+    pub not_in_world: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateStatusLikeCpp {
+    Updated,
+    DespawnRemoveQueued,
+    MissingGameObject,
+    NotGameObject,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateOutcomeLikeCpp {
+    pub game_object_guid: ObjectGuid,
+    pub diff_ms: u32,
+    pub status: GameObjectUpdateStatusLikeCpp,
+    pub despawn_delay_before_ms: Option<u32>,
+    pub despawn_delay_after_ms: Option<u32>,
+    pub despawn_respawn_time_secs: Option<u32>,
+    pub world_update_would_run: bool,
+    pub ai_update_not_represented: bool,
+    pub go_type_impl_update_not_represented: bool,
+    pub despawn_or_unsummon_requested: bool,
+    pub entity_update: Option<EntityGameObjectUpdateOutcomeLikeCpp>,
+    pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
+    pub linked_trap_guid: Option<ObjectGuid>,
+    pub linked_trap_removed: bool,
+    pub linked_trap_missing_or_self: bool,
+    pub loot_cleared: bool,
+    pub goober_spell_cast_spell_id: Option<u32>,
+    pub goober_spell_casts_represented: usize,
+    pub goober_users_cleared: bool,
+    pub goober_state_reset: bool,
+    pub goober_nodespawn_return: bool,
+    pub non_consumed_chest_or_goober_return: bool,
+    pub non_consumed_restock_armed: bool,
+    pub non_consumed_set_ready: bool,
+    pub non_consumed_update_visibility_represented: bool,
+    pub non_consumed_update_dynamic_flags_represented: bool,
+    pub non_consumed_source_missing: bool,
+    pub summoned_expired_delete: bool,
+    pub summoned_expired_respawn_time_zeroed: bool,
+    pub summoned_expired_despawn_represented: bool,
+    pub summoned_expired_go_state_ready: bool,
+    pub new_flag_drop_owner_in_base_command_represented: bool,
+    pub new_flag_drop_owner_missing_or_empty: bool,
+    pub new_flag_drop_owner_wrong_kind: bool,
+    pub new_flag_drop_owner_not_new_flag: bool,
+    pub generic_not_ready: bool,
+    pub generic_visual_despawn_represented: bool,
+    pub generic_flags_restored_represented: bool,
+    pub generic_zero_respawn_delay_return: bool,
+    pub generic_despawn_at_action_source_missing: bool,
+    pub generic_respawn_scheduled_time: Option<i64>,
+    pub generic_spawned_by_default_branch: bool,
+    pub generic_temporary_respawn_zeroed: bool,
+    pub generic_respawn_timer_add: Option<AddRespawnInfoOutcomeLikeCpp>,
+    pub generic_respawn_save_missing_spawn_id: bool,
+    pub generic_respawn_save_missing_gameobject_data: bool,
+    pub generic_respawn_compatibility_db_only_represented: bool,
+    pub generic_visibility_on_destroy_represented: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GameObjectVisibilityOnDestroyGuidsLikeCpp {
+    guids: Vec<ObjectGuid>,
+}
+
+impl GameObjectVisibilityOnDestroyGuidsLikeCpp {
+    pub fn push(&mut self, guid: ObjectGuid) {
+        self.guids.push(guid);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ObjectGuid> {
+        self.guids.iter()
+    }
+
+    pub fn as_slice(&self) -> &[ObjectGuid] {
+        self.guids.as_slice()
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GameObjectVisualDespawnGuidsLikeCpp {
+    guids: Vec<ObjectGuid>,
+}
+
+impl GameObjectVisualDespawnGuidsLikeCpp {
+    pub fn push(&mut self, guid: ObjectGuid) {
+        self.guids.push(guid);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ObjectGuid> {
+        self.guids.iter()
+    }
+
+    pub fn as_slice(&self) -> &[ObjectGuid] {
+        self.guids.as_slice()
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GameObjectsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub despawn_remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_game_object: usize,
+    pub not_in_world: usize,
+    pub linked_traps_removed: usize,
+    pub loot_cleared: usize,
+    pub goober_spell_casts_represented: usize,
+    pub goober_users_cleared: usize,
+    pub goober_state_reset: usize,
+    pub goober_nodespawn_returns: usize,
+    pub non_consumed_chest_or_goober_returns: usize,
+    pub non_consumed_restock_armed: usize,
+    pub non_consumed_set_ready: usize,
+    pub non_consumed_update_visibility_represented: usize,
+    pub non_consumed_update_dynamic_flags_represented: usize,
+    pub non_consumed_source_missing: usize,
+    pub summoned_expired_deletes: usize,
+    pub summoned_expired_respawn_time_zeroed: usize,
+    pub summoned_expired_despawn_represented: usize,
+    pub summoned_expired_go_state_ready: usize,
+    pub new_flag_drop_owner_in_base_commands_represented: usize,
+    pub new_flag_drop_owner_missing_or_empty: usize,
+    pub new_flag_drop_owner_wrong_kind: usize,
+    pub new_flag_drop_owner_not_new_flag: usize,
+    pub generic_not_ready: usize,
+    pub generic_visual_despawn_represented: usize,
+    pub generic_visual_despawn_guids: GameObjectVisualDespawnGuidsLikeCpp,
+    pub generic_flags_restored_represented: usize,
+    pub generic_zero_respawn_delay_returns: usize,
+    pub generic_despawn_at_action_source_missing: usize,
+    pub generic_respawn_scheduled: usize,
+    pub generic_spawned_by_default_branches: usize,
+    pub generic_temporary_respawn_zeroed: usize,
+    pub generic_respawn_timer_added: usize,
+    pub generic_respawn_save_missing_spawn_id: usize,
+    pub generic_respawn_save_missing_gameobject_data: usize,
+    pub generic_respawn_compatibility_db_only_represented: usize,
+    pub generic_visibility_on_destroy_represented: usize,
+    pub generic_visibility_on_destroy_guids: GameObjectVisibilityOnDestroyGuidsLikeCpp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportUpdateStatusLikeCpp {
+    Updated,
+    UnsupportedNoPeriod,
+    MissingTransport,
+    NotTransport,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportUpdateOutcomeLikeCpp {
+    pub transport_guid: ObjectGuid,
+    pub diff_ms: u32,
+    pub now_ms: u64,
+    pub current_map_id: u32,
+    pub status: TransportUpdateStatusLikeCpp,
+    pub period_ms: Option<u32>,
+    pub path_progress_before_ms: Option<u32>,
+    pub path_progress_after_ms: Option<u32>,
+    pub timer_ms: Option<u32>,
+    pub expected_map_matches_current_map: bool,
+    pub position_update_due: bool,
+    pub position_update_represented: bool,
+    pub just_stopped: bool,
+    pub entity_update: Option<TransportUpdateLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TransportsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub unsupported_no_period: usize,
+    pub missing_or_stale: usize,
+    pub not_transport: usize,
+    pub not_in_world: usize,
+    pub position_updates_represented: usize,
+    pub just_stopped: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatureUpdateStatusLikeCpp {
+    Updated,
+    MissingCreature,
+    NotCreature,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureUpdateOutcomeLikeCpp {
+    pub creature_guid: ObjectGuid,
+    pub diff_ms: u32,
+    pub now_secs: i64,
+    pub status: CreatureUpdateStatusLikeCpp,
+    pub plan: Option<CreatureRuntimePlan>,
+    pub actions_recorded: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub skipped_missing: usize,
+    pub skipped_non_creature: usize,
+    pub skipped_not_in_world: usize,
+    pub actions_recorded: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AreaTriggerUpdateStatusLikeCpp {
+    Updated,
+    ExpiredRemoveQueued,
+    MissingAreaTrigger,
+    NotAreaTrigger,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AreaTriggerUpdateOutcomeLikeCpp {
+    pub area_trigger_guid: ObjectGuid,
+    pub elapsed_ms: u32,
+    pub status: AreaTriggerUpdateStatusLikeCpp,
+    pub duration_before_ms: Option<i32>,
+    pub duration_after_ms: Option<i32>,
+    pub time_since_created_before_ms: Option<u32>,
+    pub time_since_created_after_ms: Option<u32>,
+    pub non_static_movement_would_run: bool,
+    pub ai_update_would_run: bool,
+    pub target_list_update_would_run: bool,
+    pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct AreaTriggersUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub expired_remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_area_trigger: usize,
+    pub not_in_world: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationUpdateStatusLikeCpp {
+    Updated,
+    ExpiredRemoveQueued,
+    MissingConversation,
+    NotConversation,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConversationUpdateOutcomeLikeCpp {
+    pub conversation_guid: ObjectGuid,
+    pub elapsed_ms: u32,
+    pub status: ConversationUpdateStatusLikeCpp,
+    pub duration_before_ms: Option<i32>,
+    pub duration_after_ms: Option<i32>,
+    pub script_update_would_run: bool,
+    pub world_update_would_run: bool,
+    pub remove_list: Option<AddObjectToRemoveListOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ConversationsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub expired_remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_conversation: usize,
+    pub not_in_world: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneObjectUpdateContextLikeCpp {
+    pub creator_exists: bool,
+    pub linked_aura_exists: bool,
+}
+
+impl Default for SceneObjectUpdateContextLikeCpp {
+    fn default() -> Self {
+        Self {
+            creator_exists: true,
+            linked_aura_exists: true,
+        }
+    }
+}
+
+impl SceneObjectUpdateContextLikeCpp {
+    /// Conservative represented default for live `ManagedMap::update`: until real
+    /// `ObjectAccessor::GetUnit` and Aura lookup by spell/cast id exist, do not
+    /// delete map-owned SceneObjects merely because that runtime is absent.
+    pub fn represented_default_for(scene_object: &SceneObject) -> Self {
+        let _has_spell_cast = !scene_object.created_by_spell_cast().is_empty();
+        Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneObjectUpdateStatusLikeCpp {
+    Updated,
+    RemoveQueued,
+    MissingSceneObject,
+    NotSceneObject,
+    NotInWorld,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneObjectUpdateOutcomeLikeCpp {
+    pub scene_object_guid: ObjectGuid,
+    pub elapsed_ms: u32,
+    pub status: SceneObjectUpdateStatusLikeCpp,
+    pub owner_guid: Option<ObjectGuid>,
+    pub created_by_spell_cast: Option<ObjectGuid>,
+    pub creator_exists: bool,
+    pub linked_aura_exists: bool,
+    pub world_update_would_run: bool,
+    pub should_be_removed: bool,
+    pub remove_list: Option<RemoveListOutcomeLikeCpp>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SceneObjectsUpdateSummaryLikeCpp {
+    pub visited: usize,
+    pub updated: usize,
+    pub remove_queued: usize,
+    pub missing_or_stale: usize,
+    pub not_scene_object: usize,
+    pub not_in_world: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,6 +1181,44 @@ pub struct RemoveAllObjectsInRemoveListOutcomeLikeCpp {
     pub creature_second_cleanup_count: usize,
     pub dynamic_object_remove_aura_cleanup_count: usize,
     pub dynamic_object_unbound_caster_count: usize,
+}
+
+/// Bounded represented action for C++ `Map::AddFarSpellCallback` / `_farSpellCallbacks`.
+///
+/// C++ anchors:
+/// - `Map.cpp:2514-2517` enqueues a heap-owned `FarSpellCallback`.
+/// - `Map.cpp:2519-2530` drains FIFO callbacks at the start of `Map::DelayedUpdate`
+///   and executes each callback before `RemoveAllObjectsInRemoveList()`.
+///
+/// Rust intentionally represents only closed map-owned actions. This is not a real
+/// Spell/FarSpellCallback implementation: no arbitrary closures, Spell/Aura runtime,
+/// caster lookup, ObjectAccessor, session fanout, packets, scripts, or AI callbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepresentedFarSpellCallbackActionLikeCpp {
+    /// Records execution evidence only; useful for FIFO/order tests without mutation.
+    RecordExecution,
+    /// Represented map mutation: callback queues an object for same-tick remove-list
+    /// drain by delegating to `Map::AddObjectToRemoveList` semantics.
+    QueueObjectRemove { guid: ObjectGuid },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepresentedFarSpellCallbackLikeCpp {
+    pub id: u64,
+    pub action: RepresentedFarSpellCallbackActionLikeCpp,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FarSpellCallbackDrainSummaryLikeCpp {
+    pub queued_before: usize,
+    pub processed: usize,
+    pub record_only: usize,
+    pub remove_queue_attempted: usize,
+    pub remove_queued: usize,
+    pub remove_missing_or_stale: usize,
+    pub remove_duplicates: usize,
+    pub unsupported_remove_kinds: usize,
+    pub queued_after: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,8 +1343,23 @@ pub struct SpawnGroupSpawnOutcomeLikeCpp {
     pub respawn_timers_missing: usize,
     pub skipped_respawn_timer_active: usize,
     pub skipped_live_object_active: usize,
+    /// Spawn metadata entries skipped at the C++ `GetRespawnMapForType(...) == nullptr`
+    /// guard before timers, TypeHasData/live checks, difficulty, grid, or loader planning.
+    pub skipped_no_respawn_map: usize,
     pub skipped_difficulty_mismatch: usize,
     pub skipped_unloaded_grid: usize,
+    /// Loaded-grid Creature/GameObject `SpawnGroupSpawn` entries whose explicit
+    /// caller-supplied DB/template loader returned typed records and whose
+    /// primary record was accepted by map-owned `AddToMap`.
+    pub executed_loaded_grid_spawns: usize,
+    /// Loaded-grid Creature/GameObject `SpawnGroupSpawn` entries whose C++
+    /// `LoadFromDB` attempt is represented by a caller loader returning `None`.
+    /// Compatibility wrappers still also increment the legacy type-specific
+    /// blocked counters below.
+    pub blocked_loaded_grid_spawn_loads: usize,
+    /// Loaded-grid Creature/GameObject `SpawnGroupSpawn` entries whose loader
+    /// returned records, but the primary `AddToMap` insertion was rejected.
+    pub blocked_loaded_grid_spawn_add_to_map: usize,
     pub blocked_loaded_grid_creature_loads: usize,
     pub blocked_loaded_grid_gameobject_loads: usize,
     pub unsupported_spawn_types: usize,
@@ -649,17 +1439,22 @@ pub struct ProcessRespawnsSafeSideEffectsSummaryLikeCpp {
     pub pool_unsupported_action_kind: usize,
     pub blocked_pool_plan_errors: Vec<PoolMgrPlanErrorLikeCpp>,
     pub blocked_missing_spawn_data: usize,
-    /// Loaded-grid non-pooled `DoRespawn` timers whose caller-supplied typed
-    /// `MapObjectRecord` was successfully loaded and inserted through
-    /// `AddToMap`. This is only the map-owned execution seam; DB/template
-    /// resolution stays with the caller-provided loader.
+    /// Loaded-grid `DoRespawn` timers and pooled `Spawn1Object`/`ReSpawn1Object`
+    /// actions whose caller-supplied typed `MapObjectRecord` was successfully
+    /// loaded and inserted through `AddToMap`. This is only the map-owned
+    /// execution seam; DB/template resolution stays with the caller-provided
+    /// loader.
     pub executed_loaded_grid_respawns: usize,
-    /// Loaded-grid non-pooled `DoRespawn` timers that stayed queued because the
-    /// explicit caller loader did not return a typed DB-backed record.
+    /// Loaded-grid `DoRespawn` timers that stay queued, plus pooled
+    /// `Spawn1Object`/`ReSpawn1Object` loaded-grid actions that stay represented
+    /// as blocked load-plan evidence, because the explicit caller loader did not
+    /// return a typed DB-backed record.
     pub blocked_loaded_grid_respawn_loads: usize,
-    /// Loaded-grid non-pooled `DoRespawn` timers whose loader returned a record,
-    /// after which C++ has already popped/erased the timer before `AddToMap`; the
-    /// timer therefore stays removed even when Rust `AddToMap` rejects it.
+    /// Loaded-grid `DoRespawn` timers and pooled `Spawn1Object`/`ReSpawn1Object`
+    /// actions whose loader returned a record, after which C++ has already
+    /// popped/erased the timer or mutated pool state before `AddToMap`; the timer
+    /// therefore stays removed and pool state is not reverted even when Rust
+    /// `AddToMap` rejects it.
     pub blocked_loaded_grid_respawn_add_to_map: usize,
     /// Legacy compatibility counter for the pre-#390 seam where any pooled timer
     /// blocked `ProcessRespawns`. New pooled-timer planner errors are reported in
@@ -935,6 +1730,13 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     terrain: Terrain,
     lifecycle: Lifecycle,
     active_cells: HashSet<CellCoord>,
+    /// Map-owned C++ `Map::m_activeNonPlayers` (`Map.h:617-619`).
+    ///
+    /// Source-of-truth remains `map_objects`; this set stores only non-player active
+    /// object GUID membership produced by `Map::AddToActive`/`RemoveFromActive` seams.
+    /// It is not rebuilt by sessions/ObjectAccessor scans. Rust does not yet model
+    /// C++ `Map::Update`'s mutating iterator adjustment; consumers snapshot/sort GUIDs.
+    active_non_players_like_cpp: HashSet<ObjectGuid>,
     personal_phase_tracker: MultiPersonalPhaseTracker,
     spawn_group_state: SpawnGroupRuntimeState,
     respawn_store: RespawnStoreLikeCpp,
@@ -959,6 +1761,28 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     gameobjects_by_spawn_id: HashMap<SpawnId, HashSet<ObjectGuid>>,
     area_triggers_by_spawn_id: HashMap<SpawnId, HashSet<ObjectGuid>>,
     map_objects: HashMap<ObjectGuid, MapObjectRecord>,
+    /// Map-owned represented C++ `CreatureGroupHolder`, keyed by leader spawn id.
+    ///
+    /// Source-of-truth remains `map_objects` and the typed spawn-id index. This
+    /// holder stores only represented formation membership GUIDs produced by
+    /// explicit `Creature::SearchFormation()` input; it does not own movement,
+    /// AI, DB `FormationMgr`, waypoint, combat-assist, or session fanout runtime.
+    creature_group_holder_like_cpp: HashMap<SpawnId, HashSet<ObjectGuid>>,
+    /// Map-owned represented C++ `_dynamicTree` model-key registration/update seam.
+    ///
+    /// Source-of-truth is this `Map` instance. The represented key set is a
+    /// deterministic stand-in for C++ `GameObjectModel` object identity and
+    /// drives `empty()`/count; insert/remove mutate the set and increment
+    /// `unbalanced_times` only on actual add/remove, matching
+    /// `DynamicTree.cpp:72-82`. Duplicate insert/missing remove are guarded no-ops
+    /// to avoid key-count drift. No real GameObjectModel, RegularGrid/BIH,
+    /// collision, LOS/intersection/height, AddToWorld/RemoveFromWorld wiring,
+    /// transport delayed-add, GO_FLAG_MAP_OBJECT, EnableCollision,
+    /// ObjectAccessor/session/fanout, scripts, AI, DB or model ownership is
+    /// represented here.
+    dynamic_tree_model_keys_like_cpp: HashSet<RepresentedGameObjectModelKeyLikeCpp>,
+    dynamic_tree_rebalance_timer_remaining_ms_like_cpp: u32,
+    dynamic_tree_unbalanced_times_like_cpp: u32,
     /// Map-owned deferred physical removal queue matching C++
     /// `Map::i_objectsToRemove` (`Map.cpp:2547-2555`, `2574-2646`).
     ///
@@ -977,6 +1801,61 @@ pub struct Map<Terrain = NoopTerrainGridLoader, Lifecycle = NoopGridLifecycle> {
     /// before `objects_to_remove` (`Map.cpp:2574-2594`). Session/ObjectAccessor/DB
     /// caches must not reconstruct or drain it.
     objects_to_switch: HashMap<ObjectGuid, bool>,
+    /// Map-owned represented `_farSpellCallbacks` FIFO queue for C++
+    /// `Map::AddFarSpellCallback` / `Map::DelayedUpdate` (`Map.cpp:2514-2530`).
+    ///
+    /// Source-of-truth and drain ownership are this `Map`; callers may enqueue only
+    /// explicit represented actions and only `Map::drain_far_spell_callbacks_like_cpp`
+    /// consumes them. This must run before `remove_all_objects_in_remove_list_like_cpp`.
+    far_spell_callbacks_like_cpp: VecDeque<RepresentedFarSpellCallbackLikeCpp>,
+    represented_far_spell_callback_execution_log_like_cpp: Vec<u64>,
+    /// Map-owned delayed cell/grid movement queues matching C++
+    /// `_creaturesToMove`, `_gameObjectsToMove`, `_dynamicObjectsToMove`, and
+    /// `_areaTriggersToMove` (`Map.h:566-579`, `Map.cpp:1163-1416`).
+    ///
+    /// `map_objects` remains the source-of-truth; these vectors preserve the
+    /// per-family delayed move-list order and the pending maps store only the
+    /// C++-like `_moveState`/`_newPosition` derivative. Future callers enqueue
+    /// through `Map::add_*_to_move_list_like_cpp`; only `Map` drains and mutates
+    /// canonical cell membership/positions. Session/ObjectAccessor/DB caches must
+    /// not drain or reconstruct these queues.
+    creatures_to_move: Vec<ObjectGuid>,
+    gameobjects_to_move: Vec<ObjectGuid>,
+    dynamic_objects_to_move: Vec<ObjectGuid>,
+    area_triggers_to_move: Vec<ObjectGuid>,
+    creature_move_states: HashMap<ObjectGuid, PendingCellMoveLikeCpp>,
+    gameobject_move_states: HashMap<ObjectGuid, PendingCellMoveLikeCpp>,
+    dynamic_object_move_states: HashMap<ObjectGuid, PendingCellMoveLikeCpp>,
+    area_trigger_move_states: HashMap<ObjectGuid, PendingCellMoveLikeCpp>,
+    creature_move_lock: bool,
+    gameobject_move_lock: bool,
+    dynamic_object_move_lock: bool,
+    area_trigger_move_lock: bool,
+    /// Map-owned represented script schedule matching C++ `m_scriptSchedule`
+    /// plus `i_scriptLock` (`Map.cpp:777-795`, `MapScripts.cpp:33-98,311-321`).
+    ///
+    /// Source-of-truth is this `Map` instance. Entries are keyed by absolute game
+    /// time seconds so the due prefix drains deterministically and future entries
+    /// remain queued. Values preserve multiple actions with the same due time.
+    /// Due processing records represented execution evidence only; it does not
+    /// run ScriptInfo commands, look up objects/items/sessions, send packets,
+    /// mutate movement/quests/chat/weather, or call a real script manager.
+    script_schedule_like_cpp: BTreeMap<i64, Vec<RepresentedScriptScheduleActionLikeCpp>>,
+    script_schedule_lock_like_cpp: bool,
+    represented_executed_script_actions_like_cpp: Vec<RepresentedScriptScheduleActionLikeCpp>,
+    /// Map-owned represented C++ `_zoneDynamicInfo` plus `_weatherUpdateTimer`.
+    ///
+    /// Source-of-truth is this `Map` instance. The represented zone map is only
+    /// created by explicit control/test helpers; absence is a no-op and does not
+    /// synthesize `WeatherMgr` data. Timer semantics mirror `IntervalTimer`:
+    /// accumulate diff, pass on `>= interval`, reset with modulo to preserve
+    /// overshoot. The weather seam records `Weather::Update(interval)` evidence
+    /// and drops only `DefaultWeather` when represented update returns false.
+    /// It does not run regeneration/RNG, packet fanout, world zone messages,
+    /// script manager hooks, DB lookups, or player-count checks.
+    zone_dynamic_info_like_cpp: BTreeMap<u32, RepresentedZoneDynamicInfoLikeCpp>,
+    weather_update_timer_current_ms_like_cpp: u32,
+    weather_update_timer_interval_ms_like_cpp: u32,
     /// C++ `Map::_guidGenerators` (`Map.h:789-791`), lazy initialized by
     /// `Map::GetGuidSequenceGenerator` (`Map.cpp:2505-2511`). This stores only
     /// map-owned sequence counters; callers must compose full ObjectGuids with
@@ -1037,6 +1916,7 @@ where
             terrain,
             lifecycle,
             active_cells: HashSet::new(),
+            active_non_players_like_cpp: HashSet::new(),
             personal_phase_tracker: MultiPersonalPhaseTracker::default(),
             spawn_group_state: SpawnGroupRuntimeState::new(),
             respawn_store: RespawnStoreLikeCpp::new(),
@@ -1046,8 +1926,33 @@ where
             gameobjects_by_spawn_id: HashMap::new(),
             area_triggers_by_spawn_id: HashMap::new(),
             map_objects: HashMap::new(),
+            creature_group_holder_like_cpp: HashMap::new(),
+            dynamic_tree_model_keys_like_cpp: HashSet::new(),
+            dynamic_tree_rebalance_timer_remaining_ms_like_cpp:
+                DYNAMIC_MAP_TREE_CHECK_PERIOD_MS_LIKE_CPP,
+            dynamic_tree_unbalanced_times_like_cpp: 0,
             objects_to_remove: HashSet::new(),
             objects_to_switch: HashMap::new(),
+            far_spell_callbacks_like_cpp: VecDeque::new(),
+            represented_far_spell_callback_execution_log_like_cpp: Vec::new(),
+            creatures_to_move: Vec::new(),
+            gameobjects_to_move: Vec::new(),
+            dynamic_objects_to_move: Vec::new(),
+            area_triggers_to_move: Vec::new(),
+            creature_move_states: HashMap::new(),
+            gameobject_move_states: HashMap::new(),
+            dynamic_object_move_states: HashMap::new(),
+            area_trigger_move_states: HashMap::new(),
+            creature_move_lock: false,
+            gameobject_move_lock: false,
+            dynamic_object_move_lock: false,
+            area_trigger_move_lock: false,
+            script_schedule_like_cpp: BTreeMap::new(),
+            script_schedule_lock_like_cpp: false,
+            represented_executed_script_actions_like_cpp: Vec::new(),
+            zone_dynamic_info_like_cpp: BTreeMap::new(),
+            weather_update_timer_current_ms_like_cpp: 0,
+            weather_update_timer_interval_ms_like_cpp: WEATHER_UPDATE_INTERVAL_MS_LIKE_CPP,
             guid_generators: HashMap::new(),
             creature_level_rng_like_cpp: StdRng::from_entropy(),
         }
@@ -1086,6 +1991,534 @@ where
     #[cfg(test)]
     fn seed_creature_level_rng_for_tests_like_cpp(&mut self, seed: u64) {
         self.creature_level_rng_like_cpp = StdRng::seed_from_u64(seed);
+    }
+
+    pub fn contains_gameobject_model_like_cpp(
+        &self,
+        key: RepresentedGameObjectModelKeyLikeCpp,
+    ) -> bool {
+        self.dynamic_tree_model_keys_like_cpp.contains(&key)
+    }
+
+    /// Represents C++ `Map::InsertGameObjectModel` -> `DynamicMapTree::insert`.
+    ///
+    /// The real C++ tree receives a `GameObjectModel const&`; this represented
+    /// seam stores a deterministic owner-GUID key only. A duplicate key is a
+    /// guarded no-op, so represented count/unbalanced state cannot drift from
+    /// repeated calls with the same owner GUID.
+    pub fn insert_gameobject_model_like_cpp(
+        &mut self,
+        key: RepresentedGameObjectModelKeyLikeCpp,
+    ) -> DynamicMapTreeModelMutationOutcomeLikeCpp {
+        let model_count_before = self.dynamic_tree_model_keys_like_cpp.len();
+        let unbalanced_before = self.dynamic_tree_unbalanced_times_like_cpp;
+        let inserted = self.dynamic_tree_model_keys_like_cpp.insert(key);
+
+        if inserted {
+            self.dynamic_tree_unbalanced_times_like_cpp = self
+                .dynamic_tree_unbalanced_times_like_cpp
+                .saturating_add(1);
+        }
+
+        DynamicMapTreeModelMutationOutcomeLikeCpp {
+            key,
+            status: if inserted {
+                DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+            } else {
+                DynamicMapTreeModelMutationStatusLikeCpp::AlreadyPresent
+            },
+            model_count_before,
+            model_count_after: self.dynamic_tree_model_keys_like_cpp.len(),
+            unbalanced_before,
+            unbalanced_after: self.dynamic_tree_unbalanced_times_like_cpp,
+        }
+    }
+
+    /// Represents C++ `Map::RemoveGameObjectModel` -> `DynamicMapTree::remove`.
+    ///
+    /// C++ GameObject callers check containment before removal. Rust exposes a
+    /// safe missing-key no-op at the facade so represented count cannot underflow.
+    pub fn remove_gameobject_model_like_cpp(
+        &mut self,
+        key: RepresentedGameObjectModelKeyLikeCpp,
+    ) -> DynamicMapTreeModelMutationOutcomeLikeCpp {
+        let model_count_before = self.dynamic_tree_model_keys_like_cpp.len();
+        let unbalanced_before = self.dynamic_tree_unbalanced_times_like_cpp;
+        let removed = self.dynamic_tree_model_keys_like_cpp.remove(&key);
+
+        if removed {
+            self.dynamic_tree_unbalanced_times_like_cpp = self
+                .dynamic_tree_unbalanced_times_like_cpp
+                .saturating_add(1);
+        }
+
+        DynamicMapTreeModelMutationOutcomeLikeCpp {
+            key,
+            status: if removed {
+                DynamicMapTreeModelMutationStatusLikeCpp::Removed
+            } else {
+                DynamicMapTreeModelMutationStatusLikeCpp::Missing
+            },
+            model_count_before,
+            model_count_after: self.dynamic_tree_model_keys_like_cpp.len(),
+            unbalanced_before,
+            unbalanced_after: self.dynamic_tree_unbalanced_times_like_cpp,
+        }
+    }
+
+    /// Represents C++ `GameObject::SetDisplayId(uint32)` over canonical map-owned state.
+    ///
+    /// C++ anchor: `GameObject.cpp:3817-3820`. C++ first writes
+    /// `GameObjectData::DisplayID`, then calls `UpdateModel()`. This map-owned
+    /// caller seam preserves that order and delegates all represented model-key
+    /// side effects to `update_gameobject_model_like_cpp`.
+    pub fn set_gameobject_display_id_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        display_id: u32,
+        new_has_model: bool,
+        new_is_map_object: bool,
+    ) -> GameObjectSetDisplayIdOutcomeLikeCpp {
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::MissingGameObject,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::WrongKind,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        }
+
+        let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        else {
+            return GameObjectSetDisplayIdOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetDisplayIdStatusLikeCpp::WrongKind,
+                previous_display_id: None,
+                new_display_id: None,
+                update_model: None,
+            };
+        };
+
+        let previous_display_id = game_object.data().display_id;
+        game_object.set_display_id(display_id);
+        let new_display_id = game_object.data().display_id;
+
+        let update_model =
+            self.update_gameobject_model_like_cpp(guid, new_has_model, new_is_map_object);
+
+        GameObjectSetDisplayIdOutcomeLikeCpp {
+            guid,
+            status: GameObjectSetDisplayIdStatusLikeCpp::Updated,
+            previous_display_id: Some(previous_display_id),
+            new_display_id: Some(new_display_id),
+            update_model: Some(update_model),
+        }
+    }
+
+    /// Represents C++ `GameObject::SetGoState(GOState)` over canonical map-owned state.
+    ///
+    /// C++ anchor: `GameObject.cpp:3771-3793`. Source-of-truth is
+    /// `Map::map_objects`; this mutates only exact typed
+    /// `MapObjectRecord::GameObject` records. The state write occurs before the
+    /// represented `m_model && !IsTransport()` not-in-world early return, matching
+    /// C++ statement order. Collision is never inferred from display/template/DB.
+    pub fn set_gameobject_go_state_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        state: GoState,
+    ) -> GameObjectSetGoStateOutcomeLikeCpp {
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectSetGoStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetGoStateStatusLikeCpp::MissingGameObject,
+                previous_state: None,
+                new_state: None,
+                represented_model_present: false,
+                transport_type: false,
+                in_world_for_collision_branch: None,
+                collision_enable: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectSetGoStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetGoStateStatusLikeCpp::WrongKind,
+                previous_state: None,
+                new_state: None,
+                represented_model_present: false,
+                transport_type: false,
+                in_world_for_collision_branch: None,
+                collision_enable: None,
+            };
+        }
+
+        let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        else {
+            return GameObjectSetGoStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetGoStateStatusLikeCpp::WrongKind,
+                previous_state: None,
+                new_state: None,
+                represented_model_present: false,
+                transport_type: false,
+                in_world_for_collision_branch: None,
+                collision_enable: None,
+            };
+        };
+
+        let previous_state = game_object.data().state;
+        let represented_model_present = game_object.has_represented_gameobject_model_like_cpp();
+        let transport_type = gameobject_type_is_transport_like_cpp(game_object.data().type_id);
+        game_object.set_go_state(state);
+        let new_state = game_object.data().state;
+
+        let (in_world_for_collision_branch, collision_enable) =
+            if represented_model_present && !transport_type {
+                let in_world = game_object.world().object().is_in_world();
+                if in_world {
+                    let collision = game_object
+                        .enable_represented_gameobject_collision_like_cpp(state == GoState::Ready);
+                    (
+                        Some(true),
+                        Some(GameObjectCollisionEnableOutcomeLikeCpp {
+                            requested_enable: collision.requested_enable,
+                            represented_model_present: collision.represented_model_present,
+                            previous_collision_enabled: collision.previous_collision_enabled,
+                            new_collision_enabled: collision.new_collision_enabled,
+                        }),
+                    )
+                } else {
+                    (Some(false), None)
+                }
+            } else {
+                (None, None)
+            };
+
+        GameObjectSetGoStateOutcomeLikeCpp {
+            guid,
+            status: GameObjectSetGoStateStatusLikeCpp::Updated,
+            previous_state: Some(previous_state),
+            new_state: Some(new_state),
+            represented_model_present,
+            transport_type,
+            in_world_for_collision_branch,
+            collision_enable,
+        }
+    }
+
+    /// Represents C++ `GameObject::SetLootState(LootState, Unit*)` over canonical map-owned state.
+    ///
+    /// C++ anchor: `GameObject.cpp:3683-3709`. Source-of-truth is `Map::map_objects`;
+    /// this mutates only exact typed `MapObjectRecord::GameObject` records. The `unit_guid`
+    /// argument is only represented evidence for `unit->GetGUID()` and no real `Unit*` is
+    /// resolved. Restock consumes explicit caller-supplied `Loot::IsChanged()` evidence; collision
+    /// consumes only explicit represented `m_model` evidence and never real geometry/BIH.
+    pub fn set_gameobject_loot_state_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        state: LootState,
+        unit_guid: Option<ObjectGuid>,
+        game_time_secs: i64,
+        chest_restock_time_secs: u32,
+        shared_loot_is_changed_like_cpp: bool,
+    ) -> GameObjectSetLootStateOutcomeLikeCpp {
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::MissingGameObject,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::WrongKind,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        }
+
+        let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        else {
+            return GameObjectSetLootStateOutcomeLikeCpp {
+                guid,
+                status: GameObjectSetLootStateStatusLikeCpp::WrongKind,
+                previous_loot_state: None,
+                new_loot_state: None,
+                previous_loot_state_unit_guid: None,
+                new_loot_state_unit_guid: None,
+                previous_restock_time: None,
+                new_restock_time: None,
+                ai_on_loot_state_changed_not_represented: false,
+                restock_armed: false,
+                represented_model_present: false,
+                door_type_early_return: false,
+                collision_enable: None,
+            };
+        };
+
+        let previous_loot_state = game_object.loot_state();
+        let previous_loot_state_unit_guid = game_object.loot_state_unit_guid();
+        let previous_restock_time = game_object.restock_time();
+        let represented_model_present = game_object.has_represented_gameobject_model_like_cpp();
+        let type_id = game_object.data().type_id;
+
+        game_object.set_loot_state(state, unit_guid);
+
+        let restock_armed = type_id == GAMEOBJECT_TYPE_CHEST as i8
+            && state == LootState::Activated
+            && chest_restock_time_secs > 0
+            && previous_restock_time == 0
+            && shared_loot_is_changed_like_cpp;
+        if restock_armed {
+            let restock_time = game_time_secs.saturating_add(i64::from(chest_restock_time_secs));
+            game_object.set_restock_time_like_cpp(restock_time);
+        }
+
+        let door_type_early_return = type_id == GAMEOBJECT_TYPE_DOOR as i8;
+        let collision_enable = if door_type_early_return || !represented_model_present {
+            None
+        } else {
+            let collision_enabled = (game_object.data().state != GoState::Ready as i8
+                && (state == LootState::Activated || state == LootState::JustDeactivated))
+                || state == LootState::Ready;
+            let collision =
+                game_object.enable_represented_gameobject_collision_like_cpp(collision_enabled);
+            Some(GameObjectCollisionEnableOutcomeLikeCpp {
+                requested_enable: collision.requested_enable,
+                represented_model_present: collision.represented_model_present,
+                previous_collision_enabled: collision.previous_collision_enabled,
+                new_collision_enabled: collision.new_collision_enabled,
+            })
+        };
+
+        GameObjectSetLootStateOutcomeLikeCpp {
+            guid,
+            status: GameObjectSetLootStateStatusLikeCpp::Updated,
+            previous_loot_state: Some(previous_loot_state),
+            new_loot_state: Some(game_object.loot_state()),
+            previous_loot_state_unit_guid: Some(previous_loot_state_unit_guid),
+            new_loot_state_unit_guid: Some(game_object.loot_state_unit_guid()),
+            previous_restock_time: Some(previous_restock_time),
+            new_restock_time: Some(game_object.restock_time()),
+            ai_on_loot_state_changed_not_represented: true,
+            restock_armed,
+            represented_model_present,
+            door_type_early_return,
+            collision_enable,
+        }
+    }
+
+    /// Represents C++ `GameObject::UpdateModel()` over canonical map-owned state.
+    ///
+    /// C++ anchors: `GameObject.cpp:3867-3880`, `GameObject.cpp:4394-4399`, and
+    /// `GameObject.cpp:3818-3820`. The caller supplies explicit represented
+    /// `CreateModel()` output; this helper never infers model existence or
+    /// map-object-ness from display id, template, type or DB. Only exact typed
+    /// `MapObjectRecord::GameObject` records are mutated; missing, untyped,
+    /// wrong-kind and not-in-world records are explicit no-mutation outcomes.
+    pub fn update_gameobject_model_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        new_has_model: bool,
+        new_is_map_object: bool,
+    ) -> GameObjectUpdateModelOutcomeLikeCpp {
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        let Some(record) = self.map_objects.get(&guid) else {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::MissingGameObject,
+                old_model_present: false,
+                old_model_registered: false,
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject || record.game_object().is_none() {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::WrongKind,
+                old_model_present: false,
+                old_model_registered: false,
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        }
+
+        let game_object = record
+            .game_object()
+            .expect("exact typed GameObject record checked above");
+        if !game_object.world().object().is_in_world() {
+            return GameObjectUpdateModelOutcomeLikeCpp {
+                guid,
+                status: GameObjectUpdateModelStatusLikeCpp::NotInWorld,
+                old_model_present: game_object.has_represented_gameobject_model_like_cpp(),
+                old_model_registered: self.contains_gameobject_model_like_cpp(key),
+                old_model_remove: None,
+                new_has_model,
+                new_is_map_object,
+                new_model_insert: None,
+            };
+        }
+
+        let old_model_present = game_object.has_represented_gameobject_model_like_cpp();
+        let old_model_registered =
+            old_model_present && self.contains_gameobject_model_like_cpp(key);
+        let old_model_remove =
+            old_model_registered.then(|| self.remove_gameobject_model_like_cpp(key));
+
+        if let Some(game_object) = self
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::game_object_mut)
+        {
+            // C++ removes `GO_FLAG_MAP_OBJECT`, deletes/nulls `m_model`, then
+            // calls `CreateModel()`. The first call clears old map-object and
+            // collision evidence; the second installs only the explicit new
+            // model/map-object evidence and does not call `EnableCollision()`.
+            game_object.apply_represented_gameobject_model_creation_like_cpp(false, false);
+            game_object.apply_represented_gameobject_model_creation_like_cpp(
+                new_has_model,
+                new_is_map_object,
+            );
+        }
+
+        let new_model_insert = new_has_model.then(|| self.insert_gameobject_model_like_cpp(key));
+
+        GameObjectUpdateModelOutcomeLikeCpp {
+            guid,
+            status: GameObjectUpdateModelStatusLikeCpp::Updated,
+            old_model_present,
+            old_model_registered,
+            old_model_remove,
+            new_has_model,
+            new_is_map_object,
+            new_model_insert,
+        }
+    }
+
+    /// Represents the first statement in C++ `Map::Update(uint32 t_diff)`:
+    /// `_dynamicTree.update(t_diff)` (`Map.cpp:666-668`).
+    ///
+    /// This is C++-shaped map-owned state only. It mirrors
+    /// `DynTreeImpl::update` (`DynamicTree.cpp:90-101`): return early when the
+    /// represented model-key set is empty; otherwise consume a TimeTracker-like
+    /// remaining timer; when passed, reset to `CHECK_TREE_PERIOD` (200ms) and
+    /// clear `unbalanced_times` only if it was positive, representing `balance()`.
+    /// No real BIH/collision/geometry runtime is claimed.
+    pub fn update_dynamic_tree_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> DynamicMapTreeUpdateSummaryLikeCpp {
+        let timer_before_ms = self.dynamic_tree_rebalance_timer_remaining_ms_like_cpp;
+        let unbalanced_before = self.dynamic_tree_unbalanced_times_like_cpp;
+        let empty = self.dynamic_tree_model_keys_like_cpp.is_empty();
+
+        if empty {
+            return DynamicMapTreeUpdateSummaryLikeCpp {
+                diff_ms,
+                empty,
+                timer_before_ms,
+                timer_after_ms: timer_before_ms,
+                timer_passed: false,
+                timer_reset_to_ms: None,
+                unbalanced_before,
+                balanced: false,
+                unbalanced_after: unbalanced_before,
+            };
+        }
+
+        let timer_passed = diff_ms >= timer_before_ms;
+        let mut timer_after_ms = timer_before_ms.saturating_sub(diff_ms);
+        let mut balanced = false;
+        let mut unbalanced_after = unbalanced_before;
+        let timer_reset_to_ms = if timer_passed {
+            timer_after_ms = DYNAMIC_MAP_TREE_CHECK_PERIOD_MS_LIKE_CPP;
+            if unbalanced_before > 0 {
+                self.dynamic_tree_unbalanced_times_like_cpp = 0;
+                unbalanced_after = 0;
+                balanced = true;
+            }
+            Some(DYNAMIC_MAP_TREE_CHECK_PERIOD_MS_LIKE_CPP)
+        } else {
+            None
+        };
+
+        self.dynamic_tree_rebalance_timer_remaining_ms_like_cpp = timer_after_ms;
+
+        DynamicMapTreeUpdateSummaryLikeCpp {
+            diff_ms,
+            empty,
+            timer_before_ms,
+            timer_after_ms,
+            timer_passed,
+            timer_reset_to_ms,
+            unbalanced_before,
+            balanced,
+            unbalanced_after,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_dynamic_tree_model_count_for_tests_like_cpp(&mut self, model_count: u32) {
+        self.dynamic_tree_model_keys_like_cpp.clear();
+        for counter in 0..model_count {
+            self.dynamic_tree_model_keys_like_cpp
+                .insert(RepresentedGameObjectModelKeyLikeCpp {
+                    owner_guid: ObjectGuid::create_player(1, i64::from(counter) + 1),
+                });
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_dynamic_tree_unbalanced_for_tests_like_cpp(&mut self, times: u32) {
+        self.dynamic_tree_unbalanced_times_like_cpp = times;
     }
 
     pub fn generate_low_guid_like_cpp(
@@ -1183,6 +2616,23 @@ where
 
     pub fn personal_phase_tracker(&self) -> &MultiPersonalPhaseTracker {
         &self.personal_phase_tracker
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_personal_phase_object_for_test(
+        &mut self,
+        phase_id: u32,
+        phase_owner: ObjectGuid,
+        object: ObjectGuid,
+    ) {
+        self.personal_phase_tracker
+            .register_tracked_object(phase_id, phase_owner, object);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_personal_phases_for_deletion_for_test(&mut self, phase_owner: ObjectGuid) {
+        self.personal_phase_tracker
+            .mark_all_phases_for_deletion(phase_owner);
     }
 
     /// Map-owned bridge for C++ `Map::_respawnTimes` and the per-type respawn maps.
@@ -1350,47 +2800,199 @@ where
         spawn_store: &SpawnStore,
         summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
     ) {
+        self.apply_pool_typed_spawn_plan_loaded_grid_records_like_cpp::<
+            fn(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+        >(plan, spawn_store, summary, None);
+    }
+
+    fn apply_pool_typed_spawn_plan_loaded_grid_records_like_cpp<L>(
+        &mut self,
+        plan: &PoolTypedSpawnPlanLikeCpp,
+        spawn_store: &SpawnStore,
+        summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+        mut load_record: Option<&mut L>,
+    ) where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
         if let Some(object_plan) = plan.object_plan.as_ref() {
-            self.apply_pool_spawn_object_plan_safe_map_actions_like_cpp(
+            self.apply_pool_spawn_object_plan_loaded_grid_records_like_cpp(
                 object_plan,
                 spawn_store,
                 summary,
+                load_record.as_deref_mut(),
             );
         }
     }
 
-    fn apply_pool_spawn_object_plan_safe_map_actions_like_cpp(
+    fn apply_pool_spawn_pool_plan_loaded_grid_records_like_cpp<L>(
+        &mut self,
+        plan: &PoolSpawnPoolPlanLikeCpp,
+        spawn_store: &SpawnStore,
+        summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+        mut load_record: Option<&mut L>,
+    ) where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
+        for subplan in &plan.subplans {
+            self.apply_pool_typed_spawn_plan_loaded_grid_records_like_cpp(
+                subplan,
+                spawn_store,
+                summary,
+                load_record.as_deref_mut(),
+            );
+        }
+    }
+
+    fn apply_pool_despawn_pool_plan_safe_map_actions_like_cpp(
+        &mut self,
+        plan: &PoolDespawnPoolPlanLikeCpp,
+        summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+    ) {
+        for subplan in &plan.subplans {
+            self.apply_pool_typed_despawn_plan_safe_map_actions_like_cpp(subplan, summary);
+        }
+    }
+
+    fn apply_pool_typed_despawn_plan_safe_map_actions_like_cpp(
+        &mut self,
+        plan: &PoolTypedDespawnPlanLikeCpp,
+        summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+    ) {
+        if let Some(object_plan) = plan.object_plan.as_ref() {
+            self.apply_pool_despawn_object_plan_safe_map_actions_like_cpp(object_plan, summary);
+        }
+    }
+
+    fn apply_pool_despawn_object_plan_safe_map_actions_like_cpp(
+        &mut self,
+        plan: &PoolDespawnObjectPlanLikeCpp,
+        summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
+    ) {
+        let mut child_pool_plans = plan.child_pool_plans.iter();
+        for action in &plan.actions {
+            match *action {
+                PoolSpawnObjectActionLikeCpp::DespawnOne {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    ..
+                } => {
+                    if let Some(child_plan) = child_pool_plans.next() {
+                        self.apply_pool_despawn_pool_plan_safe_map_actions_like_cpp(
+                            child_plan, summary,
+                        );
+                    } else {
+                        summary.pool_unsupported_action_kind += 1;
+                    }
+                }
+                other => match other {
+                    PoolSpawnObjectActionLikeCpp::DespawnOne { kind, guid } => {
+                        self.apply_pool_despawn_one_safe_map_action_like_cpp(kind, guid, summary);
+                    }
+                    PoolSpawnObjectActionLikeCpp::RemoveRespawnTime { kind, guid } => {
+                        let Some(object_type) =
+                            pool_member_kind_to_spawn_object_type_like_cpp(kind)
+                        else {
+                            return;
+                        };
+                        if self
+                            .remove_respawn_time_like_cpp(object_type, guid as SpawnId)
+                            .is_some()
+                        {
+                            summary.pool_respawn_timers_removed += 1;
+                        } else {
+                            summary.pool_respawn_timers_missing += 1;
+                        }
+                    }
+                    PoolSpawnObjectActionLikeCpp::SpawnOne { .. }
+                    | PoolSpawnObjectActionLikeCpp::RespawnOne { .. } => {}
+                },
+            }
+        }
+    }
+
+    fn apply_pool_spawn_object_plan_loaded_grid_records_like_cpp<L>(
         &mut self,
         plan: &PoolSpawnObjectPlanLikeCpp,
         spawn_store: &SpawnStore,
         summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
-    ) {
+        mut load_record: Option<&mut L>,
+    ) where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
+        let mut child_spawn_plans = plan.child_pool_spawn_plans.iter();
+        let mut child_despawn_plans = plan.child_pool_despawn_plans.iter();
         for action in &plan.actions {
-            self.apply_pool_spawn_object_action_safe_map_action_like_cpp(
-                *action,
-                spawn_store,
-                summary,
-            );
+            match *action {
+                PoolSpawnObjectActionLikeCpp::SpawnOne {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    ..
+                } => {
+                    if let Some(child_plan) = child_spawn_plans.next() {
+                        self.apply_pool_spawn_pool_plan_loaded_grid_records_like_cpp(
+                            child_plan,
+                            spawn_store,
+                            summary,
+                            load_record.as_deref_mut(),
+                        );
+                    } else {
+                        summary.pool_unsupported_action_kind += 1;
+                    }
+                }
+                PoolSpawnObjectActionLikeCpp::DespawnOne {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    ..
+                } => {
+                    if let Some(child_plan) = child_despawn_plans.next() {
+                        self.apply_pool_despawn_pool_plan_safe_map_actions_like_cpp(
+                            child_plan, summary,
+                        );
+                    } else {
+                        summary.pool_unsupported_action_kind += 1;
+                    }
+                }
+                PoolSpawnObjectActionLikeCpp::RespawnOne {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    ..
+                }
+                | PoolSpawnObjectActionLikeCpp::RemoveRespawnTime {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    ..
+                } => {}
+                other => self.apply_pool_spawn_object_action_loaded_grid_records_like_cpp(
+                    other,
+                    spawn_store,
+                    summary,
+                    load_record.as_deref_mut(),
+                ),
+            }
         }
     }
 
-    fn apply_pool_spawn_object_action_safe_map_action_like_cpp(
+    fn apply_pool_spawn_object_action_loaded_grid_records_like_cpp<L>(
         &mut self,
         action: PoolSpawnObjectActionLikeCpp,
         spawn_store: &SpawnStore,
         summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
-    ) {
+        load_record: Option<&mut L>,
+    ) where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
         match action {
             PoolSpawnObjectActionLikeCpp::DespawnOne { kind, guid } => {
                 self.apply_pool_despawn_one_safe_map_action_like_cpp(kind, guid, summary);
             }
             PoolSpawnObjectActionLikeCpp::RespawnOne { kind, guid } => {
                 self.apply_pool_despawn_one_safe_map_action_like_cpp(kind, guid, summary);
-                self.report_pool_spawn_one_action_like_cpp(kind, guid, true, spawn_store, summary);
+                self.report_pool_spawn_one_action_like_cpp(
+                    kind,
+                    guid,
+                    true,
+                    spawn_store,
+                    summary,
+                    load_record,
+                );
             }
             PoolSpawnObjectActionLikeCpp::RemoveRespawnTime { kind, guid } => {
                 let Some(object_type) = pool_member_kind_to_spawn_object_type_like_cpp(kind) else {
-                    summary.pool_unsupported_action_kind += 1;
                     return;
                 };
                 if self
@@ -1403,7 +3005,14 @@ where
                 }
             }
             PoolSpawnObjectActionLikeCpp::SpawnOne { kind, guid } => {
-                self.report_pool_spawn_one_action_like_cpp(kind, guid, false, spawn_store, summary);
+                self.report_pool_spawn_one_action_like_cpp(
+                    kind,
+                    guid,
+                    false,
+                    spawn_store,
+                    summary,
+                    load_record,
+                );
             }
         }
     }
@@ -1433,46 +3042,81 @@ where
                 summary.pool_stale_index_entries += 1;
                 continue;
             }
-            let outcome = self.add_object_to_remove_list_like_cpp(guid);
-            if outcome.missing_or_stale {
-                summary.pool_stale_index_entries += 1;
-            } else if outcome.unsupported_kind.is_some() {
-                summary.pool_unsupported_action_kind += 1;
-            } else if outcome.queued {
-                summary.pool_objects_removed += 1;
+            match self.remove_from_map_like_cpp(guid, true) {
+                Ok(_removed) => {
+                    summary.pool_objects_removed += 1;
+                }
+                Err(RemoveFromMapError::ObjectNotFound { .. }) => {
+                    summary.pool_stale_index_entries += 1;
+                }
+                Err(_error) => {
+                    summary.pool_remove_errors += 1;
+                }
             }
         }
     }
 
-    fn report_pool_spawn_one_action_like_cpp(
-        &self,
+    fn report_pool_spawn_one_action_like_cpp<L>(
+        &mut self,
         kind: PoolMemberKindLikeCpp,
         spawn_id: u64,
         respawn: bool,
         spawn_store: &SpawnStore,
         summary: &mut ProcessRespawnsSafeSideEffectsSummaryLikeCpp,
-    ) {
+        load_record: Option<&mut L>,
+    ) where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
         let Some(object_type) = pool_member_kind_to_spawn_object_type_like_cpp(kind) else {
             summary.pool_unsupported_action_kind += 1;
             return;
         };
-        let Some(spawn_data) = spawn_store.spawn_data(object_type, spawn_id as SpawnId) else {
+        let spawn_id = spawn_id as SpawnId;
+        let Some(spawn_data) = spawn_store.spawn_data(object_type, spawn_id) else {
             summary.pool_spawn_actions_missing_spawn_data += 1;
             return;
         };
         let cell = cell_from_world(spawn_data.spawn_point.x, spawn_data.spawn_point.y);
         let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
-        if self.is_grid_loaded(grid) {
+        if !self.is_grid_loaded(grid) {
+            summary.pool_spawn_actions_skipped_unloaded_grid += 1;
+            return;
+        }
+
+        let Some(load_record) = load_record else {
             summary.pool_spawn_actions_blocked_loaded_grid += 1;
             summary
                 .pool_spawn_action_load_plans
                 .push(PoolSpawnActionLoadPlanLikeCpp {
                     object_type,
-                    spawn_id: spawn_id as SpawnId,
+                    spawn_id,
                     respawn,
                 });
-        } else {
-            summary.pool_spawn_actions_skipped_unloaded_grid += 1;
+            return;
+        };
+
+        let Some(records) = load_record(self, object_type, spawn_id) else {
+            summary.pool_spawn_actions_blocked_loaded_grid += 1;
+            summary
+                .pool_spawn_action_load_plans
+                .push(PoolSpawnActionLoadPlanLikeCpp {
+                    object_type,
+                    spawn_id,
+                    respawn,
+                });
+            return;
+        };
+
+        for pre_add_record in records.pre_add_records {
+            let _ = self.add_map_object_record_to_map_like_cpp(pre_add_record);
+        }
+        match self.add_map_object_record_to_map_like_cpp(records.primary_record) {
+            Ok(_outcome) => {
+                summary.executed_loaded_grid_respawns += 1;
+            }
+            Err(_error) => {
+                summary.blocked_loaded_grid_respawn_add_to_map += 1;
+            }
         }
     }
 
@@ -1548,10 +3192,11 @@ where
                     &mut choose_equal,
                 ) {
                     Ok(plan) => {
-                        self.apply_pool_typed_spawn_plan_safe_map_actions_like_cpp(
+                        self.apply_pool_typed_spawn_plan_loaded_grid_records_like_cpp(
                             &plan,
                             spawn_store,
                             &mut summary,
+                            Some(&mut load_record),
                         );
                         self.remove_respawn_time_like_cpp(object_type, spawn_id);
                         summary.processed_pool_timers += 1;
@@ -1984,6 +3629,67 @@ where
         &mut self.pool_data
     }
 
+    /// Map-owned facade for a direct C++ `PoolMgr::DespawnPool(spawns, pool_id,
+    /// alwaysDeleteRespawnTime)` call.
+    ///
+    /// Ownership stays one-way: `PoolMgrLikeCpp` plans and mutates only this
+    /// map's canonical `SpawnedPoolDataLikeCpp`; `Map` then applies only safe
+    /// map-local Creature/GameObject removal and respawn-timer deletion actions
+    /// already represented by the plan. It does not fabricate live records,
+    /// persist DB state, or fan out packets/scripts/AI.
+    pub fn despawn_pool_safe_map_actions_like_cpp(
+        &mut self,
+        pool_mgr: &PoolMgrLikeCpp,
+        pool_id: u32,
+        always_delete_respawn_time: bool,
+    ) -> Result<ProcessRespawnsSafeSideEffectsSummaryLikeCpp, PoolMgrPlanErrorLikeCpp> {
+        let plan = pool_mgr.despawn_pool_plan_like_cpp(
+            &mut self.pool_data,
+            pool_id,
+            always_delete_respawn_time,
+        )?;
+        let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
+        self.apply_pool_despawn_pool_plan_safe_map_actions_like_cpp(&plan, &mut summary);
+        Ok(summary)
+    }
+
+    /// Map-owned facade for a direct C++ `PoolMgr::SpawnPool(spawns, pool_id)`
+    /// call over an already loaded canonical map.
+    ///
+    /// Ownership stays one-way: caller-owned canonical metadata and
+    /// `PoolMgrLikeCpp` feed a deterministic `SpawnPool` plan that mutates this
+    /// map's canonical `SpawnedPoolDataLikeCpp`; `Map` then consumes only
+    /// loaded-grid `Spawn1Object`/recursive child-pool actions through the
+    /// caller-supplied typed record loader. `wow-map` does not read DB, create
+    /// dummy records, persist state, touch sessions/ObjectAccessor, or fan out.
+    pub fn spawn_pool_loaded_grid_records_like_cpp<L>(
+        &mut self,
+        pool_mgr: &PoolMgrLikeCpp,
+        pool_id: u32,
+        spawn_store: &SpawnStore,
+        explicit_roll_for: impl FnMut(PoolMemberKindLikeCpp, u32) -> f32,
+        choose_equal: impl FnMut(&[PoolObjectLikeCpp], usize) -> Vec<usize>,
+        mut load_record: L,
+    ) -> Result<ProcessRespawnsSafeSideEffectsSummaryLikeCpp, PoolMgrPlanErrorLikeCpp>
+    where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
+        let plan = pool_mgr.spawn_pool_plan_like_cpp(
+            &mut self.pool_data,
+            pool_id,
+            explicit_roll_for,
+            choose_equal,
+        )?;
+        let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
+        self.apply_pool_spawn_pool_plan_loaded_grid_records_like_cpp(
+            &plan,
+            spawn_store,
+            &mut summary,
+            Some(&mut load_record),
+        );
+        Ok(summary)
+    }
+
     /// C++ `Map` constructor calls `sPoolMgr->InitPoolsForMap(this)` before
     /// startup respawn and spawn-group initialization. This represented seam
     /// applies deterministic autospawn `SpawnPool` plans into the map-owned
@@ -2110,6 +3816,70 @@ where
         actions
     }
 
+    /// C++ `Map::AddFarSpellCallback` represented as a map-owned FIFO action queue.
+    ///
+    /// This helper only accepts explicit represented actions; it does not expose a
+    /// general closure/callback runtime or real Spell/Aura side effects.
+    pub fn add_far_spell_callback_like_cpp(
+        &mut self,
+        callback: RepresentedFarSpellCallbackLikeCpp,
+    ) {
+        self.far_spell_callbacks_like_cpp.push_back(callback);
+    }
+
+    pub fn far_spell_callbacks_count_like_cpp(&self) -> usize {
+        self.far_spell_callbacks_like_cpp.len()
+    }
+
+    pub fn represented_far_spell_callback_execution_log_like_cpp(&self) -> &[u64] {
+        &self.represented_far_spell_callback_execution_log_like_cpp
+    }
+
+    /// C++ `Map::DelayedUpdate` first block: drain `_farSpellCallbacks` FIFO before
+    /// `RemoveAllObjectsInRemoveList()` (`Map.cpp:2519-2530`).
+    ///
+    /// Limits: this is a bounded represented seam only. It executes no real Spell,
+    /// Aura, caster/ObjectAccessor lookup, session fanout, packet, script, AI, or
+    /// arbitrary callback side effects. `QueueObjectRemove` is the minimal map-owned
+    /// mutation used to prove same-tick ordering before the remove-list drain.
+    pub fn drain_far_spell_callbacks_like_cpp(&mut self) -> FarSpellCallbackDrainSummaryLikeCpp {
+        let queued_before = self.far_spell_callbacks_like_cpp.len();
+        let mut summary = FarSpellCallbackDrainSummaryLikeCpp {
+            queued_before,
+            ..Default::default()
+        };
+
+        while let Some(callback) = self.far_spell_callbacks_like_cpp.pop_front() {
+            summary.processed += 1;
+            self.represented_far_spell_callback_execution_log_like_cpp
+                .push(callback.id);
+            match callback.action {
+                RepresentedFarSpellCallbackActionLikeCpp::RecordExecution => {
+                    summary.record_only += 1;
+                }
+                RepresentedFarSpellCallbackActionLikeCpp::QueueObjectRemove { guid } => {
+                    summary.remove_queue_attempted += 1;
+                    let outcome = self.add_object_to_remove_list_like_cpp(guid);
+                    if outcome.queued {
+                        summary.remove_queued += 1;
+                    }
+                    if outcome.missing_or_stale {
+                        summary.remove_missing_or_stale += 1;
+                    }
+                    if outcome.duplicate {
+                        summary.remove_duplicates += 1;
+                    }
+                    if outcome.unsupported_kind.is_some() {
+                        summary.unsupported_remove_kinds += 1;
+                    }
+                }
+            }
+        }
+
+        summary.queued_after = self.far_spell_callbacks_like_cpp.len();
+        summary
+    }
+
     /// C++ `Map::AddObjectToRemoveList` represented over canonical map records.
     ///
     /// C++ anchors:
@@ -2153,6 +3923,359 @@ where
                 .then_some(kind),
             cleanup_before_delete_count,
         }
+    }
+
+    /// Bounded represented consumption seam for C++ `Map::SendObjectUpdates()`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:777` calls `SendObjectUpdates()` after ObjectUpdater/Transport
+    ///   visitation during `Map::Update`.
+    /// - `Map.cpp:1929-1948` drains `_updateObjects`, asserts each object is
+    ///   in-world, calls `obj->BuildUpdate(update_players)`, then builds/sends
+    ///   per-player packets from `UpdateDataMapType`.
+    /// - `Object.cpp:797-806` clears changed values and resets
+    ///   `m_objectUpdated` in `ClearUpdateMask(false)`.
+    /// - `Object.cpp:3722-3728` `WorldObject::BuildUpdate` visits visible players
+    ///   then calls `ClearUpdateMask(false)`.
+    ///
+    /// Rust ownership: `map_objects` is the canonical source of objects and update
+    /// flags. Because RustyCore does not yet have a map-owned `_updateObjects` set,
+    /// this snapshots GUIDs from `map_objects` whose `object().is_object_updated()`
+    /// is true. The seam represents only the consumption/clear side effect; it
+    /// does not create `UpdateDataMapType`, iterate visible players, build packets,
+    /// access sessions/ObjectAccessor, or send `SendDirectMessage` fanout.
+    pub fn send_object_updates_like_cpp(&mut self) -> SendObjectUpdatesSummaryLikeCpp {
+        let updated_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                record
+                    .object()
+                    .object()
+                    .is_object_updated()
+                    .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = SendObjectUpdatesSummaryLikeCpp {
+            queued_before: updated_guids.len(),
+            ..Default::default()
+        };
+
+        for guid in updated_guids {
+            let Some(record) = self.map_objects.get_mut(&guid) else {
+                summary.missing_or_stale += 1;
+                continue;
+            };
+
+            if !record.object().object().is_in_world() {
+                summary.skipped_not_in_world += 1;
+                continue;
+            }
+
+            // Represents `obj->BuildUpdate(update_players)` only up to its durable
+            // map-owned side effect: `WorldObject::BuildUpdate` snapshots VALUES
+            // for visible players before it eventually calls `ClearUpdateMask(false)`.
+            // Visible player iteration, `UpdateDataMapType`, packet construction,
+            // and direct sends remain open fanout gaps.
+            if let Some(dynamic_object) = record.dynamic_object_mut() {
+                let values_update = dynamic_object.values_update();
+                if values_update.has_data() {
+                    summary.dynamic_object_values_updates.push(
+                        RepresentedDynamicObjectValuesUpdateLikeCpp {
+                            guid,
+                            values_update,
+                        },
+                    );
+                }
+                dynamic_object.clear_dynamic_object_data_changes();
+            }
+            record.object_mut().object_mut().clear_update_mask(false);
+            summary.processed += 1;
+            summary.cleared_update_masks += 1;
+            summary.fanout_not_represented += 1;
+        }
+
+        summary
+    }
+
+    pub fn represented_script_schedule_count_like_cpp(&self) -> usize {
+        self.script_schedule_like_cpp.values().map(Vec::len).sum()
+    }
+
+    pub fn represented_executed_script_actions_like_cpp(
+        &self,
+    ) -> &[RepresentedScriptScheduleActionLikeCpp] {
+        &self.represented_executed_script_actions_like_cpp
+    }
+
+    pub const fn is_script_schedule_locked_like_cpp(&self) -> bool {
+        self.script_schedule_lock_like_cpp
+    }
+
+    /// Bounded represented seam for C++ `Map::ScriptCommandStart` scheduling.
+    ///
+    /// C++ anchors:
+    /// - `MapScripts.cpp:72-98` schedules one action at
+    ///   `GameTime::GetGameTime() + delay`, increments the global scheduled count,
+    ///   and immediately processes zero-delay actions when `!i_scriptLock`.
+    /// - `MapScripts.cpp:386-893` real commands are intentionally not executed by
+    ///   this Rust seam; due actions are only recorded as represented evidence.
+    pub fn schedule_represented_script_action_like_cpp(
+        &mut self,
+        now_secs: i64,
+        delay_secs: u32,
+        source_guid: ObjectGuid,
+        target_guid: ObjectGuid,
+        owner_guid: ObjectGuid,
+        command_id: u32,
+    ) -> ScriptScheduleStartOutcomeLikeCpp {
+        let due_time_secs = now_secs.saturating_add(i64::from(delay_secs));
+        let scheduled = RepresentedScriptScheduleActionLikeCpp {
+            source_guid,
+            target_guid,
+            owner_guid,
+            command_id,
+            due_time_secs,
+        };
+        self.script_schedule_like_cpp
+            .entry(due_time_secs)
+            .or_default()
+            .push(scheduled);
+
+        let immediate_process = if delay_secs == 0 && !self.script_schedule_lock_like_cpp {
+            Some(self.process_script_schedule_update_order_like_cpp(now_secs))
+        } else {
+            None
+        };
+
+        ScriptScheduleStartOutcomeLikeCpp {
+            scheduled,
+            represented_increase_count: 1,
+            remaining_after_schedule: self.represented_script_schedule_count_like_cpp(),
+            immediate_process,
+        }
+    }
+
+    /// Bounded represented C++ `Map::ScriptsProcess()` drain.
+    ///
+    /// Empty schedules are no-ops. Otherwise only sorted entries whose due time is
+    /// `<= GameTime::GetGameTime()` are erased and recorded as represented-executed
+    /// evidence; future entries remain queued and stop the drain. This does not
+    /// execute talk/emote/move/teleport/quest/gossip/item/weather/script-manager
+    /// commands or any DB/session/ObjectAccessor side effects.
+    pub fn process_due_script_schedule_like_cpp(
+        &mut self,
+        now_secs: i64,
+    ) -> ScriptScheduleProcessSummaryLikeCpp {
+        let queued_before = self.represented_script_schedule_count_like_cpp();
+        if queued_before == 0 {
+            return ScriptScheduleProcessSummaryLikeCpp {
+                queued_before,
+                remaining: 0,
+                empty_noop: true,
+                ..Default::default()
+            };
+        }
+
+        let mut processed_actions = Vec::new();
+        loop {
+            let Some((&due_time_secs, _)) = self.script_schedule_like_cpp.first_key_value() else {
+                break;
+            };
+            if due_time_secs > now_secs {
+                break;
+            }
+            if let Some(mut actions) = self.script_schedule_like_cpp.remove(&due_time_secs) {
+                processed_actions.append(&mut actions);
+            }
+        }
+
+        self.represented_executed_script_actions_like_cpp
+            .extend(processed_actions.iter().copied());
+        let remaining = self.represented_script_schedule_count_like_cpp();
+        ScriptScheduleProcessSummaryLikeCpp {
+            queued_before,
+            processed: processed_actions.len(),
+            remaining,
+            represented_decrease_count: processed_actions.len(),
+            lock_entered: false,
+            empty_noop: false,
+            processed_actions,
+        }
+    }
+
+    /// C++ `Map::Update` order helper for the script seam.
+    ///
+    /// Mirrors `if (!m_scriptSchedule.empty()) { i_scriptLock = true;
+    /// ScriptsProcess(); i_scriptLock = false; }` between `SendObjectUpdates()`
+    /// and weather/personal phase (`Map.cpp:777-798`).
+    pub fn process_script_schedule_update_order_like_cpp(
+        &mut self,
+        now_secs: i64,
+    ) -> ScriptScheduleProcessSummaryLikeCpp {
+        if self.script_schedule_like_cpp.is_empty() {
+            return ScriptScheduleProcessSummaryLikeCpp {
+                empty_noop: true,
+                ..Default::default()
+            };
+        }
+
+        self.script_schedule_lock_like_cpp = true;
+        let mut summary = self.process_due_script_schedule_like_cpp(now_secs);
+        self.script_schedule_lock_like_cpp = false;
+        summary.lock_entered = true;
+        summary
+    }
+
+    #[cfg(test)]
+    fn set_script_schedule_lock_for_test(&mut self, locked: bool) {
+        self.script_schedule_lock_like_cpp = locked;
+    }
+
+    pub const fn weather_update_timer_current_ms_like_cpp(&self) -> u32 {
+        self.weather_update_timer_current_ms_like_cpp
+    }
+
+    pub const fn weather_update_timer_interval_ms_like_cpp(&self) -> u32 {
+        self.weather_update_timer_interval_ms_like_cpp
+    }
+
+    pub fn represented_zone_dynamic_info_like_cpp(
+        &self,
+        zone_id: u32,
+    ) -> Option<&RepresentedZoneDynamicInfoLikeCpp> {
+        self.zone_dynamic_info_like_cpp.get(&zone_id)
+    }
+
+    pub fn represented_zone_default_weather_update_diffs_like_cpp(
+        &self,
+        zone_id: u32,
+    ) -> Option<&[u32]> {
+        self.zone_dynamic_info_like_cpp
+            .get(&zone_id)?
+            .default_weather
+            .as_ref()
+            .map(RepresentedZoneDefaultWeatherLikeCpp::update_call_diffs_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_represented_zone_default_weather_for_test(&mut self, zone_id: u32) {
+        self.zone_dynamic_info_like_cpp
+            .entry(zone_id)
+            .or_default()
+            .default_weather = Some(RepresentedZoneDefaultWeatherLikeCpp::new());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_represented_zone_default_weather_next_update_alive_for_test(
+        &mut self,
+        zone_id: u32,
+        alive: bool,
+    ) -> bool {
+        let Some(weather) = self
+            .zone_dynamic_info_like_cpp
+            .get_mut(&zone_id)
+            .and_then(|zone| zone.default_weather.as_mut())
+        else {
+            return false;
+        };
+        weather.set_next_update_returns_alive(alive);
+        true
+    }
+
+    /// Represented C++ `_weatherUpdateTimer` / `_zoneDynamicInfo.DefaultWeather`
+    /// step from `Map::Update` (`Map.cpp:777-798`).
+    ///
+    /// Timer semantics mirror `IntervalTimer` (`Timer.h:62-87`): update adds the
+    /// diff, `Passed()` is `current >= interval`, and `Reset()` keeps overshoot via
+    /// modulo. When passed, existing represented zones are iterated and only zones
+    /// with `DefaultWeather` call represented `Weather::Update(interval)`. A false
+    /// represented return removes only that optional weather pointer like C++
+    /// `DefaultWeather.reset()`. Weather regeneration/RNG, `UpdateWeather`, player
+    /// discovery/fanout, `sWorld->SendZoneMessage`, `sScriptMgr` hooks, DB and
+    /// WeatherMgr runtime are explicit gaps surfaced in the summary flag.
+    pub fn update_weather_like_cpp(&mut self, diff_ms: u32) -> WeatherUpdateSummaryLikeCpp {
+        let interval_ms = self.weather_update_timer_interval_ms_like_cpp;
+        let timer_current_before = self.weather_update_timer_current_ms_like_cpp;
+        self.weather_update_timer_current_ms_like_cpp = self
+            .weather_update_timer_current_ms_like_cpp
+            .saturating_add(diff_ms);
+        let timer_current_after_update = self.weather_update_timer_current_ms_like_cpp;
+        let timer_passed = timer_current_after_update >= interval_ms;
+        let mut summary = WeatherUpdateSummaryLikeCpp {
+            interval_ms,
+            timer_current_before,
+            timer_current_after_update,
+            timer_current_after_reset: timer_current_after_update,
+            timer_passed,
+            script_update_regeneration_fanout_not_represented: true,
+            ..Default::default()
+        };
+
+        if !timer_passed {
+            return summary;
+        }
+
+        summary.zones_seen = self.zone_dynamic_info_like_cpp.len();
+        for zone_info in self.zone_dynamic_info_like_cpp.values_mut() {
+            let Some(default_weather) = zone_info.default_weather.as_mut() else {
+                summary.zones_without_default_weather += 1;
+                continue;
+            };
+            summary.default_weather_updated += 1;
+            summary.weather_update_call_diff_ms = Some(interval_ms);
+            if !default_weather.update_like_cpp(interval_ms) {
+                zone_info.default_weather = None;
+                summary.default_weather_removed += 1;
+            }
+        }
+
+        self.weather_update_timer_current_ms_like_cpp %= interval_ms;
+        summary.timer_current_after_reset = self.weather_update_timer_current_ms_like_cpp;
+        summary
+    }
+
+    /// C++ `GetMultiPersonalPhaseTracker().Update(this, t_diff)` represented on `Map`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:797-798` calls the map-owned multi personal phase tracker during
+    ///   `Map::Update` before deferred move/remove-list processing.
+    /// - `PersonalPhaseTracker.cpp:62-78,106-113,192-202` expires per-owner phases,
+    ///   calls `Map::AddObjectToRemoveList` for tracked objects, clears phase
+    ///   object/grid sets, and removes empty owner trackers.
+    ///
+    /// Rust ownership: `personal_phase_tracker.update(diff_ms)` is the sole source
+    /// of expired GUIDs; `map_objects` remains canonical for real records/removal.
+    /// This seam does not drain `objects_to_remove`, rebuild objects from external
+    /// caches, or claim session/ObjectAccessor/visibility/DB/script behavior.
+    pub fn update_personal_phase_tracker_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> PersonalPhaseTrackerUpdateSummaryLikeCpp {
+        let expired_guids = self.personal_phase_tracker.update(diff_ms);
+        let mut summary = PersonalPhaseTrackerUpdateSummaryLikeCpp {
+            expired_objects: expired_guids.len(),
+            ..Default::default()
+        };
+
+        for guid in expired_guids {
+            let outcome = self.add_object_to_remove_list_like_cpp(guid);
+            if outcome.queued {
+                summary.remove_queued += 1;
+            }
+            if outcome.duplicate {
+                summary.duplicate_queued += 1;
+            }
+            if outcome.missing_or_stale {
+                summary.missing_or_stale += 1;
+            }
+            if outcome.unsupported_kind.is_some() {
+                summary.unsupported_kinds += 1;
+            }
+        }
+
+        summary
     }
 
     /// C++ `WorldObject::SetWorldObject(bool)` facade owned by `Map` over the
@@ -2761,6 +4884,2006 @@ where
         }
     }
 
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `DynamicObject` records only.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:666-785` creates `Trinity::ObjectUpdater updater(t_diff)`
+    ///   during `Map::Update` and visits object containers before
+    ///   `SendObjectUpdates()` / scripts.
+    /// - `GridNotifiers.cpp:258-264,296-301` visits each object and calls
+    ///   `Update(i_timeDiff)` only when `IsInWorld()`, including the explicit
+    ///   `DynamicObject` instantiation.
+    /// - `DynamicObject.cpp:136-171` is represented by
+    ///   `update_dynamic_object_like_cpp`, including duration/aura-bound evidence
+    ///   and expiry enqueue through `AddObjectToRemoveList()`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. This method
+    /// snapshots typed DynamicObject GUIDs only, then delegates each GUID to the
+    /// existing per-object helper. It does not drain the remove-list, visit nearby
+    /// cells, update players/sessions or other object families, send object
+    /// updates, run scripts/AI, touch dynamic tree/collision, fan out visibility,
+    /// write ObjectAccessor/session mirrors, or create fallback records.
+    pub fn update_dynamic_objects_like_cpp(
+        &mut self,
+        elapsed_ms: u32,
+    ) -> DynamicObjectsUpdateSummaryLikeCpp {
+        let dynamic_object_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::DynamicObject
+                    && record.dynamic_object().is_some())
+                .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = DynamicObjectsUpdateSummaryLikeCpp::default();
+        for guid in dynamic_object_guids {
+            summary.visited += 1;
+            let outcome = self.update_dynamic_object_like_cpp(guid, elapsed_ms);
+            match outcome.status {
+                DynamicObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                DynamicObjectUpdateStatusLikeCpp::ExpiredRemoveQueued => {
+                    summary.expired_remove_queued += 1;
+                }
+                DynamicObjectUpdateStatusLikeCpp::MissingDynamicObject => {
+                    summary.missing_or_stale += 1;
+                }
+                DynamicObjectUpdateStatusLikeCpp::NotDynamicObject => {
+                    summary.not_dynamic_object += 1;
+                }
+                DynamicObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `GameObject::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:666-785` creates `Trinity::ObjectUpdater updater(t_diff)`
+    ///   during `Map::Update`.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects and explicitly instantiates `GameObject`.
+    /// - `GameObject.cpp:1215-1233` is represented through the entity-level
+    ///   `m_despawnDelay` countdown; expiry represents `DespawnOrUnsummon(0ms,
+    ///   m_despawnRespawnTime)`.
+    /// - `GameObject.cpp:1575-1580` `GO_JUST_DEACTIVATED` despawns an
+    ///   already-linked trap via `GetLinkedTrap()->DespawnOrUnsummon()` before
+    ///   later goober/chest/generic cleanup.
+    /// - `GameObject.cpp:1740-1764` `Delete()` is represented only as
+    ///   `SetLootState(GO_NOT_READY)` plus `AddObjectToRemoveList()`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. Missing,
+    /// non-GameObject and not-in-world outcomes do not mutate state. This helper
+    /// never creates fallback records, reads session/ObjectAccessor mirrors,
+    /// saves DB respawn times, runs PoolMgr, sends packets, fans out visibility,
+    /// executes AI/go-type implementations, drains removal, or includes Transport
+    /// records whose embedded body happens to be a GameObject.
+    pub fn update_game_object_like_cpp(
+        &mut self,
+        game_object_guid: ObjectGuid,
+        diff_ms: u32,
+        game_time_secs: i64,
+    ) -> GameObjectUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(game_object_guid) else {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::MissingGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+                linked_trap_guid: None,
+                linked_trap_removed: false,
+                linked_trap_missing_or_self: false,
+                loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
+                generic_not_ready: false,
+                generic_visual_despawn_represented: false,
+                generic_flags_restored_represented: false,
+                generic_zero_respawn_delay_return: false,
+                generic_despawn_at_action_source_missing: false,
+                generic_respawn_scheduled_time: None,
+                generic_spawned_by_default_branch: false,
+                generic_temporary_respawn_zeroed: false,
+                generic_respawn_timer_add: None,
+                generic_respawn_save_missing_spawn_id: false,
+                generic_respawn_save_missing_gameobject_data: false,
+                generic_respawn_compatibility_db_only_represented: false,
+                generic_visibility_on_destroy_represented: false,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::GameObject {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+                linked_trap_guid: None,
+                linked_trap_removed: false,
+                linked_trap_missing_or_self: false,
+                loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
+                generic_not_ready: false,
+                generic_visual_despawn_represented: false,
+                generic_flags_restored_represented: false,
+                generic_zero_respawn_delay_return: false,
+                generic_despawn_at_action_source_missing: false,
+                generic_respawn_scheduled_time: None,
+                generic_spawned_by_default_branch: false,
+                generic_temporary_respawn_zeroed: false,
+                generic_respawn_timer_add: None,
+                generic_respawn_save_missing_spawn_id: false,
+                generic_respawn_save_missing_gameobject_data: false,
+                generic_respawn_compatibility_db_only_represented: false,
+                generic_visibility_on_destroy_represented: false,
+            };
+        }
+
+        let Some(game_object) = record.game_object() else {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                despawn_delay_before_ms: None,
+                despawn_delay_after_ms: None,
+                despawn_respawn_time_secs: None,
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+                linked_trap_guid: None,
+                linked_trap_removed: false,
+                linked_trap_missing_or_self: false,
+                loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
+                generic_not_ready: false,
+                generic_visual_despawn_represented: false,
+                generic_flags_restored_represented: false,
+                generic_zero_respawn_delay_return: false,
+                generic_despawn_at_action_source_missing: false,
+                generic_respawn_scheduled_time: None,
+                generic_spawned_by_default_branch: false,
+                generic_temporary_respawn_zeroed: false,
+                generic_respawn_timer_add: None,
+                generic_respawn_save_missing_spawn_id: false,
+                generic_respawn_save_missing_gameobject_data: false,
+                generic_respawn_compatibility_db_only_represented: false,
+                generic_visibility_on_destroy_represented: false,
+            };
+        };
+
+        let despawn_delay_before_ms = game_object.despawn_delay();
+        let despawn_respawn_time_secs = game_object.despawn_respawn_time();
+        if !game_object.world().object().is_in_world() {
+            return GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::NotInWorld,
+                despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                world_update_would_run: false,
+                ai_update_not_represented: false,
+                go_type_impl_update_not_represented: false,
+                despawn_or_unsummon_requested: false,
+                entity_update: None,
+                remove_list: None,
+                linked_trap_guid: None,
+                linked_trap_removed: false,
+                linked_trap_missing_or_self: false,
+                loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
+                generic_not_ready: false,
+                generic_visual_despawn_represented: false,
+                generic_flags_restored_represented: false,
+                generic_zero_respawn_delay_return: false,
+                generic_despawn_at_action_source_missing: false,
+                generic_respawn_scheduled_time: None,
+                generic_spawned_by_default_branch: false,
+                generic_temporary_respawn_zeroed: false,
+                generic_respawn_timer_add: None,
+                generic_respawn_save_missing_spawn_id: false,
+                generic_respawn_save_missing_gameobject_data: false,
+                generic_respawn_compatibility_db_only_represented: false,
+                generic_visibility_on_destroy_represented: false,
+            };
+        }
+
+        let entity_update = {
+            let Some(record) = self.map_objects.get_mut(&game_object_guid) else {
+                return GameObjectUpdateOutcomeLikeCpp {
+                    game_object_guid,
+                    diff_ms,
+                    status: GameObjectUpdateStatusLikeCpp::MissingGameObject,
+                    despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                    despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                    despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                    world_update_would_run: false,
+                    ai_update_not_represented: false,
+                    go_type_impl_update_not_represented: false,
+                    despawn_or_unsummon_requested: false,
+                    entity_update: None,
+                    remove_list: None,
+                    linked_trap_guid: None,
+                    linked_trap_removed: false,
+                    linked_trap_missing_or_self: false,
+                    loot_cleared: false,
+                    goober_spell_cast_spell_id: None,
+                    goober_spell_casts_represented: 0,
+                    goober_users_cleared: false,
+                    goober_state_reset: false,
+                    goober_nodespawn_return: false,
+                    non_consumed_chest_or_goober_return: false,
+                    non_consumed_restock_armed: false,
+                    non_consumed_set_ready: false,
+                    non_consumed_update_visibility_represented: false,
+                    non_consumed_update_dynamic_flags_represented: false,
+                    non_consumed_source_missing: false,
+                    summoned_expired_delete: false,
+                    summoned_expired_respawn_time_zeroed: false,
+                    summoned_expired_despawn_represented: false,
+                    summoned_expired_go_state_ready: false,
+                    new_flag_drop_owner_in_base_command_represented: false,
+                    new_flag_drop_owner_missing_or_empty: false,
+                    new_flag_drop_owner_wrong_kind: false,
+                    new_flag_drop_owner_not_new_flag: false,
+                    generic_not_ready: false,
+                    generic_visual_despawn_represented: false,
+                    generic_flags_restored_represented: false,
+                    generic_zero_respawn_delay_return: false,
+                    generic_despawn_at_action_source_missing: false,
+                    generic_respawn_scheduled_time: None,
+                    generic_spawned_by_default_branch: false,
+                    generic_temporary_respawn_zeroed: false,
+                    generic_respawn_timer_add: None,
+                    generic_respawn_save_missing_spawn_id: false,
+                    generic_respawn_save_missing_gameobject_data: false,
+                    generic_respawn_compatibility_db_only_represented: false,
+                    generic_visibility_on_destroy_represented: false,
+                };
+            };
+            let Some(game_object) = record.game_object_mut() else {
+                return GameObjectUpdateOutcomeLikeCpp {
+                    game_object_guid,
+                    diff_ms,
+                    status: GameObjectUpdateStatusLikeCpp::NotGameObject,
+                    despawn_delay_before_ms: Some(despawn_delay_before_ms),
+                    despawn_delay_after_ms: Some(despawn_delay_before_ms),
+                    despawn_respawn_time_secs: Some(despawn_respawn_time_secs),
+                    world_update_would_run: false,
+                    ai_update_not_represented: false,
+                    go_type_impl_update_not_represented: false,
+                    despawn_or_unsummon_requested: false,
+                    entity_update: None,
+                    remove_list: None,
+                    linked_trap_guid: None,
+                    linked_trap_removed: false,
+                    linked_trap_missing_or_self: false,
+                    loot_cleared: false,
+                    goober_spell_cast_spell_id: None,
+                    goober_spell_casts_represented: 0,
+                    goober_users_cleared: false,
+                    goober_state_reset: false,
+                    goober_nodespawn_return: false,
+                    non_consumed_chest_or_goober_return: false,
+                    non_consumed_restock_armed: false,
+                    non_consumed_set_ready: false,
+                    non_consumed_update_visibility_represented: false,
+                    non_consumed_update_dynamic_flags_represented: false,
+                    non_consumed_source_missing: false,
+                    summoned_expired_delete: false,
+                    summoned_expired_respawn_time_zeroed: false,
+                    summoned_expired_despawn_represented: false,
+                    summoned_expired_go_state_ready: false,
+                    new_flag_drop_owner_in_base_command_represented: false,
+                    new_flag_drop_owner_missing_or_empty: false,
+                    new_flag_drop_owner_wrong_kind: false,
+                    new_flag_drop_owner_not_new_flag: false,
+                    generic_not_ready: false,
+                    generic_visual_despawn_represented: false,
+                    generic_flags_restored_represented: false,
+                    generic_zero_respawn_delay_return: false,
+                    generic_despawn_at_action_source_missing: false,
+                    generic_respawn_scheduled_time: None,
+                    generic_spawned_by_default_branch: false,
+                    generic_temporary_respawn_zeroed: false,
+                    generic_respawn_timer_add: None,
+                    generic_respawn_save_missing_spawn_id: false,
+                    generic_respawn_save_missing_gameobject_data: false,
+                    generic_respawn_compatibility_db_only_represented: false,
+                    generic_visibility_on_destroy_represented: false,
+                };
+            };
+            game_object.update_like_cpp(diff_ms)
+        };
+
+        let (linked_trap_guid, linked_trap_removed, linked_trap_missing_or_self) =
+            if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+                (None, false, false)
+            } else {
+                self.map_object_record(game_object_guid)
+                    .and_then(MapObjectRecord::game_object)
+                    .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+                    .map(|game_object| game_object.linked_trap_guid_like_cpp())
+                    .map_or((None, false, false), |linked_guid| {
+                        if linked_guid.is_empty() || linked_guid == game_object_guid {
+                            return (
+                                (!linked_guid.is_empty()).then_some(linked_guid),
+                                false,
+                                true,
+                            );
+                        }
+
+                        let linked_trap_exists = self
+                            .map_object_record(linked_guid)
+                            .filter(|record| record.kind() == AccessorObjectKind::GameObject)
+                            .and_then(MapObjectRecord::game_object)
+                            .is_some();
+                        if !linked_trap_exists {
+                            return (Some(linked_guid), false, true);
+                        }
+
+                        match self.remove_from_map_like_cpp(linked_guid, true) {
+                            Ok(_) => (Some(linked_guid), true, false),
+                            Err(_) => (Some(linked_guid), false, true),
+                        }
+                    })
+            };
+
+        let mut goober_spell_cast_spell_id = None;
+        let mut goober_spell_casts_represented = 0;
+        let mut goober_users_cleared = false;
+        let mut goober_state_reset = false;
+        let mut goober_nodespawn_return = false;
+        let mut non_consumed_chest_or_goober_return = false;
+        let mut non_consumed_restock_armed = false;
+        let mut non_consumed_set_ready = false;
+        let mut non_consumed_update_visibility_represented = false;
+        let mut non_consumed_update_dynamic_flags_represented = false;
+        let mut non_consumed_source_missing = false;
+        let mut summoned_expired_delete = false;
+        let mut summoned_expired_respawn_time_zeroed = false;
+        let mut summoned_expired_despawn_represented = false;
+        let mut summoned_expired_go_state_ready = false;
+        let mut new_flag_drop_owner_in_base_command_represented = false;
+        let mut new_flag_drop_owner_missing_or_empty = false;
+        let mut new_flag_drop_owner_wrong_kind = false;
+        let mut new_flag_drop_owner_not_new_flag = false;
+        let mut generic_not_ready = false;
+        let mut generic_visual_despawn_represented = false;
+        let mut generic_flags_restored_represented = false;
+        let mut generic_zero_respawn_delay_return = false;
+        let mut generic_despawn_at_action_source_missing = false;
+        let mut generic_respawn_scheduled_time = None;
+        let mut generic_spawned_by_default_branch = false;
+        let mut generic_temporary_respawn_zeroed = false;
+        let mut generic_respawn_timer_add = None;
+        let mut generic_respawn_save_missing_spawn_id = false;
+        let mut generic_respawn_save_missing_gameobject_data = false;
+        let mut generic_respawn_compatibility_db_only_represented = false;
+        let mut generic_visibility_on_destroy_represented = false;
+
+        if entity_update.status != EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&game_object_guid)
+                .and_then(MapObjectRecord::game_object_mut)
+                .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+                .filter(|game_object| game_object.data().type_id == GAMEOBJECT_TYPE_GOOBER as i8)
+            {
+                if let Some(goober_source) = game_object.represented_goober_use_source_like_cpp() {
+                    if goober_source.spell_id != 0 {
+                        goober_spell_cast_spell_id = Some(goober_source.spell_id);
+                        goober_spell_casts_represented =
+                            game_object.unique_users_snapshot_like_cpp().len();
+                        game_object.clear_unique_users_and_reset_use_times_like_cpp();
+                        goober_users_cleared = true;
+                    }
+
+                    if goober_source.lock_id != 0 || goober_source.auto_close_ms != 0 {
+                        game_object.set_go_state(GoState::Ready);
+                        goober_state_reset = true;
+                    }
+                }
+
+                goober_nodespawn_return = game_object.data().flags & GO_FLAG_NODESPAWN != 0;
+            }
+        }
+
+        let loot_cleared = if entity_update.status
+            == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested
+            || goober_nodespawn_return
+        {
+            false
+        } else if let Some(game_object) = self
+            .map_objects
+            .get_mut(&game_object_guid)
+            .and_then(MapObjectRecord::game_object_mut)
+            .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+        {
+            game_object.clear_loot_like_cpp();
+            true
+        } else {
+            false
+        };
+
+        if loot_cleared {
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&game_object_guid)
+                .and_then(MapObjectRecord::game_object_mut)
+            {
+                let go_type = game_object.data().type_id as u32;
+                let despawn_at_action = match go_type {
+                    GAMEOBJECT_TYPE_CHEST => game_object
+                        .represented_chest_loot_source_like_cpp()
+                        .map(|source| source.chest_consumable),
+                    GAMEOBJECT_TYPE_GOOBER => game_object
+                        .represented_goober_use_source_like_cpp()
+                        .map(|source| source.consumable),
+                    _ => None,
+                };
+
+                if matches!(go_type, GAMEOBJECT_TYPE_CHEST | GAMEOBJECT_TYPE_GOOBER) {
+                    // C++ anchor: GameObject.cpp:1609-1623. This represented seam
+                    // deliberately does not call the broader SetLootState facade from
+                    // GameObject.cpp:3683-3709 because line 1617 only writes
+                    // GO_NOT_READY after arming the fully-looted chest restock timer;
+                    // Activated-specific restock/collision semantics are not part of
+                    // this branch. Owner/spell-created expiration is consumed below
+                    // through the represented `Delete()` seam.
+                    if let Some(despawn_at_action) = despawn_at_action {
+                        let is_summoned_and_expired = (game_object.owner_guid()
+                            != ObjectGuid::EMPTY
+                            || game_object.spell_id() != 0)
+                            && game_object.respawn_time() == 0;
+                        if !despawn_at_action && !is_summoned_and_expired {
+                            if go_type == GAMEOBJECT_TYPE_CHEST {
+                                if let Some(source) =
+                                    game_object.represented_chest_loot_source_like_cpp()
+                                {
+                                    if source.chest_restock_time_secs > 0 {
+                                        let restock_time = game_time_secs.saturating_add(
+                                            i64::from(source.chest_restock_time_secs),
+                                        );
+                                        game_object.set_restock_time_like_cpp(restock_time);
+                                        game_object.set_loot_state(LootState::NotReady, None);
+                                        non_consumed_restock_armed = true;
+                                        non_consumed_update_dynamic_flags_represented = true;
+                                    } else {
+                                        game_object.set_loot_state(LootState::Ready, None);
+                                        non_consumed_set_ready = true;
+                                    }
+                                }
+                            } else {
+                                game_object.set_loot_state(LootState::Ready, None);
+                                non_consumed_set_ready = true;
+                            }
+                            non_consumed_chest_or_goober_return = true;
+                            non_consumed_update_visibility_represented = true;
+                        }
+                    } else {
+                        non_consumed_source_missing = true;
+                    }
+                }
+            }
+        }
+
+        if loot_cleared && !non_consumed_chest_or_goober_return {
+            let summoned_snapshot = self
+                .map_object_record(game_object_guid)
+                .and_then(MapObjectRecord::game_object)
+                .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+                .map(|game_object| {
+                    (
+                        game_object.data().type_id as u32,
+                        game_object.owner_guid(),
+                        game_object.spell_id(),
+                        game_object.respawn_time(),
+                    )
+                });
+
+            if let Some((go_type, owner_guid, spell_id, respawn_time)) = summoned_snapshot {
+                let is_summoned_and_expired =
+                    (owner_guid != ObjectGuid::EMPTY || spell_id != 0) && respawn_time == 0;
+                if is_summoned_and_expired {
+                    if let Some(game_object) = self
+                        .map_objects
+                        .get_mut(&game_object_guid)
+                        .and_then(MapObjectRecord::game_object_mut)
+                    {
+                        game_object.set_respawn_time(0);
+                        game_object.set_loot_state(LootState::NotReady, None);
+                        summoned_expired_respawn_time_zeroed = true;
+                        summoned_expired_despawn_represented = true;
+                        if go_type != GAMEOBJECT_TYPE_TRANSPORT {
+                            game_object.set_go_state(GoState::Ready);
+                            summoned_expired_go_state_ready = true;
+                        }
+                    }
+
+                    if go_type == GAMEOBJECT_TYPE_NEW_FLAG_DROP {
+                        if owner_guid == ObjectGuid::EMPTY {
+                            new_flag_drop_owner_missing_or_empty = true;
+                        } else {
+                            match self.map_object_record(owner_guid) {
+                                Some(owner_record)
+                                    if owner_record.kind() == AccessorObjectKind::GameObject =>
+                                {
+                                    match owner_record.game_object() {
+                                        Some(owner_go)
+                                            if owner_go.data().type_id as u32
+                                                == GAMEOBJECT_TYPE_NEW_FLAG =>
+                                        {
+                                            // C++ NewFlag::SetState(InBase, nullptr) has
+                                            // no full Rust go-type state object yet; record
+                                            // the exact typed owner command as represented
+                                            // evidence only, without faking ZoneScript or
+                                            // fanout.
+                                            new_flag_drop_owner_in_base_command_represented = true;
+                                        }
+                                        Some(_) => {
+                                            new_flag_drop_owner_not_new_flag = true;
+                                        }
+                                        None => {
+                                            new_flag_drop_owner_wrong_kind = true;
+                                        }
+                                    }
+                                }
+                                Some(_) => {
+                                    new_flag_drop_owner_wrong_kind = true;
+                                }
+                                None => {
+                                    new_flag_drop_owner_missing_or_empty = true;
+                                }
+                            }
+                        }
+                    }
+
+                    summoned_expired_delete = true;
+                }
+            }
+        }
+
+        if loot_cleared && !non_consumed_chest_or_goober_return && !summoned_expired_delete {
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&game_object_guid)
+                .and_then(MapObjectRecord::game_object_mut)
+                .filter(|game_object| game_object.loot_state() == LootState::JustDeactivated)
+            {
+                // C++ anchor: GameObject.cpp:1639-1651. This represented seam
+                // preserves the `if (!m_respawnDelayTime) return;` early return;
+                // the positive-delay scheduling/SaveRespawnTime tail is consumed
+                // immediately below after releasing the typed GameObject borrow.
+                game_object.set_loot_state(LootState::NotReady, None);
+                generic_not_ready = true;
+
+                let go_type = game_object.data().type_id as u32;
+                let despawn_at_action = match go_type {
+                    GAMEOBJECT_TYPE_CHEST => game_object
+                        .represented_chest_loot_source_like_cpp()
+                        .map(|source| source.chest_consumable),
+                    GAMEOBJECT_TYPE_GOOBER => game_object
+                        .represented_goober_use_source_like_cpp()
+                        .map(|source| source.consumable),
+                    _ => Some(false),
+                };
+                generic_despawn_at_action_source_missing = despawn_at_action.is_none();
+                let visual_despawn = despawn_at_action.unwrap_or(false)
+                    || game_object.go_anim_progress_like_cpp() > 0;
+                if visual_despawn {
+                    generic_visual_despawn_represented = true;
+                    generic_flags_restored_represented =
+                        game_object.restore_represented_baseline_flags_like_cpp();
+                }
+                generic_zero_respawn_delay_return = game_object.respawn_delay_time() == 0;
+            }
+        }
+
+        if generic_not_ready && !generic_zero_respawn_delay_return {
+            let generic_respawn_snapshot = self
+                .map_object_record(game_object_guid)
+                .and_then(MapObjectRecord::game_object)
+                .map(|game_object| {
+                    (
+                        game_object.spawned_by_default(),
+                        game_object.respawn_compatibility_mode(),
+                        game_object.respawn_delay_time(),
+                        game_object.spawn_id(),
+                        game_object.has_represented_gameobject_data_like_cpp(),
+                        game_object.world().object().entry(),
+                        game_object.world().position(),
+                    )
+                });
+
+            if let Some((
+                spawned_by_default,
+                respawn_compatibility_mode,
+                respawn_delay_time,
+                spawn_id,
+                represented_gameobject_data_present,
+                entry,
+                position,
+            )) = generic_respawn_snapshot
+            {
+                if spawned_by_default {
+                    let scheduled_respawn_time =
+                        game_time_secs.saturating_add(i64::from(respawn_delay_time));
+                    if let Some(game_object) = self
+                        .map_objects
+                        .get_mut(&game_object_guid)
+                        .and_then(MapObjectRecord::game_object_mut)
+                    {
+                        game_object.set_respawn_time(scheduled_respawn_time);
+                    }
+                    generic_respawn_scheduled_time = Some(scheduled_respawn_time);
+                    generic_spawned_by_default_branch = true;
+
+                    if !represented_gameobject_data_present {
+                        // C++ `GameObject::SaveRespawnTime` is guarded by `m_goData`.
+                        // A nonzero spawn id is not enough evidence for map-owned
+                        // respawn persistence in this represented seam.
+                        generic_respawn_save_missing_gameobject_data = true;
+                    } else if spawn_id == 0 {
+                        generic_respawn_save_missing_spawn_id = true;
+                    } else if scheduled_respawn_time > game_time_secs {
+                        if respawn_compatibility_mode {
+                            // C++ `SaveRespawnTime` compatibility mode calls
+                            // `SaveRespawnInfoDB` only. `wow-map` owns no async DB
+                            // writes, so record DB-only evidence without mutating the
+                            // map-owned respawn store.
+                            generic_respawn_compatibility_db_only_represented = true;
+                        } else {
+                            let grid = compute_grid_coord(position.x, position.y);
+                            let add_outcome = self.add_respawn_info_like_cpp(RespawnInfoLikeCpp {
+                                object_type: SpawnObjectType::GameObject,
+                                spawn_id,
+                                entry,
+                                respawn_time: scheduled_respawn_time,
+                                grid_id: grid.get_id(),
+                            });
+                            generic_respawn_timer_add = Some(add_outcome);
+                        }
+                    }
+
+                    if respawn_compatibility_mode {
+                        generic_visibility_on_destroy_represented = true;
+                    }
+                } else {
+                    if let Some(game_object) = self
+                        .map_objects
+                        .get_mut(&game_object_guid)
+                        .and_then(MapObjectRecord::game_object_mut)
+                    {
+                        game_object.set_respawn_time(0);
+                    }
+                    generic_temporary_respawn_zeroed = true;
+                    generic_visibility_on_destroy_represented = spawn_id != 0;
+                }
+            }
+        }
+
+        if summoned_expired_delete
+            || (generic_not_ready
+                && !generic_zero_respawn_delay_return
+                && !generic_visibility_on_destroy_represented)
+        {
+            let remove_list = self.add_object_to_remove_list_like_cpp(game_object_guid);
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: Some(remove_list),
+                linked_trap_guid,
+                linked_trap_removed,
+                linked_trap_missing_or_self,
+                loot_cleared,
+                goober_spell_cast_spell_id,
+                goober_spell_casts_represented,
+                goober_users_cleared,
+                goober_state_reset,
+                goober_nodespawn_return,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing,
+                summoned_expired_delete,
+                summoned_expired_respawn_time_zeroed,
+                summoned_expired_despawn_represented,
+                summoned_expired_go_state_ready,
+                new_flag_drop_owner_in_base_command_represented,
+                new_flag_drop_owner_missing_or_empty,
+                new_flag_drop_owner_wrong_kind,
+                new_flag_drop_owner_not_new_flag,
+                generic_not_ready,
+                generic_visual_despawn_represented,
+                generic_flags_restored_represented,
+                generic_zero_respawn_delay_return,
+                generic_despawn_at_action_source_missing,
+                generic_respawn_scheduled_time,
+                generic_spawned_by_default_branch,
+                generic_temporary_respawn_zeroed,
+                generic_respawn_timer_add,
+                generic_respawn_save_missing_spawn_id,
+                generic_respawn_save_missing_gameobject_data,
+                generic_respawn_compatibility_db_only_represented,
+                generic_visibility_on_destroy_represented,
+            }
+        } else if entity_update.status == EntityGameObjectUpdateStatusLikeCpp::DespawnRequested {
+            if let Some(record) = self.map_objects.get_mut(&game_object_guid) {
+                if let Some(game_object) = record.game_object_mut() {
+                    game_object.set_loot_state(LootState::NotReady, None);
+                }
+            }
+            let remove_list = self.add_object_to_remove_list_like_cpp(game_object_guid);
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: Some(remove_list),
+                linked_trap_guid,
+                linked_trap_removed,
+                linked_trap_missing_or_self,
+                loot_cleared: false,
+                goober_spell_cast_spell_id: None,
+                goober_spell_casts_represented: 0,
+                goober_users_cleared: false,
+                goober_state_reset: false,
+                goober_nodespawn_return: false,
+                non_consumed_chest_or_goober_return: false,
+                non_consumed_restock_armed: false,
+                non_consumed_set_ready: false,
+                non_consumed_update_visibility_represented: false,
+                non_consumed_update_dynamic_flags_represented: false,
+                non_consumed_source_missing: false,
+                summoned_expired_delete: false,
+                summoned_expired_respawn_time_zeroed: false,
+                summoned_expired_despawn_represented: false,
+                summoned_expired_go_state_ready: false,
+                new_flag_drop_owner_in_base_command_represented: false,
+                new_flag_drop_owner_missing_or_empty: false,
+                new_flag_drop_owner_wrong_kind: false,
+                new_flag_drop_owner_not_new_flag: false,
+                generic_not_ready: false,
+                generic_visual_despawn_represented: false,
+                generic_flags_restored_represented: false,
+                generic_zero_respawn_delay_return: false,
+                generic_despawn_at_action_source_missing: false,
+                generic_respawn_scheduled_time: None,
+                generic_spawned_by_default_branch: false,
+                generic_temporary_respawn_zeroed: false,
+                generic_respawn_timer_add: None,
+                generic_respawn_save_missing_spawn_id: false,
+                generic_respawn_save_missing_gameobject_data: false,
+                generic_respawn_compatibility_db_only_represented: false,
+                generic_visibility_on_destroy_represented: false,
+            }
+        } else {
+            GameObjectUpdateOutcomeLikeCpp {
+                game_object_guid,
+                diff_ms,
+                status: GameObjectUpdateStatusLikeCpp::Updated,
+                despawn_delay_before_ms: Some(entity_update.despawn_delay_before_ms),
+                despawn_delay_after_ms: Some(entity_update.despawn_delay_after_ms),
+                despawn_respawn_time_secs: Some(entity_update.despawn_respawn_time_secs),
+                world_update_would_run: entity_update.world_update_would_run,
+                ai_update_not_represented: entity_update.ai_update_not_represented,
+                go_type_impl_update_not_represented: entity_update
+                    .go_type_impl_update_not_represented,
+                despawn_or_unsummon_requested: entity_update.despawn_or_unsummon_requested,
+                entity_update: Some(entity_update),
+                remove_list: None,
+                linked_trap_guid,
+                linked_trap_removed,
+                linked_trap_missing_or_self,
+                loot_cleared,
+                goober_spell_cast_spell_id,
+                goober_spell_casts_represented,
+                goober_users_cleared,
+                goober_state_reset,
+                goober_nodespawn_return,
+                non_consumed_chest_or_goober_return,
+                non_consumed_restock_armed,
+                non_consumed_set_ready,
+                non_consumed_update_visibility_represented,
+                non_consumed_update_dynamic_flags_represented,
+                non_consumed_source_missing,
+                summoned_expired_delete,
+                summoned_expired_respawn_time_zeroed,
+                summoned_expired_despawn_represented,
+                summoned_expired_go_state_ready,
+                new_flag_drop_owner_in_base_command_represented,
+                new_flag_drop_owner_missing_or_empty,
+                new_flag_drop_owner_wrong_kind,
+                new_flag_drop_owner_not_new_flag,
+                generic_not_ready,
+                generic_visual_despawn_represented,
+                generic_flags_restored_represented,
+                generic_zero_respawn_delay_return,
+                generic_despawn_at_action_source_missing,
+                generic_respawn_scheduled_time,
+                generic_spawned_by_default_branch,
+                generic_temporary_respawn_zeroed,
+                generic_respawn_timer_add,
+                generic_respawn_save_missing_spawn_id,
+                generic_respawn_save_missing_gameobject_data,
+                generic_respawn_compatibility_db_only_represented,
+                generic_visibility_on_destroy_represented,
+            }
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `GameObject` records only.
+    ///
+    /// This snapshots canonical typed GameObject GUIDs from `Map::map_objects`
+    /// and delegates each GUID to `update_game_object_like_cpp`. C++ visits by
+    /// nearby cell/active object order; this slice only adds the missing
+    /// map-owned GameObject family and keeps the existing Rust family order.
+    pub fn update_game_objects_like_cpp(
+        &mut self,
+        diff_ms: u32,
+        game_time_secs: i64,
+    ) -> GameObjectsUpdateSummaryLikeCpp {
+        let game_object_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::GameObject && record.game_object().is_some())
+                    .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = GameObjectsUpdateSummaryLikeCpp::default();
+        for guid in game_object_guids {
+            summary.visited += 1;
+            let outcome = self.update_game_object_like_cpp(guid, diff_ms, game_time_secs);
+            if outcome.linked_trap_removed {
+                summary.linked_traps_removed += 1;
+            }
+            if outcome.loot_cleared {
+                summary.loot_cleared += 1;
+            }
+            summary.goober_spell_casts_represented += outcome.goober_spell_casts_represented;
+            if outcome.goober_users_cleared {
+                summary.goober_users_cleared += 1;
+            }
+            if outcome.goober_state_reset {
+                summary.goober_state_reset += 1;
+            }
+            if outcome.goober_nodespawn_return {
+                summary.goober_nodespawn_returns += 1;
+            }
+            if outcome.non_consumed_chest_or_goober_return {
+                summary.non_consumed_chest_or_goober_returns += 1;
+            }
+            if outcome.non_consumed_restock_armed {
+                summary.non_consumed_restock_armed += 1;
+            }
+            if outcome.non_consumed_set_ready {
+                summary.non_consumed_set_ready += 1;
+            }
+            if outcome.non_consumed_update_visibility_represented {
+                summary.non_consumed_update_visibility_represented += 1;
+            }
+            if outcome.non_consumed_update_dynamic_flags_represented {
+                summary.non_consumed_update_dynamic_flags_represented += 1;
+            }
+            if outcome.non_consumed_source_missing {
+                summary.non_consumed_source_missing += 1;
+            }
+            if outcome.summoned_expired_delete {
+                summary.summoned_expired_deletes += 1;
+            }
+            if outcome.summoned_expired_respawn_time_zeroed {
+                summary.summoned_expired_respawn_time_zeroed += 1;
+            }
+            if outcome.summoned_expired_despawn_represented {
+                summary.summoned_expired_despawn_represented += 1;
+            }
+            if outcome.summoned_expired_go_state_ready {
+                summary.summoned_expired_go_state_ready += 1;
+            }
+            if outcome.new_flag_drop_owner_in_base_command_represented {
+                summary.new_flag_drop_owner_in_base_commands_represented += 1;
+            }
+            if outcome.new_flag_drop_owner_missing_or_empty {
+                summary.new_flag_drop_owner_missing_or_empty += 1;
+            }
+            if outcome.new_flag_drop_owner_wrong_kind {
+                summary.new_flag_drop_owner_wrong_kind += 1;
+            }
+            if outcome.new_flag_drop_owner_not_new_flag {
+                summary.new_flag_drop_owner_not_new_flag += 1;
+            }
+            if outcome.generic_not_ready {
+                summary.generic_not_ready += 1;
+            }
+            if outcome.generic_visual_despawn_represented {
+                summary.generic_visual_despawn_represented += 1;
+                summary
+                    .generic_visual_despawn_guids
+                    .push(outcome.game_object_guid);
+            }
+            if outcome.generic_flags_restored_represented {
+                summary.generic_flags_restored_represented += 1;
+            }
+            if outcome.generic_zero_respawn_delay_return {
+                summary.generic_zero_respawn_delay_returns += 1;
+            }
+            if outcome.generic_despawn_at_action_source_missing {
+                summary.generic_despawn_at_action_source_missing += 1;
+            }
+            if outcome.generic_respawn_scheduled_time.is_some() {
+                summary.generic_respawn_scheduled += 1;
+            }
+            if outcome.generic_spawned_by_default_branch {
+                summary.generic_spawned_by_default_branches += 1;
+            }
+            if outcome.generic_temporary_respawn_zeroed {
+                summary.generic_temporary_respawn_zeroed += 1;
+            }
+            if matches!(
+                outcome.generic_respawn_timer_add,
+                Some(
+                    AddRespawnInfoOutcomeLikeCpp::Inserted
+                        | AddRespawnInfoOutcomeLikeCpp::ReplacedExisting
+                )
+            ) {
+                summary.generic_respawn_timer_added += 1;
+            }
+            if outcome.generic_respawn_save_missing_spawn_id {
+                summary.generic_respawn_save_missing_spawn_id += 1;
+            }
+            if outcome.generic_respawn_save_missing_gameobject_data {
+                summary.generic_respawn_save_missing_gameobject_data += 1;
+            }
+            if outcome.generic_respawn_compatibility_db_only_represented {
+                summary.generic_respawn_compatibility_db_only_represented += 1;
+            }
+            if outcome.generic_visibility_on_destroy_represented {
+                summary.generic_visibility_on_destroy_represented += 1;
+                summary
+                    .generic_visibility_on_destroy_guids
+                    .push(outcome.game_object_guid);
+            }
+            match outcome.status {
+                GameObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued => {
+                    summary.despawn_remove_queued += 1;
+                }
+                GameObjectUpdateStatusLikeCpp::MissingGameObject => summary.missing_or_stale += 1,
+                GameObjectUpdateStatusLikeCpp::NotGameObject => summary.not_game_object += 1,
+                GameObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `Transport::Update(uint32 diff)` under `Map::Update`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:666-785` updates object families, transport collection, then later
+    ///   `SendObjectUpdates`; exact TypeContainerVisitor and `_transports` ordering is
+    ///   not fully reproduced here.
+    /// - `Transport.cpp:179-251` is represented only for local timers/path progress,
+    ///   stop request evidence, client path-progress field, expected-map gated
+    ///   200ms position-update due evidence, and stopped state/dynflag.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. Missing,
+    /// non-Transport and untyped Transport-kind outcomes do not mutate state.
+    /// Unlike `ObjectUpdater::Visit<T>`, the C++ `_transports` loop does not gate
+    /// canonical transports on `IsInWorld`, so typed Transport records are delegated
+    /// even when their embedded WorldObject is not in-world. This helper never
+    /// creates fallback records, reads session/ObjectAccessor mirrors, runs
+    /// scripts/AI/GameEvents, computes real spline position, teleports,
+    /// spawns/removes static passengers, relocates passengers, fans out packets, or
+    /// drains queues.
+    pub fn update_transport_like_cpp(
+        &mut self,
+        transport_guid: ObjectGuid,
+        diff_ms: u32,
+        now_ms: u64,
+    ) -> TransportUpdateOutcomeLikeCpp {
+        let current_map_id = self.map_id;
+        let Some(record) = self.map_object_record(transport_guid) else {
+            return TransportUpdateOutcomeLikeCpp {
+                transport_guid,
+                diff_ms,
+                now_ms,
+                current_map_id,
+                status: TransportUpdateStatusLikeCpp::MissingTransport,
+                period_ms: None,
+                path_progress_before_ms: None,
+                path_progress_after_ms: None,
+                timer_ms: None,
+                expected_map_matches_current_map: false,
+                position_update_due: false,
+                position_update_represented: false,
+                just_stopped: false,
+                entity_update: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::Transport {
+            return TransportUpdateOutcomeLikeCpp {
+                transport_guid,
+                diff_ms,
+                now_ms,
+                current_map_id,
+                status: TransportUpdateStatusLikeCpp::NotTransport,
+                period_ms: None,
+                path_progress_before_ms: None,
+                path_progress_after_ms: None,
+                timer_ms: None,
+                expected_map_matches_current_map: false,
+                position_update_due: false,
+                position_update_represented: false,
+                just_stopped: false,
+                entity_update: None,
+            };
+        }
+
+        let Some(transport) = record.transport() else {
+            return TransportUpdateOutcomeLikeCpp {
+                transport_guid,
+                diff_ms,
+                now_ms,
+                current_map_id,
+                status: TransportUpdateStatusLikeCpp::NotTransport,
+                period_ms: None,
+                path_progress_before_ms: None,
+                path_progress_after_ms: None,
+                timer_ms: None,
+                expected_map_matches_current_map: false,
+                position_update_due: false,
+                position_update_represented: false,
+                just_stopped: false,
+                entity_update: None,
+            };
+        };
+
+        let period_ms = transport.get_transport_period();
+        let path_progress_before_ms = transport.path_progress_ms();
+
+        let Some(record) = self.map_objects.get_mut(&transport_guid) else {
+            return TransportUpdateOutcomeLikeCpp {
+                transport_guid,
+                diff_ms,
+                now_ms,
+                current_map_id,
+                status: TransportUpdateStatusLikeCpp::MissingTransport,
+                period_ms: Some(period_ms),
+                path_progress_before_ms: Some(path_progress_before_ms),
+                path_progress_after_ms: Some(path_progress_before_ms),
+                timer_ms: None,
+                expected_map_matches_current_map: false,
+                position_update_due: false,
+                position_update_represented: false,
+                just_stopped: false,
+                entity_update: None,
+            };
+        };
+        let Some(transport) = record.transport_mut() else {
+            return TransportUpdateOutcomeLikeCpp {
+                transport_guid,
+                diff_ms,
+                now_ms,
+                current_map_id,
+                status: TransportUpdateStatusLikeCpp::NotTransport,
+                period_ms: Some(period_ms),
+                path_progress_before_ms: Some(path_progress_before_ms),
+                path_progress_after_ms: Some(path_progress_before_ms),
+                timer_ms: None,
+                expected_map_matches_current_map: false,
+                position_update_due: false,
+                position_update_represented: false,
+                just_stopped: false,
+                entity_update: None,
+            };
+        };
+
+        let entity_update = transport.update_like_cpp(diff_ms, now_ms, current_map_id);
+        let status = if entity_update.unsupported_no_period {
+            TransportUpdateStatusLikeCpp::UnsupportedNoPeriod
+        } else {
+            TransportUpdateStatusLikeCpp::Updated
+        };
+        TransportUpdateOutcomeLikeCpp {
+            transport_guid,
+            diff_ms,
+            now_ms,
+            current_map_id,
+            status,
+            period_ms: Some(entity_update.period_ms),
+            path_progress_before_ms: Some(entity_update.old_path_progress_ms),
+            path_progress_after_ms: Some(entity_update.new_path_progress_ms),
+            timer_ms: entity_update.timer_ms,
+            expected_map_matches_current_map: entity_update.expected_map_matches_current_map,
+            position_update_due: entity_update.position_update_due,
+            position_update_represented: entity_update.position_update_represented,
+            just_stopped: entity_update.just_stopped,
+            entity_update: Some(entity_update),
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// typed canonical Transport records only. This snapshots `MapObjectRecord`
+    /// GUIDs before mutation and deliberately excludes generic `WorldObject`
+    /// fallback records even when their kind is Transport.
+    pub fn update_transports_like_cpp(
+        &mut self,
+        diff_ms: u32,
+        now_ms: u64,
+    ) -> TransportsUpdateSummaryLikeCpp {
+        let transport_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::Transport && record.transport().is_some())
+                    .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = TransportsUpdateSummaryLikeCpp::default();
+        for guid in transport_guids {
+            summary.visited += 1;
+            let outcome = self.update_transport_like_cpp(guid, diff_ms, now_ms);
+            match outcome.status {
+                TransportUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                TransportUpdateStatusLikeCpp::UnsupportedNoPeriod => {
+                    summary.unsupported_no_period += 1;
+                }
+                TransportUpdateStatusLikeCpp::MissingTransport => summary.missing_or_stale += 1,
+                TransportUpdateStatusLikeCpp::NotTransport => summary.not_transport += 1,
+                TransportUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+            if outcome.position_update_represented {
+                summary.position_updates_represented += 1;
+            }
+            if outcome.just_stopped {
+                summary.just_stopped += 1;
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `Creature::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `Map.cpp:666-785` uses `Trinity::ObjectUpdater` during `Map::Update`.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects, including the explicit `Creature` instantiation.
+    /// - `Creature.cpp:696-903` is represented here only through the existing
+    ///   `Creature::runtime_update_plan(diff, GameTime::GetGameTime(), context)`
+    ///   helper; real AI/scripts/Unit::Update/fanout remain outside this slice.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. Missing,
+    /// non-Creature, and not-in-world outcomes do not mutate state. This helper
+    /// never creates fallback records, reads session/ObjectAccessor mirrors,
+    /// sends packets, runs DB writes, or drains map queues.
+    pub fn update_creature_like_cpp(
+        &mut self,
+        creature_guid: ObjectGuid,
+        diff_ms: u32,
+        now_secs: i64,
+        context: CreatureRuntimeUpdateContext,
+    ) -> CreatureUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(creature_guid) else {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::MissingCreature,
+                plan: None,
+                actions_recorded: 0,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::Creature {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::NotCreature,
+                plan: None,
+                actions_recorded: 0,
+            };
+        }
+
+        let Some(creature) = record.creature() else {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::NotCreature,
+                plan: None,
+                actions_recorded: 0,
+            };
+        };
+
+        if !creature.unit().world().object().is_in_world() {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::NotInWorld,
+                plan: None,
+                actions_recorded: 0,
+            };
+        }
+
+        let Some(record) = self.map_objects.get_mut(&creature_guid) else {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::MissingCreature,
+                plan: None,
+                actions_recorded: 0,
+            };
+        };
+        let Some(creature) = record.creature_mut() else {
+            return CreatureUpdateOutcomeLikeCpp {
+                creature_guid,
+                diff_ms,
+                now_secs,
+                status: CreatureUpdateStatusLikeCpp::NotCreature,
+                plan: None,
+                actions_recorded: 0,
+            };
+        };
+
+        let plan = creature.runtime_update_plan(diff_ms, now_secs, context);
+        let actions_recorded = plan.actions().len();
+        CreatureUpdateOutcomeLikeCpp {
+            creature_guid,
+            diff_ms,
+            now_secs,
+            status: CreatureUpdateStatusLikeCpp::Updated,
+            plan: Some(plan),
+            actions_recorded,
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `CreatureMapType` records only.
+    ///
+    /// This snapshots canonical typed Creature GUIDs from `Map::map_objects`,
+    /// resolves a represented runtime context from the caller before mutable
+    /// access, then delegates to `update_creature_like_cpp`. It intentionally
+    /// excludes Pet and every non-Creature family unless already stored as a typed
+    /// `MapObjectRecord::Creature`.
+    pub fn update_creatures_like_cpp<F>(
+        &mut self,
+        diff_ms: u32,
+        now_secs: i64,
+        mut context_resolver: F,
+    ) -> CreatureUpdateSummaryLikeCpp
+    where
+        F: FnMut(ObjectGuid, &Creature) -> CreatureRuntimeUpdateContext,
+    {
+        let creature_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::Creature && record.creature().is_some())
+                    .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = CreatureUpdateSummaryLikeCpp::default();
+        for guid in creature_guids {
+            summary.visited += 1;
+            let Some(context) = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .map(|creature| context_resolver(guid, creature))
+            else {
+                let outcome = self.update_creature_like_cpp(
+                    guid,
+                    diff_ms,
+                    now_secs,
+                    CreatureRuntimeUpdateContext::default(),
+                );
+                match outcome.status {
+                    CreatureUpdateStatusLikeCpp::MissingCreature => summary.skipped_missing += 1,
+                    CreatureUpdateStatusLikeCpp::NotCreature => summary.skipped_non_creature += 1,
+                    CreatureUpdateStatusLikeCpp::NotInWorld => summary.skipped_not_in_world += 1,
+                    CreatureUpdateStatusLikeCpp::Updated => {
+                        summary.updated += 1;
+                        summary.actions_recorded += outcome.actions_recorded;
+                    }
+                }
+                continue;
+            };
+
+            let outcome = self.update_creature_like_cpp(guid, diff_ms, now_secs, context);
+            match outcome.status {
+                CreatureUpdateStatusLikeCpp::Updated => {
+                    summary.updated += 1;
+                    summary.actions_recorded += outcome.actions_recorded;
+                }
+                CreatureUpdateStatusLikeCpp::MissingCreature => summary.skipped_missing += 1,
+                CreatureUpdateStatusLikeCpp::NotCreature => summary.skipped_non_creature += 1,
+                CreatureUpdateStatusLikeCpp::NotInWorld => summary.skipped_not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `AreaTrigger::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `AreaTrigger.cpp:297-364` runs `WorldObject::Update(diff)`, increments
+    ///   `_timeSinceCreated`, runs the non-static movement/orbit/shape branch
+    ///   before duration expiry, calls `Remove(); return;` on duration expiry,
+    ///   and only then runs AI update plus target-list update.
+    /// - `AreaTrigger.cpp:366-372` makes `Remove()` enqueue through
+    ///   `AddObjectToRemoveList()` only when the object is in world.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects and explicitly instantiates `AreaTrigger`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. This helper
+    /// mutates only typed `MapObjectRecord::AreaTrigger` time/duration state and,
+    /// after dropping that mutable borrow, enqueues the same GUID through the
+    /// existing remove-list facade on expiry. It does not drain removal, run real
+    /// movement/shape, AI, target-list runtime, ObjectAccessor/session mirrors,
+    /// fanout, packets, dynamic tree, scripts, or create fallback records.
+    pub fn update_area_trigger_like_cpp(
+        &mut self,
+        area_trigger_guid: ObjectGuid,
+        elapsed_ms: u32,
+    ) -> AreaTriggerUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(area_trigger_guid) else {
+            return AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::MissingAreaTrigger,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                time_since_created_before_ms: None,
+                time_since_created_after_ms: None,
+                non_static_movement_would_run: false,
+                ai_update_would_run: false,
+                target_list_update_would_run: false,
+                remove_list: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::AreaTrigger {
+            return AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::NotAreaTrigger,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                time_since_created_before_ms: None,
+                time_since_created_after_ms: None,
+                non_static_movement_would_run: false,
+                ai_update_would_run: false,
+                target_list_update_would_run: false,
+                remove_list: None,
+            };
+        }
+
+        let Some(area_trigger) = record.area_trigger() else {
+            return AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::NotAreaTrigger,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                time_since_created_before_ms: None,
+                time_since_created_after_ms: None,
+                non_static_movement_would_run: false,
+                ai_update_would_run: false,
+                target_list_update_would_run: false,
+                remove_list: None,
+            };
+        };
+
+        let duration_before_ms = area_trigger.duration_ms();
+        let time_since_created_before_ms = area_trigger.time_since_created_ms();
+        let non_static_movement_would_run = !area_trigger.is_static_spawn();
+        if !area_trigger.world().object().is_in_world() {
+            return AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::NotInWorld,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_before_ms),
+                time_since_created_before_ms: Some(time_since_created_before_ms),
+                time_since_created_after_ms: Some(time_since_created_before_ms),
+                non_static_movement_would_run: false,
+                ai_update_would_run: false,
+                target_list_update_would_run: false,
+                remove_list: None,
+            };
+        }
+
+        let (expired, duration_after_ms, time_since_created_after_ms) = {
+            let Some(record) = self.map_objects.get_mut(&area_trigger_guid) else {
+                return AreaTriggerUpdateOutcomeLikeCpp {
+                    area_trigger_guid,
+                    elapsed_ms,
+                    status: AreaTriggerUpdateStatusLikeCpp::MissingAreaTrigger,
+                    duration_before_ms: Some(duration_before_ms),
+                    duration_after_ms: Some(duration_before_ms),
+                    time_since_created_before_ms: Some(time_since_created_before_ms),
+                    time_since_created_after_ms: Some(time_since_created_before_ms),
+                    non_static_movement_would_run: false,
+                    ai_update_would_run: false,
+                    target_list_update_would_run: false,
+                    remove_list: None,
+                };
+            };
+            let Some(area_trigger) = record.area_trigger_mut() else {
+                return AreaTriggerUpdateOutcomeLikeCpp {
+                    area_trigger_guid,
+                    elapsed_ms,
+                    status: AreaTriggerUpdateStatusLikeCpp::NotAreaTrigger,
+                    duration_before_ms: Some(duration_before_ms),
+                    duration_after_ms: Some(duration_before_ms),
+                    time_since_created_before_ms: Some(time_since_created_before_ms),
+                    time_since_created_after_ms: Some(time_since_created_before_ms),
+                    non_static_movement_would_run: false,
+                    ai_update_would_run: false,
+                    target_list_update_would_run: false,
+                    remove_list: None,
+                };
+            };
+            let expired = area_trigger.update_time_and_duration(elapsed_ms);
+            (
+                expired,
+                area_trigger.duration_ms(),
+                area_trigger.time_since_created_ms(),
+            )
+        };
+
+        if expired {
+            let remove_list = self.add_object_to_remove_list_like_cpp(area_trigger_guid);
+            AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::ExpiredRemoveQueued,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_after_ms),
+                time_since_created_before_ms: Some(time_since_created_before_ms),
+                time_since_created_after_ms: Some(time_since_created_after_ms),
+                non_static_movement_would_run,
+                ai_update_would_run: false,
+                target_list_update_would_run: false,
+                remove_list: Some(remove_list),
+            }
+        } else {
+            AreaTriggerUpdateOutcomeLikeCpp {
+                area_trigger_guid,
+                elapsed_ms,
+                status: AreaTriggerUpdateStatusLikeCpp::Updated,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_after_ms),
+                time_since_created_before_ms: Some(time_since_created_before_ms),
+                time_since_created_after_ms: Some(time_since_created_after_ms),
+                non_static_movement_would_run,
+                ai_update_would_run: true,
+                target_list_update_would_run: true,
+                remove_list: None,
+            }
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `AreaTrigger` records only.
+    ///
+    /// This follows the same partial ObjectUpdater seam as DynamicObject: it
+    /// snapshots canonical typed AreaTrigger GUIDs from `Map::map_objects`, then
+    /// delegates every GUID to `update_area_trigger_like_cpp`. It does not visit
+    /// nearby cells, players/sessions, other object families, SendObjectUpdates,
+    /// scripts/AI real runtime, visibility, dynamic tree, packets, DB, or mirrors.
+    pub fn update_area_triggers_like_cpp(
+        &mut self,
+        elapsed_ms: u32,
+    ) -> AreaTriggersUpdateSummaryLikeCpp {
+        let area_trigger_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::AreaTrigger
+                    && record.area_trigger().is_some())
+                .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = AreaTriggersUpdateSummaryLikeCpp::default();
+        for guid in area_trigger_guids {
+            summary.visited += 1;
+            let outcome = self.update_area_trigger_like_cpp(guid, elapsed_ms);
+            match outcome.status {
+                AreaTriggerUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                AreaTriggerUpdateStatusLikeCpp::ExpiredRemoveQueued => {
+                    summary.expired_remove_queued += 1;
+                }
+                AreaTriggerUpdateStatusLikeCpp::MissingAreaTrigger => {
+                    summary.missing_or_stale += 1;
+                }
+                AreaTriggerUpdateStatusLikeCpp::NotAreaTrigger => summary.not_area_trigger += 1,
+                AreaTriggerUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `Conversation::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `Conversation.cpp:67-80` runs `sScriptMgr->OnConversationUpdate` before
+    ///   duration handling; on expiry it calls `Remove(); return;`, otherwise it
+    ///   runs `WorldObject::Update(diff)`.
+    /// - `Conversation.cpp:82-87` makes `Remove()` enqueue through
+    ///   `AddObjectToRemoveList()` only when the object is in world.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects and explicitly instantiates `Conversation`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. Missing,
+    /// non-Conversation, and not-in-world outcomes do not mutate, enqueue, or
+    /// create fallback records. This helper represents script and WorldObject
+    /// update callsites as booleans only; it does not execute scripts, fanout,
+    /// visibility, ObjectAccessor/session mirrors, DB writes, or remove-list drain.
+    pub fn update_conversation_like_cpp(
+        &mut self,
+        conversation_guid: ObjectGuid,
+        elapsed_ms: u32,
+    ) -> ConversationUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(conversation_guid) else {
+            return ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::MissingConversation,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                script_update_would_run: false,
+                world_update_would_run: false,
+                remove_list: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::Conversation {
+            return ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::NotConversation,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                script_update_would_run: false,
+                world_update_would_run: false,
+                remove_list: None,
+            };
+        }
+
+        let Some(conversation) = record.conversation() else {
+            return ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::NotConversation,
+                duration_before_ms: None,
+                duration_after_ms: None,
+                script_update_would_run: false,
+                world_update_would_run: false,
+                remove_list: None,
+            };
+        };
+
+        let duration_before_ms = conversation.duration_ms();
+        if !conversation.world().object().is_in_world() {
+            return ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::NotInWorld,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_before_ms),
+                script_update_would_run: false,
+                world_update_would_run: false,
+                remove_list: None,
+            };
+        }
+
+        let (expired, duration_after_ms) = {
+            let Some(record) = self.map_objects.get_mut(&conversation_guid) else {
+                return ConversationUpdateOutcomeLikeCpp {
+                    conversation_guid,
+                    elapsed_ms,
+                    status: ConversationUpdateStatusLikeCpp::MissingConversation,
+                    duration_before_ms: Some(duration_before_ms),
+                    duration_after_ms: Some(duration_before_ms),
+                    script_update_would_run: false,
+                    world_update_would_run: false,
+                    remove_list: None,
+                };
+            };
+            let Some(conversation) = record.conversation_mut() else {
+                return ConversationUpdateOutcomeLikeCpp {
+                    conversation_guid,
+                    elapsed_ms,
+                    status: ConversationUpdateStatusLikeCpp::NotConversation,
+                    duration_before_ms: Some(duration_before_ms),
+                    duration_after_ms: Some(duration_before_ms),
+                    script_update_would_run: false,
+                    world_update_would_run: false,
+                    remove_list: None,
+                };
+            };
+            let expired = conversation.update_duration(elapsed_ms);
+            (expired, conversation.duration_ms())
+        };
+
+        if expired {
+            let remove_list = self.add_object_to_remove_list_like_cpp(conversation_guid);
+            ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::ExpiredRemoveQueued,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_after_ms),
+                script_update_would_run: true,
+                world_update_would_run: false,
+                remove_list: Some(remove_list),
+            }
+        } else {
+            ConversationUpdateOutcomeLikeCpp {
+                conversation_guid,
+                elapsed_ms,
+                status: ConversationUpdateStatusLikeCpp::Updated,
+                duration_before_ms: Some(duration_before_ms),
+                duration_after_ms: Some(duration_after_ms),
+                script_update_would_run: true,
+                world_update_would_run: true,
+                remove_list: None,
+            }
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `Conversation` records only.
+    ///
+    /// This snapshots canonical typed Conversation GUIDs from `Map::map_objects`,
+    /// then delegates every GUID to `update_conversation_like_cpp`. It does not
+    /// model exact `TypeContainerVisitor` order/cell traversal, players/sessions,
+    /// other object families, `SendObjectUpdates`, real scripts, visibility,
+    /// packets, DB, ObjectAccessor/session mirrors, or remove-list drain.
+    pub fn update_conversations_like_cpp(
+        &mut self,
+        elapsed_ms: u32,
+    ) -> ConversationsUpdateSummaryLikeCpp {
+        let conversation_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::Conversation
+                    && record.conversation().is_some())
+                .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = ConversationsUpdateSummaryLikeCpp::default();
+        for guid in conversation_guids {
+            summary.visited += 1;
+            let outcome = self.update_conversation_like_cpp(guid, elapsed_ms);
+            match outcome.status {
+                ConversationUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                ConversationUpdateStatusLikeCpp::ExpiredRemoveQueued => {
+                    summary.expired_remove_queued += 1;
+                }
+                ConversationUpdateStatusLikeCpp::MissingConversation => {
+                    summary.missing_or_stale += 1;
+                }
+                ConversationUpdateStatusLikeCpp::NotConversation => summary.not_conversation += 1,
+                ConversationUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
+    /// Map-owned seam for C++ `SceneObject::Update` under `ObjectUpdater`.
+    ///
+    /// C++ anchors:
+    /// - `SceneObject.cpp:58-71` runs `WorldObject::Update(diff)` and removes the
+    ///   SceneObject when `ShouldBeRemoved()` is true.
+    /// - `SceneObject.cpp:73-90` makes `Remove()` enqueue through
+    ///   `AddObjectToRemoveList()` only when in world, and `ShouldBeRemoved()`
+    ///   depends on `ObjectAccessor::GetUnit(owner)` plus optional Aura lookup by
+    ///   spell/cast id.
+    /// - `GridNotifiers.cpp:258-264,296-301` calls `Update(i_timeDiff)` only for
+    ///   in-world objects and explicitly instantiates `SceneObjectMapType`.
+    ///
+    /// Ownership: source-of-truth is canonical `Map::map_objects`. ObjectAccessor
+    /// Unit resolution and Aura lookup are represented by explicit caller-supplied
+    /// booleans; this helper does not scan maps, create fallback records, fan out,
+    /// send packets, write session/ObjectAccessor mirrors, or drain remove-list.
+    pub fn update_scene_object_like_cpp(
+        &mut self,
+        scene_object_guid: ObjectGuid,
+        elapsed_ms: u32,
+        context: SceneObjectUpdateContextLikeCpp,
+    ) -> SceneObjectUpdateOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(scene_object_guid) else {
+            return SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::MissingSceneObject,
+                owner_guid: None,
+                created_by_spell_cast: None,
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: false,
+                should_be_removed: false,
+                remove_list: None,
+            };
+        };
+
+        if record.kind() != AccessorObjectKind::SceneObject {
+            return SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::NotSceneObject,
+                owner_guid: None,
+                created_by_spell_cast: None,
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: false,
+                should_be_removed: false,
+                remove_list: None,
+            };
+        }
+
+        let Some(scene_object) = record.scene_object() else {
+            return SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::NotSceneObject,
+                owner_guid: None,
+                created_by_spell_cast: None,
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: false,
+                should_be_removed: false,
+                remove_list: None,
+            };
+        };
+
+        let owner_guid = scene_object.owner_guid();
+        let created_by_spell_cast = scene_object.created_by_spell_cast();
+        if !scene_object.world().object().is_in_world() {
+            return SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::NotInWorld,
+                owner_guid: Some(owner_guid),
+                created_by_spell_cast: Some(created_by_spell_cast),
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: false,
+                should_be_removed: false,
+                remove_list: None,
+            };
+        }
+
+        let should_be_removed =
+            scene_object.should_be_removed(context.creator_exists, context.linked_aura_exists);
+
+        if should_be_removed {
+            let remove_list = self.add_object_to_remove_list_like_cpp(scene_object_guid);
+            SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::RemoveQueued,
+                owner_guid: Some(owner_guid),
+                created_by_spell_cast: Some(created_by_spell_cast),
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: true,
+                should_be_removed,
+                remove_list: Some(remove_list),
+            }
+        } else {
+            SceneObjectUpdateOutcomeLikeCpp {
+                scene_object_guid,
+                elapsed_ms,
+                status: SceneObjectUpdateStatusLikeCpp::Updated,
+                owner_guid: Some(owner_guid),
+                created_by_spell_cast: Some(created_by_spell_cast),
+                creator_exists: context.creator_exists,
+                linked_aura_exists: context.linked_aura_exists,
+                world_update_would_run: true,
+                should_be_removed,
+                remove_list: None,
+            }
+        }
+    }
+
+    /// Bounded map-owned live visitation seam for C++ `Map::Update` consuming
+    /// `Trinity::ObjectUpdater` for `SceneObject` records only.
+    ///
+    /// This snapshots canonical typed SceneObject GUIDs from `Map::map_objects`,
+    /// resolves the explicit represented ObjectAccessor/Aura context before the
+    /// per-object helper, and never visits generic/untyped SceneObject records.
+    pub fn update_scene_objects_like_cpp<F>(
+        &mut self,
+        elapsed_ms: u32,
+        mut context_resolver: F,
+    ) -> SceneObjectsUpdateSummaryLikeCpp
+    where
+        F: FnMut(ObjectGuid, &SceneObject) -> SceneObjectUpdateContextLikeCpp,
+    {
+        let scene_object_guids = self
+            .map_objects
+            .iter()
+            .filter_map(|(guid, record)| {
+                (record.kind() == AccessorObjectKind::SceneObject
+                    && record.scene_object().is_some())
+                .then_some(*guid)
+            })
+            .collect::<Vec<_>>();
+
+        let mut summary = SceneObjectsUpdateSummaryLikeCpp::default();
+        for guid in scene_object_guids {
+            summary.visited += 1;
+            let Some(context) = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::scene_object)
+                .map(|scene_object| context_resolver(guid, scene_object))
+            else {
+                let outcome = self.update_scene_object_like_cpp(
+                    guid,
+                    elapsed_ms,
+                    SceneObjectUpdateContextLikeCpp::default(),
+                );
+                match outcome.status {
+                    SceneObjectUpdateStatusLikeCpp::MissingSceneObject => {
+                        summary.missing_or_stale += 1;
+                    }
+                    SceneObjectUpdateStatusLikeCpp::NotSceneObject => summary.not_scene_object += 1,
+                    SceneObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+                    SceneObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                    SceneObjectUpdateStatusLikeCpp::RemoveQueued => summary.remove_queued += 1,
+                }
+                continue;
+            };
+
+            let outcome = self.update_scene_object_like_cpp(guid, elapsed_ms, context);
+            match outcome.status {
+                SceneObjectUpdateStatusLikeCpp::Updated => summary.updated += 1,
+                SceneObjectUpdateStatusLikeCpp::RemoveQueued => summary.remove_queued += 1,
+                SceneObjectUpdateStatusLikeCpp::MissingSceneObject => {
+                    summary.missing_or_stale += 1;
+                }
+                SceneObjectUpdateStatusLikeCpp::NotSceneObject => summary.not_scene_object += 1,
+                SceneObjectUpdateStatusLikeCpp::NotInWorld => summary.not_in_world += 1,
+            }
+        }
+
+        summary
+    }
+
     /// Bounded map-owned caller-consumption seam for C++
     /// `DynamicObject::SetCasterViewpoint` / `RemoveCasterViewpoint`.
     ///
@@ -3240,26 +7363,45 @@ where
 
     /// C++ `Map::SpawnGroupSpawn(groupId, ignoreRespawn, force)` represented as a
     /// safe map-local planning/execution seam over map-owned active state,
-    /// respawn timers, and by-spawn live-object indexes.
+    /// respawn timers, by-spawn live-object indexes, and optional caller-supplied
+    /// loaded-grid DB-backed records.
     ///
     /// C++ anchors:
     /// - `Map.cpp:2315-2324` validates existing/non-system group and marks it
     ///   active before iterating metadata.
     /// - `Map.cpp:2326-2353` iterates ObjectMgr spawn metadata, removes respawn
     ///   timers when forced/ignoring, skips active timers and live objects.
-    /// - `Map.cpp:2356-2395` checks difficulty/grid-loaded before calling
-    ///   Creature/GameObject/AreaTrigger `LoadFromDB`.
+    /// - `Map.cpp:2326-2334` skips types whose `GetRespawnMapForType` is null;
+    ///   `Map.h:751-763,765-777` currently returns null for AreaTrigger, so that
+    ///   type is continued before timers, TypeHasData, difficulty, grid, or loader
+    ///   planning.
+    /// - `Map.cpp:2356-2385` checks difficulty/grid-loaded before calling
+    ///   Creature/GameObject `LoadFromDB` and retaining the loaded object.
+    /// - `Map.cpp:2387-2395` contains an AreaTrigger switch branch, but it is
+    ///   unreachable with the current respawn-map guard. This does not implement
+    ///   `AreaTrigger::LoadFromDB` or live AreaTrigger runtime.
     ///
-    /// RustyCore deliberately does not create DB-backed entities here. Loaded-grid
-    /// Creature/GameObject work is returned as explicit `load_plans` and counted
-    /// as blocked; AreaTrigger live creation is reported unsupported.
-    pub fn spawn_group_spawn_like_cpp(
+    /// Ownership: `Map` owns active spawn-group state, respawn timers, live indexes,
+    /// and `AddToMap`. The caller owns DB/template/runtime selection and may provide
+    /// typed `LoadedGridRespawnRecordsLikeCpp` records. Synchronization is strictly
+    /// caller loader -> map-owned `AddToMap`; this method never fabricates fallback
+    /// records and never reaches into DB/world-server/session state.
+    pub fn spawn_group_spawn_loaded_grid_records_like_cpp<L>(
         &mut self,
         group: Option<&SpawnGroupTemplateData>,
         ignore_respawn: bool,
         force: bool,
         spawn_store: &SpawnStore,
-    ) -> SpawnGroupSpawnOutcomeLikeCpp {
+        mut load_record: L,
+    ) -> SpawnGroupSpawnOutcomeLikeCpp
+    where
+        L: FnMut(
+            &mut Self,
+            SpawnObjectType,
+            SpawnId,
+            bool,
+        ) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
         let Some(group) = group else {
             return SpawnGroupSpawnOutcomeLikeCpp::blocked_missing_group(0);
         };
@@ -3320,7 +7462,7 @@ where
                         }
                     }
                     SpawnObjectType::AreaTrigger => {
-                        outcome.unsupported_spawn_types += 1;
+                        outcome.skipped_no_respawn_map += 1;
                         continue;
                     }
                 }
@@ -3342,12 +7484,24 @@ where
                     spawn_id: member.spawn_id,
                     force,
                 });
-                match member.object_type {
-                    SpawnObjectType::Creature => outcome.blocked_loaded_grid_creature_loads += 1,
-                    SpawnObjectType::GameObject => {
-                        outcome.blocked_loaded_grid_gameobject_loads += 1
+
+                let Some(records) = load_record(self, member.object_type, member.spawn_id, force)
+                else {
+                    outcome.blocked_loaded_grid_spawn_loads += 1;
+                    if member.object_type == SpawnObjectType::Creature {
+                        outcome.blocked_loaded_grid_creature_loads += 1;
+                    } else if member.object_type == SpawnObjectType::GameObject {
+                        outcome.blocked_loaded_grid_gameobject_loads += 1;
                     }
-                    SpawnObjectType::AreaTrigger => outcome.unsupported_spawn_types += 1,
+                    continue;
+                };
+
+                for pre_add_record in records.pre_add_records {
+                    let _ = self.add_map_object_record_to_map_like_cpp(pre_add_record);
+                }
+                match self.add_map_object_record_to_map_like_cpp(records.primary_record) {
+                    Ok(_outcome) => outcome.executed_loaded_grid_spawns += 1,
+                    Err(_error) => outcome.blocked_loaded_grid_spawn_add_to_map += 1,
                 }
             }
         }
@@ -3355,20 +7509,51 @@ where
         outcome
     }
 
+    /// Compatibility wrapper preserving the pre-loader `SpawnGroupSpawn` seam:
+    /// loaded-grid Creature/GameObject attempts are planned and counted as blocked,
+    /// but no DB-backed records are fabricated or inserted.
+    pub fn spawn_group_spawn_like_cpp(
+        &mut self,
+        group: Option<&SpawnGroupTemplateData>,
+        ignore_respawn: bool,
+        force: bool,
+        spawn_store: &SpawnStore,
+    ) -> SpawnGroupSpawnOutcomeLikeCpp {
+        self.spawn_group_spawn_loaded_grid_records_like_cpp(
+            group,
+            ignore_respawn,
+            force,
+            spawn_store,
+            |_map, _object_type, _spawn_id, _force| None,
+        )
+    }
+
     /// C++-shaped `Map::UpdateSpawnGroupConditions` bridge over pre-resolved
     /// templates that executes the complete represented `SetSpawnGroupInactive`
     /// branch, the map-local `SpawnGroupDespawn(..., true)` condition-failure
-    /// branch, and the safe map-local `SpawnGroupSpawn` planning branch. Entity
-    /// creation remains blocked/planned by `SpawnGroupSpawnOutcomeLikeCpp`.
-    pub fn apply_update_spawn_group_conditions_represented_like_cpp<'a, I, F>(
+    /// branch, and the safe map-local `SpawnGroupSpawn` loaded-grid branch with
+    /// caller-supplied records.
+    ///
+    /// Ownership remains split like `spawn_group_spawn_loaded_grid_records_like_cpp`:
+    /// this map owns active-state/timer/live/grid/difficulty/AddToMap decisions;
+    /// the caller owns DB/template/runtime composition and may return no record to
+    /// preserve the pre-loader planned/blocked outcome.
+    pub fn apply_update_spawn_group_conditions_loaded_grid_records_like_cpp<'a, I, F, L>(
         &mut self,
         groups: I,
         spawn_store: &SpawnStore,
         meets_conditions: F,
+        mut load_record: L,
     ) -> Vec<SpawnGroupConditionUpdateOutcomeLikeCpp>
     where
         I: IntoIterator<Item = &'a SpawnGroupTemplateData>,
         F: FnMut(&SpawnGroupTemplateData) -> bool,
+        L: FnMut(
+            &mut Self,
+            SpawnObjectType,
+            SpawnId,
+            bool,
+        ) -> Option<LoadedGridRespawnRecordsLikeCpp>,
     {
         let groups = groups.into_iter().collect::<Vec<_>>();
         let planned_actions = self
@@ -3398,11 +7583,12 @@ where
                         ignore_respawn,
                         force,
                     } => {
-                        spawn_outcome = Some(self.spawn_group_spawn_like_cpp(
+                        spawn_outcome = Some(self.spawn_group_spawn_loaded_grid_records_like_cpp(
                             Some(group),
                             ignore_respawn,
                             force,
                             spawn_store,
+                            &mut load_record,
                         ));
                     }
                     SpawnGroupConditionActionLikeCpp::Noop => {}
@@ -3417,6 +7603,27 @@ where
                 }
             })
             .collect()
+    }
+
+    /// Compatibility wrapper preserving the pre-loader `UpdateSpawnGroupConditions`
+    /// seam: loaded-grid Creature/GameObject spawn attempts are planned and counted
+    /// as blocked, but no DB-backed records are fabricated or inserted.
+    pub fn apply_update_spawn_group_conditions_represented_like_cpp<'a, I, F>(
+        &mut self,
+        groups: I,
+        spawn_store: &SpawnStore,
+        meets_conditions: F,
+    ) -> Vec<SpawnGroupConditionUpdateOutcomeLikeCpp>
+    where
+        I: IntoIterator<Item = &'a SpawnGroupTemplateData>,
+        F: FnMut(&SpawnGroupTemplateData) -> bool,
+    {
+        self.apply_update_spawn_group_conditions_loaded_grid_records_like_cpp(
+            groups,
+            spawn_store,
+            meets_conditions,
+            |_map, _object_type, _spawn_id, _force| None,
+        )
     }
 
     /// Legacy wrapper preserving the pre-#391 SetInactive-only seam for focused
@@ -3485,6 +7692,22 @@ where
         self.creatures_by_spawn_id
             .get(&spawn_id)
             .map_or(0, HashSet::len)
+    }
+
+    pub fn creature_group_holder_member_count_like_cpp(&self, leader_spawn_id: SpawnId) -> usize {
+        self.creature_group_holder_like_cpp
+            .get(&leader_spawn_id)
+            .map_or(0, HashSet::len)
+    }
+
+    pub fn creature_group_holder_contains_like_cpp(
+        &self,
+        leader_spawn_id: SpawnId,
+        member_guid: ObjectGuid,
+    ) -> bool {
+        self.creature_group_holder_like_cpp
+            .get(&leader_spawn_id)
+            .is_some_and(|members| members.contains(&member_guid))
     }
 
     pub fn gameobject_spawn_id_store_count_like_cpp(&self, spawn_id: SpawnId) -> usize {
@@ -3556,6 +7779,57 @@ where
         alive_guid
             .or(fallback_guid)
             .and_then(|guid| self.map_object_record(guid)?.creature())
+    }
+
+    /// Bounded map-owned consumer for C++ `GameEventMgr::ChangeEquipOrModel` live creature loop.
+    ///
+    /// Mirrors the `GetCreatureBySpawnIdStore().equal_range(spawn_id)` direction over the
+    /// map-owned creature by-spawn index. This only mutates canonical `MapObjectRecord::Creature`
+    /// equipment/display fields; it does not implement full `Creature::LoadEquipment`, DB2
+    /// `GetCreatureModelInfo`, values/session fanout, scripts, AI, or ObjectAccessor side effects.
+    pub fn change_game_event_equip_or_model_by_spawn_id_like_cpp(
+        &mut self,
+        spawn_id: SpawnId,
+        equipment_id: u8,
+        model_id: u32,
+        model_info_available: bool,
+    ) -> GameEventChangeEquipOrModelLiveOutcomeLikeCpp {
+        let guids = self.creature_spawn_id_store_guids_like_cpp(spawn_id);
+        let mut outcome = GameEventChangeEquipOrModelLiveOutcomeLikeCpp {
+            spawn_id,
+            indexed_guids: guids.len(),
+            ..GameEventChangeEquipOrModelLiveOutcomeLikeCpp::default()
+        };
+
+        for guid in guids {
+            let Some(record) = self.map_objects.get_mut(&guid) else {
+                outcome.stale_index_or_wrong_kind += 1;
+                continue;
+            };
+            let Some(creature) = record.creature_mut() else {
+                outcome.stale_index_or_wrong_kind += 1;
+                continue;
+            };
+            if creature.spawn_id() != spawn_id {
+                outcome.stale_index_or_wrong_kind += 1;
+                continue;
+            }
+
+            outcome.live_creatures_mutated += 1;
+            creature.set_equipment_id_like_cpp(equipment_id);
+            outcome.equipment_changed += 1;
+
+            if model_id > 0 && creature.unit().data().display_id as u32 != model_id {
+                if model_info_available {
+                    creature.set_display_id(model_id, true, None);
+                    outcome.display_changed += 1;
+                } else {
+                    outcome.model_validation_unavailable += 1;
+                }
+            }
+        }
+
+        outcome
     }
 
     pub fn get_gameobject_by_spawn_id_like_cpp(&self, spawn_id: SpawnId) -> Option<&GameObject> {
@@ -3716,6 +7990,337 @@ where
         }
     }
 
+    fn apply_creature_search_formation_like_cpp(
+        &mut self,
+        current_guid: ObjectGuid,
+        outcome: CreatureSearchFormationOutcomeLikeCpp,
+    ) {
+        if !outcome.add_to_group_requested {
+            return;
+        }
+
+        let Some(leader_spawn_id) = outcome.leader_spawn_id else {
+            return;
+        };
+
+        let stale_member_guids = self.creature_spawn_id_store_guids_like_cpp(outcome.spawn_id);
+        let group = self
+            .creature_group_holder_like_cpp
+            .entry(leader_spawn_id)
+            .or_default();
+        for stale_guid in stale_member_guids {
+            if stale_guid != current_guid {
+                group.remove(&stale_guid);
+            }
+        }
+        group.insert(current_guid);
+    }
+
+    fn remove_creature_from_formation_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> Option<CreatureRemoveFormationOutcomeLikeCpp> {
+        let (spawn_id, leader_spawn_id) = self
+            .map_object_record(guid)
+            .filter(|record| record.kind() == AccessorObjectKind::Creature)
+            .and_then(MapObjectRecord::creature)
+            .filter(|creature| creature.unit().world().object().is_in_world())
+            .and_then(|creature| {
+                let leader_spawn_id = creature.formation_info_like_cpp()?.leader_spawn_id;
+                Some((creature.spawn_id(), leader_spawn_id))
+            })?;
+
+        let Some(group) = self
+            .creature_group_holder_like_cpp
+            .get_mut(&leader_spawn_id)
+        else {
+            return Some(CreatureRemoveFormationOutcomeLikeCpp {
+                guid,
+                spawn_id,
+                leader_spawn_id: Some(leader_spawn_id),
+                had_group: false,
+                removed_member: false,
+                removed_group: false,
+                remaining_members: 0,
+            });
+        };
+
+        let removed_member = group.remove(&guid);
+        let remaining_members = group.len();
+        let removed_group = remaining_members == 0;
+        if removed_group {
+            self.creature_group_holder_like_cpp.remove(&leader_spawn_id);
+        }
+
+        Some(CreatureRemoveFormationOutcomeLikeCpp {
+            guid,
+            spawn_id,
+            leader_spawn_id: Some(leader_spawn_id),
+            had_group: true,
+            removed_member,
+            removed_group,
+            remaining_members,
+        })
+    }
+
+    fn active_respawn_location_like_cpp(
+        &self,
+        guid: ObjectGuid,
+    ) -> Option<ActiveNonPlayerRespawnLocationLikeCpp> {
+        let record = self.map_object_record(guid)?;
+        match record.kind() {
+            AccessorObjectKind::Creature => {
+                let creature = record.creature()?;
+                let spawn_id = creature.spawn_id();
+                (spawn_id != 0).then_some(ActiveNonPlayerRespawnLocationLikeCpp {
+                    spawn_id,
+                    position: creature.ai_home_position(),
+                })
+            }
+            AccessorObjectKind::GameObject => {
+                let game_object = record.game_object()?;
+                let spawn_id = game_object.spawn_id();
+                (spawn_id != 0).then_some(ActiveNonPlayerRespawnLocationLikeCpp {
+                    spawn_id,
+                    position: game_object.stationary_position(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn mutate_unload_active_lock_for_respawn_location_like_cpp(
+        &mut self,
+        location: ActiveNonPlayerRespawnLocationLikeCpp,
+        increment: bool,
+    ) -> ActiveNonPlayerUnloadLockOutcomeLikeCpp {
+        if !is_valid_map_coord_2d(location.position.x, location.position.y) {
+            return ActiveNonPlayerUnloadLockOutcomeLikeCpp {
+                spawn_id: location.spawn_id,
+                respawn_grid: None,
+                respawn_grid_missing: true,
+                invalid_respawn_position: true,
+                lock_incremented: false,
+                lock_decremented: false,
+            };
+        }
+
+        let cell = Cell::from_world(location.position.x, location.position.y);
+        let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
+        let Some(ngrid) = self.get_ngrid_mut(grid) else {
+            return ActiveNonPlayerUnloadLockOutcomeLikeCpp {
+                spawn_id: location.spawn_id,
+                respawn_grid: Some(grid),
+                respawn_grid_missing: true,
+                invalid_respawn_position: false,
+                lock_incremented: false,
+                lock_decremented: false,
+            };
+        };
+
+        if increment {
+            ngrid.info_mut().inc_unload_active_lock();
+        } else {
+            ngrid.info_mut().dec_unload_active_lock();
+        }
+
+        ActiveNonPlayerUnloadLockOutcomeLikeCpp {
+            spawn_id: location.spawn_id,
+            respawn_grid: Some(grid),
+            respawn_grid_missing: false,
+            invalid_respawn_position: false,
+            lock_incremented: increment,
+            lock_decremented: !increment,
+        }
+    }
+
+    pub fn add_to_active_like_cpp(&mut self, guid: ObjectGuid) -> AddToActiveOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(guid) else {
+            return AddToActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::MissingRecord,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        };
+        if record.kind() == AccessorObjectKind::Player {
+            return AddToActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::PlayerUnsupported,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        }
+        if !is_active_object_like_cpp(record.kind(), record.object()) {
+            return AddToActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::NotActiveObject,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        }
+
+        let location = self.active_respawn_location_like_cpp(guid);
+        let inserted_in_active_set = self.active_non_players_like_cpp.insert(guid);
+        let unload_lock = location.map(|location| {
+            self.mutate_unload_active_lock_for_respawn_location_like_cpp(location, true)
+        });
+        AddToActiveOutcomeLikeCpp {
+            guid,
+            status: ActiveNonPlayerMutationStatusLikeCpp::Mutated,
+            inserted_in_active_set,
+            removed_from_active_set: false,
+            spawn_id_zero_or_unsupported: unload_lock.is_none(),
+            unload_lock,
+        }
+    }
+
+    pub fn remove_from_active_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> RemoveFromActiveOutcomeLikeCpp {
+        let Some(record) = self.map_object_record(guid) else {
+            return RemoveFromActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::MissingRecord,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        };
+        if record.kind() == AccessorObjectKind::Player {
+            return RemoveFromActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::PlayerUnsupported,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        }
+        if !is_active_object_like_cpp(record.kind(), record.object()) {
+            return RemoveFromActiveOutcomeLikeCpp {
+                guid,
+                status: ActiveNonPlayerMutationStatusLikeCpp::NotActiveObject,
+                inserted_in_active_set: false,
+                removed_from_active_set: false,
+                spawn_id_zero_or_unsupported: false,
+                unload_lock: None,
+            };
+        }
+
+        let location = self.active_respawn_location_like_cpp(guid);
+        let removed_from_active_set = self.active_non_players_like_cpp.remove(&guid);
+        let unload_lock = location.map(|location| {
+            self.mutate_unload_active_lock_for_respawn_location_like_cpp(location, false)
+        });
+        RemoveFromActiveOutcomeLikeCpp {
+            guid,
+            status: ActiveNonPlayerMutationStatusLikeCpp::Mutated,
+            inserted_in_active_set: false,
+            removed_from_active_set,
+            spawn_id_zero_or_unsupported: unload_lock.is_none(),
+            unload_lock,
+        }
+    }
+
+    pub fn active_non_players_count_like_cpp(&self) -> usize {
+        self.active_non_players_like_cpp.len()
+    }
+
+    pub fn is_active_non_player_like_cpp(&self, guid: ObjectGuid) -> bool {
+        self.active_non_players_like_cpp.contains(&guid)
+    }
+
+    fn represented_active_non_player_sources_like_cpp(&self) -> Vec<ObjectGuid> {
+        let mut guids: Vec<_> = self
+            .active_non_players_like_cpp
+            .iter()
+            .copied()
+            .filter(|guid| self.object_is_in_world(*guid))
+            .collect();
+        sort_dedup(&mut guids);
+        guids
+    }
+
+    fn represent_add_to_map_post_add_to_world_tail_like_cpp(
+        &mut self,
+        kind: AccessorObjectKind,
+        guid: ObjectGuid,
+        active_object: bool,
+    ) -> Option<AddToMapPostAddToWorldOutcomeLikeCpp> {
+        let pending_move_state = match kind {
+            AccessorObjectKind::Creature => {
+                if self
+                    .map_object_record(guid)
+                    .is_some_and(|record| record.creature().is_some())
+                {
+                    self.creature_move_states.remove(&guid)
+                } else {
+                    return None;
+                }
+            }
+            AccessorObjectKind::GameObject => {
+                if self
+                    .map_object_record(guid)
+                    .is_some_and(|record| record.game_object().is_some())
+                {
+                    self.gameobject_move_states.remove(&guid)
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+
+        if pending_move_state.is_some() {
+            match kind {
+                AccessorObjectKind::Creature => {
+                    self.creatures_to_move.retain(|queued| *queued != guid)
+                }
+                AccessorObjectKind::GameObject => {
+                    self.gameobjects_to_move.retain(|queued| *queued != guid);
+                }
+                _ => {}
+            }
+        }
+
+        let add_to_active = active_object.then(|| self.add_to_active_like_cpp(guid));
+
+        let mut set_true = false;
+        let mut set_false = false;
+        let final_is_new_object = if let Some(record) = self.map_objects.get_mut(&guid) {
+            record.object_mut().object_mut().set_is_new_object(true);
+            set_true = true;
+            record.object_mut().object_mut().set_is_new_object(false);
+            set_false = true;
+            record.object().object().is_new_object()
+        } else {
+            false
+        };
+
+        Some(AddToMapPostAddToWorldOutcomeLikeCpp {
+            initialize_object_represented: true,
+            pending_move_state_cleared: pending_move_state.is_some(),
+            no_pending_move_state: pending_move_state.is_none(),
+            add_to_active_represented: add_to_active.is_some(),
+            add_to_active_skipped_runtime_gap: false,
+            add_to_active,
+            set_is_new_object_true: set_true,
+            update_object_visibility_on_create_represented: true,
+            update_object_visibility_on_create_runtime_gap: true,
+            set_is_new_object_false: set_false,
+            final_is_new_object,
+        })
+    }
+
     pub fn add_to_map_like_cpp(
         &mut self,
         kind: AccessorObjectKind,
@@ -3746,6 +8351,20 @@ where
                 grid_created: false,
                 grid_loaded: false,
                 inserted_into_cell: false,
+                gameobject_model_insert: None,
+                gameobject_collision_enable: None,
+                gameobject_zone_script_create: None,
+                gameobject_store_inserted_before_add_to_world: None,
+                gameobject_spawn_indexed_before_add_to_world: None,
+                creature_store_inserted_before_add_to_world: None,
+                creature_spawn_indexed_before_add_to_world: None,
+                creature_unit_add_to_world: None,
+                creature_search_formation: None,
+                creature_aim_initialize: None,
+                creature_vehicle_reset: None,
+                creature_vehicle_install: None,
+                creature_zone_script_create: None,
+                add_to_map_tail: None,
             });
         }
 
@@ -3783,17 +8402,356 @@ where
             insert_object_guid_in_cell_like_cpp(local_cell, kind, is_world_object, guid);
         }
 
-        {
-            let object = record.object_mut();
-            object.set_current_cell(cell.cell_x(), cell.cell_y());
-            object.object_mut().add_to_world();
-            object.object_mut().set_is_new_object(true);
-            // Rust does not emit visibility here yet; keep the flag lifecycle identical to
-            // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
-            object.object_mut().set_is_new_object(false);
+        if kind == AccessorObjectKind::Creature && record.creature().is_some() {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let previous = self.insert_map_object_record(record)?;
+
+            let creature_store_inserted_before_add_to_world = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.creature().is_some());
+            let creature_spawn_indexed_before_add_to_world = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some_and(|creature| {
+                    let spawn_id = creature.spawn_id();
+                    spawn_id != 0
+                        && self
+                            .creature_spawn_id_store_guids_like_cpp(spawn_id)
+                            .contains(&guid)
+                });
+
+            let creature_unit_add_to_world = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .map(|creature| creature.unit_mut().add_to_world_like_cpp());
+            let creature_search_formation = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .map(Creature::search_formation_like_cpp);
+            if let Some(outcome) = creature_search_formation {
+                self.apply_creature_search_formation_like_cpp(guid, outcome);
+            }
+
+            let creature_aim_initialize = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .map(Creature::aim_initialize_like_cpp);
+
+            let creature_vehicle_reset = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .and_then(|creature| {
+                    let context = creature
+                        .add_to_world_vehicle_reset_context_like_cpp()?
+                        .clone();
+                    let base_is_alive = creature.is_alive();
+                    creature
+                        .unit_mut()
+                        .subsystems_mut()
+                        .vehicle
+                        .reset_vehicle_kit_for_creature_add_to_world_like_cpp(
+                            &context,
+                            base_is_alive,
+                        )
+                });
+
+            let creature_vehicle_install = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .and_then(|creature| {
+                    let install = creature
+                        .unit_mut()
+                        .subsystems_mut()
+                        .vehicle
+                        .install_vehicle_kit_like_cpp();
+                    install.had_kit.then_some(install)
+                });
+
+            let creature_zone_script_create = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some()
+                .then_some(CreatureZoneScriptCreateOutcomeLikeCpp {
+                    guid,
+                    represented_callback: true,
+                    script_dispatch_represented: false,
+                });
+            let add_to_map_tail = self.represent_add_to_map_post_add_to_world_tail_like_cpp(
+                kind,
+                guid,
+                active_object,
+            );
+
+            return Ok(AddToMapOutcome {
+                guid,
+                cell: cell.cell_coord(),
+                grid,
+                inserted: previous.is_none(),
+                already_in_world: false,
+                grid_created,
+                grid_loaded,
+                inserted_into_cell: true,
+                gameobject_model_insert: None,
+                gameobject_collision_enable: None,
+                gameobject_zone_script_create: None,
+                gameobject_store_inserted_before_add_to_world: None,
+                gameobject_spawn_indexed_before_add_to_world: None,
+                creature_store_inserted_before_add_to_world: Some(
+                    creature_store_inserted_before_add_to_world,
+                ),
+                creature_spawn_indexed_before_add_to_world: Some(
+                    creature_spawn_indexed_before_add_to_world,
+                ),
+                creature_unit_add_to_world,
+                creature_search_formation,
+                creature_aim_initialize,
+                creature_vehicle_reset,
+                creature_vehicle_install,
+                creature_zone_script_create,
+                add_to_map_tail,
+            });
         }
 
+        if kind == AccessorObjectKind::GameObject && record.game_object().is_some() {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let object_store_present_before_callback = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.game_object().is_some());
+            let spawn_index_present_before_callback =
+                record.game_object().is_some_and(|game_object| {
+                    let spawn_id = game_object.spawn_id();
+                    spawn_id != 0
+                        && self
+                            .gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                            .contains(&guid)
+                });
+            let gameobject_zone_script_create = Some(GameObjectZoneScriptCreateOutcomeLikeCpp {
+                guid,
+                represented_callback_boundary: true,
+                script_dispatch_represented: false,
+                object_store_present_before_callback,
+                spawn_index_present_before_callback,
+            });
+            let previous = self.insert_map_object_record(record)?;
+
+            let gameobject_store_inserted_before_add_to_world = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.game_object().is_some());
+            let gameobject_spawn_indexed_before_add_to_world = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some_and(|game_object| {
+                    let spawn_id = game_object.spawn_id();
+                    spawn_id != 0
+                        && self
+                            .gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                            .contains(&guid)
+                });
+            let has_represented_model = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some_and(GameObject::has_represented_gameobject_model_like_cpp);
+            let (gameobject_model_insert, gameobject_collision_enable) = if has_represented_model {
+                let gameobject_model_insert =
+                    self.insert_gameobject_model_like_cpp(RepresentedGameObjectModelKeyLikeCpp {
+                        owner_guid: guid,
+                    });
+                let gameobject_collision_enable = self
+                    .map_objects
+                    .get_mut(&guid)
+                    .and_then(MapObjectRecord::game_object_mut)
+                    .map(|game_object| {
+                        // C++ `GameObject::AddToWorld()` computes toggledState before
+                        // `EnableCollision(toggledState)`: chests use `getLootState() == GO_READY`,
+                        // exact non-Transport GameObjects use `GetGoState() == GO_STATE_READY`.
+                        // `MapObjectRecord::Transport` is handled outside this exact-typed
+                        // GameObject branch and remains a delayed-add runtime gap for this
+                        // represented seam.
+                        let toggled_state =
+                            if game_object.data().type_id as u32 == GAMEOBJECT_TYPE_CHEST {
+                                game_object.loot_state() == LootState::Ready
+                            } else {
+                                game_object.data().state == GoState::Ready as i8
+                            };
+                        let collision = game_object
+                            .enable_represented_gameobject_collision_like_cpp(toggled_state);
+                        GameObjectCollisionEnableOutcomeLikeCpp {
+                            requested_enable: collision.requested_enable,
+                            represented_model_present: collision.represented_model_present,
+                            previous_collision_enabled: collision.previous_collision_enabled,
+                            new_collision_enabled: collision.new_collision_enabled,
+                        }
+                    });
+                (Some(gameobject_model_insert), gameobject_collision_enable)
+            } else {
+                (None, None)
+            };
+
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::game_object_mut)
+            {
+                game_object.world_mut().object_mut().add_to_world();
+            }
+            let add_to_map_tail = self.represent_add_to_map_post_add_to_world_tail_like_cpp(
+                kind,
+                guid,
+                active_object,
+            );
+
+            return Ok(AddToMapOutcome {
+                guid,
+                cell: cell.cell_coord(),
+                grid,
+                inserted: previous.is_none(),
+                already_in_world: false,
+                grid_created,
+                grid_loaded,
+                inserted_into_cell: true,
+                gameobject_model_insert,
+                gameobject_collision_enable,
+                gameobject_zone_script_create,
+                gameobject_store_inserted_before_add_to_world: Some(
+                    gameobject_store_inserted_before_add_to_world,
+                ),
+                gameobject_spawn_indexed_before_add_to_world: Some(
+                    gameobject_spawn_indexed_before_add_to_world,
+                ),
+                creature_store_inserted_before_add_to_world: None,
+                creature_spawn_indexed_before_add_to_world: None,
+                creature_unit_add_to_world: None,
+                creature_search_formation: None,
+                creature_aim_initialize: None,
+                creature_vehicle_reset: None,
+                creature_vehicle_install: None,
+                creature_zone_script_create: None,
+                add_to_map_tail,
+            });
+        }
+
+        let creature_unit_add_to_world = {
+            record
+                .object_mut()
+                .set_current_cell(cell.cell_x(), cell.cell_y());
+            let creature_unit_add_to_world = if let Some(creature) = record.creature_mut() {
+                Some(creature.unit_mut().add_to_world_like_cpp())
+            } else {
+                record.object_mut().object_mut().add_to_world();
+                None
+            };
+            record.object_mut().object_mut().set_is_new_object(true);
+            // Rust does not emit visibility here yet; keep the flag lifecycle identical to
+            // C++ `Map::AddToMap` after `UpdateObjectVisibilityOnCreate()` returns.
+            record.object_mut().object_mut().set_is_new_object(false);
+            creature_unit_add_to_world
+        };
+
+        let creature_search_formation = if kind == AccessorObjectKind::Creature {
+            record.creature().map(Creature::search_formation_like_cpp)
+        } else {
+            None
+        };
+        if let Some(outcome) = creature_search_formation {
+            self.apply_creature_search_formation_like_cpp(guid, outcome);
+        }
+
+        let creature_aim_initialize = if kind == AccessorObjectKind::Creature {
+            record.creature().map(Creature::aim_initialize_like_cpp)
+        } else {
+            None
+        };
+
+        let creature_vehicle_reset = if kind == AccessorObjectKind::Creature {
+            record.creature_mut().and_then(|creature| {
+                let context = creature
+                    .add_to_world_vehicle_reset_context_like_cpp()?
+                    .clone();
+                let base_is_alive = creature.is_alive();
+                creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .vehicle
+                    .reset_vehicle_kit_for_creature_add_to_world_like_cpp(&context, base_is_alive)
+            })
+        } else {
+            None
+        };
+
+        let creature_vehicle_install = if kind == AccessorObjectKind::Creature {
+            record.creature_mut().and_then(|creature| {
+                let install = creature
+                    .unit_mut()
+                    .subsystems_mut()
+                    .vehicle
+                    .install_vehicle_kit_like_cpp();
+                install.had_kit.then_some(install)
+            })
+        } else {
+            None
+        };
+        let creature_zone_script_create = if kind == AccessorObjectKind::Creature {
+            record
+                .creature()
+                .is_some()
+                .then_some(CreatureZoneScriptCreateOutcomeLikeCpp {
+                    guid,
+                    represented_callback: true,
+                    script_dispatch_represented: false,
+                })
+        } else {
+            None
+        };
+
+        let (gameobject_model_insert, gameobject_collision_enable) =
+            if kind == AccessorObjectKind::GameObject {
+                if let Some(game_object) = record
+                    .game_object_mut()
+                    .filter(|game_object| game_object.has_represented_gameobject_model_like_cpp())
+                {
+                    let gameobject_model_insert = self.insert_gameobject_model_like_cpp(
+                        RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid },
+                    );
+                    // C++ `GameObject::AddToWorld()` computes toggledState before
+                    // `EnableCollision(toggledState)`: chests use `getLootState() == GO_READY`,
+                    // exact non-Transport GameObjects use `GetGoState() == GO_STATE_READY`.
+                    // `MapObjectRecord::Transport` is handled above by the kind gate and remains
+                    // a delayed-add runtime gap for this represented seam.
+                    let toggled_state =
+                        if game_object.data().type_id as u32 == GAMEOBJECT_TYPE_CHEST {
+                            game_object.loot_state() == LootState::Ready
+                        } else {
+                            game_object.data().state == GoState::Ready as i8
+                        };
+                    let collision =
+                        game_object.enable_represented_gameobject_collision_like_cpp(toggled_state);
+                    let gameobject_collision_enable = GameObjectCollisionEnableOutcomeLikeCpp {
+                        requested_enable: collision.requested_enable,
+                        represented_model_present: collision.represented_model_present,
+                        previous_collision_enabled: collision.previous_collision_enabled,
+                        new_collision_enabled: collision.new_collision_enabled,
+                    };
+                    (
+                        Some(gameobject_model_insert),
+                        Some(gameobject_collision_enable),
+                    )
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
         let previous = self.insert_map_object_record(record)?;
+        let add_to_map_tail =
+            self.represent_add_to_map_post_add_to_world_tail_like_cpp(kind, guid, active_object);
         Ok(AddToMapOutcome {
             guid,
             cell: cell.cell_coord(),
@@ -3803,6 +8761,20 @@ where
             grid_created,
             grid_loaded,
             inserted_into_cell: true,
+            gameobject_model_insert,
+            gameobject_collision_enable,
+            gameobject_zone_script_create: None,
+            gameobject_store_inserted_before_add_to_world: None,
+            gameobject_spawn_indexed_before_add_to_world: None,
+            creature_store_inserted_before_add_to_world: None,
+            creature_spawn_indexed_before_add_to_world: None,
+            creature_unit_add_to_world,
+            creature_search_formation,
+            creature_aim_initialize,
+            creature_vehicle_reset,
+            creature_vehicle_install,
+            creature_zone_script_create,
+            add_to_map_tail,
         })
     }
 
@@ -3812,105 +8784,502 @@ where
         Some(record)
     }
 
+    fn map_record_is_unit_like_owner_for_gameobject_remove_from_owner_like_cpp(
+        record: &MapObjectRecord,
+    ) -> bool {
+        matches!(
+            record.kind(),
+            AccessorObjectKind::Player | AccessorObjectKind::Creature | AccessorObjectKind::Pet
+        ) && (record.player().is_some() || record.creature().is_some() || record.pet().is_some())
+    }
+
+    /// Bounded map-owned representation of C++ `GameObject::RemoveFromOwner()`
+    /// during `GameObject::RemoveFromWorld()`.
+    ///
+    /// C++ anchors:
+    /// - `GameObject.cpp:880-897`: empty owner returns; resolved Unit calls
+    ///   `Unit::RemoveGameObject(this, false)`; missing owner falls back to
+    ///   `SetOwnerGUID(ObjectGuid::Empty)`.
+    /// - `GameObject.cpp:926-948`: this runs after ZoneScript remove and before
+    ///   model removal, linked trap despawn, `WorldObject::RemoveFromWorld`,
+    ///   spawn-id unindex, and map store removal.
+    /// - `Unit.cpp:5213-5250`: real owner-side list/slot/aura/cooldown/AI effects
+    ///   remain explicit gaps here.
+    fn gameobject_remove_from_owner_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> Option<GameObjectRemoveFromOwnerOutcomeLikeCpp> {
+        let (owner_guid_before, spell_id) = self
+            .map_object_record(guid)
+            .filter(|record| record.kind() == AccessorObjectKind::GameObject)
+            .and_then(MapObjectRecord::game_object)
+            .filter(|game_object| game_object.world().object().is_in_world())
+            .map(|game_object| (game_object.owner_guid(), game_object.spell_id()))?;
+
+        let owner_found_as_unit_like = !owner_guid_before.is_empty()
+            && self.map_object_record(owner_guid_before).is_some_and(
+                Self::map_record_is_unit_like_owner_for_gameobject_remove_from_owner_like_cpp,
+            );
+        let cleared_owner = !owner_guid_before.is_empty();
+
+        if cleared_owner {
+            if let Some(game_object) = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::game_object_mut)
+            {
+                game_object.clear_owner_guid_like_cpp();
+            }
+        }
+
+        Some(GameObjectRemoveFromOwnerOutcomeLikeCpp {
+            guid,
+            owner_guid_before,
+            owner_guid_after: if cleared_owner {
+                ObjectGuid::EMPTY
+            } else {
+                owner_guid_before
+            },
+            owner_found_as_unit_like,
+            cleared_owner,
+            spell_id,
+            unit_side_effects_represented: false,
+            unit_owned_gameobject_list_removed: false,
+            unit_object_slot_cleared: false,
+            aura_cleanup_represented: false,
+            cooldown_event_represented: false,
+            creature_ai_callback_represented: false,
+        })
+    }
+
+    /// Bounded map-owned representation of C++ `GameObject::RemoveFromWorld()`
+    /// linked-trap cleanup.
+    ///
+    /// C++ anchors:
+    /// - `GameObject.cpp:926-948`: after ZoneScript remove, `RemoveFromOwner`,
+    ///   and represented model removal, `GetLinkedTrap()->DespawnOrUnsummon()`
+    ///   runs before `WorldObject::RemoveFromWorld()` and before ObjectsStore
+    ///   removal.
+    /// - `Map.cpp:933-951`: `Map::RemoveFromMap<T>` calls
+    ///   `obj->RemoveFromWorld()` before active/grid/reset/delete tail.
+    fn gameobject_remove_linked_trap_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        remove_from_map_in_progress: &mut HashSet<ObjectGuid>,
+    ) -> Option<GameObjectRemoveLinkedTrapOutcomeLikeCpp> {
+        let linked_trap_guid = self
+            .map_object_record(guid)
+            .filter(|record| record.kind() == AccessorObjectKind::GameObject)
+            .and_then(MapObjectRecord::game_object)
+            .filter(|game_object| game_object.world().object().is_in_world())
+            .map(GameObject::linked_trap_guid_like_cpp)?;
+
+        let owner_present_before_linked_trap_remove = self.map_object_record(guid).is_some();
+        let linked_trap_guid = (!linked_trap_guid.is_empty()).then_some(linked_trap_guid);
+        let linked_trap_cycle_guarded = linked_trap_guid.is_some_and(|linked_guid| {
+            linked_guid != guid && remove_from_map_in_progress.contains(&linked_guid)
+        });
+        let linked_trap_missing_or_self = linked_trap_guid.is_none_or(|linked_guid| {
+            linked_guid == guid
+                || (!linked_trap_cycle_guarded && self.map_object_record(linked_guid).is_none())
+        });
+        let linked_trap_removed = if let Some(linked_guid) = linked_trap_guid {
+            if linked_guid == guid
+                || linked_trap_cycle_guarded
+                || self.map_object_record(linked_guid).is_none()
+            {
+                false
+            } else {
+                self.remove_from_map_like_cpp_inner(linked_guid, true, remove_from_map_in_progress)
+                    .is_ok()
+            }
+        } else {
+            false
+        };
+
+        Some(GameObjectRemoveLinkedTrapOutcomeLikeCpp {
+            guid,
+            linked_trap_guid,
+            owner_present_before_linked_trap_remove,
+            linked_trap_removed,
+            linked_trap_missing_or_self,
+            linked_trap_cycle_guarded,
+            despawn_or_unsummon_scheduler_represented: false,
+            object_accessor_fanout_represented: false,
+        })
+    }
+
+    /// Bounded map-owned cleanup for the late C++ `Player::RemoveFromWorld()`
+    /// `GetViewpoint()` -> `SetViewpoint(viewpoint, false)` branch.
+    ///
+    /// Source-of-truth anchors:
+    /// - `Player.cpp:1567-1585` runs this after `Unit::RemoveFromWorld()` and
+    ///   item cleanup while the Player still exists.
+    /// - `Player.cpp:25344-25387` clears `FarsightObject`, removes Unit shared
+    ///   vision for Unit targets, requests `SetSeer(this)`, and does not request
+    ///   `UpdateVisibilityOf` on remove.
+    /// - `Player.cpp:25389-25395` resolves `GetViewpoint()` from
+    ///   `FarsightObject` through `TYPEMASK_SEER`.
+    ///
+    /// Ownership: only canonical same-map `Map::map_objects` typed records are
+    /// consulted/mutated. DynamicObject targets clear only the removing Player's
+    /// `FarsightObject` when it still equals the target GUID; this branch never
+    /// resolves `DynamicObject::bound_caster()` or toggles DynamicObject caster
+    /// viewpoint state because that lifecycle belongs to DynamicObject removal.
+    /// There is no ObjectAccessor/session fallback, no packet fanout, and no real
+    /// SetSeer implementation in this seam. Vehicle-base skipping stays open
+    /// because this map-owned cleanup has no Player vehicle base runtime; the Unit
+    /// helper is called with `vehicle_base_guid: None`.
+    fn cleanup_player_remove_from_world_viewpoint_like_cpp(
+        &mut self,
+        player_guid: ObjectGuid,
+    ) -> Option<PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp> {
+        let player_record = self.map_object_record(player_guid)?;
+        if player_record.kind() != AccessorObjectKind::Player
+            || !player_record.object().object().is_in_world()
+        {
+            return None;
+        }
+
+        let viewpoint_guid = player_record
+            .player()
+            .map(|player| player.active_data().farsight_object)?;
+        if viewpoint_guid.is_empty() {
+            return None;
+        }
+
+        let outcome = |status,
+                       player_set_viewpoint: Option<PlayerSetViewpointOutcomeLikeCpp>,
+                       dynamic_object_caster_viewpoint: Option<
+            DynamicObjectCasterViewpointOutcomeLikeCpp,
+        >,
+                       update_visibility_requested,
+                       set_seer_requested| {
+            PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp {
+                player_guid,
+                viewpoint_guid,
+                status,
+                player_set_viewpoint,
+                dynamic_object_caster_viewpoint,
+                update_visibility_requested,
+                set_seer_requested,
+                object_accessor_fanout_represented: false,
+            }
+        };
+
+        let Some(target_record) = self.map_object_record(viewpoint_guid) else {
+            return Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::MissingTarget,
+                None,
+                None,
+                false,
+                false,
+            ));
+        };
+        let target_kind = target_record.kind();
+        if !target_record.object().object().is_in_world() {
+            return Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotInWorld,
+                None,
+                None,
+                false,
+                false,
+            ));
+        }
+
+        match target_kind {
+            AccessorObjectKind::Creature | AccessorObjectKind::Pet => {
+                let player_set_viewpoint = self.apply_player_set_viewpoint_unit_like_cpp(
+                    player_guid,
+                    viewpoint_guid,
+                    false,
+                    None,
+                );
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedUnitViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            AccessorObjectKind::DynamicObject => {
+                let player_set_viewpoint = match self.get_typed_player_mut(player_guid) {
+                    Some(player) if player.active_data().farsight_object == viewpoint_guid => {
+                        player.set_farsight_object_like_cpp(ObjectGuid::EMPTY);
+                        Self::player_set_viewpoint_outcome_like_cpp(
+                            player_guid,
+                            viewpoint_guid,
+                            false,
+                            PlayerSetViewpointStatusLikeCpp::Removed,
+                            None,
+                            false,
+                            true,
+                        )
+                    }
+                    Some(_) => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::ViewpointMismatch,
+                        None,
+                        false,
+                        false,
+                    ),
+                    None => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::MissingPlayer,
+                        None,
+                        false,
+                        false,
+                    ),
+                };
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            AccessorObjectKind::Player => {
+                let player_set_viewpoint = match self.get_typed_player_mut(player_guid) {
+                    Some(player) if player.active_data().farsight_object == viewpoint_guid => {
+                        player.set_farsight_object_like_cpp(ObjectGuid::EMPTY);
+                        Self::player_set_viewpoint_outcome_like_cpp(
+                            player_guid,
+                            viewpoint_guid,
+                            false,
+                            PlayerSetViewpointStatusLikeCpp::Removed,
+                            None,
+                            false,
+                            true,
+                        )
+                    }
+                    _ => Self::player_set_viewpoint_outcome_like_cpp(
+                        player_guid,
+                        viewpoint_guid,
+                        false,
+                        PlayerSetViewpointStatusLikeCpp::ViewpointMismatch,
+                        None,
+                        false,
+                        false,
+                    ),
+                };
+                Some(outcome(
+                    PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedPlayerViewpoint,
+                    Some(player_set_viewpoint),
+                    None,
+                    player_set_viewpoint.update_visibility_requested,
+                    player_set_viewpoint.set_seer_requested,
+                ))
+            }
+            _ => Some(outcome(
+                PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotSeer,
+                None,
+                None,
+                false,
+                false,
+            )),
+        }
+    }
+
     pub fn remove_from_map_like_cpp(
         &mut self,
         guid: ObjectGuid,
         delete_from_world: bool,
     ) -> Result<RemoveFromMapOutcome, RemoveFromMapError> {
-        let should_cleanup_dynamic_object_caster_viewpoint = self
-            .map_object_record(guid)
-            .and_then(MapObjectRecord::dynamic_object)
-            .is_some_and(|dynamic_object| {
-                dynamic_object.world().object().is_in_world()
-                    && dynamic_object.is_caster_viewpoint()
-            });
-        let dynamic_object_caster_viewpoint = should_cleanup_dynamic_object_caster_viewpoint
-            .then(|| self.apply_dynamic_object_caster_viewpoint_like_cpp(guid, false));
-        let dynamic_object_remove_cleanup = self
-            .map_objects
-            .get_mut(&guid)
-            .and_then(MapObjectRecord::dynamic_object_mut)
-            .and_then(|dynamic_object| {
-                if !dynamic_object.world().object().is_in_world() {
-                    return None;
-                }
-
-                let had_aura = dynamic_object.has_aura();
-                if had_aura {
-                    dynamic_object.remove_aura();
-                }
-
-                let unbound_caster = dynamic_object.bound_caster();
-                if unbound_caster.is_some() {
-                    dynamic_object.unbind_from_caster();
-                }
-
-                Some(DynamicObjectRemoveCleanupOutcomeLikeCpp {
-                    had_aura,
-                    removed_aura_pending_delete: dynamic_object.has_removed_aura_pending_delete(),
-                    unbound_caster,
-                })
-            });
-        let record = self
-            .remove_map_object(guid)
-            .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
-        let linked_trap_guid = record
-            .game_object()
-            .map(GameObject::linked_trap_guid_like_cpp)
-            .filter(|linked_guid| !linked_guid.is_empty() && *linked_guid != guid);
-        let kind = record.kind();
-        let was_world_object_like_cpp = map_record_is_world_object_like_cpp(&record);
-        let mut object = record.into_object();
-        let was_in_world = object.object().is_in_world();
-        let was_active = is_active_object_like_cpp(kind, &object);
-        let cell = Cell::from_world(object.position().x, object.position().y);
-        let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
-
-        if let Some(linked_trap_guid) = linked_trap_guid {
-            // C++ `GameObject::RemoveFromWorld` despawns `m_linkedTrap` before
-            // `WorldObject::RemoveFromWorld` (`GameObject.cpp:939-943`), and
-            // `Map::RemoveFromMap` calls `obj->RemoveFromWorld()` before grid
-            // removal (`Map.cpp:933-951`). This bounded seam represents that
-            // ordering map-locally with no scheduler/fanout, avoids
-            // self-recursion, and tolerates traps already removed by another
-            // path.
-            if self.map_object_record(linked_trap_guid).is_some() {
-                let _ = self.remove_from_map_like_cpp(linked_trap_guid, true);
-            }
-        }
-
-        object.object_mut().remove_from_world();
-        let removed_from_cell = remove_object_guid_from_cell_like_cpp(
-            self,
-            grid,
-            &cell,
-            kind,
-            was_world_object_like_cpp,
+        let mut remove_from_map_in_progress = HashSet::new();
+        self.remove_from_map_like_cpp_inner(
             guid,
-        );
-        if was_active {
-            self.unmark_active_cell(cell.cell_coord());
-        }
-
-        object.clear_current_cell();
-        object.reset_map().map_err(RemoveFromMapError::ResetMap)?;
-
-        Ok(RemoveFromMapOutcome {
-            guid,
-            cell: cell.cell_coord(),
-            grid,
-            was_in_world,
-            was_active,
-            removed_from_cell,
             delete_from_world,
-            dynamic_object_caster_viewpoint,
-            dynamic_object_remove_cleanup,
-            object: if delete_from_world {
-                None
-            } else {
-                Some(object)
-            },
-        })
+            &mut remove_from_map_in_progress,
+        )
+    }
+
+    fn remove_from_map_like_cpp_inner(
+        &mut self,
+        guid: ObjectGuid,
+        delete_from_world: bool,
+        remove_from_map_in_progress: &mut HashSet<ObjectGuid>,
+    ) -> Result<RemoveFromMapOutcome, RemoveFromMapError> {
+        if !remove_from_map_in_progress.insert(guid) {
+            return Err(RemoveFromMapError::ObjectNotFound { guid });
+        }
+
+        let outcome = (|| {
+            let should_cleanup_dynamic_object_caster_viewpoint = self
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::dynamic_object)
+                .is_some_and(|dynamic_object| {
+                    dynamic_object.world().object().is_in_world()
+                        && dynamic_object.is_caster_viewpoint()
+                });
+            let dynamic_object_caster_viewpoint = should_cleanup_dynamic_object_caster_viewpoint
+                .then(|| self.apply_dynamic_object_caster_viewpoint_like_cpp(guid, false));
+            let dynamic_object_remove_cleanup = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::dynamic_object_mut)
+                .and_then(|dynamic_object| {
+                    if !dynamic_object.world().object().is_in_world() {
+                        return None;
+                    }
+
+                    let had_aura = dynamic_object.has_aura();
+                    if had_aura {
+                        dynamic_object.remove_aura();
+                    }
+
+                    let unbound_caster = dynamic_object.bound_caster();
+                    if unbound_caster.is_some() {
+                        dynamic_object.unbind_from_caster();
+                    }
+
+                    Some(DynamicObjectRemoveCleanupOutcomeLikeCpp {
+                        had_aura,
+                        removed_aura_pending_delete: dynamic_object
+                            .has_removed_aura_pending_delete(),
+                        unbound_caster,
+                    })
+                });
+            let gameobject_model_key = self
+                .map_object_record(guid)
+                .filter(|record| record.kind() == AccessorObjectKind::GameObject)
+                .and_then(MapObjectRecord::game_object)
+                .filter(|game_object| game_object.world().object().is_in_world())
+                .filter(|game_object| game_object.has_represented_gameobject_model_like_cpp())
+                .map(|_| RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid });
+            let gameobject_model_remove_pending_before_callback = gameobject_model_key
+                .is_some_and(|key| self.contains_gameobject_model_like_cpp(key));
+            let gameobject_zone_script_remove = self
+                .map_object_record(guid)
+                .filter(|record| record.kind() == AccessorObjectKind::GameObject)
+                .and_then(MapObjectRecord::game_object)
+                .filter(|game_object| game_object.world().object().is_in_world())
+                .map(|game_object| {
+                    let spawn_id = game_object.spawn_id();
+                    GameObjectZoneScriptRemoveOutcomeLikeCpp {
+                        guid,
+                        represented_callback_boundary: true,
+                        script_dispatch_represented: false,
+                        model_remove_pending_before_callback:
+                            gameobject_model_remove_pending_before_callback,
+                        spawn_index_present_before_callback: spawn_id != 0
+                            && self
+                                .gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                                .contains(&guid),
+                    }
+                });
+            let gameobject_remove_from_owner = self.gameobject_remove_from_owner_like_cpp(guid);
+            let gameobject_model_remove = gameobject_model_key.and_then(|key| {
+                self.contains_gameobject_model_like_cpp(key)
+                    .then(|| self.remove_gameobject_model_like_cpp(key))
+            });
+            let gameobject_linked_trap_remove =
+                self.gameobject_remove_linked_trap_like_cpp(guid, remove_from_map_in_progress);
+            let remove_from_map_was_in_world = self
+                .map_object_record(guid)
+                .is_some_and(|record| record.object().object().is_in_world());
+            let creature_zone_script_remove = self
+                .map_object_record(guid)
+                .filter(|record| record.kind() == AccessorObjectKind::Creature)
+                .and_then(MapObjectRecord::creature)
+                .filter(|creature| creature.unit().world().object().is_in_world())
+                .map(|_| CreatureZoneScriptRemoveOutcomeLikeCpp {
+                    guid,
+                    represented_callback: true,
+                    script_dispatch_represented: false,
+                });
+            let creature_remove_formation = self.remove_creature_from_formation_like_cpp(guid);
+            let creature_unit_remove_from_world = self
+                .map_objects
+                .get_mut(&guid)
+                .and_then(MapObjectRecord::creature_mut)
+                .and_then(|creature| creature.unit_mut().remove_from_world_like_cpp());
+            let creature_vehicle_remove = creature_unit_remove_from_world
+                .as_ref()
+                .and_then(|outcome| outcome.vehicle_remove);
+            let player_viewpoint_cleanup =
+                self.cleanup_player_remove_from_world_viewpoint_like_cpp(guid);
+            let (kind, was_active) = self
+                .map_object_record(guid)
+                .map(|record| {
+                    (
+                        record.kind(),
+                        is_active_object_like_cpp(record.kind(), record.object()),
+                    )
+                })
+                .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
+            let remove_from_active = was_active.then(|| self.remove_from_active_like_cpp(guid));
+            let record = self
+                .remove_map_object(guid)
+                .ok_or(RemoveFromMapError::ObjectNotFound { guid })?;
+            let was_world_object_like_cpp = map_record_is_world_object_like_cpp(&record);
+            let mut object = record.into_object();
+            let was_in_world = remove_from_map_was_in_world;
+            let cxx_in_world =
+                was_in_world && remove_from_map_in_world_eligible_type_like_cpp(kind);
+            let personal_phase_owner = object.phase_shift().personal_guid_like_cpp();
+            let cell = Cell::from_world(object.position().x, object.position().y);
+            let grid = GridCoord::new(cell.grid_x(), cell.grid_y());
+
+            object.object_mut().remove_from_world();
+            let personal_phase_unregister = self
+                .personal_phase_tracker
+                .unregister_tracked_object_for_phase_owner_like_cpp(personal_phase_owner, guid);
+            let visibility_on_destroy = RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp {
+                guid,
+                cxx_in_world,
+                update_object_visibility_on_destroy_represented: !cxx_in_world,
+                update_object_visibility_on_destroy_runtime_gap: !cxx_in_world,
+            };
+            let removed_from_cell = remove_object_guid_from_cell_like_cpp(
+                self,
+                grid,
+                &cell,
+                kind,
+                was_world_object_like_cpp,
+                guid,
+            );
+
+            object.clear_current_cell();
+            object.reset_map().map_err(RemoveFromMapError::ResetMap)?;
+
+            Ok(RemoveFromMapOutcome {
+                guid,
+                cell: cell.cell_coord(),
+                grid,
+                was_in_world,
+                cxx_in_world,
+                was_active,
+                remove_from_active,
+                removed_from_cell,
+                delete_from_world,
+                dynamic_object_caster_viewpoint,
+                dynamic_object_remove_cleanup,
+                gameobject_zone_script_remove,
+                gameobject_remove_from_owner,
+                gameobject_model_remove,
+                gameobject_linked_trap_remove,
+                creature_zone_script_remove,
+                creature_vehicle_remove,
+                player_viewpoint_cleanup,
+                creature_unit_remove_from_world,
+                creature_remove_formation,
+                personal_phase_unregister,
+                visibility_on_destroy,
+                object: if delete_from_world {
+                    None
+                } else {
+                    Some(object)
+                },
+            })
+        })();
+        remove_from_map_in_progress.remove(&guid);
+        outcome
     }
 
     pub fn relocate_map_object_like_cpp(
@@ -3997,7 +9366,7 @@ where
             object_is_world_object,
             guid,
         );
-        debug_assert!(removed, "relocated object should have been in its old cell");
+        let _removed_from_old_cell = removed;
         {
             let ngrid = self
                 .get_ngrid_mut(new_grid)
@@ -4140,6 +9509,73 @@ where
             diff_ms,
             update_guids,
         }
+    }
+
+    /// Live represented C++ `Map::Update` source selection for
+    /// `ProcessRelocationNotifies(t_diff)` (`Map.cpp:692-717,797-805,830-905`).
+    ///
+    /// Source of truth stays map-owned canonical `map_objects`: typed in-world
+    /// Players become player sources, typed in-world active non-Players become
+    /// active object sources, and the existing visit/relocation helpers consume
+    /// marked cells and reset notify flags. Unsupported far combat/aura/summon
+    /// source ownership remains a gap and is represented by empty source lists;
+    /// no session, ObjectAccessor, packet, AI, dynamic-tree, or fanout side
+    /// effects are claimed here.
+    pub fn process_live_relocation_notifies_like_cpp(
+        &mut self,
+        diff_ms: u32,
+        visibility_notify_period_ms: i64,
+    ) -> ProcessRelocationNotifiesOutcome {
+        let mut player_sources = Vec::new();
+
+        for (guid, record) in &self.map_objects {
+            let object = record.object();
+            if !object.object().is_in_world() || record.kind() != AccessorObjectKind::Player {
+                continue;
+            }
+
+            let viewpoint_guid = record.player().and_then(|player| {
+                let farsight = player.active_data().farsight_object;
+                (!farsight.is_empty()).then_some(farsight)
+            });
+            player_sources.push(MapUpdatePlayerSources {
+                player_guid: *guid,
+                viewpoint_guid,
+                far_combat_unit_guids: Vec::new(),
+                far_aura_caster_guids: Vec::new(),
+                far_summon_guids: Vec::new(),
+            });
+        }
+
+        let active_non_player_guids = self.represented_active_non_player_sources_like_cpp();
+        player_sources.sort_by_key(|source| source.player_guid);
+        player_sources.dedup_by_key(|source| source.player_guid);
+
+        let visit_plan = self.map_update_visit_plan_like_cpp(
+            player_sources,
+            active_non_player_guids,
+            std::iter::empty(),
+            diff_ms,
+        );
+        if !visit_plan.process_relocation_notifies {
+            return ProcessRelocationNotifiesOutcome::default();
+        }
+
+        let centers =
+            visit_plan
+                .nearby_visit_centers
+                .into_iter()
+                .map(|guid| NearbyCellVisitCenter {
+                    guid,
+                    activation_radius: MAX_VISIBILITY_DISTANCE,
+                });
+        let nearby_plan = self.visit_nearby_cells_of_like_cpp(centers);
+        self.process_relocation_notifies_like_cpp(
+            nearby_plan.marked_cells,
+            diff_ms,
+            visibility_notify_period_ms,
+            std::iter::empty(),
+        )
     }
 
     pub fn map_update_visit_plan_like_cpp(
@@ -4291,12 +9727,23 @@ where
             process_plan.delayed_relocation_cells.iter().copied(),
             invalid_non_self_viewpoints,
         );
+        // C++ runs DelayedUnitRelocation's CreatureRelocationNotifier and
+        // PlayerRelocationNotifier while NOTIFY_VISIBILITY_CHANGED is still set,
+        // before ResetNotifier clears the cell. Rust exposes only represented
+        // visibility/AI evidence here: no packets, sessions, ObjectAccessor fanout,
+        // real UpdateObjectVisibility, or SendObjectUpdates are executed.
+        let visibility_plans = self.delayed_unit_relocation_visibility_plans_like_cpp(
+            &delayed_plan,
+            self.delayed_player_relocation_contexts_from_plan_like_cpp(&delayed_plan),
+            self.delayed_creature_relocation_contexts_from_plan_like_cpp(&delayed_plan),
+        );
         let reset_outcome = self
             .reset_notify_flags_for_cells_like_cpp(process_plan.reset_notify_cells.iter().copied());
 
         ProcessRelocationNotifiesOutcome {
             process_plan,
             delayed_plan,
+            visibility_plans,
             reset_outcome,
         }
     }
@@ -4363,19 +9810,33 @@ where
                 .chain(nearby.grid.creatures.iter())
                 .copied()
                 .filter(|guid| self.object_needs_notify_visibility(*guid));
-            let player_viewpoints_needing_notify = nearby
-                .world
-                .players
-                .iter()
-                .copied()
-                .filter(|guid| self.object_needs_notify_visibility(*guid));
-
-            let plan = DelayedUnitRelocationPlan::from_nearby_like_cpp(
+            let mut plan = DelayedUnitRelocationPlan::from_nearby_like_cpp(
                 &nearby,
                 creatures_needing_notify,
-                player_viewpoints_needing_notify,
-                invalid_non_self_viewpoints.iter().copied(),
+                std::iter::empty::<ObjectGuid>(),
+                std::iter::empty::<ObjectGuid>(),
             );
+            let mut players: Vec<_> = nearby.world.players.iter().copied().collect();
+            players.sort();
+            for player_guid in players {
+                let Some(viewpoint_guid) = self.player_viewpoint_guid_like_cpp(player_guid) else {
+                    continue;
+                };
+                if !self.object_needs_notify_visibility(viewpoint_guid) {
+                    continue;
+                }
+                if player_guid != viewpoint_guid
+                    && (invalid_non_self_viewpoints.contains(&player_guid)
+                        || invalid_non_self_viewpoints.contains(&viewpoint_guid)
+                        || self.viewpoint_has_invalid_position_like_cpp(viewpoint_guid))
+                {
+                    plan.skipped_invalid_viewpoints.push(player_guid);
+                    continue;
+                }
+                plan.player_relocations.push(player_guid);
+            }
+            sort_dedup(&mut plan.player_relocations);
+            sort_dedup(&mut plan.skipped_invalid_viewpoints);
             if !plan.creature_relocations.is_empty()
                 || !plan.player_relocations.is_empty()
                 || !plan.skipped_invalid_viewpoints.is_empty()
@@ -4429,7 +9890,7 @@ where
                     .players
                     .iter()
                     .copied()
-                    .filter(|guid| self.object_needs_notify_visibility(*guid));
+                    .filter(|guid| self.player_seer_needs_notify_visibility_like_cpp(*guid));
                 let creatures_needing_notify = nearby
                     .world
                     .creatures
@@ -4437,9 +9898,11 @@ where
                     .chain(nearby.grid.creatures.iter())
                     .copied()
                     .filter(|guid| self.object_needs_notify_visibility(*guid));
-                let source_creature_alive = creature_contexts
-                    .get(creature_guid)
-                    .is_none_or(|context| context.source_creature_alive);
+                let Some(creature_context) = creature_contexts.get(creature_guid) else {
+                    skipped_missing_sources.push(*creature_guid);
+                    continue;
+                };
+                let source_creature_alive = creature_context.source_creature_alive;
                 let visibility_plan = CreatureRelocationVisibilityPlan::from_nearby_like_cpp(
                     *creature_guid,
                     source_creature_alive,
@@ -4475,11 +9938,26 @@ where
                     position.y,
                     MAX_VISIBILITY_DISTANCE + viewpoint.combat_reach(),
                 );
+                let player_seers_needing_notify = nearby
+                    .world
+                    .players
+                    .iter()
+                    .copied()
+                    .filter(|guid| self.player_seer_needs_notify_visibility_like_cpp(*guid));
+                let creatures_needing_notify = nearby
+                    .world
+                    .creatures
+                    .iter()
+                    .chain(nearby.grid.creatures.iter())
+                    .copied()
+                    .filter(|guid| self.object_needs_notify_visibility(*guid));
                 let visibility_plan = PlayerRelocationVisibilityPlan::from_nearby_like_cpp(
                     *player_guid,
                     context.previous_client_guids.iter().copied(),
                     &nearby,
                     context.relocated_for_ai,
+                    player_seers_needing_notify,
+                    creatures_needing_notify,
                 );
                 player_plans.push(PlayerDelayedRelocationVisibilityPlan {
                     player_guid: *player_guid,
@@ -4502,6 +9980,85 @@ where
             skipped_invalid_source_positions,
             missing_player_contexts,
         }
+    }
+
+    fn player_viewpoint_guid_like_cpp(&self, player_guid: ObjectGuid) -> Option<ObjectGuid> {
+        let record = self.map_object_record(player_guid)?;
+        if record.kind() != AccessorObjectKind::Player {
+            return None;
+        }
+        let Some(player) = record.player() else {
+            return Some(player_guid);
+        };
+        let farsight = player.active_data().farsight_object;
+        Some(if farsight.is_empty() {
+            player_guid
+        } else {
+            farsight
+        })
+    }
+
+    fn player_seer_needs_notify_visibility_like_cpp(&self, player_guid: ObjectGuid) -> bool {
+        self.player_viewpoint_guid_like_cpp(player_guid)
+            .is_some_and(|viewpoint_guid| self.object_needs_notify_visibility(viewpoint_guid))
+    }
+
+    fn viewpoint_has_invalid_position_like_cpp(&self, viewpoint_guid: ObjectGuid) -> bool {
+        self.map_object(viewpoint_guid).is_none_or(|viewpoint| {
+            let position = viewpoint.position();
+            !is_valid_map_coord_2d(position.x, position.y)
+        })
+    }
+
+    fn delayed_player_relocation_contexts_from_plan_like_cpp(
+        &self,
+        delayed_plan: &DelayedUnitRelocationForCellsPlan,
+    ) -> Vec<DelayedPlayerRelocationContext> {
+        let mut player_guids: Vec<_> = delayed_plan
+            .cell_plans
+            .iter()
+            .flat_map(|cell_plan| cell_plan.plan.player_relocations.iter().copied())
+            .collect();
+        sort_dedup(&mut player_guids);
+
+        player_guids
+            .into_iter()
+            .filter_map(|player_guid| {
+                let viewpoint_guid = self.player_viewpoint_guid_like_cpp(player_guid)?;
+                Some(DelayedPlayerRelocationContext {
+                    player_guid,
+                    viewpoint_guid,
+                    // Map-owned live relocation currently has no canonical client
+                    // object-list source; keep this empty as an explicit visibility
+                    // fanout gap rather than inventing session state.
+                    previous_client_guids: Vec::new(),
+                    relocated_for_ai: viewpoint_guid == player_guid,
+                })
+            })
+            .collect()
+    }
+
+    fn delayed_creature_relocation_contexts_from_plan_like_cpp(
+        &self,
+        delayed_plan: &DelayedUnitRelocationForCellsPlan,
+    ) -> Vec<DelayedCreatureRelocationContext> {
+        let mut creature_guids: Vec<_> = delayed_plan
+            .cell_plans
+            .iter()
+            .flat_map(|cell_plan| cell_plan.plan.creature_relocations.iter().copied())
+            .collect();
+        sort_dedup(&mut creature_guids);
+
+        creature_guids
+            .into_iter()
+            .filter_map(|creature_guid| {
+                let creature = self.get_typed_creature(creature_guid)?;
+                Some(DelayedCreatureRelocationContext {
+                    creature_guid,
+                    source_creature_alive: creature.is_alive(),
+                })
+            })
+            .collect()
     }
 
     pub fn process_map_object_move_list_like_cpp(
@@ -4595,8 +10152,408 @@ where
         plan
     }
 
+    /// C++ `Map::AddCreatureToMoveList` (`Map.cpp:1163-1176`) seam.
+    pub fn add_creature_to_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        position: Position,
+    ) -> AddObjectToMoveListOutcomeLikeCpp {
+        self.add_to_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid, position)
+    }
+
+    /// C++ `Map::RemoveCreatureFromMoveList` (`Map.cpp:1178-1187`) seam.
+    pub fn remove_creature_from_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> RemoveObjectFromMoveListOutcomeLikeCpp {
+        self.remove_from_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+    }
+
+    /// C++ `Map::AddGameObjectToMoveList` (`Map.cpp:1189-1202`) seam.
+    pub fn add_game_object_to_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        position: Position,
+    ) -> AddObjectToMoveListOutcomeLikeCpp {
+        self.add_to_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject, guid, position)
+    }
+
+    /// C++ `Map::RemoveGameObjectFromMoveList` (`Map.cpp:1204-1213`) seam.
+    pub fn remove_game_object_from_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> RemoveObjectFromMoveListOutcomeLikeCpp {
+        self.remove_from_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject, guid)
+    }
+
+    /// C++ `Map::AddDynamicObjectToMoveList` (`Map.cpp:1215-1226`) seam.
+    pub fn add_dynamic_object_to_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        position: Position,
+    ) -> AddObjectToMoveListOutcomeLikeCpp {
+        self.add_to_move_list_like_cpp(
+            MapObjectMoveListFamilyLikeCpp::DynamicObject,
+            guid,
+            position,
+        )
+    }
+
+    /// C++ `Map::RemoveDynamicObjectFromMoveList` (`Map.cpp:1228-1237`) seam.
+    pub fn remove_dynamic_object_from_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> RemoveObjectFromMoveListOutcomeLikeCpp {
+        self.remove_from_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::DynamicObject, guid)
+    }
+
+    /// C++ `Map::AddAreaTriggerToMoveList` (`Map.h:566-579`, `Map.cpp:1163-1237`) seam.
+    pub fn add_area_trigger_to_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+        position: Position,
+    ) -> AddObjectToMoveListOutcomeLikeCpp {
+        self.add_to_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger, guid, position)
+    }
+
+    /// C++ `Map::RemoveAreaTriggerFromMoveList` (`Map.h:566-579`, `Map.cpp:1163-1237`) seam.
+    pub fn remove_area_trigger_from_move_list_like_cpp(
+        &mut self,
+        guid: ObjectGuid,
+    ) -> RemoveObjectFromMoveListOutcomeLikeCpp {
+        self.remove_from_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger, guid)
+    }
+
+    pub fn move_all_creatures_in_move_list_like_cpp(&mut self) -> MoveListDrainSummaryLikeCpp {
+        self.drain_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature)
+    }
+
+    pub fn move_all_game_objects_in_move_list_like_cpp(&mut self) -> MoveListDrainSummaryLikeCpp {
+        self.drain_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject)
+    }
+
+    pub fn move_all_dynamic_objects_in_move_list_like_cpp(
+        &mut self,
+    ) -> MoveListDrainSummaryLikeCpp {
+        self.drain_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::DynamicObject)
+    }
+
+    pub fn move_all_area_triggers_in_move_list_like_cpp(&mut self) -> MoveListDrainSummaryLikeCpp {
+        self.drain_move_list_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger)
+    }
+
+    /// C++ `Map::UnloadAll` clears only `_creaturesToMove` and
+    /// `_gameObjectsToMove` before calling `UnloadGrid(grid, true)`
+    /// (`Map.cpp:1646-1651`). It does not drain or relocate any move-list, and
+    /// it does not clear AreaTrigger/DynamicObject delayed moves in that branch.
+    ///
+    /// Rust has no broader `UnloadAll` entry point in this seam yet; callers
+    /// modeling that exact C++ pre-loop cleanup may invoke this helper before
+    /// repeatedly calling `unload_grid_at(..., true)`.
+    pub fn clear_unload_all_delayed_moves_like_cpp(&mut self) {
+        self.creatures_to_move.clear();
+        self.gameobjects_to_move.clear();
+        self.creature_move_states.clear();
+        self.gameobject_move_states.clear();
+    }
+
+    pub fn pending_cell_move_like_cpp(
+        &self,
+        family: MapObjectMoveListFamilyLikeCpp,
+        guid: ObjectGuid,
+    ) -> Option<PendingCellMoveLikeCpp> {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creature_move_states.get(&guid),
+            MapObjectMoveListFamilyLikeCpp::GameObject => self.gameobject_move_states.get(&guid),
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => {
+                self.dynamic_object_move_states.get(&guid)
+            }
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => self.area_trigger_move_states.get(&guid),
+        }
+        .copied()
+    }
+
+    pub fn move_list_len_like_cpp(&self, family: MapObjectMoveListFamilyLikeCpp) -> usize {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creatures_to_move.len(),
+            MapObjectMoveListFamilyLikeCpp::GameObject => self.gameobjects_to_move.len(),
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => self.dynamic_objects_to_move.len(),
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => self.area_triggers_to_move.len(),
+        }
+    }
+
+    fn add_to_move_list_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+        guid: ObjectGuid,
+        position: Position,
+    ) -> AddObjectToMoveListOutcomeLikeCpp {
+        if self.move_list_locked_like_cpp(family) {
+            return AddObjectToMoveListOutcomeLikeCpp::LockedIgnored;
+        }
+        let Some(record) = self.map_object_record(guid) else {
+            return AddObjectToMoveListOutcomeLikeCpp::MissingOrStale;
+        };
+        let actual = record.kind();
+        if !move_list_family_accepts_kind_like_cpp(family, actual) {
+            return AddObjectToMoveListOutcomeLikeCpp::WrongKind { actual };
+        }
+
+        let pending = PendingCellMoveLikeCpp {
+            state: MapObjectCellMoveStateLikeCpp::Active,
+            new_position: position,
+        };
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => {
+                let existed = self.creature_move_states.insert(guid, pending).is_some();
+                if !existed {
+                    self.creatures_to_move.push(guid);
+                }
+                if existed {
+                    AddObjectToMoveListOutcomeLikeCpp::UpdatedExisting
+                } else {
+                    AddObjectToMoveListOutcomeLikeCpp::Queued
+                }
+            }
+            MapObjectMoveListFamilyLikeCpp::GameObject => {
+                let existed = self.gameobject_move_states.insert(guid, pending).is_some();
+                if !existed {
+                    self.gameobjects_to_move.push(guid);
+                }
+                if existed {
+                    AddObjectToMoveListOutcomeLikeCpp::UpdatedExisting
+                } else {
+                    AddObjectToMoveListOutcomeLikeCpp::Queued
+                }
+            }
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => {
+                let existed = self
+                    .dynamic_object_move_states
+                    .insert(guid, pending)
+                    .is_some();
+                if !existed {
+                    self.dynamic_objects_to_move.push(guid);
+                }
+                if existed {
+                    AddObjectToMoveListOutcomeLikeCpp::UpdatedExisting
+                } else {
+                    AddObjectToMoveListOutcomeLikeCpp::Queued
+                }
+            }
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => {
+                let existed = self
+                    .area_trigger_move_states
+                    .insert(guid, pending)
+                    .is_some();
+                if !existed {
+                    self.area_triggers_to_move.push(guid);
+                }
+                if existed {
+                    AddObjectToMoveListOutcomeLikeCpp::UpdatedExisting
+                } else {
+                    AddObjectToMoveListOutcomeLikeCpp::Queued
+                }
+            }
+        }
+    }
+
+    fn remove_from_move_list_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+        guid: ObjectGuid,
+    ) -> RemoveObjectFromMoveListOutcomeLikeCpp {
+        if self.move_list_locked_like_cpp(family) {
+            return RemoveObjectFromMoveListOutcomeLikeCpp::LockedIgnored;
+        }
+        let Some(record) = self.map_object_record(guid) else {
+            return RemoveObjectFromMoveListOutcomeLikeCpp::MissingOrStale;
+        };
+        let actual = record.kind();
+        if !move_list_family_accepts_kind_like_cpp(family, actual) {
+            return RemoveObjectFromMoveListOutcomeLikeCpp::WrongKind { actual };
+        }
+        let state = match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creature_move_states.get_mut(&guid),
+            MapObjectMoveListFamilyLikeCpp::GameObject => {
+                self.gameobject_move_states.get_mut(&guid)
+            }
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => {
+                self.dynamic_object_move_states.get_mut(&guid)
+            }
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => {
+                self.area_trigger_move_states.get_mut(&guid)
+            }
+        };
+        let Some(pending) = state else {
+            return RemoveObjectFromMoveListOutcomeLikeCpp::NotQueued;
+        };
+        if pending.state == MapObjectCellMoveStateLikeCpp::Active {
+            pending.state = MapObjectCellMoveStateLikeCpp::Inactive;
+            RemoveObjectFromMoveListOutcomeLikeCpp::MarkedInactive
+        } else {
+            RemoveObjectFromMoveListOutcomeLikeCpp::AlreadyInactive
+        }
+    }
+
+    fn move_list_locked_like_cpp(&self, family: MapObjectMoveListFamilyLikeCpp) -> bool {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creature_move_lock,
+            MapObjectMoveListFamilyLikeCpp::GameObject => self.gameobject_move_lock,
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => self.dynamic_object_move_lock,
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => self.area_trigger_move_lock,
+        }
+    }
+
+    fn set_move_list_lock_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+        locked: bool,
+    ) {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creature_move_lock = locked,
+            MapObjectMoveListFamilyLikeCpp::GameObject => self.gameobject_move_lock = locked,
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => self.dynamic_object_move_lock = locked,
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => self.area_trigger_move_lock = locked,
+        }
+    }
+
+    fn take_move_list_queue_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+    ) -> Vec<ObjectGuid> {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => std::mem::take(&mut self.creatures_to_move),
+            MapObjectMoveListFamilyLikeCpp::GameObject => {
+                std::mem::take(&mut self.gameobjects_to_move)
+            }
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => {
+                std::mem::take(&mut self.dynamic_objects_to_move)
+            }
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => {
+                std::mem::take(&mut self.area_triggers_to_move)
+            }
+        }
+    }
+
+    fn remove_pending_move_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+        guid: ObjectGuid,
+    ) -> Option<PendingCellMoveLikeCpp> {
+        match family {
+            MapObjectMoveListFamilyLikeCpp::Creature => self.creature_move_states.remove(&guid),
+            MapObjectMoveListFamilyLikeCpp::GameObject => self.gameobject_move_states.remove(&guid),
+            MapObjectMoveListFamilyLikeCpp::DynamicObject => {
+                self.dynamic_object_move_states.remove(&guid)
+            }
+            MapObjectMoveListFamilyLikeCpp::AreaTrigger => {
+                self.area_trigger_move_states.remove(&guid)
+            }
+        }
+    }
+
+    fn drain_move_list_like_cpp(
+        &mut self,
+        family: MapObjectMoveListFamilyLikeCpp,
+    ) -> MoveListDrainSummaryLikeCpp {
+        let mut summary = MoveListDrainSummaryLikeCpp {
+            family: Some(family),
+            ..Default::default()
+        };
+        if self.move_list_locked_like_cpp(family) {
+            summary.locked_ignored = 1;
+            return summary;
+        }
+
+        self.set_move_list_lock_like_cpp(family, true);
+        let queued = self.take_move_list_queue_like_cpp(family);
+        for guid in queued {
+            summary.processed += 1;
+            let Some(pending) = self.remove_pending_move_like_cpp(family, guid) else {
+                summary.inactive_reset += 1;
+                continue;
+            };
+            if pending.state != MapObjectCellMoveStateLikeCpp::Active {
+                summary.inactive_reset += 1;
+                continue;
+            }
+
+            let Some(record) = self.map_object_record(guid) else {
+                summary.missing_or_stale += 1;
+                continue;
+            };
+            let actual = record.kind();
+            if !move_list_family_accepts_kind_like_cpp(family, actual) {
+                summary.wrong_kind += 1;
+                continue;
+            }
+            if !record.object().object().is_in_world() {
+                summary.not_in_world += 1;
+                continue;
+            }
+
+            match self.relocate_map_object_like_cpp(guid, pending.new_position) {
+                Ok(outcome) if outcome.relocated => summary.relocated += 1,
+                Ok(outcome) if outcome.blocked_by_unloaded_grid => {
+                    summary.blocked_by_unloaded_grid += 1;
+                    if matches!(
+                        family,
+                        MapObjectMoveListFamilyLikeCpp::Creature
+                            | MapObjectMoveListFamilyLikeCpp::GameObject
+                    ) {
+                        summary.respawn_relocation_unsupported += 1;
+                    }
+                }
+                Ok(_) => summary.blocked_by_unloaded_grid += 1,
+                Err(MapObjectRelocationError::InvalidCoordinates { .. }) => {
+                    summary.failed_invalid_position += 1;
+                }
+                Err(MapObjectRelocationError::ObjectNotFound { .. }) => {
+                    summary.missing_or_stale += 1;
+                }
+                Err(MapObjectRelocationError::Record(_) | MapObjectRelocationError::Store(_)) => {
+                    summary.failed_store += 1;
+                }
+            }
+        }
+        self.set_move_list_lock_like_cpp(family, false);
+        summary
+    }
+
     pub fn map_object_record(&self, guid: ObjectGuid) -> Option<&MapObjectRecord> {
         self.map_objects.get(&guid)
+    }
+
+    /// Represented tail metrics from C++ `Map::Update` after
+    /// `sScriptMgr->OnMapUpdate(this, t_diff)` (`Map.cpp:804-815`).
+    ///
+    /// C++ emits `TC_METRIC_VALUE("map_creatures", GetObjectsStore().Size<Creature>())`
+    /// and `TC_METRIC_VALUE("map_gameobjects", GetObjectsStore().Size<GameObject>())`.
+    /// Rust reads only canonical typed `MapObjectRecord`s from `map_objects`: a
+    /// record must have both the exact canonical kind and the corresponding typed
+    /// body. Generic `WorldObject` records, Pet, Transport, DynamicObject,
+    /// AreaTrigger, Player, etc. are intentionally excluded; no telemetry backend
+    /// is invoked here.
+    pub fn map_update_metrics_like_cpp(&self) -> MapUpdateMetricsSummaryLikeCpp {
+        let mut summary = MapUpdateMetricsSummaryLikeCpp {
+            map_id: self.map_id,
+            instance_id: self.instance_id,
+            ..MapUpdateMetricsSummaryLikeCpp::default()
+        };
+
+        for record in self.map_objects.values() {
+            match record.kind() {
+                AccessorObjectKind::Creature if record.creature().is_some() => {
+                    summary.creature_count += 1;
+                }
+                AccessorObjectKind::GameObject if record.game_object().is_some() => {
+                    summary.gameobject_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        summary
     }
 
     pub fn map_object(&self, guid: ObjectGuid) -> Option<&WorldObject> {
@@ -5018,7 +10975,21 @@ where
     }
 
     pub fn active_objects_near_grid(&self, grid: &NGrid) -> bool {
-        active_cells_near_grid(&self.active_cells, self.visible_distance, grid)
+        if active_cells_near_grid(&self.active_cells, self.visible_distance, grid) {
+            return true;
+        }
+
+        let active_non_player_cells: HashSet<_> = self
+            .active_non_players_like_cpp
+            .iter()
+            .filter_map(|guid| {
+                let record = self.map_object_record(*guid)?;
+                record.object().object().is_in_world().then(|| {
+                    compute_cell_coord(record.object().position().x, record.object().position().y)
+                })
+            })
+            .collect();
+        active_cells_near_grid(&active_non_player_cells, self.visible_distance, grid)
     }
 
     pub fn unload_grid_at(&mut self, coord: GridCoord, unload_all: bool) -> bool {
@@ -5034,6 +11005,74 @@ where
 
         self.run_unload_lifecycle(&mut grid, unload_all);
         true
+    }
+
+    pub fn update_loaded_grid_states_like_cpp(
+        &mut self,
+        diff_ms: u32,
+    ) -> GridStatesUpdateSummaryLikeCpp {
+        // C++ `Map::DelayedUpdate` increments the GridRefManager iterator before
+        // invoking the grid-state update because that update may unload/delete
+        // the current grid (`Map.cpp:2536-2542`). Rust snapshots loaded grid
+        // coordinates first and then re-checks each slot, never recreating a
+        // grid that disappeared earlier in the same delayed-update pass.
+        let loaded_grid_coords: Vec<GridCoord> = self
+            .grids
+            .iter()
+            .enumerate()
+            .filter_map(|(index, grid)| {
+                grid.as_ref().map(|_| {
+                    GridCoord::new(
+                        (index as u32) / MAX_NUMBER_OF_GRIDS,
+                        (index as u32) % MAX_NUMBER_OF_GRIDS,
+                    )
+                })
+            })
+            .collect();
+
+        let mut summary = GridStatesUpdateSummaryLikeCpp {
+            diff_ms,
+            visited: loaded_grid_coords.len(),
+            ..GridStatesUpdateSummaryLikeCpp::default()
+        };
+
+        for coord in loaded_grid_coords {
+            let Some(previous_state) = self.get_ngrid(coord).map(NGrid::state) else {
+                summary.missing_after_snapshot += 1;
+                continue;
+            };
+
+            if matches!(previous_state, GridStateKind::Invalid) {
+                summary.skipped_invalid += 1;
+            }
+
+            let unloaded = self.update_grid_state_at(coord, diff_ms);
+            summary.updated += 1;
+
+            if unloaded {
+                summary.unloaded += 1;
+                if matches!(previous_state, GridStateKind::Removal) {
+                    summary.removal_unloaded += 1;
+                }
+                continue;
+            }
+
+            let Some(next_state) = self.get_ngrid(coord).map(NGrid::state) else {
+                summary.missing_after_snapshot += 1;
+                continue;
+            };
+
+            match (previous_state, next_state) {
+                (GridStateKind::Active, GridStateKind::Idle) => summary.active_to_idle += 1,
+                (GridStateKind::Idle, GridStateKind::Removal) => summary.idle_to_removal += 1,
+                (GridStateKind::Removal, GridStateKind::Removal) => {
+                    summary.removal_deferred_or_reset += 1;
+                }
+                _ => {}
+            }
+        }
+
+        summary
     }
 
     pub fn update_grid_state_at(&mut self, coord: GridCoord, diff_ms: u32) -> bool {
@@ -5059,9 +11098,22 @@ where
     }
 
     fn run_unload_lifecycle(&mut self, grid: &mut NGrid, unload_all: bool) {
+        // C++ `Map::UnloadGrid` drains Creature/GameObject/AreaTrigger move lists
+        // only in the `!unloadAll` branch, before and after the evacuator
+        // (`Map.cpp:1579-1596`). `UnloadGrid(..., true)` does not drain or
+        // relocate move-lists; `Map::UnloadAll` only clears Creature/GameObject
+        // delayed moves before entering that loop (`Map.cpp:1646-1651`). Rust
+        // still keeps the rest of this unload lifecycle represented: no
+        // DynamicObject drain in this path, no full visibility/fanout/scripts/DB.
         if !unload_all {
+            self.move_all_creatures_in_move_list_like_cpp();
+            self.move_all_game_objects_in_move_list_like_cpp();
+            self.move_all_area_triggers_in_move_list_like_cpp();
             self.lifecycle.evacuate_grid(grid);
             self.drain_grid_unload_actions_like_cpp();
+            self.move_all_creatures_in_move_list_like_cpp();
+            self.move_all_game_objects_in_move_list_like_cpp();
+            self.move_all_area_triggers_in_move_list_like_cpp();
         }
 
         self.lifecycle.clean_grid(grid);
@@ -5104,6 +11156,126 @@ impl From<ObjectAccessorError> for MapObjectStoreError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectCollisionEnableOutcomeLikeCpp {
+    pub requested_enable: bool,
+    pub represented_model_present: bool,
+    pub previous_collision_enabled: Option<bool>,
+    pub new_collision_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureZoneScriptCreateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback: bool,
+    pub script_dispatch_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectZoneScriptCreateOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback_boundary: bool,
+    pub script_dispatch_represented: bool,
+    pub object_store_present_before_callback: bool,
+    pub spawn_index_present_before_callback: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectZoneScriptRemoveOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback_boundary: bool,
+    pub script_dispatch_represented: bool,
+    pub model_remove_pending_before_callback: bool,
+    pub spawn_index_present_before_callback: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectRemoveFromOwnerOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub owner_guid_before: ObjectGuid,
+    pub owner_guid_after: ObjectGuid,
+    pub owner_found_as_unit_like: bool,
+    pub cleared_owner: bool,
+    pub spell_id: u32,
+    pub unit_side_effects_represented: bool,
+    pub unit_owned_gameobject_list_removed: bool,
+    pub unit_object_slot_cleared: bool,
+    pub aura_cleanup_represented: bool,
+    pub cooldown_event_represented: bool,
+    pub creature_ai_callback_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectRemoveLinkedTrapOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub linked_trap_guid: Option<ObjectGuid>,
+    pub owner_present_before_linked_trap_remove: bool,
+    pub linked_trap_removed: bool,
+    pub linked_trap_missing_or_self: bool,
+    pub linked_trap_cycle_guarded: bool,
+    pub despawn_or_unsummon_scheduler_represented: bool,
+    pub object_accessor_fanout_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureZoneScriptRemoveOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub represented_callback: bool,
+    pub script_dispatch_represented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ActiveNonPlayerRespawnLocationLikeCpp {
+    spawn_id: SpawnId,
+    position: Position,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveNonPlayerMutationStatusLikeCpp {
+    Mutated,
+    MissingRecord,
+    PlayerUnsupported,
+    NotActiveObject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveNonPlayerUnloadLockOutcomeLikeCpp {
+    pub spawn_id: SpawnId,
+    pub respawn_grid: Option<GridCoord>,
+    pub respawn_grid_missing: bool,
+    pub invalid_respawn_position: bool,
+    pub lock_incremented: bool,
+    pub lock_decremented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveNonPlayerMutationOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub status: ActiveNonPlayerMutationStatusLikeCpp,
+    pub inserted_in_active_set: bool,
+    pub removed_from_active_set: bool,
+    pub spawn_id_zero_or_unsupported: bool,
+    pub unload_lock: Option<ActiveNonPlayerUnloadLockOutcomeLikeCpp>,
+}
+
+pub type AddToActiveOutcomeLikeCpp = ActiveNonPlayerMutationOutcomeLikeCpp;
+pub type RemoveFromActiveOutcomeLikeCpp = ActiveNonPlayerMutationOutcomeLikeCpp;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddToMapPostAddToWorldOutcomeLikeCpp {
+    pub initialize_object_represented: bool,
+    pub pending_move_state_cleared: bool,
+    pub no_pending_move_state: bool,
+    pub add_to_active_represented: bool,
+    pub add_to_active_skipped_runtime_gap: bool,
+    pub add_to_active: Option<AddToActiveOutcomeLikeCpp>,
+    pub set_is_new_object_true: bool,
+    pub update_object_visibility_on_create_represented: bool,
+    pub update_object_visibility_on_create_runtime_gap: bool,
+    pub set_is_new_object_false: bool,
+    pub final_is_new_object: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddToMapOutcome {
     pub guid: ObjectGuid,
     pub cell: CellCoord,
@@ -5113,6 +11285,20 @@ pub struct AddToMapOutcome {
     pub grid_created: bool,
     pub grid_loaded: bool,
     pub inserted_into_cell: bool,
+    pub gameobject_model_insert: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub gameobject_collision_enable: Option<GameObjectCollisionEnableOutcomeLikeCpp>,
+    pub gameobject_zone_script_create: Option<GameObjectZoneScriptCreateOutcomeLikeCpp>,
+    pub gameobject_store_inserted_before_add_to_world: Option<bool>,
+    pub gameobject_spawn_indexed_before_add_to_world: Option<bool>,
+    pub creature_store_inserted_before_add_to_world: Option<bool>,
+    pub creature_spawn_indexed_before_add_to_world: Option<bool>,
+    pub creature_unit_add_to_world: Option<UnitAddToWorldOutcomeLikeCpp>,
+    pub creature_search_formation: Option<CreatureSearchFormationOutcomeLikeCpp>,
+    pub creature_aim_initialize: Option<CreatureAimInitializeOutcomeLikeCpp>,
+    pub creature_vehicle_reset: Option<VehicleKitAddToWorldResetOutcomeLikeCpp>,
+    pub creature_vehicle_install: Option<VehicleKitInstallOutcomeLikeCpp>,
+    pub creature_zone_script_create: Option<CreatureZoneScriptCreateOutcomeLikeCpp>,
+    pub add_to_map_tail: Option<AddToMapPostAddToWorldOutcomeLikeCpp>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -5127,18 +11313,50 @@ impl From<MapObjectStoreError> for AddToMapError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub cxx_in_world: bool,
+    pub update_object_visibility_on_destroy_represented: bool,
+    pub update_object_visibility_on_destroy_runtime_gap: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoveFromMapOutcome {
     pub guid: ObjectGuid,
     pub cell: CellCoord,
     pub grid: GridCoord,
     pub was_in_world: bool,
+    pub cxx_in_world: bool,
     pub was_active: bool,
+    pub remove_from_active: Option<RemoveFromActiveOutcomeLikeCpp>,
     pub removed_from_cell: bool,
     pub delete_from_world: bool,
     pub dynamic_object_caster_viewpoint: Option<DynamicObjectCasterViewpointOutcomeLikeCpp>,
     pub dynamic_object_remove_cleanup: Option<DynamicObjectRemoveCleanupOutcomeLikeCpp>,
+    pub gameobject_zone_script_remove: Option<GameObjectZoneScriptRemoveOutcomeLikeCpp>,
+    pub gameobject_remove_from_owner: Option<GameObjectRemoveFromOwnerOutcomeLikeCpp>,
+    pub gameobject_model_remove: Option<DynamicMapTreeModelMutationOutcomeLikeCpp>,
+    pub gameobject_linked_trap_remove: Option<GameObjectRemoveLinkedTrapOutcomeLikeCpp>,
+    pub creature_zone_script_remove: Option<CreatureZoneScriptRemoveOutcomeLikeCpp>,
+    pub creature_vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
+    pub player_viewpoint_cleanup: Option<PlayerRemoveFromWorldViewpointCleanupOutcomeLikeCpp>,
+    pub creature_unit_remove_from_world: Option<UnitRemoveFromWorldOutcomeLikeCpp>,
+    pub creature_remove_formation: Option<CreatureRemoveFormationOutcomeLikeCpp>,
+    pub personal_phase_unregister: PersonalPhaseUnregisterTrackedObjectOutcomeLikeCpp,
+    pub visibility_on_destroy: RemoveFromMapVisibilityOnDestroyOutcomeLikeCpp,
     pub object: Option<WorldObject>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureRemoveFormationOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub spawn_id: SpawnId,
+    pub leader_spawn_id: Option<SpawnId>,
+    pub had_group: bool,
+    pub removed_member: bool,
+    pub removed_group: bool,
+    pub remaining_members: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5182,6 +11400,25 @@ pub struct NearbyCellGuids {
     pub grid: GridObjectGuids,
     pub visited_cells: usize,
 }
+
+impl PartialEq for NearbyCellGuids {
+    fn eq(&self, other: &Self) -> bool {
+        self.visited_cells == other.visited_cells
+            && self.world.players == other.world.players
+            && self.world.creatures == other.world.creatures
+            && self.world.corpses == other.world.corpses
+            && self.world.dynamic_objects == other.world.dynamic_objects
+            && self.grid.gameobjects == other.grid.gameobjects
+            && self.grid.creatures == other.grid.creatures
+            && self.grid.dynamic_objects == other.grid.dynamic_objects
+            && self.grid.corpses == other.grid.corpses
+            && self.grid.area_triggers == other.grid.area_triggers
+            && self.grid.scene_objects == other.grid.scene_objects
+            && self.grid.conversations == other.grid.conversations
+    }
+}
+
+impl Eq for NearbyCellGuids {}
 
 impl NearbyCellGuids {
     pub fn is_empty(&self) -> bool {
@@ -5266,28 +11503,42 @@ impl PlayerRelocationVisibilityPlan {
         previous_client_guids: impl IntoIterator<Item = ObjectGuid>,
         nearby: &NearbyCellGuids,
         relocated_for_ai: bool,
+        player_seers_needing_notify: impl IntoIterator<Item = ObjectGuid>,
+        creatures_needing_notify: impl IntoIterator<Item = ObjectGuid>,
     ) -> Self {
+        let player_seers_needing_notify: HashSet<_> =
+            player_seers_needing_notify.into_iter().collect();
+        let creatures_needing_notify: HashSet<_> = creatures_needing_notify.into_iter().collect();
         let visible_guids = nearby.all_guids();
         let mut out_of_range_guids: HashSet<_> = previous_client_guids.into_iter().collect();
         out_of_range_guids.remove(&player_guid);
 
-        let mut reciprocal_player_updates = HashSet::new();
-        let mut ai_relocation_checks = Vec::new();
         for guid in &visible_guids {
             out_of_range_guids.remove(guid);
+        }
 
-            if guid.is_player() && *guid != player_guid {
+        let mut reciprocal_player_updates = HashSet::new();
+        for guid in &nearby.world.players {
+            if *guid != player_guid && !player_seers_needing_notify.contains(guid) {
                 reciprocal_player_updates.insert(*guid);
-            } else if relocated_for_ai && guid.is_any_type_creature() {
-                ai_relocation_checks.push((*guid, player_guid));
             }
         }
 
         for guid in &out_of_range_guids {
-            if guid.is_player() {
+            if guid.is_player() && !player_seers_needing_notify.contains(guid) {
                 reciprocal_player_updates.insert(*guid);
             }
         }
+
+        let ai_relocation_checks = if relocated_for_ai {
+            nearby_creature_guids_excluding(nearby, player_guid)
+                .into_iter()
+                .filter(|guid| !creatures_needing_notify.contains(guid))
+                .map(|guid| (guid, player_guid))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         Self {
             visible_guids,
@@ -5421,7 +11672,7 @@ pub struct DelayedCreatureRelocationContext {
     pub source_creature_alive: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DelayedUnitRelocationVisibilityPlans {
     pub creature_plans: Vec<CreatureDelayedRelocationVisibilityPlan>,
     pub player_plans: Vec<PlayerDelayedRelocationVisibilityPlan>,
@@ -5430,7 +11681,7 @@ pub struct DelayedUnitRelocationVisibilityPlans {
     pub missing_player_contexts: Vec<ObjectGuid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatureDelayedRelocationVisibilityPlan {
     pub creature_guid: ObjectGuid,
     pub cell_coord: CellCoord,
@@ -5438,7 +11689,7 @@ pub struct CreatureDelayedRelocationVisibilityPlan {
     pub visibility_plan: CreatureRelocationVisibilityPlan,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerDelayedRelocationVisibilityPlan {
     pub player_guid: ObjectGuid,
     pub viewpoint_guid: ObjectGuid,
@@ -5515,6 +11766,7 @@ pub struct RelocationNotifyProcessPlan {
 pub struct ProcessRelocationNotifiesOutcome {
     pub process_plan: RelocationNotifyProcessPlan,
     pub delayed_plan: DelayedUnitRelocationForCellsPlan,
+    pub visibility_plans: DelayedUnitRelocationVisibilityPlans,
     pub reset_outcome: ResetNotifyFlagsOutcome,
 }
 
@@ -5525,11 +11777,70 @@ pub struct ResetNotifyFlagsOutcome {
     pub missing_guids: Vec<ObjectGuid>,
 }
 
+/// C++ `MapObjectCellMoveState` (`MapObject.h:28-33`) represented for
+/// map-owned delayed cell/grid move-list state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapObjectCellMoveState {
+pub enum MapObjectCellMoveStateLikeCpp {
     None,
     Active,
     Inactive,
+}
+
+pub type MapObjectCellMoveState = MapObjectCellMoveStateLikeCpp;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapObjectMoveListFamilyLikeCpp {
+    Creature,
+    GameObject,
+    DynamicObject,
+    AreaTrigger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PendingCellMoveLikeCpp {
+    pub state: MapObjectCellMoveStateLikeCpp,
+    pub new_position: Position,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddObjectToMoveListOutcomeLikeCpp {
+    Queued,
+    UpdatedExisting,
+    LockedIgnored,
+    MissingOrStale,
+    WrongKind { actual: AccessorObjectKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveObjectFromMoveListOutcomeLikeCpp {
+    MarkedInactive,
+    AlreadyInactive,
+    NotQueued,
+    LockedIgnored,
+    MissingOrStale,
+    WrongKind { actual: AccessorObjectKind },
+}
+
+/// Drain summary for C++ `Map::MoveAll*InMoveList` (`Map.cpp:1239-1416`).
+/// This is a map-owned seam only: it does not claim UpdatePositionData,
+/// visibility fanout, AfterRelocation, respawn relocation, Pet::Remove,
+/// dynamic tree, scripts/AI, ObjectAccessor, or session packet runtime.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveListDrainSummaryLikeCpp {
+    pub family: Option<MapObjectMoveListFamilyLikeCpp>,
+    pub processed: usize,
+    pub relocated: usize,
+    pub inactive_reset: usize,
+    pub not_in_world: usize,
+    pub missing_or_stale: usize,
+    pub wrong_kind: usize,
+    pub blocked_by_unloaded_grid: usize,
+    pub remove_list_queued: usize,
+    pub pet_remove_requested: usize,
+    pub respawn_relocation_unsupported: usize,
+    pub failed_invalid_position: usize,
+    pub failed_store: usize,
+    pub locked_ignored: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -5560,6 +11871,36 @@ pub struct MapObjectMoveListPlan {
 
 fn is_active_object_like_cpp(kind: AccessorObjectKind, object: &WorldObject) -> bool {
     kind == AccessorObjectKind::Player || object.is_active()
+}
+
+fn remove_from_map_in_world_eligible_type_like_cpp(kind: AccessorObjectKind) -> bool {
+    matches!(
+        kind,
+        AccessorObjectKind::Player
+            | AccessorObjectKind::Creature
+            | AccessorObjectKind::Pet
+            | AccessorObjectKind::GameObject
+            | AccessorObjectKind::Transport
+    )
+}
+
+fn move_list_family_accepts_kind_like_cpp(
+    family: MapObjectMoveListFamilyLikeCpp,
+    kind: AccessorObjectKind,
+) -> bool {
+    match family {
+        MapObjectMoveListFamilyLikeCpp::Creature => {
+            matches!(kind, AccessorObjectKind::Creature | AccessorObjectKind::Pet)
+        }
+        MapObjectMoveListFamilyLikeCpp::GameObject => {
+            matches!(
+                kind,
+                AccessorObjectKind::GameObject | AccessorObjectKind::Transport
+            )
+        }
+        MapObjectMoveListFamilyLikeCpp::DynamicObject => kind == AccessorObjectKind::DynamicObject,
+        MapObjectMoveListFamilyLikeCpp::AreaTrigger => kind == AccessorObjectKind::AreaTrigger,
+    }
 }
 
 fn push_in_world_guids<Terrain, Lifecycle>(
@@ -6109,8 +12450,14 @@ mod tests {
     use wow_constants::{DeathState, TypeId, TypeMask};
     use wow_core::{ObjectGuid, Position, guid::HighGuid};
     use wow_entities::{
-        AccessorObjectRef, Creature, GameObject, ObjectAccessor, ObjectNotifyFlags, Player,
+        AccessorObjectRef, AppliedAuraRef, Creature, CreatureAddToWorldVehicleResetContextLikeCpp,
+        CreatureFormationInfoLikeCpp, GameObject, GameObjectLootSource, GameObjectOwnedLoot,
+        GooberUseSource, ObjectAccessor, ObjectNotifyFlags, Player,
+        SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP, Transport, VehicleAccessory,
+        VehicleSeatAddon, VehicleSeatInfo, VehicleSpellImmunity, VehicleSpellImmunityKind,
     };
+
+    const GO_FLAG_MAP_OBJECT: u32 = 0x0010_0000;
 
     #[derive(Debug, Default)]
     struct RecordingTerrain {
@@ -6152,6 +12499,2175 @@ mod tests {
         ) -> f32 {
             INVALID_HEIGHT
         }
+    }
+
+    fn script_guid(counter: i64) -> ObjectGuid {
+        ObjectGuid::create_player(1, counter)
+    }
+
+    fn dynamic_model_key(counter: i64) -> RepresentedGameObjectModelKeyLikeCpp {
+        RepresentedGameObjectModelKeyLikeCpp {
+            owner_guid: guid(HighGuid::GameObject, counter),
+        }
+    }
+
+    #[test]
+    fn dynamic_tree_update_empty_tree_returns_before_timer_or_balance_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.mark_dynamic_tree_unbalanced_for_tests_like_cpp(3);
+
+        let summary = map.update_dynamic_tree_like_cpp(250);
+
+        assert_eq!(summary.diff_ms, 250);
+        assert!(summary.empty);
+        assert_eq!(summary.timer_before_ms, 200);
+        assert_eq!(summary.timer_after_ms, 200);
+        assert!(!summary.timer_passed);
+        assert_eq!(summary.timer_reset_to_ms, None);
+        assert_eq!(summary.unbalanced_before, 3);
+        assert!(!summary.balanced);
+        assert_eq!(summary.unbalanced_after, 3);
+
+        let next = map.update_dynamic_tree_like_cpp(50);
+        assert_eq!(next.timer_before_ms, 200);
+        assert_eq!(next.unbalanced_before, 3);
+    }
+
+    #[test]
+    fn dynamic_tree_update_non_empty_clean_tree_consumes_timer_and_resets_without_balance_like_cpp()
+    {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.insert_gameobject_model_like_cpp(dynamic_model_key(1));
+        map.mark_dynamic_tree_unbalanced_for_tests_like_cpp(0);
+
+        let first = map.update_dynamic_tree_like_cpp(50);
+        assert!(!first.empty);
+        assert_eq!(first.timer_before_ms, 200);
+        assert_eq!(first.timer_after_ms, 150);
+        assert!(!first.timer_passed);
+        assert_eq!(first.timer_reset_to_ms, None);
+        assert_eq!(first.unbalanced_before, 0);
+        assert!(!first.balanced);
+        assert_eq!(first.unbalanced_after, 0);
+
+        let second = map.update_dynamic_tree_like_cpp(150);
+        assert_eq!(second.timer_before_ms, 150);
+        assert_eq!(second.timer_after_ms, 200);
+        assert!(second.timer_passed);
+        assert_eq!(second.timer_reset_to_ms, Some(200));
+        assert_eq!(second.unbalanced_before, 0);
+        assert!(!second.balanced);
+        assert_eq!(second.unbalanced_after, 0);
+    }
+
+    #[test]
+    fn dynamic_tree_update_non_empty_unbalanced_tree_balances_when_timer_passes_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.insert_gameobject_model_like_cpp(dynamic_model_key(1));
+        map.insert_gameobject_model_like_cpp(dynamic_model_key(2));
+
+        let first = map.update_dynamic_tree_like_cpp(199);
+        assert_eq!(first.timer_before_ms, 200);
+        assert_eq!(first.timer_after_ms, 1);
+        assert!(!first.timer_passed);
+        assert_eq!(first.unbalanced_before, 2);
+        assert!(!first.balanced);
+        assert_eq!(first.unbalanced_after, 2);
+
+        let second = map.update_dynamic_tree_like_cpp(1);
+        assert_eq!(second.timer_before_ms, 1);
+        assert_eq!(second.timer_after_ms, 200);
+        assert!(second.timer_passed);
+        assert_eq!(second.timer_reset_to_ms, Some(200));
+        assert_eq!(second.unbalanced_before, 2);
+        assert!(second.balanced);
+        assert_eq!(second.unbalanced_after, 0);
+
+        let third = map.update_dynamic_tree_like_cpp(200);
+        assert_eq!(third.unbalanced_before, 0);
+        assert!(!third.balanced);
+        assert_eq!(third.unbalanced_after, 0);
+    }
+
+    #[test]
+    fn dynamic_tree_insert_first_model_makes_tree_non_empty_and_update_consumes_timer_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let key = dynamic_model_key(45001);
+
+        let inserted = map.insert_gameobject_model_like_cpp(key);
+        assert_eq!(
+            inserted.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert_eq!(inserted.model_count_before, 0);
+        assert_eq!(inserted.model_count_after, 1);
+        assert_eq!(inserted.unbalanced_before, 0);
+        assert_eq!(inserted.unbalanced_after, 1);
+        assert!(map.contains_gameobject_model_like_cpp(key));
+
+        let summary = map.update_dynamic_tree_like_cpp(50);
+        assert!(!summary.empty);
+        assert_eq!(summary.timer_before_ms, 200);
+        assert_eq!(summary.timer_after_ms, 150);
+        assert!(!summary.timer_passed);
+        assert_eq!(summary.unbalanced_before, 1);
+        assert_eq!(summary.unbalanced_after, 1);
+    }
+
+    #[test]
+    fn dynamic_tree_duplicate_insert_does_not_double_count_or_increment_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let key = dynamic_model_key(45002);
+
+        let first = map.insert_gameobject_model_like_cpp(key);
+        let duplicate = map.insert_gameobject_model_like_cpp(key);
+
+        assert_eq!(
+            first.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert_eq!(
+            duplicate.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::AlreadyPresent
+        );
+        assert_eq!(duplicate.model_count_before, 1);
+        assert_eq!(duplicate.model_count_after, 1);
+        assert_eq!(duplicate.unbalanced_before, 1);
+        assert_eq!(duplicate.unbalanced_after, 1);
+    }
+
+    #[test]
+    fn dynamic_tree_remove_contained_model_empties_tree_and_next_update_early_returns_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let key = dynamic_model_key(45003);
+        map.insert_gameobject_model_like_cpp(key);
+
+        let removed = map.remove_gameobject_model_like_cpp(key);
+        assert_eq!(
+            removed.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(removed.model_count_before, 1);
+        assert_eq!(removed.model_count_after, 0);
+        assert_eq!(removed.unbalanced_before, 1);
+        assert_eq!(removed.unbalanced_after, 2);
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+
+        let summary = map.update_dynamic_tree_like_cpp(250);
+        assert!(summary.empty);
+        assert_eq!(summary.timer_before_ms, 200);
+        assert_eq!(summary.timer_after_ms, 200);
+        assert!(!summary.timer_passed);
+        assert_eq!(summary.unbalanced_before, 2);
+        assert_eq!(summary.unbalanced_after, 2);
+    }
+
+    #[test]
+    fn dynamic_tree_missing_remove_is_noop_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let key = dynamic_model_key(45004);
+
+        let missing = map.remove_gameobject_model_like_cpp(key);
+
+        assert_eq!(
+            missing.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Missing
+        );
+        assert_eq!(missing.model_count_before, 0);
+        assert_eq!(missing.model_count_after, 0);
+        assert_eq!(missing.unbalanced_before, 0);
+        assert_eq!(missing.unbalanced_after, 0);
+    }
+
+    #[test]
+    fn dynamic_tree_contains_reflects_insert_and_remove_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let key = dynamic_model_key(45005);
+
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        map.insert_gameobject_model_like_cpp(key);
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        map.remove_gameobject_model_like_cpp(key);
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_consumes_explicit_model_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45101, 4510101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let insert = outcome
+            .gameobject_model_insert
+            .expect("explicit represented model should insert dynamic-tree key");
+        assert_eq!(
+            insert.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert_eq!(insert.model_count_before, 0);
+        assert_eq!(insert.model_count_after, 1);
+        assert_eq!(insert.unbalanced_before, 0);
+        assert_eq!(insert.unbalanced_after, 1);
+        let collision = outcome
+            .gameobject_collision_enable
+            .expect("represented model should record EnableCollision evidence");
+        assert!(collision.represented_model_present);
+        assert_eq!(collision.requested_enable, false);
+        assert_eq!(collision.previous_collision_enabled, None);
+        assert_eq!(collision.new_collision_enabled, Some(false));
+        assert!(map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn add_to_map_exact_gameobject_preinserts_canonical_store_and_spawn_index_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(47901, 4790101);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            outcome.gameobject_store_inserted_before_add_to_world,
+            Some(true)
+        );
+        assert_eq!(
+            outcome.gameobject_spawn_indexed_before_add_to_world,
+            Some(true)
+        );
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert!(outcome.gameobject_collision_enable.is_some());
+        assert!(outcome.add_to_map_tail.is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some()
+        );
+        assert!(
+            map.gameobject_spawn_id_store_guids_like_cpp(47901)
+                .contains(&guid)
+        );
+    }
+
+    #[test]
+    fn add_to_map_exact_gameobject_model_collision_and_world_state_mutate_canonical_record_like_cpp()
+     {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(47902, 4790201);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_state(GoState::Ready);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let canonical = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(canonical.world().object().is_in_world());
+        assert!(!canonical.world().object().is_new_object());
+        assert_eq!(
+            canonical.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+    }
+
+    #[test]
+    fn active_non_player_add_remove_gameobject_updates_set_and_unload_lock_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(48501, 4850101);
+        let guid = gameobject.world().guid();
+        let respawn_position = gameobject.stationary_position();
+        let respawn_cell = Cell::from_world(respawn_position.x, respawn_position.y);
+        let respawn_grid = GridCoord::new(respawn_cell.grid_x(), respawn_cell.grid_y());
+        map.ensure_grid_loaded(&cell_from_grid_center(respawn_grid));
+        gameobject.world_mut().set_active(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+
+        let add = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        let add_active = add
+            .add_to_map_tail
+            .unwrap()
+            .add_to_active
+            .expect("active exact typed GameObject should consume AddToActive seam");
+
+        assert_eq!(
+            add_active.status,
+            ActiveNonPlayerMutationStatusLikeCpp::Mutated
+        );
+        assert!(add_active.inserted_in_active_set);
+        assert!(map.is_active_non_player_like_cpp(guid));
+        assert_eq!(map.active_non_players_count_like_cpp(), 1);
+        let add_lock = add_active.unload_lock.unwrap();
+        assert_eq!(add_lock.spawn_id, 48501);
+        assert_eq!(add_lock.respawn_grid, Some(respawn_grid));
+        assert!(add_lock.lock_incremented);
+        assert_eq!(
+            map.get_ngrid(respawn_grid)
+                .unwrap()
+                .info()
+                .unload_active_lock_count(),
+            1
+        );
+
+        let remove = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let remove_active = remove
+            .remove_from_active
+            .expect("active exact typed GameObject should consume RemoveFromActive seam");
+        assert!(remove_active.removed_from_active_set);
+        assert!(!map.is_active_non_player_like_cpp(guid));
+        assert_eq!(map.active_non_players_count_like_cpp(), 0);
+        assert_eq!(
+            map.get_ngrid(respawn_grid)
+                .unwrap()
+                .info()
+                .unload_active_lock_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn active_non_player_add_remove_creature_updates_set_and_unload_lock_like_cpp() {
+        let mut map = test_map();
+        let respawn_position = Position::xyz(1.0, 2.0, 3.0);
+        let respawn_cell = Cell::from_world(respawn_position.x, respawn_position.y);
+        let respawn_grid = GridCoord::new(respawn_cell.grid_x(), respawn_cell.grid_y());
+        map.ensure_grid_loaded(&cell_from_grid_center(respawn_grid));
+        let mut creature = test_creature_for_spawn(48502, 4850201, true);
+        let guid = creature.guid();
+        creature.set_ai_home_position(respawn_position);
+        creature.unit_mut().world_mut().set_active(true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+
+        let add = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let add_active = add
+            .add_to_map_tail
+            .unwrap()
+            .add_to_active
+            .expect("active exact typed Creature should consume AddToActive seam");
+
+        assert_eq!(
+            add_active.status,
+            ActiveNonPlayerMutationStatusLikeCpp::Mutated
+        );
+        assert!(add_active.inserted_in_active_set);
+        assert_eq!(
+            add_active.unload_lock.unwrap().respawn_grid,
+            Some(respawn_grid)
+        );
+        assert!(map.is_active_non_player_like_cpp(guid));
+        assert_eq!(
+            map.get_ngrid(respawn_grid)
+                .unwrap()
+                .info()
+                .unload_active_lock_count(),
+            1
+        );
+
+        let remove = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let remove_active = remove.remove_from_active.unwrap();
+        assert!(remove_active.removed_from_active_set);
+        assert_eq!(
+            remove_active.unload_lock.unwrap().respawn_grid,
+            Some(respawn_grid)
+        );
+        assert!(!map.is_active_non_player_like_cpp(guid));
+        assert_eq!(
+            map.get_ngrid(respawn_grid)
+                .unwrap()
+                .info()
+                .unload_active_lock_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn active_non_player_zero_spawn_mutates_set_without_unload_lock_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(0, 4850301);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().set_active(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+
+        let add = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        let add_active = add.add_to_map_tail.unwrap().add_to_active.unwrap();
+        assert!(add_active.inserted_in_active_set);
+        assert!(add_active.spawn_id_zero_or_unsupported);
+        assert!(add_active.unload_lock.is_none());
+        assert!(map.is_active_non_player_like_cpp(guid));
+
+        let remove = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let remove_active = remove.remove_from_active.unwrap();
+        assert!(remove_active.removed_from_active_set);
+        assert!(remove_active.spawn_id_zero_or_unsupported);
+        assert!(remove_active.unload_lock.is_none());
+        assert!(!map.is_active_non_player_like_cpp(guid));
+    }
+
+    #[test]
+    fn active_non_player_active_objects_near_grid_uses_real_active_set_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(48504, 4850401);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().set_active(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let object_cell = Cell::from_world(
+            gameobject.world().position().x,
+            gameobject.world().position().y,
+        );
+        let object_grid = GridCoord::new(object_cell.grid_x(), object_cell.grid_y());
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        map.unmark_active_cell(object_cell.cell_coord());
+        let grid = NGrid::from_coords(
+            object_grid.x_coord as i32,
+            object_grid.y_coord as i32,
+            1000,
+            true,
+        );
+
+        assert!(map.active_objects_near_grid(&grid));
+        let remove = map.remove_from_map_like_cpp(guid, true).unwrap();
+        assert!(remove.remove_from_active.unwrap().removed_from_active_set);
+        assert!(!map.active_objects_near_grid(&grid));
+
+        let mut stale_map = test_map();
+        let mut stale_gameobject = test_gameobject_for_spawn(48504, 4850402);
+        stale_gameobject.world_mut().set_active(true);
+        stale_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let stale_guid = stale_gameobject.world().guid();
+        stale_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(stale_gameobject).unwrap(),
+            )
+            .unwrap();
+        stale_map.unmark_active_cell(object_cell.cell_coord());
+        stale_map.active_non_players_like_cpp.remove(&stale_guid);
+        assert!(!stale_map.active_objects_near_grid(&grid));
+    }
+
+    #[test]
+    fn active_non_player_visit_sources_use_real_set_and_filter_stale_like_cpp() {
+        let mut map = test_map();
+        let mut active = test_gameobject_for_spawn(48505, 4850501);
+        let active_guid = active.world().guid();
+        active.world_mut().set_active(true);
+        active.world_mut().object_mut().remove_from_world();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(active).unwrap(),
+        )
+        .unwrap();
+
+        let mut stale = test_gameobject_for_spawn(48505, 4850502);
+        let stale_guid = stale.world().guid();
+        stale.world_mut().set_active(true);
+        stale.world_mut().object_mut().remove_from_world();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(stale).unwrap())
+            .unwrap();
+        map.active_non_players_like_cpp.remove(&stale_guid);
+        map.active_non_players_like_cpp
+            .insert(guid(HighGuid::GameObject, 4850503));
+
+        let active_sources = map.represented_active_non_player_sources_like_cpp();
+        assert_eq!(active_sources, vec![active_guid]);
+        let plan = map.map_update_visit_plan_like_cpp(
+            std::iter::empty::<MapUpdatePlayerSources>(),
+            active_sources,
+            std::iter::empty::<ObjectGuid>(),
+            1,
+        );
+        assert!(plan.process_relocation_notifies);
+        assert_eq!(plan.nearby_visit_centers, vec![active_guid]);
+    }
+
+    #[test]
+    fn map_grid_state_delayed_helper_active_expired_moves_to_idle_and_stops_like_cpp() {
+        let mut map = test_map();
+        let position = Position::xyz(3_000.0, 3_000.0, 0.0);
+        assert!(map.load_grid(position.x, position.y));
+        let cell = Cell::from_world(position.x, position.y);
+        let coord = GridCoord::new(cell.grid_x(), cell.grid_y());
+        let grid = map.get_ngrid_mut(coord).unwrap();
+        grid.set_state(GridStateKind::Active);
+        grid.info_mut().reset_time_tracker(1);
+
+        let summary = map.update_loaded_grid_states_like_cpp(1);
+
+        assert_eq!(summary.diff_ms, 1);
+        assert_eq!(summary.visited, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(summary.active_to_idle, 1);
+        assert_eq!(summary.unloaded, 0);
+        assert_eq!(summary.missing_after_snapshot, 0);
+        assert_eq!(map.get_ngrid(coord).unwrap().state(), GridStateKind::Idle);
+        assert_eq!(map.lifecycle().stops, 1);
+    }
+
+    #[test]
+    fn map_grid_state_delayed_helper_removal_lock_and_active_near_defer_unload_like_cpp() {
+        let mut locked_map = test_map();
+        let locked_position = Position::xyz(3_100.0, 3_100.0, 0.0);
+        assert!(locked_map.load_grid(locked_position.x, locked_position.y));
+        let locked_cell = Cell::from_world(locked_position.x, locked_position.y);
+        let locked_coord = GridCoord::new(locked_cell.grid_x(), locked_cell.grid_y());
+        let locked_grid = locked_map.get_ngrid_mut(locked_coord).unwrap();
+        locked_grid.set_state(GridStateKind::Removal);
+        locked_grid.info_mut().reset_time_tracker(1);
+        locked_grid.info_mut().set_unload_explicit_lock(true);
+
+        let locked_summary = locked_map.update_loaded_grid_states_like_cpp(1);
+
+        assert_eq!(locked_summary.visited, 1);
+        assert_eq!(locked_summary.updated, 1);
+        assert_eq!(locked_summary.unloaded, 0);
+        assert_eq!(locked_summary.removal_deferred_or_reset, 1);
+        assert_eq!(
+            locked_map.get_ngrid(locked_coord).unwrap().state(),
+            GridStateKind::Removal
+        );
+
+        let mut active_near_map = test_map();
+        let active_position = Position::xyz(3_200.0, 3_200.0, 0.0);
+        assert!(active_near_map.load_grid(active_position.x, active_position.y));
+        let active_cell = Cell::from_world(active_position.x, active_position.y);
+        let active_coord = GridCoord::new(active_cell.grid_x(), active_cell.grid_y());
+        let active_grid = active_near_map.get_ngrid_mut(active_coord).unwrap();
+        active_grid.set_state(GridStateKind::Removal);
+        active_grid.info_mut().reset_time_tracker(1);
+        active_near_map.mark_active_cell(active_cell.cell_coord());
+
+        let active_summary = active_near_map.update_loaded_grid_states_like_cpp(1);
+
+        assert_eq!(active_summary.visited, 1);
+        assert_eq!(active_summary.updated, 1);
+        assert_eq!(active_summary.unloaded, 0);
+        assert_eq!(active_summary.removal_deferred_or_reset, 1);
+        assert_eq!(
+            active_near_map.get_ngrid(active_coord).unwrap().state(),
+            GridStateKind::Removal
+        );
+    }
+
+    #[test]
+    fn add_to_map_gameobject_non_exact_paths_do_not_emit_typed_preinsert_evidence_like_cpp() {
+        let mut already_map = test_map();
+        let mut already_gameobject = test_gameobject_for_spawn(47903, 4790301);
+        already_gameobject.set_represented_gameobject_model_like_cpp(true);
+        let already_outcome = already_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(already_gameobject).unwrap(),
+            )
+            .unwrap();
+        assert!(already_outcome.already_in_world);
+        assert_eq!(
+            already_outcome.gameobject_store_inserted_before_add_to_world,
+            None
+        );
+        assert_eq!(
+            already_outcome.gameobject_spawn_indexed_before_add_to_world,
+            None
+        );
+
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4790302, 571, 7, false);
+        let generic_outcome = generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+        assert!(!generic_outcome.already_in_world);
+        assert_eq!(
+            generic_outcome.gameobject_store_inserted_before_add_to_world,
+            None
+        );
+        assert_eq!(
+            generic_outcome.gameobject_spawn_indexed_before_add_to_world,
+            None
+        );
+    }
+
+    #[test]
+    fn gameobject_zone_script_create_precedes_store_insert_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(48001, 4800101);
+        let guid = gameobject.world().guid();
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let zone_script = outcome
+            .gameobject_zone_script_create
+            .expect("exact typed GameObject should expose represented ZoneScript create boundary");
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback_boundary);
+        assert!(!zone_script.script_dispatch_represented);
+        assert!(!zone_script.object_store_present_before_callback);
+        assert!(!zone_script.spawn_index_present_before_callback);
+        assert_eq!(
+            outcome.gameobject_store_inserted_before_add_to_world,
+            Some(true)
+        );
+        assert_eq!(
+            outcome.gameobject_spawn_indexed_before_add_to_world,
+            Some(true)
+        );
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::game_object)
+                .is_some()
+        );
+        assert!(
+            map.gameobject_spawn_id_store_guids_like_cpp(48001)
+                .contains(&guid)
+        );
+    }
+
+    #[test]
+    fn gameobject_zone_script_create_skips_already_in_world_and_generic_paths_like_cpp() {
+        let mut already_map = test_map();
+        let already_gameobject = test_gameobject_for_spawn(48002, 4800201);
+        let already_outcome = already_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(already_gameobject).unwrap(),
+            )
+            .unwrap();
+        assert!(already_outcome.already_in_world);
+        assert!(already_outcome.gameobject_zone_script_create.is_none());
+
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4800202, 571, 7, false);
+        let generic_outcome = generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+        assert!(!generic_outcome.already_in_world);
+        assert!(generic_outcome.gameobject_zone_script_create.is_none());
+
+        let mut non_gameobject_map = test_map();
+        let mut creature = test_creature_for_spawn(48003, 4800301, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let non_gameobject = non_gameobject_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(non_gameobject.gameobject_zone_script_create.is_none());
+    }
+
+    #[test]
+    fn gameobject_zone_script_remove_snapshots_before_model_spawn_unindex_like_cpp() {
+        let mut map = test_map();
+        let spawn_id = 48101;
+        let mut gameobject = test_gameobject_for_spawn(spawn_id, 4810101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        assert!(map.map_object_record(guid).is_some());
+        assert!(
+            map.gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                .contains(&guid)
+        );
+        assert!(map.contains_gameobject_model_like_cpp(key));
+
+        let outcome = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let zone_script = outcome.gameobject_zone_script_remove.expect(
+            "exact typed in-world GameObject should expose represented ZoneScript remove boundary",
+        );
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback_boundary);
+        assert!(!zone_script.script_dispatch_represented);
+        assert!(zone_script.model_remove_pending_before_callback);
+        assert!(zone_script.spawn_index_present_before_callback);
+        assert!(outcome.gameobject_model_remove.is_some());
+        assert!(map.map_object_record(guid).is_none());
+        assert!(
+            map.gameobject_spawn_id_store_guids_like_cpp(spawn_id)
+                .is_empty()
+        );
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn gameobject_zone_script_remove_skips_generic_and_not_in_world_like_cpp() {
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4810201, 571, 7, false);
+        let generic_guid = generic_object.guid();
+        generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+
+        let generic_removed = generic_map
+            .remove_from_map_like_cpp(generic_guid, true)
+            .unwrap();
+
+        assert!(generic_removed.gameobject_zone_script_remove.is_none());
+
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_gameobject = test_gameobject_for_spawn(48102, 4810202);
+        let not_in_world_guid = not_in_world_gameobject.world().guid();
+        not_in_world_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(
+                MapObjectRecord::new_game_object(not_in_world_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let not_in_world_removed = not_in_world_map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+
+        assert!(not_in_world_removed.gameobject_zone_script_remove.is_none());
+    }
+
+    #[test]
+    fn gameobject_remove_from_owner_clears_owner_before_model_remove_like_cpp() {
+        let mut map = test_map();
+        let owner = test_player_for_viewpoint(4820101);
+        let owner_guid = owner.guid();
+        map.insert_map_object_record(MapObjectRecord::new_player(owner).unwrap())
+            .unwrap();
+
+        let mut gameobject = test_gameobject_for_spawn(48201, 4820102);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_owner_guid_like_cpp(owner_guid);
+        gameobject.set_spell_id(482001);
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        map.insert_gameobject_model_like_cpp(key);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let remove_owner = outcome
+            .gameobject_remove_from_owner
+            .expect("exact typed in-world GameObject should expose RemoveFromOwner boundary");
+
+        assert_eq!(remove_owner.guid, guid);
+        assert_eq!(remove_owner.owner_guid_before, owner_guid);
+        assert_eq!(remove_owner.owner_guid_after, ObjectGuid::EMPTY);
+        assert!(remove_owner.owner_found_as_unit_like);
+        assert!(remove_owner.cleared_owner);
+        assert_eq!(remove_owner.spell_id, 482001);
+        assert!(!remove_owner.unit_side_effects_represented);
+        assert!(!remove_owner.unit_owned_gameobject_list_removed);
+        assert!(!remove_owner.unit_object_slot_cleared);
+        assert!(!remove_owner.aura_cleanup_represented);
+        assert!(!remove_owner.cooldown_event_represented);
+        assert!(!remove_owner.creature_ai_callback_represented);
+        assert!(outcome.gameobject_model_remove.is_some());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn gameobject_remove_from_owner_clears_lost_owner_fallback_like_cpp() {
+        let mut map = test_map();
+        let missing_owner_guid = ObjectGuid::create_player(1, 4820201);
+        let mut gameobject = test_gameobject_for_spawn(48202, 4820202);
+        let guid = gameobject.world().guid();
+        gameobject.set_owner_guid_like_cpp(missing_owner_guid);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let remove_owner = outcome.gameobject_remove_from_owner.unwrap();
+
+        assert_eq!(remove_owner.owner_guid_before, missing_owner_guid);
+        assert_eq!(remove_owner.owner_guid_after, ObjectGuid::EMPTY);
+        assert!(!remove_owner.owner_found_as_unit_like);
+        assert!(remove_owner.cleared_owner);
+        assert!(!remove_owner.unit_side_effects_represented);
+    }
+
+    #[test]
+    fn gameobject_remove_from_owner_noops_empty_owner_generic_and_not_in_world_like_cpp() {
+        let mut empty_owner_map = test_map();
+        let empty_owner_gameobject = test_gameobject_for_spawn(48203, 4820301);
+        let empty_owner_guid = empty_owner_gameobject.world().guid();
+        empty_owner_map
+            .insert_map_object_record(
+                MapObjectRecord::new_game_object(empty_owner_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let empty_owner_removed = empty_owner_map
+            .remove_from_map_like_cpp(empty_owner_guid, true)
+            .unwrap();
+        let empty_owner = empty_owner_removed.gameobject_remove_from_owner.unwrap();
+        assert_eq!(empty_owner.owner_guid_before, ObjectGuid::EMPTY);
+        assert_eq!(empty_owner.owner_guid_after, ObjectGuid::EMPTY);
+        assert!(!empty_owner.owner_found_as_unit_like);
+        assert!(!empty_owner.cleared_owner);
+
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4820302, 571, 7, false);
+        let generic_guid = generic_object.guid();
+        generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+        let generic_removed = generic_map
+            .remove_from_map_like_cpp(generic_guid, true)
+            .unwrap();
+        assert!(generic_removed.gameobject_remove_from_owner.is_none());
+
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_gameobject = test_gameobject_for_spawn(48203, 4820303);
+        let not_in_world_guid = not_in_world_gameobject.world().guid();
+        not_in_world_gameobject.set_owner_guid_like_cpp(ObjectGuid::create_player(1, 4820304));
+        not_in_world_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(
+                MapObjectRecord::new_game_object(not_in_world_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let not_in_world_removed = not_in_world_map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+        assert!(not_in_world_removed.gameobject_remove_from_owner.is_none());
+    }
+
+    #[test]
+    fn gameobject_linked_trap_remove_runs_before_owner_store_extraction_like_cpp() {
+        let mut map = test_map();
+        let mut trap = test_gameobject_for_spawn(48301, 4830101);
+        let trap_guid = trap.world().guid();
+        trap.set_represented_gameobject_model_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+
+        let mut owner = test_gameobject_for_spawn(48302, 4830102);
+        let owner_guid = owner.world().guid();
+        owner.set_linked_trap_like_cpp(trap_guid);
+        owner.set_represented_gameobject_model_like_cpp(true);
+        let owner_model_key = RepresentedGameObjectModelKeyLikeCpp { owner_guid };
+        map.insert_gameobject_model_like_cpp(owner_model_key);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let outcome = map.remove_from_map_like_cpp(owner_guid, true).unwrap();
+        let linked_trap = outcome.gameobject_linked_trap_remove.expect(
+            "exact typed in-world GameObject should expose linked-trap RemoveFromWorld evidence",
+        );
+
+        assert_eq!(linked_trap.guid, owner_guid);
+        assert_eq!(linked_trap.linked_trap_guid, Some(trap_guid));
+        assert!(linked_trap.owner_present_before_linked_trap_remove);
+        assert!(linked_trap.linked_trap_removed);
+        assert!(!linked_trap.linked_trap_missing_or_self);
+        assert!(!linked_trap.linked_trap_cycle_guarded);
+        assert!(!linked_trap.despawn_or_unsummon_scheduler_represented);
+        assert!(!linked_trap.object_accessor_fanout_represented);
+        assert!(outcome.gameobject_model_remove.is_some());
+        assert!(map.map_object_record(owner_guid).is_none());
+        assert!(map.map_object_record(trap_guid).is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(owner_model_key));
+    }
+
+    #[test]
+    fn gameobject_linked_trap_remove_cycle_guard_allows_single_nested_remove_like_cpp() {
+        let mut map = test_map();
+        let mut owner = test_gameobject_for_spawn(48307, 4830401);
+        let owner_guid = owner.world().guid();
+        let mut trap = test_gameobject_for_spawn(48308, 4830402);
+        let trap_guid = trap.world().guid();
+
+        owner.set_linked_trap_like_cpp(trap_guid);
+        trap.set_linked_trap_like_cpp(owner_guid);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+
+        let outcome = map.remove_from_map_like_cpp(owner_guid, true).unwrap();
+        let linked_trap = outcome.gameobject_linked_trap_remove.expect(
+            "exact typed in-world GameObject should expose linked-trap RemoveFromWorld evidence",
+        );
+
+        assert_eq!(linked_trap.guid, owner_guid);
+        assert_eq!(linked_trap.linked_trap_guid, Some(trap_guid));
+        assert!(linked_trap.owner_present_before_linked_trap_remove);
+        assert!(linked_trap.linked_trap_removed);
+        assert!(!linked_trap.linked_trap_missing_or_self);
+        assert!(!linked_trap.linked_trap_cycle_guarded);
+        assert!(map.map_object_record(owner_guid).is_none());
+        assert!(map.map_object_record(trap_guid).is_none());
+    }
+
+    #[test]
+    fn gameobject_linked_trap_remove_noops_missing_self_and_empty_like_cpp() {
+        let mut missing_map = test_map();
+        let missing_trap_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 7, 0, 4830201);
+        let mut missing_owner = test_gameobject_for_spawn(48303, 4830202);
+        let missing_owner_guid = missing_owner.world().guid();
+        missing_owner.set_linked_trap_like_cpp(missing_trap_guid);
+        missing_map
+            .insert_map_object_record(MapObjectRecord::new_game_object(missing_owner).unwrap())
+            .unwrap();
+
+        let missing_outcome = missing_map
+            .remove_from_map_like_cpp(missing_owner_guid, true)
+            .unwrap();
+        let missing = missing_outcome.gameobject_linked_trap_remove.unwrap();
+        assert_eq!(missing.linked_trap_guid, Some(missing_trap_guid));
+        assert!(!missing.linked_trap_removed);
+        assert!(missing.linked_trap_missing_or_self);
+        assert!(!missing.linked_trap_cycle_guarded);
+        assert!(missing_map.map_object_record(missing_owner_guid).is_none());
+
+        let mut self_map = test_map();
+        let mut self_owner = test_gameobject_for_spawn(48304, 4830203);
+        let self_guid = self_owner.world().guid();
+        self_owner.set_linked_trap_like_cpp(self_guid);
+        self_map
+            .insert_map_object_record(MapObjectRecord::new_game_object(self_owner).unwrap())
+            .unwrap();
+
+        let self_outcome = self_map.remove_from_map_like_cpp(self_guid, true).unwrap();
+        let self_linked = self_outcome.gameobject_linked_trap_remove.unwrap();
+        assert_eq!(self_linked.linked_trap_guid, Some(self_guid));
+        assert!(!self_linked.linked_trap_removed);
+        assert!(self_linked.linked_trap_missing_or_self);
+        assert!(!self_linked.linked_trap_cycle_guarded);
+        assert!(self_map.map_object_record(self_guid).is_none());
+
+        let mut empty_map = test_map();
+        let empty_owner = test_gameobject_for_spawn(48305, 4830204);
+        let empty_guid = empty_owner.world().guid();
+        empty_map
+            .insert_map_object_record(MapObjectRecord::new_game_object(empty_owner).unwrap())
+            .unwrap();
+
+        let empty_outcome = empty_map
+            .remove_from_map_like_cpp(empty_guid, true)
+            .unwrap();
+        let empty = empty_outcome.gameobject_linked_trap_remove.unwrap();
+        assert_eq!(empty.linked_trap_guid, None);
+        assert!(!empty.linked_trap_removed);
+        assert!(empty.linked_trap_missing_or_self);
+        assert!(empty_map.map_object_record(empty_guid).is_none());
+    }
+
+    #[test]
+    fn gameobject_linked_trap_remove_skips_not_in_world_and_generic_paths_like_cpp() {
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_gameobject = test_gameobject_for_spawn(48306, 4830301);
+        let not_in_world_guid = not_in_world_gameobject.world().guid();
+        not_in_world_gameobject.set_linked_trap_like_cpp(ObjectGuid::create_world_object(
+            HighGuid::GameObject,
+            0,
+            1,
+            571,
+            7,
+            0,
+            4830302,
+        ));
+        not_in_world_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(
+                MapObjectRecord::new_game_object(not_in_world_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let not_in_world_removed = not_in_world_map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+        assert!(not_in_world_removed.gameobject_linked_trap_remove.is_none());
+
+        let mut generic_map = test_map();
+        let generic_object =
+            world_object_with_counter(HighGuid::GameObject, 4830303, 571, 7, false);
+        let generic_guid = generic_object.guid();
+        generic_map
+            .add_to_map_like_cpp(AccessorObjectKind::GameObject, generic_object)
+            .unwrap();
+
+        let generic_removed = generic_map
+            .remove_from_map_like_cpp(generic_guid, true)
+            .unwrap();
+        assert!(generic_removed.gameobject_linked_trap_remove.is_none());
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_without_model_evidence_leaves_tree_empty_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45102, 4510201);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.world_mut().object_mut().remove_from_world();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert!(outcome.gameobject_model_insert.is_none());
+        assert!(outcome.gameobject_collision_enable.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let summary = map.update_dynamic_tree_like_cpp(250);
+        assert!(summary.empty);
+        assert_eq!(summary.unbalanced_after, 0);
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_already_in_world_add_does_not_insert_model_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45103, 4510301);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.gameobject_model_insert.is_none());
+        assert!(outcome.gameobject_collision_enable.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_chest_ready_enables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45201, 4520101);
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_loot_state(LootState::Ready, None);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let collision = outcome.gameobject_collision_enable.unwrap();
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert_eq!(collision.requested_enable, true);
+        assert_eq!(collision.new_collision_enabled, Some(true));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_chest_non_ready_disables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45202, 4520201);
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_loot_state(LootState::Activated, None);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let collision = outcome.gameobject_collision_enable.unwrap();
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert_eq!(collision.requested_enable, false);
+        assert_eq!(collision.new_collision_enabled, Some(false));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_non_chest_ready_state_enables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45203, 4520301);
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_state(GoState::Ready);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let collision = outcome.gameobject_collision_enable.unwrap();
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert_eq!(collision.requested_enable, true);
+        assert_eq!(collision.new_collision_enabled, Some(true));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_add_non_chest_active_state_disables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45204, 4520401);
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        gameobject.set_go_state(GoState::Active);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let collision = outcome.gameobject_collision_enable.unwrap();
+        assert!(outcome.gameobject_model_insert.is_some());
+        assert_eq!(collision.requested_enable, false);
+        assert_eq!(collision.new_collision_enabled, Some(false));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_remove_consumes_contained_model_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45104, 4510401);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.world_mut().object_mut().remove_from_world();
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        assert!(map.contains_gameobject_model_like_cpp(key));
+
+        let outcome = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let remove = outcome
+            .gameobject_model_remove
+            .expect("contained represented model should be removed before final map removal");
+        assert_eq!(
+            remove.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(remove.model_count_before, 1);
+        assert_eq!(remove.model_count_after, 0);
+        assert_eq!(remove.unbalanced_before, 1);
+        assert_eq!(remove.unbalanced_after, 2);
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_remove_missing_key_is_guarded_noop_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45105, 4510501);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_represented_gameobject_model_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.mark_dynamic_tree_unbalanced_for_tests_like_cpp(5);
+
+        let outcome = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        assert!(outcome.gameobject_model_remove.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let summary = map.update_dynamic_tree_like_cpp(250);
+        assert!(summary.empty);
+        assert_eq!(summary.unbalanced_before, 5);
+        assert_eq!(summary.unbalanced_after, 5);
+    }
+
+    #[test]
+    fn dynamic_tree_transport_add_excludes_immediate_gameobject_model_insert_like_cpp() {
+        let mut map = test_map();
+        let mut transport = test_transport_for_update(4510601, false);
+        let guid = transport.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        transport
+            .game_object_mut()
+            .set_represented_gameobject_model_like_cpp(true);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_transport(transport).unwrap(),
+            )
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.gameobject_model_insert.is_none());
+        assert!(outcome.gameobject_collision_enable.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_removes_old_and_inserts_new_without_collision_like_cpp()
+    {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45301, 4530101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, true, false);
+
+        assert_eq!(outcome.status, GameObjectUpdateModelStatusLikeCpp::Updated);
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        let remove = outcome.old_model_remove.unwrap();
+        assert_eq!(
+            remove.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(remove.model_count_before, 1);
+        assert_eq!(remove.model_count_after, 0);
+        assert_eq!(remove.unbalanced_before, 1);
+        assert_eq!(remove.unbalanced_after, 2);
+        let insert = outcome.new_model_insert.unwrap();
+        assert_eq!(
+            insert.status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert_eq!(insert.model_count_before, 0);
+        assert_eq!(insert.model_count_after, 1);
+        assert_eq!(insert.unbalanced_before, 2);
+        assert_eq!(insert.unbalanced_after, 3);
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_to_no_model_removes_old_without_insert_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45302, 4530201);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, false, true);
+
+        assert_eq!(outcome.status, GameObjectUpdateModelStatusLikeCpp::Updated);
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        assert_eq!(
+            outcome.old_model_remove.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert!(outcome.new_model_insert.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(!gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_not_in_world_is_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45303, 4530301);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.update_gameobject_model_like_cpp(guid, false, false);
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateModelStatusLikeCpp::NotInWorld
+        );
+        assert!(outcome.old_model_present);
+        assert!(outcome.old_model_registered);
+        assert!(outcome.old_model_remove.is_none());
+        assert!(outcome.new_model_insert.is_none());
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            gameobject.data().flags & GO_FLAG_MAP_OBJECT,
+            GO_FLAG_MAP_OBJECT
+        );
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn dynamic_tree_gameobject_update_model_missing_and_wrong_kind_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4530401);
+        let creature = test_creature_for_spawn(45304, 4530402, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4530403, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.update_gameobject_model_like_cpp(missing_guid, true, true);
+        let wrong_kind = map.update_gameobject_model_like_cpp(creature_guid, true, true);
+        let untyped = map.update_gameobject_model_like_cpp(untyped_guid, true, true);
+
+        assert_eq!(
+            missing.status,
+            GameObjectUpdateModelStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectUpdateModelStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectUpdateModelStatusLikeCpp::WrongKind
+        );
+        assert!(missing.new_model_insert.is_none());
+        assert!(wrong_kind.new_model_insert.is_none());
+        assert!(untyped.new_model_insert.is_none());
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_display_set_in_world_writes_field_then_updates_model_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45401, 4540101);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(111);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 777, true, false);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(111));
+        assert_eq!(outcome.new_display_id, Some(777));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::Updated
+        );
+        assert_eq!(
+            update_model.old_model_remove.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Removed
+        );
+        assert_eq!(
+            update_model.new_model_insert.unwrap().status,
+            DynamicMapTreeModelMutationStatusLikeCpp::Inserted
+        );
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 777);
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(!gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn gameobject_display_set_not_in_world_preserves_old_model_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45402, 4540201);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(222);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+        map.insert_gameobject_model_like_cpp(key);
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 888, false, false);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(222));
+        assert_eq!(outcome.new_display_id, Some(888));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::NotInWorld
+        );
+        assert!(update_model.old_model_present);
+        assert!(update_model.old_model_registered);
+        assert!(update_model.old_model_remove.is_none());
+        assert!(update_model.new_model_insert.is_none());
+        assert!(map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 888);
+        assert!(gameobject.has_represented_gameobject_model_like_cpp());
+        assert!(gameobject.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn gameobject_display_set_missing_wrong_kind_and_untyped_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4540301);
+        let creature = test_creature_for_spawn(45403, 4540302, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4540303, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.set_gameobject_display_id_like_cpp(missing_guid, 777, true, true);
+        let wrong_kind = map.set_gameobject_display_id_like_cpp(creature_guid, 777, true, true);
+        let untyped = map.set_gameobject_display_id_like_cpp(untyped_guid, 777, true, true);
+
+        assert_eq!(
+            missing.status,
+            GameObjectSetDisplayIdStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectSetDisplayIdStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectSetDisplayIdStatusLikeCpp::WrongKind
+        );
+        assert!(missing.update_model.is_none());
+        assert!(wrong_kind.update_model.is_none());
+        assert!(untyped.update_model.is_none());
+        assert_eq!(missing.previous_display_id, None);
+        assert_eq!(wrong_kind.previous_display_id, None);
+        assert_eq!(untyped.previous_display_id, None);
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_display_set_does_not_infer_model_from_nonzero_display_id_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45404, 4540401);
+        let guid = gameobject.world().guid();
+        let key = RepresentedGameObjectModelKeyLikeCpp { owner_guid: guid };
+        gameobject.set_display_id(0);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_display_id_like_cpp(guid, 999, false, true);
+
+        assert_eq!(outcome.status, GameObjectSetDisplayIdStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_display_id, Some(0));
+        assert_eq!(outcome.new_display_id, Some(999));
+        let update_model = outcome.update_model.unwrap();
+        assert_eq!(
+            update_model.status,
+            GameObjectUpdateModelStatusLikeCpp::Updated
+        );
+        assert!(!update_model.old_model_present);
+        assert!(update_model.old_model_remove.is_none());
+        assert!(update_model.new_model_insert.is_none());
+        assert!(!map.contains_gameobject_model_like_cpp(key));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().display_id, 999);
+        assert!(!gameobject.has_represented_gameobject_model_like_cpp());
+        assert_eq!(gameobject.data().flags & GO_FLAG_MAP_OBJECT, 0);
+    }
+
+    #[test]
+    fn gameobject_set_go_state_ready_enables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45501, 4550101);
+        let guid = gameobject.world().guid();
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_go_state_like_cpp(guid, GoState::Ready);
+
+        assert_eq!(outcome.status, GameObjectSetGoStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_state, Some(GoState::Active as i8));
+        assert_eq!(outcome.new_state, Some(GoState::Ready as i8));
+        assert!(outcome.represented_model_present);
+        assert!(!outcome.transport_type);
+        assert_eq!(outcome.in_world_for_collision_branch, Some(true));
+        let collision = outcome.collision_enable.unwrap();
+        assert_eq!(collision.requested_enable, true);
+        assert_eq!(collision.previous_collision_enabled, None);
+        assert_eq!(collision.new_collision_enabled, Some(true));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().state, GoState::Ready as i8);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_go_state_active_disables_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45502, 4550201);
+        let guid = gameobject.world().guid();
+        gameobject.set_go_state(GoState::Ready);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_go_state_like_cpp(guid, GoState::Active);
+
+        assert_eq!(outcome.status, GameObjectSetGoStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_state, Some(GoState::Ready as i8));
+        assert_eq!(outcome.new_state, Some(GoState::Active as i8));
+        assert_eq!(outcome.in_world_for_collision_branch, Some(true));
+        let collision = outcome.collision_enable.unwrap();
+        assert_eq!(collision.requested_enable, false);
+        assert_eq!(collision.previous_collision_enabled, Some(true));
+        assert_eq!(collision.new_collision_enabled, Some(false));
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().state, GoState::Active as i8);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_go_state_not_in_world_writes_state_without_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45503, 4550301);
+        let guid = gameobject.world().guid();
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        gameobject.world_mut().object_mut().remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_go_state_like_cpp(guid, GoState::Ready);
+
+        assert_eq!(outcome.status, GameObjectSetGoStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_state, Some(GoState::Active as i8));
+        assert_eq!(outcome.new_state, Some(GoState::Ready as i8));
+        assert!(outcome.represented_model_present);
+        assert!(!outcome.transport_type);
+        assert_eq!(outcome.in_world_for_collision_branch, Some(false));
+        assert!(outcome.collision_enable.is_none());
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().state, GoState::Ready as i8);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_go_state_transport_type_writes_state_without_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45504, 4550401);
+        let guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_TRANSPORT as u8);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(false);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_go_state_like_cpp(guid, GoState::Ready);
+
+        assert_eq!(outcome.status, GameObjectSetGoStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_state, Some(GoState::Active as i8));
+        assert_eq!(outcome.new_state, Some(GoState::Ready as i8));
+        assert!(outcome.represented_model_present);
+        assert!(outcome.transport_type);
+        assert_eq!(outcome.in_world_for_collision_branch, None);
+        assert!(outcome.collision_enable.is_none());
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().state, GoState::Ready as i8);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_go_state_map_obj_transport_writes_state_without_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45506, 4550601);
+        let guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_go_state_like_cpp(guid, GoState::Ready);
+
+        assert_eq!(outcome.status, GameObjectSetGoStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_state, Some(GoState::Active as i8));
+        assert_eq!(outcome.new_state, Some(GoState::Ready as i8));
+        assert!(outcome.represented_model_present);
+        assert!(outcome.transport_type);
+        assert_eq!(outcome.in_world_for_collision_branch, None);
+        assert!(outcome.collision_enable.is_none());
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.data().state, GoState::Ready as i8);
+        assert_eq!(
+            gameobject.data().type_id,
+            GAMEOBJECT_TYPE_MAP_OBJ_TRANSPORT as i8
+        );
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_go_state_missing_wrong_kind_and_untyped_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4550501);
+        let creature = test_creature_for_spawn(45505, 4550502, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4550503, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.set_gameobject_go_state_like_cpp(missing_guid, GoState::Ready);
+        let wrong_kind = map.set_gameobject_go_state_like_cpp(creature_guid, GoState::Ready);
+        let untyped = map.set_gameobject_go_state_like_cpp(untyped_guid, GoState::Ready);
+
+        assert_eq!(
+            missing.status,
+            GameObjectSetGoStateStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectSetGoStateStatusLikeCpp::WrongKind
+        );
+        assert_eq!(untyped.status, GameObjectSetGoStateStatusLikeCpp::WrongKind);
+        assert_eq!(missing.previous_state, None);
+        assert_eq!(wrong_kind.previous_state, None);
+        assert_eq!(untyped.previous_state, None);
+        assert!(missing.collision_enable.is_none());
+        assert!(wrong_kind.collision_enable.is_none());
+        assert!(untyped.collision_enable.is_none());
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_chest_activated_arms_restock_and_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45601, 4560101);
+        let go_guid = gameobject.world().guid();
+        let unit = guid(HighGuid::Player, 4560199);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.set_gameobject_loot_state_like_cpp(
+            go_guid,
+            LootState::Activated,
+            Some(unit),
+            1_000,
+            30,
+            true,
+        );
+
+        assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.previous_loot_state, Some(LootState::NotReady));
+        assert_eq!(outcome.new_loot_state, Some(LootState::Activated));
+        assert_eq!(outcome.new_loot_state_unit_guid, Some(unit));
+        assert!(outcome.ai_on_loot_state_changed_not_represented);
+        assert!(outcome.restock_armed);
+        assert_eq!(outcome.previous_restock_time, Some(0));
+        assert_eq!(outcome.new_restock_time, Some(1_030));
+        let collision = outcome.collision_enable.unwrap();
+        assert_eq!(collision.requested_enable, true);
+        assert_eq!(collision.new_collision_enabled, Some(true));
+        let gameobject = map
+            .map_object_record(go_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.restock_time(), 1_030);
+        assert_eq!(gameobject.loot_state_unit_guid(), unit);
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_restock_requires_changed_and_zero_previous_like_cpp() {
+        let mut map = test_map();
+        let mut unchanged = test_gameobject_for_spawn(45602, 4560201);
+        let unchanged_guid = unchanged.world().guid();
+        unchanged.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(unchanged).unwrap())
+            .unwrap();
+
+        let unchanged_outcome = map.set_gameobject_loot_state_like_cpp(
+            unchanged_guid,
+            LootState::Activated,
+            None,
+            2_000,
+            60,
+            false,
+        );
+        assert!(!unchanged_outcome.restock_armed);
+        assert_eq!(unchanged_outcome.new_restock_time, Some(0));
+
+        let mut already_restocking = test_gameobject_for_spawn(45603, 4560301);
+        let already_guid = already_restocking.world().guid();
+        already_restocking.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        already_restocking.set_restock_time_like_cpp(77);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(already_restocking).unwrap())
+            .unwrap();
+
+        let already_outcome = map.set_gameobject_loot_state_like_cpp(
+            already_guid,
+            LootState::Activated,
+            None,
+            2_000,
+            60,
+            true,
+        );
+        assert!(!already_outcome.restock_armed);
+        assert_eq!(already_outcome.previous_restock_time, Some(77));
+        assert_eq!(already_outcome.new_restock_time, Some(77));
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_door_writes_loot_but_preserves_collision_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(45604, 4560401);
+        let guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_DOOR as u8);
+        gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        gameobject.enable_represented_gameobject_collision_like_cpp(false);
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome =
+            map.set_gameobject_loot_state_like_cpp(guid, LootState::Ready, None, 3_000, 60, true);
+
+        assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+        assert_eq!(outcome.new_loot_state, Some(LootState::Ready));
+        assert!(outcome.door_type_early_return);
+        assert!(outcome.collision_enable.is_none());
+        let gameobject = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(gameobject.loot_state(), LootState::Ready);
+        assert_eq!(
+            gameobject.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_model_collision_condition_matches_cpp() {
+        let mut map = test_map();
+        let cases = [
+            (4560501, GoState::Active, LootState::Ready, true),
+            (4560502, GoState::Active, LootState::Activated, true),
+            (4560503, GoState::Active, LootState::JustDeactivated, true),
+            (4560504, GoState::Ready, LootState::Activated, false),
+        ];
+
+        for (counter, go_state, loot_state, expected_collision) in cases {
+            let mut gameobject = test_gameobject_for_spawn(counter as SpawnId, counter);
+            let guid = gameobject.world().guid();
+            gameobject.set_go_state(go_state);
+            gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+            gameobject.apply_represented_gameobject_model_creation_like_cpp(true, true);
+            map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+                .unwrap();
+
+            let outcome =
+                map.set_gameobject_loot_state_like_cpp(guid, loot_state, None, 4_000, 0, true);
+
+            assert_eq!(outcome.status, GameObjectSetLootStateStatusLikeCpp::Updated);
+            let collision = outcome.collision_enable.unwrap();
+            assert_eq!(collision.requested_enable, expected_collision);
+            assert_eq!(collision.new_collision_enabled, Some(expected_collision));
+        }
+    }
+
+    #[test]
+    fn gameobject_set_loot_state_missing_wrong_kind_and_untyped_are_no_mutation_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::GameObject, 4560601);
+        let creature = test_creature_for_spawn(45606, 4560602, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped = world_object_with_counter(HighGuid::GameObject, 4560603, 571, 7, true);
+        let untyped_guid = untyped.guid();
+        map.insert_map_object(AccessorObjectKind::GameObject, untyped)
+            .unwrap();
+
+        let missing = map.set_gameobject_loot_state_like_cpp(
+            missing_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+        let wrong_kind = map.set_gameobject_loot_state_like_cpp(
+            creature_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+        let untyped = map.set_gameobject_loot_state_like_cpp(
+            untyped_guid,
+            LootState::Ready,
+            None,
+            5_000,
+            10,
+            true,
+        );
+
+        assert_eq!(
+            missing.status,
+            GameObjectSetLootStateStatusLikeCpp::MissingGameObject
+        );
+        assert_eq!(
+            wrong_kind.status,
+            GameObjectSetLootStateStatusLikeCpp::WrongKind
+        );
+        assert_eq!(
+            untyped.status,
+            GameObjectSetLootStateStatusLikeCpp::WrongKind
+        );
+        assert_eq!(missing.previous_loot_state, None);
+        assert_eq!(wrong_kind.previous_loot_state, None);
+        assert_eq!(untyped.previous_loot_state, None);
+        assert!(missing.collision_enable.is_none());
+        assert!(wrong_kind.collision_enable.is_none());
+        assert!(untyped.collision_enable.is_none());
+        assert_eq!(map.update_dynamic_tree_like_cpp(250).unbalanced_after, 0);
+    }
+
+    #[test]
+    fn script_schedule_due_prefix_drains_sorted_and_keeps_future_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let delayed = map.schedule_represented_script_action_like_cpp(
+            100,
+            10,
+            script_guid(1),
+            script_guid(2),
+            script_guid(3),
+            1001,
+        );
+        let due_a = map.schedule_represented_script_action_like_cpp(
+            100,
+            5,
+            script_guid(4),
+            script_guid(5),
+            script_guid(6),
+            1002,
+        );
+        let due_b = map.schedule_represented_script_action_like_cpp(
+            100,
+            5,
+            script_guid(7),
+            script_guid(8),
+            script_guid(9),
+            1003,
+        );
+
+        assert_eq!(delayed.represented_increase_count, 1);
+        assert_eq!(due_a.represented_increase_count, 1);
+        assert_eq!(due_b.represented_increase_count, 1);
+        assert_eq!(map.represented_script_schedule_count_like_cpp(), 3);
+
+        let summary = map.process_due_script_schedule_like_cpp(105);
+
+        assert_eq!(summary.queued_before, 3);
+        assert_eq!(summary.processed, 2);
+        assert_eq!(summary.represented_decrease_count, 2);
+        assert_eq!(summary.remaining, 1);
+        assert!(!summary.empty_noop);
+        assert_eq!(
+            summary
+                .processed_actions
+                .iter()
+                .map(|action| action.command_id)
+                .collect::<Vec<_>>(),
+            vec![1002, 1003]
+        );
+        assert_eq!(map.represented_script_schedule_count_like_cpp(), 1);
+        assert_eq!(
+            map.represented_executed_script_actions_like_cpp()
+                .iter()
+                .map(|action| action.command_id)
+                .collect::<Vec<_>>(),
+            vec![1002, 1003]
+        );
+
+        let delayed_summary = map.process_script_schedule_update_order_like_cpp(110);
+        assert_eq!(delayed_summary.processed_actions, vec![delayed.scheduled]);
+        assert_eq!(delayed_summary.remaining, 0);
+        assert!(delayed_summary.lock_entered);
+    }
+
+    #[test]
+    fn script_schedule_empty_update_order_is_noop_without_lock_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+
+        let summary = map.process_script_schedule_update_order_like_cpp(100);
+
+        assert!(summary.empty_noop);
+        assert_eq!(summary.queued_before, 0);
+        assert_eq!(summary.processed, 0);
+        assert_eq!(summary.remaining, 0);
+        assert!(!summary.lock_entered);
+        assert!(!map.is_script_schedule_locked_like_cpp());
+    }
+
+    #[test]
+    fn script_schedule_zero_delay_processes_immediately_when_unlocked_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+
+        let outcome = map.schedule_represented_script_action_like_cpp(
+            200,
+            0,
+            script_guid(11),
+            script_guid(12),
+            script_guid(13),
+            2001,
+        );
+
+        let immediate = outcome
+            .immediate_process
+            .expect("zero-delay represented schedule should process while unlocked");
+        assert_eq!(immediate.queued_before, 1);
+        assert_eq!(immediate.processed, 1);
+        assert_eq!(immediate.remaining, 0);
+        assert!(immediate.lock_entered);
+        assert_eq!(immediate.processed_actions, vec![outcome.scheduled]);
+        assert_eq!(outcome.remaining_after_schedule, 0);
+        assert_eq!(map.represented_script_schedule_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn script_schedule_zero_delay_remains_queued_when_locked_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.set_script_schedule_lock_for_test(true);
+
+        let outcome = map.schedule_represented_script_action_like_cpp(
+            300,
+            0,
+            script_guid(21),
+            script_guid(22),
+            script_guid(23),
+            3001,
+        );
+
+        assert!(outcome.immediate_process.is_none());
+        assert_eq!(outcome.remaining_after_schedule, 1);
+        assert_eq!(map.represented_script_schedule_count_like_cpp(), 1);
+        assert!(map.is_script_schedule_locked_like_cpp());
+        map.set_script_schedule_lock_for_test(false);
+
+        let summary = map.process_script_schedule_update_order_like_cpp(300);
+        assert_eq!(summary.processed_actions, vec![outcome.scheduled]);
+        assert_eq!(summary.remaining, 0);
+    }
+
+    #[test]
+    fn weather_timer_not_passed_does_not_call_default_weather_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.register_represented_zone_default_weather_for_test(44701);
+
+        let summary = map.update_weather_like_cpp(999);
+
+        assert_eq!(summary.interval_ms, 1_000);
+        assert_eq!(summary.timer_current_before, 0);
+        assert_eq!(summary.timer_current_after_update, 999);
+        assert_eq!(summary.timer_current_after_reset, 999);
+        assert!(!summary.timer_passed);
+        assert_eq!(summary.zones_seen, 0);
+        assert_eq!(summary.default_weather_updated, 0);
+        assert_eq!(map.weather_update_timer_current_ms_like_cpp(), 999);
+        assert_eq!(
+            map.represented_zone_default_weather_update_diffs_like_cpp(44701),
+            Some([].as_slice())
+        );
+    }
+
+    #[test]
+    fn weather_timer_passed_exact_interval_calls_default_weather_with_interval_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.register_represented_zone_default_weather_for_test(44702);
+
+        let summary = map.update_weather_like_cpp(1_000);
+
+        assert!(summary.timer_passed);
+        assert_eq!(summary.timer_current_before, 0);
+        assert_eq!(summary.timer_current_after_update, 1_000);
+        assert_eq!(summary.timer_current_after_reset, 0);
+        assert_eq!(summary.zones_seen, 1);
+        assert_eq!(summary.default_weather_updated, 1);
+        assert_eq!(summary.default_weather_removed, 0);
+        assert_eq!(summary.weather_update_call_diff_ms, Some(1_000));
+        assert!(summary.script_update_regeneration_fanout_not_represented);
+        assert_eq!(map.weather_update_timer_current_ms_like_cpp(), 0);
+        assert_eq!(
+            map.represented_zone_default_weather_update_diffs_like_cpp(44702),
+            Some([1_000].as_slice())
+        );
+    }
+
+    #[test]
+    fn weather_timer_overshoot_reset_preserves_modulo_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.register_represented_zone_default_weather_for_test(44703);
+
+        let summary = map.update_weather_like_cpp(2_500);
+
+        assert!(summary.timer_passed);
+        assert_eq!(summary.timer_current_after_update, 2_500);
+        assert_eq!(summary.timer_current_after_reset, 500);
+        assert_eq!(map.weather_update_timer_current_ms_like_cpp(), 500);
+        assert_eq!(summary.default_weather_updated, 1);
+        assert_eq!(
+            map.represented_zone_default_weather_update_diffs_like_cpp(44703),
+            Some([1_000].as_slice())
+        );
+    }
+
+    #[test]
+    fn weather_update_false_return_resets_default_weather_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.register_represented_zone_default_weather_for_test(44704);
+        assert!(map.set_represented_zone_default_weather_next_update_alive_for_test(44704, false));
+
+        let summary = map.update_weather_like_cpp(1_000);
+
+        assert!(summary.timer_passed);
+        assert_eq!(summary.default_weather_updated, 1);
+        assert_eq!(summary.default_weather_removed, 1);
+        assert!(
+            map.represented_zone_dynamic_info_like_cpp(44704)
+                .and_then(|zone| zone.default_weather.as_ref())
+                .is_none()
+        );
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -6681,6 +15197,47 @@ mod tests {
         gameobject
     }
 
+    fn test_transport(counter: i64, in_world: bool) -> wow_entities::Transport {
+        let mut transport = wow_entities::Transport::new();
+        transport
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Transport, counter));
+        transport.world_mut().set_map(571, 7).unwrap();
+        transport.world_mut().relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            transport.world_mut().object_mut().add_to_world();
+        }
+        transport
+    }
+
+    fn test_pet(counter: i64, in_world: bool) -> wow_entities::Pet {
+        let owner = ObjectGuid::create_player(1, 484_000);
+        let mut pet = wow_entities::Pet::new(owner, wow_entities::PetType::Hunter);
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Pet, counter));
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .set_map(571, 7)
+            .unwrap();
+        pet.creature_mut()
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            pet.creature_mut()
+                .unit_mut()
+                .world_mut()
+                .object_mut()
+                .add_to_world();
+        }
+        pet
+    }
+
     fn test_area_trigger_for_spawn(spawn_id: SpawnId, counter: i64) -> AreaTrigger {
         let mut area_trigger = AreaTrigger::new();
         area_trigger
@@ -7127,7 +15684,7 @@ mod tests {
         store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 43, active), |_| {
             false
         });
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 43, 100));
 
         let summary = map.process_due_respawns_spawn_group_delete_only_like_cpp(100, &store);
@@ -7210,7 +15767,7 @@ mod tests {
             &spawn_data(SpawnObjectType::Creature, 39701, active),
             |_| false,
         );
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 39701, 100));
         let expected_guid = guid(HighGuid::Creature, 3970101);
         let mut loader_calls = 0;
@@ -7278,7 +15835,7 @@ mod tests {
             &spawn_data(SpawnObjectType::GameObject, 39801, active),
             |_| false,
         );
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 39801, 100));
         let expected_guid = guid(HighGuid::GameObject, 3980101);
 
@@ -7334,7 +15891,7 @@ mod tests {
             &spawn_data(SpawnObjectType::GameObject, 40901, active),
             |_| false,
         );
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 40901, 100));
         let owner_guid = guid(HighGuid::GameObject, 4090101);
         let trap_guid = guid(HighGuid::GameObject, 4090102);
@@ -7397,7 +15954,7 @@ mod tests {
             &spawn_data(SpawnObjectType::Creature, 39902, active),
             |_| false,
         );
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 39901, 90));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 39902, 100));
 
@@ -7472,7 +16029,7 @@ mod tests {
             &spawn_data(SpawnObjectType::Creature, 40101, active),
             |_| false,
         );
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 40101, 100));
         let expected_guid = guid(HighGuid::Creature, 4010101);
 
@@ -7513,6 +16070,214 @@ mod tests {
         );
         assert!(map.map_object_record(expected_guid).is_none());
         assert_eq!(map.creature_spawn_id_store_count_like_cpp(40101), 0);
+    }
+
+    #[test]
+    fn process_respawns_pool_loaded_grid_spawn_one_loader_adds_record_and_removes_trigger_timer_like_cpp()
+     {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(526, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 52601, active.clone()),
+            |_| false,
+        );
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 52602, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 52601, 100));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(526, PoolTemplateDataLikeCpp::new(1, 571));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 526);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52601, 0.0), 1);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52602, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 526, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::Creature, 52601, 526)
+            .expect("test spawn pool relation");
+        let expected_guid = guid(HighGuid::Creature, 5260201);
+        let mut loader_calls = 0;
+
+        let summary = map.process_due_respawns_composite_loaded_grid_respawns_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &pool_mgr,
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, _count| vec![1],
+            |_map, object_type, spawn_id| {
+                loader_calls += 1;
+                assert_eq!(object_type, SpawnObjectType::Creature);
+                assert_eq!(spawn_id, 52602);
+                let mut creature = test_creature_for_spawn(52602, 5260201, true);
+                creature
+                    .unit_mut()
+                    .world_mut()
+                    .object_mut()
+                    .remove_from_world();
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(creature).unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(loader_calls, 1);
+        assert_eq!(summary.processed_pool_timers, 1);
+        assert_eq!(summary.executed_loaded_grid_respawns, 1);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert_eq!(summary.pool_spawn_action_load_plans, Vec::new());
+        assert_eq!(summary.blocked_loaded_grid_respawn_add_to_map, 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 52601),
+            0
+        );
+        assert!(map.pool_data_like_cpp().is_spawned_creature_like_cpp(52602));
+        assert_eq!(
+            map.pool_data_like_cpp().get_spawned_objects_like_cpp(526),
+            1
+        );
+        assert!(map.map_object_record(expected_guid).is_some());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(52602), 1);
+    }
+
+    #[test]
+    fn process_respawns_pool_loaded_grid_spawn_one_loader_none_keeps_load_plan_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(527, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::GameObject, 52701, active.clone()),
+            |_| false,
+        );
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::GameObject, 52702, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 52701, 100));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(527, PoolTemplateDataLikeCpp::new(1, 571));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::GameObject, 527);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52701, 0.0), 1);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52702, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::GameObject, 527, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::GameObject, 52701, 527)
+            .expect("test spawn pool relation");
+
+        let summary = map.process_due_respawns_composite_safe_side_effects_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &pool_mgr,
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, _count| vec![1],
+        );
+
+        assert_eq!(summary.processed_pool_timers, 1);
+        assert_eq!(summary.executed_loaded_grid_respawns, 0);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 1);
+        assert_eq!(
+            summary.pool_spawn_action_load_plans,
+            vec![PoolSpawnActionLoadPlanLikeCpp {
+                object_type: SpawnObjectType::GameObject,
+                spawn_id: 52702,
+                respawn: false,
+            }]
+        );
+        assert_eq!(map.map_object_count(), 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 52701),
+            0
+        );
+        assert!(
+            map.pool_data_like_cpp()
+                .is_spawned_gameobject_like_cpp(52702)
+        );
+    }
+
+    #[test]
+    fn process_respawns_pool_loaded_grid_add_to_map_failure_counts_and_removes_trigger_timer_like_cpp()
+     {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(528, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 52801, active.clone()),
+            |_| false,
+        );
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 52802, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 52801, 100));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(528, PoolTemplateDataLikeCpp::new(1, 571));
+        let mut group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 528);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52801, 0.0), 1);
+        group.add_entry_like_cpp(PoolObjectLikeCpp::new(52802, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 528, group)
+            .expect("test pool group");
+        pool_mgr
+            .register_spawn_pool_relation_like_cpp(PoolMemberKindLikeCpp::Creature, 52801, 528)
+            .expect("test spawn pool relation");
+        let expected_guid = guid(HighGuid::Creature, 5280201);
+
+        let summary = map.process_due_respawns_composite_loaded_grid_respawns_like_cpp(
+            100,
+            &store,
+            &LinkedRespawnStoreLikeCpp::new(),
+            &pool_mgr,
+            5,
+            false,
+            |_, _| false,
+            |_, _| 0.0,
+            |_candidates, _count| vec![1],
+            |_map, object_type, spawn_id| {
+                assert_eq!(object_type, SpawnObjectType::Creature);
+                assert_eq!(spawn_id, 52802);
+                let mut creature = test_creature_for_spawn(52802, 5280201, true);
+                creature
+                    .unit_mut()
+                    .world_mut()
+                    .object_mut()
+                    .remove_from_world();
+                creature.unit_mut().world_mut().relocate(Position::xyz(
+                    1_000_000.0,
+                    1_000_000.0,
+                    0.0,
+                ));
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(creature).unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(summary.processed_pool_timers, 1);
+        assert_eq!(summary.executed_loaded_grid_respawns, 0);
+        assert_eq!(summary.blocked_loaded_grid_respawn_add_to_map, 1);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 52801),
+            0
+        );
+        assert!(map.pool_data_like_cpp().is_spawned_creature_like_cpp(52802));
+        assert!(map.map_object_record(expected_guid).is_none());
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(52802), 0);
     }
 
     #[test]
@@ -7691,6 +16456,7 @@ mod tests {
                 selected: vec![],
                 despawned_trigger: None,
                 respawned_trigger: true,
+                ..PoolSpawnObjectPlanLikeCpp::default()
             }),
             skip_reason: None,
         };
@@ -7741,6 +16507,7 @@ mod tests {
                 selected: vec![],
                 despawned_trigger: None,
                 respawned_trigger: false,
+                ..PoolSpawnObjectPlanLikeCpp::default()
             }),
             skip_reason: None,
         };
@@ -7798,6 +16565,7 @@ mod tests {
                 selected: vec![],
                 despawned_trigger: None,
                 respawned_trigger: false,
+                ..PoolSpawnObjectPlanLikeCpp::default()
             }),
             skip_reason: None,
         };
@@ -7816,6 +16584,354 @@ mod tests {
                 spawn_id: 76,
                 respawn: false,
             }]
+        );
+    }
+
+    #[test]
+    fn process_respawns_pool_spawn_one_pool_applies_real_child_spawn_plan_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(34, SpawnGroupFlags::NONE);
+        store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 80, active), |_| {
+            false
+        });
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        let plan = PoolTypedSpawnPlanLikeCpp {
+            kind: PoolMemberKindLikeCpp::Pool,
+            pool_id: 180,
+            trigger_from: 0,
+            max_limit: Some(1),
+            object_plan: Some(PoolSpawnObjectPlanLikeCpp {
+                actions: vec![PoolSpawnObjectActionLikeCpp::SpawnOne {
+                    kind: PoolMemberKindLikeCpp::Pool,
+                    guid: 181,
+                }],
+                selected: vec![],
+                despawned_trigger: None,
+                respawned_trigger: false,
+                child_pool_spawn_plans: vec![PoolSpawnPoolPlanLikeCpp {
+                    pool_id: 181,
+                    subplans: vec![PoolTypedSpawnPlanLikeCpp {
+                        kind: PoolMemberKindLikeCpp::Creature,
+                        pool_id: 181,
+                        trigger_from: 0,
+                        max_limit: Some(1),
+                        object_plan: Some(PoolSpawnObjectPlanLikeCpp {
+                            actions: vec![PoolSpawnObjectActionLikeCpp::SpawnOne {
+                                kind: PoolMemberKindLikeCpp::Creature,
+                                guid: 80,
+                            }],
+                            selected: vec![],
+                            despawned_trigger: None,
+                            respawned_trigger: false,
+                            ..PoolSpawnObjectPlanLikeCpp::default()
+                        }),
+                        skip_reason: None,
+                    }],
+                }],
+                child_pool_despawn_plans: vec![],
+            }),
+            skip_reason: None,
+        };
+        let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
+
+        map.apply_pool_typed_spawn_plan_loaded_grid_records_like_cpp(
+            &plan,
+            &store,
+            &mut summary,
+            Some(&mut |_, object_type, spawn_id| {
+                assert_eq!(object_type, SpawnObjectType::Creature);
+                assert_eq!(spawn_id, 80);
+                let mut creature = test_creature_for_spawn(spawn_id, 8001, true);
+                creature
+                    .unit_mut()
+                    .world_mut()
+                    .object_mut()
+                    .remove_from_world();
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(creature).unwrap(),
+                ))
+            }),
+        );
+
+        assert_eq!(summary.pool_unsupported_action_kind, 0);
+        assert_eq!(summary.executed_loaded_grid_respawns, 1);
+        assert_eq!(summary.pool_spawn_action_load_plans, vec![]);
+        assert_eq!(map.map_object_count(), 1);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(80), 1);
+    }
+
+    #[test]
+    fn spawn_pool_facade_mutates_pool_data_and_executes_loaded_grid_loader_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(530, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 530101, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(5301, crate::pool::PoolTemplateDataLikeCpp::new(1, 571));
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5301);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(530101, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5301, creature_group)
+            .expect("test creature pool group");
+        let mut loader_calls = 0usize;
+
+        let summary = map
+            .spawn_pool_loaded_grid_records_like_cpp(
+                &pool_mgr,
+                5301,
+                &store,
+                |_, _| 0.0,
+                |_candidates, count| (0..count).collect(),
+                |_, object_type, spawn_id| {
+                    loader_calls += 1;
+                    assert_eq!(object_type, SpawnObjectType::Creature);
+                    assert_eq!(spawn_id, 530101);
+                    let mut creature = test_creature_for_spawn(spawn_id, 53010101, true);
+                    creature
+                        .unit_mut()
+                        .world_mut()
+                        .object_mut()
+                        .remove_from_world();
+                    Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                        MapObjectRecord::new_creature(creature).unwrap(),
+                    ))
+                },
+            )
+            .expect("spawn pool facade plan");
+
+        assert_eq!(loader_calls, 1);
+        assert_eq!(summary.executed_loaded_grid_respawns, 1);
+        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 0);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert!(
+            map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(530101)
+        );
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(530101), 1);
+    }
+
+    #[test]
+    fn spawn_pool_facade_filters_unloaded_grid_without_calling_loader_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(531, SpawnGroupFlags::NONE);
+        let mut unloaded = spawn_data(SpawnObjectType::Creature, 530201, active);
+        unloaded.spawn_point = crate::spawn::SpawnPosition::new(1_000.0, 1_000.0, 0.0, 0.0);
+        store.add_object_spawn(&unloaded, |_| false);
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(5302, crate::pool::PoolTemplateDataLikeCpp::new(1, 571));
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5302);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(530201, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5302, creature_group)
+            .expect("test creature pool group");
+        let mut loader_calls = 0usize;
+
+        let summary = map
+            .spawn_pool_loaded_grid_records_like_cpp(
+                &pool_mgr,
+                5302,
+                &store,
+                |_, _| 0.0,
+                |_candidates, count| (0..count).collect(),
+                |_, _, _| {
+                    loader_calls += 1;
+                    None
+                },
+            )
+            .expect("spawn pool facade plan");
+
+        assert_eq!(loader_calls, 0);
+        assert_eq!(summary.executed_loaded_grid_respawns, 0);
+        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 1);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert!(
+            map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(530201)
+        );
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(530201), 0);
+    }
+
+    #[test]
+    fn despawn_pool_facade_removes_live_creature_and_gameobject_from_map_owned_state_like_cpp() {
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(528101, 52810101, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(528102, 52810201)).unwrap(),
+        )
+        .unwrap();
+        map.pool_data_mut_like_cpp()
+            .add_spawn_like_cpp(SpawnObjectType::Creature, 528101, 5281)
+            .expect("test creature pool state");
+        map.pool_data_mut_like_cpp()
+            .add_spawn_like_cpp(SpawnObjectType::GameObject, 528102, 5281)
+            .expect("test gameobject pool state");
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5281);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528101, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5281, creature_group)
+            .expect("test creature pool group");
+        let mut gameobject_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::GameObject, 5281);
+        gameobject_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528102, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(
+                PoolMemberKindLikeCpp::GameObject,
+                5281,
+                gameobject_group,
+            )
+            .expect("test gameobject pool group");
+
+        let summary = map
+            .despawn_pool_safe_map_actions_like_cpp(&pool_mgr, 5281, false)
+            .expect("despawn pool plan");
+
+        assert_eq!(summary.pool_objects_removed, 2);
+        assert_eq!(summary.pool_respawn_timers_removed, 0);
+        assert_eq!(summary.pool_unsupported_action_kind, 0);
+        assert_eq!(map.map_object_count(), 0);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(528101), 0);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(528102), 0);
+        assert!(
+            !map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(528101)
+        );
+        assert!(
+            !map.pool_data_like_cpp()
+                .is_spawned_gameobject_like_cpp(528102)
+        );
+        assert_eq!(
+            map.pool_data_like_cpp().get_spawned_objects_like_cpp(5281),
+            0
+        );
+    }
+
+    #[test]
+    fn despawn_pool_facade_always_delete_removes_non_spawned_creature_gameobject_timers_not_pool_like_cpp()
+     {
+        let mut map = test_map();
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 528201, 200));
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 528202, 200));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5282);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528201, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5282, creature_group)
+            .expect("test creature pool group");
+        let mut gameobject_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::GameObject, 5282);
+        gameobject_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528202, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(
+                PoolMemberKindLikeCpp::GameObject,
+                5282,
+                gameobject_group,
+            )
+            .expect("test gameobject pool group");
+        let mut pool_group = PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Pool, 5282);
+        pool_group.add_entry_like_cpp(PoolObjectLikeCpp::new(5283, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Pool, 5282, pool_group)
+            .expect("test child-pool relation group");
+
+        let summary = map
+            .despawn_pool_safe_map_actions_like_cpp(&pool_mgr, 5282, true)
+            .expect("despawn pool plan");
+
+        assert_eq!(summary.pool_respawn_timers_removed, 2);
+        assert_eq!(summary.pool_respawn_timers_missing, 0);
+        assert_eq!(summary.pool_objects_removed, 0);
+        assert_eq!(summary.pool_unsupported_action_kind, 0);
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::Creature, 528201),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 528202),
+            0
+        );
+    }
+
+    #[test]
+    fn despawn_pool_facade_consumes_child_pool_recursion_without_pool_timer_removal_like_cpp() {
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(528401, 52840101, true)).unwrap(),
+        )
+        .unwrap();
+        map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::GameObject, 528402, 250));
+        map.pool_data_mut_like_cpp()
+            .add_pool_spawn_like_cpp(5284, 5280);
+        map.pool_data_mut_like_cpp()
+            .add_spawn_like_cpp(SpawnObjectType::Creature, 528401, 5284)
+            .expect("test child creature pool state");
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        let mut parent_pool_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Pool, 5280);
+        parent_pool_group.add_entry_like_cpp(PoolObjectLikeCpp::new(5284, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Pool, 5280, parent_pool_group)
+            .expect("test parent pool group");
+        let mut child_creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5284);
+        child_creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528401, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(
+                PoolMemberKindLikeCpp::Creature,
+                5284,
+                child_creature_group,
+            )
+            .expect("test child creature group");
+        let mut child_gameobject_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::GameObject, 5284);
+        child_gameobject_group.add_entry_like_cpp(PoolObjectLikeCpp::new(528402, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(
+                PoolMemberKindLikeCpp::GameObject,
+                5284,
+                child_gameobject_group,
+            )
+            .expect("test child gameobject group");
+
+        let summary = map
+            .despawn_pool_safe_map_actions_like_cpp(&pool_mgr, 5280, true)
+            .expect("despawn parent pool plan");
+
+        assert_eq!(summary.pool_objects_removed, 1);
+        assert_eq!(summary.pool_respawn_timers_removed, 1);
+        assert_eq!(summary.pool_respawn_timers_missing, 0);
+        assert_eq!(summary.pool_unsupported_action_kind, 0);
+        assert_eq!(map.map_object_count(), 0);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(528401), 0);
+        assert!(
+            !map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(528401)
+        );
+        assert!(!map.pool_data_like_cpp().is_spawned_pool_like_cpp(5284));
+        assert_eq!(
+            map.pool_data_like_cpp().get_spawned_objects_like_cpp(5280),
+            0
+        );
+        assert_eq!(
+            map.pool_data_like_cpp().get_spawned_objects_like_cpp(5284),
+            0
+        );
+        assert_eq!(
+            map.get_respawn_time_like_cpp(SpawnObjectType::GameObject, 528402),
+            0
         );
     }
 
@@ -7874,7 +16990,7 @@ mod tests {
         store.add_object_spawn(&spawn_data(SpawnObjectType::Creature, 40, manual), |_| {
             false
         });
-        map.ensure_grid_loaded(&cell_from_grid_center(GridCoord::new(7, 0)));
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 50, 90));
         map.add_respawn_info_like_cpp(respawn_info(SpawnObjectType::Creature, 40, 100));
 
@@ -8129,6 +17245,83 @@ mod tests {
             CheckRespawnLiveObjectGuardOutcomeLikeCpp::AliveCreatureBlocksRespawn
         );
         assert_eq!(info.respawn_time, 0);
+    }
+
+    #[test]
+    fn game_event_change_equip_or_model_two_live_creatures_same_spawn_mutates_equipment_like_cpp() {
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(157, 15701, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(157, 15702, true)).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.change_game_event_equip_or_model_by_spawn_id_like_cpp(157, 9, 0, false);
+
+        assert_eq!(outcome.indexed_guids, 2);
+        assert_eq!(outcome.live_creatures_mutated, 2);
+        assert_eq!(outcome.equipment_changed, 2);
+        for guid in map.creature_spawn_id_store_guids_like_cpp(157) {
+            let creature = map
+                .map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .unwrap();
+            assert_eq!(creature.equipment_id(), 9);
+        }
+    }
+
+    #[test]
+    fn game_event_change_equip_or_model_missing_spawn_id_does_not_panic_like_cpp() {
+        let mut map = test_map();
+
+        let outcome = map.change_game_event_equip_or_model_by_spawn_id_like_cpp(158, 9, 123, false);
+
+        assert_eq!(outcome.indexed_guids, 0);
+        assert_eq!(outcome.live_creatures_mutated, 0);
+        assert_eq!(outcome.model_validation_unavailable, 0);
+    }
+
+    #[test]
+    fn game_event_change_equip_or_model_model_gate_reports_unavailable_without_display_like_cpp() {
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(159, 15901, true)).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.change_game_event_equip_or_model_by_spawn_id_like_cpp(159, 4, 123, false);
+
+        assert_eq!(outcome.indexed_guids, 1);
+        assert_eq!(outcome.live_creatures_mutated, 1);
+        assert_eq!(outcome.equipment_changed, 1);
+        assert_eq!(outcome.display_changed, 0);
+        assert_eq!(outcome.model_validation_unavailable, 1);
+    }
+
+    #[test]
+    fn game_event_change_equip_or_model_wrong_kind_index_entry_does_not_mutate_like_cpp() {
+        let mut map = test_map();
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(160, 16001, true)).unwrap(),
+        )
+        .unwrap();
+        let guid = guid(HighGuid::Creature, 16001);
+        if let Some(creature_index) = map.creatures_by_spawn_id.get_mut(&160) {
+            creature_index.retain(|indexed_guid| *indexed_guid != guid);
+        }
+        map.creatures_by_spawn_id
+            .entry(161)
+            .or_default()
+            .insert(guid);
+
+        let outcome = map.change_game_event_equip_or_model_by_spawn_id_like_cpp(161, 9, 0, false);
+
+        assert_eq!(outcome.indexed_guids, 1);
+        assert_eq!(outcome.live_creatures_mutated, 0);
+        assert_eq!(outcome.stale_index_or_wrong_kind, 1);
     }
 
     #[test]
@@ -9055,6 +18248,9 @@ mod tests {
         );
         assert_eq!(outcome.blocked_loaded_grid_creature_loads, 1);
         assert_eq!(outcome.blocked_loaded_grid_gameobject_loads, 1);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 2);
+        assert_eq!(outcome.executed_loaded_grid_spawns, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_add_to_map, 0);
         assert_eq!(
             outcome.load_plans,
             vec![
@@ -9201,7 +18397,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_group_spawn_area_trigger_is_unsupported_not_complete_like_cpp() {
+    fn spawn_group_spawn_area_trigger_skips_no_respawn_map_before_loader_like_cpp() {
         let group = spawn_group(3946, SpawnGroupFlags::NONE);
         let (group, store) = spawn_group_store(
             group,
@@ -9213,12 +18409,234 @@ mod tests {
         );
         let mut map = test_map();
         map.load_grid(0.0, 0.0);
+        let mut loader_calls = 0;
 
-        let outcome = map.spawn_group_spawn_like_cpp(Some(&group), false, false, &store);
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, _object_type, _spawn_id, _force| {
+                loader_calls += 1;
+                None
+            },
+        );
 
         assert_eq!(outcome.metadata_entries, 1);
-        assert_eq!(outcome.unsupported_spawn_types, 1);
+        assert_eq!(outcome.skipped_no_respawn_map, 1);
+        assert_eq!(outcome.unsupported_spawn_types, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(loader_calls, 0);
         assert!(outcome.load_plans.is_empty());
+        assert_eq!(map.map_object_count(), 0);
+        assert!(map.is_spawn_group_active_like_cpp(Some(&group)));
+    }
+
+    #[test]
+    fn spawn_group_spawn_loaded_grid_loader_some_inserts_gameobject_like_cpp() {
+        let group = spawn_group(3947, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![spawn_data(
+                SpawnObjectType::GameObject,
+                207,
+                SpawnGroupTemplateData::default_group(),
+            )],
+        );
+        let mut map = test_map();
+        map.load_grid(0.0, 0.0);
+
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, object_type, spawn_id, force| {
+                assert_eq!(object_type, SpawnObjectType::GameObject);
+                assert_eq!(spawn_id, 207);
+                assert!(!force);
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_game_object(test_gameobject_for_spawn(spawn_id, 207))
+                        .unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(outcome.load_plans.len(), 1);
+        assert_eq!(outcome.executed_loaded_grid_spawns, 1);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(outcome.blocked_loaded_grid_gameobject_loads, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_add_to_map, 0);
+        assert_eq!(map.map_object_count(), 1);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(207), 1);
+    }
+
+    #[test]
+    fn spawn_group_spawn_loader_none_blocks_and_continues_to_later_member_like_cpp() {
+        let group = spawn_group(3948, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![
+                spawn_data(
+                    SpawnObjectType::Creature,
+                    108,
+                    SpawnGroupTemplateData::default_group(),
+                ),
+                spawn_data(
+                    SpawnObjectType::GameObject,
+                    208,
+                    SpawnGroupTemplateData::default_group(),
+                ),
+            ],
+        );
+        let mut map = test_map();
+        map.load_grid(0.0, 0.0);
+        let mut calls = Vec::new();
+
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, object_type, spawn_id, force| {
+                calls.push((object_type, spawn_id, force));
+                if object_type == SpawnObjectType::Creature {
+                    None
+                } else {
+                    Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                        MapObjectRecord::new_game_object(test_gameobject_for_spawn(spawn_id, 208))
+                            .unwrap(),
+                    ))
+                }
+            },
+        );
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(outcome.load_plans.len(), 2);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 1);
+        assert_eq!(outcome.blocked_loaded_grid_creature_loads, 1);
+        assert_eq!(outcome.blocked_loaded_grid_gameobject_loads, 0);
+        assert_eq!(outcome.executed_loaded_grid_spawns, 1);
+        assert_eq!(map.map_object_count(), 1);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(208), 1);
+    }
+
+    #[test]
+    fn spawn_group_spawn_primary_add_to_map_failure_blocks_without_executed_like_cpp() {
+        let group = spawn_group(3949, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![spawn_data(
+                SpawnObjectType::GameObject,
+                209,
+                SpawnGroupTemplateData::default_group(),
+            )],
+        );
+        let mut map = test_map();
+        map.load_grid(0.0, 0.0);
+
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, _object_type, spawn_id, _force| {
+                let mut gameobject = GameObject::new();
+                gameobject
+                    .world_mut()
+                    .object_mut()
+                    .create(guid(HighGuid::GameObject, 209));
+                gameobject.world_mut().object_mut().set_entry(42);
+                gameobject.world_mut().set_map(999, 7).unwrap();
+                gameobject
+                    .world_mut()
+                    .relocate(Position::xyz(1.0, 2.0, 3.0));
+                gameobject.set_spawn_id(spawn_id);
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_game_object(gameobject).unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(outcome.load_plans.len(), 1);
+        assert_eq!(outcome.executed_loaded_grid_spawns, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(outcome.blocked_loaded_grid_gameobject_loads, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_add_to_map, 1);
+        assert_eq!(map.map_object_count(), 0);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(209), 0);
+    }
+
+    #[test]
+    fn spawn_group_spawn_passes_force_to_loader_after_force_bypasses_live_skip_like_cpp() {
+        let group = spawn_group(3950, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![spawn_data(
+                SpawnObjectType::Creature,
+                110,
+                SpawnGroupTemplateData::default_group(),
+            )],
+        );
+        let mut map = test_map();
+        map.load_grid(0.0, 0.0);
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(110, 110, true)).unwrap(),
+        )
+        .unwrap();
+        let mut captured_force = Vec::new();
+
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            true,
+            &store,
+            |_map, _object_type, _spawn_id, force| {
+                captured_force.push(force);
+                None
+            },
+        );
+
+        assert_eq!(captured_force, vec![true]);
+        assert_eq!(outcome.skipped_live_object_active, 0);
+        assert_eq!(outcome.load_plans.len(), 1);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 1);
+        assert_eq!(outcome.blocked_loaded_grid_creature_loads, 1);
+    }
+
+    #[test]
+    fn spawn_group_spawn_loaded_grid_loader_some_inserts_creature_like_cpp() {
+        let group = spawn_group(3951, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![spawn_data(
+                SpawnObjectType::Creature,
+                111,
+                SpawnGroupTemplateData::default_group(),
+            )],
+        );
+        let mut map = test_map();
+        map.load_grid(0.0, 0.0);
+
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, _object_type, spawn_id, _force| {
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_creature(test_creature_for_spawn(spawn_id, 111, true))
+                        .unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(outcome.load_plans.len(), 1);
+        assert_eq!(outcome.executed_loaded_grid_spawns, 1);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(outcome.blocked_loaded_grid_creature_loads, 0);
+        assert_eq!(map.map_object_count(), 1);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(111), 1);
     }
 
     #[test]
@@ -9272,6 +18690,58 @@ mod tests {
             }]
         );
         assert_eq!(map.map_object_count(), 0);
+        assert!(map.is_spawn_group_active_like_cpp(Some(&group)));
+    }
+
+    #[test]
+    fn update_spawn_group_conditions_spawn_group_spawn_loaded_grid_loader_some_inserts_primary_record_like_cpp()
+     {
+        let group = spawn_group(393, SpawnGroupFlags::NONE);
+        let (group, store) = spawn_group_store(
+            group,
+            vec![spawn_data(
+                SpawnObjectType::GameObject,
+                31,
+                SpawnGroupTemplateData::default_group(),
+            )],
+        );
+        let mut map = test_map();
+        map.set_spawn_group_inactive_like_cpp(Some(&group));
+        map.load_grid(0.0, 0.0);
+        let mut calls = Vec::new();
+
+        let outcomes = map.apply_update_spawn_group_conditions_loaded_grid_records_like_cpp(
+            [&group],
+            &store,
+            |_| true,
+            |_map, object_type, spawn_id, force| {
+                calls.push((object_type, spawn_id, force));
+                Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                    MapObjectRecord::new_game_object(test_gameobject_for_spawn(spawn_id, 31))
+                        .unwrap(),
+                ))
+            },
+        );
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].action,
+            SpawnGroupConditionActionLikeCpp::spawn_group_spawn_default()
+        );
+        assert_eq!(outcomes[0].applied_change, None);
+        assert_eq!(outcomes[0].despawn_outcome, None);
+        let spawn = outcomes[0].spawn_outcome.as_ref().expect("spawn executed");
+        assert_eq!(calls, vec![(SpawnObjectType::GameObject, 31, false)]);
+        assert_eq!(
+            spawn.applied_active_change,
+            Some(SpawnGroupActiveChange::ClearedToggle)
+        );
+        assert_eq!(spawn.load_plans.len(), 1);
+        assert_eq!(spawn.executed_loaded_grid_spawns, 1);
+        assert_eq!(spawn.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(spawn.blocked_loaded_grid_spawn_add_to_map, 0);
+        assert_eq!(map.map_object_count(), 1);
+        assert_eq!(map.gameobject_spawn_id_store_count_like_cpp(31), 1);
         assert!(map.is_spawn_group_active_like_cpp(Some(&group)));
     }
 
@@ -10524,6 +19994,1075 @@ mod tests {
         assert!(!cell.world_objects.creatures.contains(&guid));
     }
 
+    fn creature_formation_info_like_cpp(leader_spawn_id: SpawnId) -> CreatureFormationInfoLikeCpp {
+        CreatureFormationInfoLikeCpp {
+            leader_spawn_id,
+            follow_dist: 8.0,
+            follow_angle_radians: 0.75,
+            group_ai: 4,
+            leader_waypoint_ids: [21, 22],
+        }
+    }
+
+    #[test]
+    fn creature_search_formation_add_to_map_inserts_group_holder_and_coexists_with_vehicle_like_cpp()
+     {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(470, 47001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900470)));
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9470);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let search = outcome.creature_search_formation.unwrap();
+        assert_eq!(search.spawn_id, 470);
+        assert_eq!(search.leader_spawn_id, Some(900470));
+        assert!(search.add_to_group_requested);
+        assert!(map.creature_group_holder_contains_like_cpp(900470, guid));
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900470), 1);
+        assert!(outcome.creature_vehicle_reset.is_some());
+        assert!(outcome.creature_vehicle_install.is_some());
+    }
+
+    #[test]
+    fn creature_search_formation_add_to_map_removes_stale_same_spawn_member_like_cpp() {
+        let mut map = test_map();
+        let mut old_creature = test_creature_for_spawn(471, 47101, true);
+        old_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        old_creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900471)));
+        let old_guid = old_creature.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(old_creature).unwrap(),
+        )
+        .unwrap();
+        assert!(map.creature_group_holder_contains_like_cpp(900471, old_guid));
+
+        let mut new_creature = test_creature_for_spawn(471, 47102, true);
+        new_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        new_creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900471)));
+        let new_guid = new_creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_creature(new_creature).unwrap(),
+            )
+            .unwrap();
+
+        assert!(
+            outcome
+                .creature_search_formation
+                .as_ref()
+                .is_some_and(|search| search.add_to_group_requested)
+        );
+        assert!(!map.creature_group_holder_contains_like_cpp(900471, old_guid));
+        assert!(map.creature_group_holder_contains_like_cpp(900471, new_guid));
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900471), 1);
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(471), 2);
+    }
+
+    #[test]
+    fn creature_search_formation_add_to_map_already_in_world_is_not_consumed_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(472, 47201, true);
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900472)));
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.creature_search_formation.is_none());
+        assert!(!map.creature_group_holder_contains_like_cpp(900472, guid));
+    }
+
+    #[test]
+    fn creature_search_formation_add_to_map_non_creature_path_is_unchanged_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(473, 47301);
+        gameobject.world_mut().object_mut().remove_from_world();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.creature_search_formation.is_none());
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900473), 0);
+    }
+
+    #[test]
+    fn creature_search_formation_remove_from_map_removes_last_member_and_holder_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(474, 47401, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900474)));
+        let guid = creature.guid();
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(map.creature_group_holder_contains_like_cpp(900474, guid));
+
+        let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
+        let formation = removed.creature_remove_formation.unwrap();
+
+        assert_eq!(formation.guid, guid);
+        assert_eq!(formation.spawn_id, 474);
+        assert_eq!(formation.leader_spawn_id, Some(900474));
+        assert!(formation.had_group);
+        assert!(formation.removed_member);
+        assert!(formation.removed_group);
+        assert_eq!(formation.remaining_members, 0);
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900474), 0);
+    }
+
+    #[test]
+    fn creature_search_formation_remove_from_map_keeps_group_with_other_member_like_cpp() {
+        let mut map = test_map();
+        let mut first = test_creature_for_spawn(475, 47501, true);
+        first
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        first.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900475)));
+        let first_guid = first.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(first).unwrap())
+            .unwrap();
+
+        let mut second = test_creature_for_spawn(476, 47601, true);
+        second
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        second.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900475)));
+        let second_guid = second.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(second).unwrap())
+            .unwrap();
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900475), 2);
+
+        let removed = map.remove_from_map_like_cpp(first_guid, true).unwrap();
+        let formation = removed.creature_remove_formation.unwrap();
+
+        assert!(formation.had_group);
+        assert!(formation.removed_member);
+        assert!(!formation.removed_group);
+        assert_eq!(formation.remaining_members, 1);
+        assert!(!map.creature_group_holder_contains_like_cpp(900475, first_guid));
+        assert!(map.creature_group_holder_contains_like_cpp(900475, second_guid));
+    }
+
+    #[test]
+    fn creature_search_formation_remove_from_map_existing_holder_non_member_keeps_holder_like_cpp()
+    {
+        let mut map = test_map();
+        let mut member = test_creature_for_spawn(483, 48301, true);
+        member
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        member.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900483)));
+        let member_guid = member.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(member).unwrap())
+            .unwrap();
+        let member_count_before = map.creature_group_holder_member_count_like_cpp(900483);
+        assert_eq!(member_count_before, 1);
+        assert!(map.creature_group_holder_contains_like_cpp(900483, member_guid));
+
+        let mut non_member = test_creature_for_spawn(484, 48401, true);
+        non_member.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900483)));
+        let non_member_guid = non_member.guid();
+        let add_outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_creature(non_member).unwrap(),
+            )
+            .unwrap();
+        assert!(add_outcome.already_in_world);
+        assert!(!map.creature_group_holder_contains_like_cpp(900483, non_member_guid));
+
+        let removed = map.remove_from_map_like_cpp(non_member_guid, true).unwrap();
+        let formation = removed.creature_remove_formation.unwrap();
+
+        assert!(formation.had_group);
+        assert!(!formation.removed_member);
+        assert!(!formation.removed_group);
+        assert_eq!(formation.remaining_members, member_count_before);
+        assert!(map.creature_group_holder_contains_like_cpp(900483, member_guid));
+        assert!(!map.creature_group_holder_contains_like_cpp(900483, non_member_guid));
+    }
+
+    #[test]
+    fn creature_search_formation_remove_from_map_no_formation_or_not_in_world_noops_like_cpp() {
+        let mut map = test_map();
+        let mut holder_creature = test_creature_for_spawn(477, 47701, true);
+        holder_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        holder_creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900477)));
+        let holder_guid = holder_creature.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(holder_creature).unwrap(),
+        )
+        .unwrap();
+
+        let mut no_formation = test_creature_for_spawn(478, 47801, true);
+        no_formation
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let no_formation_guid = no_formation.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(no_formation).unwrap(),
+        )
+        .unwrap();
+        let removed = map
+            .remove_from_map_like_cpp(no_formation_guid, true)
+            .unwrap();
+        assert!(removed.creature_remove_formation.is_none());
+        assert!(map.creature_group_holder_contains_like_cpp(900477, holder_guid));
+
+        let mut missing_holder = test_creature_for_spawn(479, 47901, true);
+        missing_holder.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900479)));
+        let missing_holder_guid = missing_holder.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(missing_holder).unwrap(),
+        )
+        .unwrap();
+        let removed = map
+            .remove_from_map_like_cpp(missing_holder_guid, true)
+            .unwrap();
+        let formation = removed.creature_remove_formation.unwrap();
+        assert_eq!(formation.leader_spawn_id, Some(900479));
+        assert!(!formation.had_group);
+        assert!(!formation.removed_member);
+        assert!(!formation.removed_group);
+        assert_eq!(formation.remaining_members, 0);
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900479), 0);
+        assert!(map.creature_group_holder_contains_like_cpp(900477, holder_guid));
+
+        let mut not_in_world = test_creature_for_spawn(482, 48201, true);
+        not_in_world.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900477)));
+        let not_in_world_guid = not_in_world.guid();
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(not_in_world).unwrap(),
+        )
+        .unwrap();
+        map.map_objects
+            .get_mut(&not_in_world_guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .unwrap()
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let removed = map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+        assert!(removed.creature_remove_formation.is_none());
+        assert!(map.creature_group_holder_contains_like_cpp(900477, holder_guid));
+    }
+
+    #[test]
+    fn creature_search_formation_remove_from_map_non_creature_path_is_unchanged_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(480, 48001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900480)));
+        let creature_guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let mut gameobject = test_gameobject_for_spawn(481, 48101);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let gameobject_guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(gameobject_guid, true).unwrap();
+
+        assert!(removed.creature_remove_formation.is_none());
+        assert!(map.creature_group_holder_contains_like_cpp(900480, creature_guid));
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900480), 1);
+    }
+
+    #[test]
+    fn creature_add_to_world_unit_seam_only_for_exact_typed_creature_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(475, 47501, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let caster = ObjectGuid::new(0, 47599);
+        let enter_world_aura = AppliedAuraRef::new(47_510, caster, 1, 0x1);
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .auras
+            .register_applied_aura(
+                enter_world_aura,
+                None,
+                SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP,
+                0,
+            );
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            outcome.creature_store_inserted_before_add_to_world,
+            Some(true)
+        );
+        assert_eq!(
+            outcome.creature_spawn_indexed_before_add_to_world,
+            Some(true)
+        );
+        let unit_add = outcome.creature_unit_add_to_world.unwrap();
+        assert_eq!(unit_add.guid, guid);
+        assert!(unit_add.world_object_added);
+        assert!(unit_add.is_in_world_after);
+        assert_eq!(unit_add.removed_enter_world_auras, vec![enter_world_aura]);
+        assert!(
+            unit_add
+                .motion_master_add_to_world
+                .had_initialization_pending
+        );
+        assert!(
+            unit_add
+                .motion_master_add_to_world
+                .direct_initialize_represented
+        );
+        assert!(outcome.creature_zone_script_create.is_some());
+        assert!(
+            map.map_object_record(guid)
+                .and_then(MapObjectRecord::creature)
+                .is_some_and(|creature| !creature
+                    .unit()
+                    .subsystems()
+                    .auras
+                    .has_applied(enter_world_aura))
+        );
+
+        let generic_creature = world_object_with_counter(HighGuid::Creature, 47502, 571, 7, false);
+        let generic = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new(AccessorObjectKind::Creature, generic_creature).unwrap(),
+            )
+            .unwrap();
+        assert!(
+            generic
+                .creature_store_inserted_before_add_to_world
+                .is_none()
+        );
+        assert!(generic.creature_spawn_indexed_before_add_to_world.is_none());
+        assert!(generic.creature_unit_add_to_world.is_none());
+        assert!(generic.creature_search_formation.is_none());
+        assert!(generic.creature_aim_initialize.is_none());
+        assert!(generic.creature_zone_script_create.is_none());
+
+        let gameobject = test_gameobject_for_spawn(47503, 47504);
+        let non_creature = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        assert!(
+            non_creature
+                .creature_store_inserted_before_add_to_world
+                .is_none()
+        );
+        assert!(
+            non_creature
+                .creature_spawn_indexed_before_add_to_world
+                .is_none()
+        );
+        assert!(non_creature.creature_unit_add_to_world.is_none());
+        assert!(non_creature.creature_aim_initialize.is_none());
+    }
+
+    #[test]
+    fn creature_aim_initialize_add_to_map_emits_for_normal_creature_without_vehicle_reset_like_cpp()
+    {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(476, 47601, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let aim = outcome.creature_aim_initialize.unwrap();
+        assert_eq!(aim.guid, guid);
+        assert_eq!(aim.spawn_id, 476);
+        assert!(aim.aim_create_represented);
+        assert!(aim.motion_initialize_represented);
+        assert!(!aim.formation_present);
+        assert!(!aim.formation_leader);
+        assert!(!aim.formation_move_idle_represented);
+        assert!(!aim.motion_initialize_requires_formed_state);
+        assert!(aim.motion_master_initialize_represented);
+        assert!(aim.ai_selected_represented);
+        assert!(aim.ai_initialize_represented);
+        assert!(!aim.vehicle_reset_expected);
+        assert!(aim.succeeded);
+        assert!(outcome.creature_vehicle_reset.is_none());
+    }
+
+    #[test]
+    fn creature_zone_script_add_to_map_create_evidence_only_on_normal_creature_path_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(490, 49001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let zone_script = outcome.creature_zone_script_create.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+        assert!(!outcome.already_in_world);
+
+        let already_in_world = test_creature_for_spawn(491, 49101, true);
+        let already = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_creature(already_in_world).unwrap(),
+            )
+            .unwrap();
+
+        assert!(already.already_in_world);
+        assert!(already.creature_zone_script_create.is_none());
+
+        let generic_creature = world_object_with_counter(HighGuid::Creature, 49002, 571, 7, false);
+        let generic = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new(AccessorObjectKind::Creature, generic_creature).unwrap(),
+            )
+            .unwrap();
+
+        assert!(!generic.already_in_world);
+        assert!(generic.creature_zone_script_create.is_none());
+    }
+
+    #[test]
+    fn creature_zone_script_add_to_map_create_follows_vehicle_install_tail_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(492, 49201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9492, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let install = outcome.creature_vehicle_install.unwrap();
+        assert_eq!(install.kit_id, Some(9492));
+        let zone_script = outcome.creature_zone_script_create.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+    }
+
+    #[test]
+    fn creature_zone_script_remove_from_map_remove_evidence_precedes_formation_then_unit_vehicle_like_cpp()
+     {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(493, 49301, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900493)));
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9493, true);
+        let guid = creature.guid();
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(map.creature_group_holder_contains_like_cpp(900493, guid));
+
+        let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let zone_script = removed.creature_zone_script_remove.unwrap();
+        assert_eq!(zone_script.guid, guid);
+        assert!(zone_script.represented_callback);
+        assert!(!zone_script.script_dispatch_represented);
+        let formation = removed.creature_remove_formation.unwrap();
+        assert_eq!(formation.guid, guid);
+        assert!(formation.had_group);
+        assert!(formation.removed_member);
+        assert!(formation.removed_group);
+        assert_eq!(map.creature_group_holder_member_count_like_cpp(900493), 0);
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.guid, guid);
+        assert!(unit_remove.was_in_world);
+        assert!(unit_remove.during_remove_entered);
+        assert!(!unit_remove.ai_on_despawn_represented);
+        assert!(!unit_remove.leave_world_cleanup_represented);
+        assert!(unit_remove.world_object_removed);
+        assert!(unit_remove.during_remove_cleared);
+        let unit_vehicle_remove = unit_remove.vehicle_remove.unwrap();
+        assert_eq!(unit_vehicle_remove.kit_id, Some(9493));
+        assert_eq!(removed.creature_vehicle_remove, Some(unit_vehicle_remove));
+    }
+
+    #[test]
+    fn creature_zone_script_remove_from_map_missing_not_in_world_and_non_creature_noop_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::Creature, 49401);
+        assert!(matches!(
+            map.remove_from_map_like_cpp(missing_guid, true),
+            Err(RemoveFromMapError::ObjectNotFound { guid }) if guid == missing_guid
+        ));
+
+        let mut not_in_world = test_creature_for_spawn(494, 49402, true);
+        not_in_world
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let not_in_world_guid = not_in_world.guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_creature(not_in_world).unwrap(),
+        )
+        .unwrap();
+        map.map_objects
+            .get_mut(&not_in_world_guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .unwrap()
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let removed = map
+            .remove_from_map_like_cpp(not_in_world_guid, true)
+            .unwrap();
+        assert!(!removed.was_in_world);
+        assert!(removed.creature_zone_script_remove.is_none());
+        assert!(removed.creature_remove_formation.is_none());
+        assert!(removed.creature_unit_remove_from_world.is_none());
+        assert!(removed.creature_vehicle_remove.is_none());
+
+        let mut gameobject = test_gameobject_for_spawn(495, 49501);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let gameobject_guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        let removed = map.remove_from_map_like_cpp(gameobject_guid, true).unwrap();
+        assert!(removed.creature_zone_script_remove.is_none());
+    }
+
+    fn creature_add_to_world_vehicle_reset_context(
+        is_mechanical_creature: bool,
+        is_world_boss: bool,
+    ) -> CreatureAddToWorldVehicleResetContextLikeCpp {
+        CreatureAddToWorldVehicleResetContextLikeCpp {
+            is_mechanical_creature,
+            is_world_boss,
+            accessories: vec![VehicleAccessory {
+                accessory_entry: 7001,
+                is_minion: false,
+                summon_time_ms: 3_000,
+                seat_id: 1,
+                summoned_type: 6,
+            }],
+        }
+    }
+
+    fn create_loaded_creature_vehicle_kit_like_cpp(creature: &mut Creature, vehicle_id: u32) {
+        let guid = creature.guid();
+        let position = creature.unit().world().position();
+        let entry = creature.unit().world().object().entry();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .create_vehicle_kit_like_cpp(
+                guid,
+                position,
+                Some(vehicle_id),
+                entry,
+                true,
+                Some(vec![(
+                    0,
+                    VehicleSeatInfo {
+                        id: 100,
+                        attachment_offset: Position::default(),
+                        can_enter_or_exit: true,
+                        usable_by_override: false,
+                        can_control: false,
+                        disables_gravity: false,
+                        passenger_not_selectable: false,
+                        keep_pet: false,
+                    },
+                    VehicleSeatAddon::default(),
+                )]),
+            );
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_resets_then_installs_vehicle_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(400, 40001, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9003);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let reset = outcome.creature_vehicle_reset.unwrap();
+        assert_eq!(reset.kit_id, 9003);
+        let aim = outcome.creature_aim_initialize.unwrap();
+        assert_eq!(aim.guid, guid);
+        assert_eq!(aim.spawn_id, 400);
+        assert!(!aim.motion_initialize_requires_formed_state);
+        assert!(aim.vehicle_reset_expected);
+        assert!(aim.aim_create_represented);
+        assert!(aim.ai_initialize_represented);
+        assert!(reset.aim_create_represented);
+        assert!(reset.ai_initialize_represented);
+        assert!(!reset.reset_evading);
+        assert!(reset.reset_plan.call_on_reset_script);
+        assert!(
+            reset
+                .reset_plan
+                .immunity_plan
+                .immunities
+                .contains(&VehicleSpellImmunity {
+                    kind: VehicleSpellImmunityKind::Effect,
+                    spell_or_mechanic: 98,
+                    apply: true,
+                })
+        );
+        let accessory_plan = reset.reset_plan.accessory_install_plan.unwrap();
+        assert_eq!(accessory_plan.accessories.len(), 1);
+        assert_eq!(accessory_plan.accessories[0].accessory_entry, 7001);
+        assert!(outcome.creature_vehicle_install.is_some());
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
+        assert_eq!(kit.kit_id(), 9003);
+        assert!(kit.installed());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_mechanical_world_boss_skips_mechanical_immunities_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(401, 40101, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(true, true),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9004);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let immunities = &outcome
+            .creature_vehicle_reset
+            .unwrap()
+            .reset_plan
+            .immunity_plan
+            .immunities;
+        assert!(immunities.contains(&VehicleSpellImmunity {
+            kind: VehicleSpellImmunityKind::Effect,
+            spell_or_mechanic: 98,
+            apply: true,
+        }));
+        assert!(!immunities.contains(&VehicleSpellImmunity {
+            kind: VehicleSpellImmunityKind::Effect,
+            spell_or_mechanic: 6,
+            apply: true,
+        }));
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_without_kit_has_no_reset_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(402, 40201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.creature_vehicle_reset.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_already_in_world_has_no_reset_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(403, 40301, true);
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9005);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.creature_vehicle_reset.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_installs_local_vehicle_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(397, 39701, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9001, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        let install = outcome.creature_vehicle_install.unwrap();
+        assert_eq!(install.kit_id, Some(9001));
+        assert!(install.had_kit);
+        assert_eq!(install.previous_installed, Some(false));
+        assert!(install.installed);
+        assert!(install.script_on_install_represented);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
+        assert_eq!(kit.kit_id, 9001);
+        assert!(kit.active);
+        assert!(kit.installed);
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_without_kit_has_no_install_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(398, 39801, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(!outcome.already_in_world);
+        assert!(outcome.creature_vehicle_install.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_add_to_map_already_in_world_does_not_install_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(399, 39901, true);
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9002, true);
+        let guid = creature.guid();
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.already_in_world);
+        assert!(outcome.creature_vehicle_install.is_none());
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        let kit = stored.unit().subsystems().vehicle.kit.as_ref().unwrap();
+        assert_eq!(kit.kit_id, 9002);
+        assert!(!kit.installed);
+    }
+
+    #[test]
+    fn creature_add_to_world_add_to_map_tail_initializes_clears_move_and_visibility_flags_like_cpp()
+    {
+        let mut map = test_map();
+        let mut stale_creature = test_creature_for_spawn(478, 47801, true);
+        stale_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = stale_creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(stale_creature).unwrap())
+            .unwrap();
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, Position::xyz(40.0, 41.0, 42.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+                .is_some()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            1
+        );
+
+        let mut creature = test_creature_for_spawn(478, 47801, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900478)));
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9478);
+
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(outcome.creature_unit_add_to_world.is_some());
+        assert!(outcome.creature_search_formation.is_some());
+        assert!(outcome.creature_aim_initialize.is_some());
+        assert!(outcome.creature_vehicle_reset.is_some());
+        assert!(outcome.creature_vehicle_install.is_some());
+        assert!(outcome.creature_zone_script_create.is_some());
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.initialize_object_represented);
+        assert!(tail.pending_move_state_cleared);
+        assert!(!tail.no_pending_move_state);
+        assert!(!tail.add_to_active_represented);
+        assert!(!tail.add_to_active_skipped_runtime_gap);
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.update_object_visibility_on_create_represented);
+        assert!(tail.update_object_visibility_on_create_runtime_gap);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+                .is_none()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            0
+        );
+        let drain = map.move_all_creatures_in_move_list_like_cpp();
+        assert_eq!(drain.processed, 0);
+        assert_eq!(drain.relocated, 0);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        assert!(!stored.unit().world().object().is_new_object());
+    }
+
+    #[test]
+    fn add_to_map_typed_gameobject_tail_initializes_and_clears_move_like_cpp() {
+        let mut map = test_map();
+        let mut stale_gameobject = test_gameobject_for_spawn(478, 47802);
+        stale_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let guid = stale_gameobject.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(stale_gameobject).unwrap())
+            .unwrap();
+        assert_eq!(
+            map.add_game_object_to_move_list_like_cpp(guid, Position::xyz(50.0, 51.0, 52.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+
+        let mut gameobject = test_gameobject_for_spawn(478, 47802);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let outcome = map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let tail = outcome.add_to_map_tail.unwrap();
+        assert!(tail.initialize_object_represented);
+        assert!(tail.pending_move_state_cleared);
+        assert!(tail.set_is_new_object_true);
+        assert!(tail.update_object_visibility_on_create_represented);
+        assert!(tail.update_object_visibility_on_create_runtime_gap);
+        assert!(tail.set_is_new_object_false);
+        assert!(!tail.final_is_new_object);
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject, guid)
+                .is_none()
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject),
+            0
+        );
+        let drain = map.move_all_game_objects_in_move_list_like_cpp();
+        assert_eq!(drain.processed, 0);
+        assert_eq!(drain.relocated, 0);
+        let stored = map
+            .map_object_record(guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert!(stored.world().object().is_in_world());
+        assert!(!stored.world().object().is_new_object());
+    }
+
+    #[test]
+    fn add_to_map_generic_creature_and_already_in_world_do_not_overclaim_tail_like_cpp() {
+        let mut map = test_map();
+        let generic = world_object_with_counter(HighGuid::Creature, 47803, 571, 7, false);
+        let generic_guid = generic.guid();
+        map.insert_map_object(AccessorObjectKind::Creature, generic)
+            .unwrap();
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(generic_guid, Position::xyz(60.0, 61.0, 62.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        let generic_again = world_object_with_counter(HighGuid::Creature, 47803, 571, 7, false);
+
+        let generic_outcome = map
+            .add_to_map_like_cpp(AccessorObjectKind::Creature, generic_again)
+            .unwrap();
+
+        assert!(generic_outcome.creature_unit_add_to_world.is_none());
+        assert!(generic_outcome.creature_search_formation.is_none());
+        assert!(generic_outcome.creature_aim_initialize.is_none());
+        assert!(generic_outcome.creature_vehicle_reset.is_none());
+        assert!(generic_outcome.creature_vehicle_install.is_none());
+        assert!(generic_outcome.creature_zone_script_create.is_none());
+        assert!(generic_outcome.add_to_map_tail.is_none());
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, generic_guid)
+                .is_some()
+        );
+
+        let mut creature = test_creature_for_spawn(479, 47901, true);
+        creature.set_formation_info_like_cpp(Some(creature_formation_info_like_cpp(900479)));
+        creature.set_add_to_world_vehicle_reset_context_like_cpp(Some(
+            creature_add_to_world_vehicle_reset_context(false, false),
+        ));
+        create_loaded_creature_vehicle_kit_like_cpp(&mut creature, 9479);
+        let already_guid = creature.guid();
+        let already = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert!(already.already_in_world);
+        assert!(already.creature_unit_add_to_world.is_none());
+        assert!(already.creature_search_formation.is_none());
+        assert!(already.creature_aim_initialize.is_none());
+        assert!(already.creature_vehicle_reset.is_none());
+        assert!(already.creature_vehicle_install.is_none());
+        assert!(already.creature_zone_script_create.is_none());
+        assert!(already.add_to_map_tail.is_none());
+        let stored = map
+            .map_object_record(already_guid)
+            .and_then(MapObjectRecord::creature)
+            .unwrap();
+        assert!(stored.unit().world().object().is_in_world());
+        assert!(!stored.unit().world().object().is_new_object());
+    }
+
     #[test]
     fn add_map_object_record_to_map_like_cpp_preserves_typed_gameobject_spawn_index() {
         let mut map = test_map();
@@ -10645,6 +21184,129 @@ mod tests {
     }
 
     #[test]
+    fn creature_vehicle_remove_from_map_unit_remove_from_world_uninstalls_local_vehicle_kit_like_cpp()
+     {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46701, 4670101, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9101, true);
+        let guid = creature.guid();
+        let added = map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        assert!(added.creature_vehicle_install.is_some());
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(removed.was_in_world);
+        let remove = removed.creature_vehicle_remove.unwrap();
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.guid, guid);
+        assert!(unit_remove.was_in_world);
+        assert_eq!(unit_remove.vehicle_remove, Some(remove));
+        assert!(unit_remove.world_object_removed);
+        assert_eq!(remove.kit_id, Some(9101));
+        assert!(remove.had_kit);
+        assert_eq!(remove.previous_installed, Some(true));
+        assert!(remove.on_remove_from_world);
+        assert!(!remove.send_set_vehicle_rec_id_zero_represented);
+        assert!(remove.uninstall_represented);
+        assert!(remove.remove_all_passengers_represented);
+        assert!(remove.script_on_uninstall_represented);
+        assert!(remove.kit_cleared);
+        assert!(removed.object.is_some());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_delete_keeps_uninstall_evidence_without_object_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46702, 4670201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9102, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, true).unwrap();
+
+        let remove = removed.creature_vehicle_remove.unwrap();
+        let unit_remove = removed.creature_unit_remove_from_world.unwrap();
+        assert_eq!(unit_remove.vehicle_remove, Some(remove));
+        assert!(unit_remove.world_object_removed);
+        assert_eq!(remove.kit_id, Some(9102));
+        assert!(remove.kit_cleared);
+        assert!(removed.object.is_none());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_not_in_world_does_not_consume_kit_like_cpp() {
+        let mut map = test_map();
+        let mut creature = test_creature_for_spawn(46703, 4670301, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        creature
+            .unit_mut()
+            .subsystems_mut()
+            .vehicle
+            .set_vehicle_kit(9103, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let stored = map
+            .map_objects
+            .get_mut(&guid)
+            .and_then(MapObjectRecord::creature_mut)
+            .unwrap();
+        stored
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(removed.creature_unit_remove_from_world.is_none());
+        assert!(removed.creature_vehicle_remove.is_none());
+        assert!(removed.object.is_some());
+    }
+
+    #[test]
+    fn creature_vehicle_remove_from_map_non_creature_has_no_evidence_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(46704, 4670401);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(removed.creature_unit_remove_from_world.is_none());
+        assert!(removed.creature_vehicle_remove.is_none());
+    }
+
+    #[test]
     fn remove_from_map_like_cpp_removes_store_cell_and_resets_object_binding() {
         let mut map = test_map();
         let creature = world_object(HighGuid::Creature, 571, 7, false);
@@ -10659,6 +21321,7 @@ mod tests {
         assert_eq!(removed.guid, guid);
         assert_eq!(removed.cell, added.cell);
         assert!(removed.was_in_world);
+        assert!(removed.cxx_in_world);
         assert!(!removed.was_active);
         assert!(removed.removed_from_cell);
         assert!(!removed.delete_from_world);
@@ -10678,6 +21341,221 @@ mod tests {
         assert!(!object.object().is_in_grid());
         assert!(!object.has_current_map());
         assert_eq!(object.current_cell(), None);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_unregisters_personal_phase_tracker_from_object_owner_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 48401);
+        let mut gameobject = test_gameobject_for_spawn(48401, 4840101);
+        gameobject
+            .world_mut()
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(owner);
+        let guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        map.register_personal_phase_object_for_test(84, owner, guid);
+        assert_eq!(map.personal_phase_tracker().tracker_count(), 1);
+
+        let outcome = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert_eq!(outcome.personal_phase_unregister.phase_owner, owner);
+        assert!(outcome.personal_phase_unregister.attempted);
+        assert!(outcome.personal_phase_unregister.tracker_found);
+        assert!(outcome.personal_phase_unregister.removed);
+        assert!(outcome.personal_phase_unregister.removed_owner_tracker);
+        assert_eq!(map.personal_phase_tracker().tracker_count(), 0);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_personal_phase_empty_or_missing_owner_noops_like_cpp() {
+        let mut empty_owner_map = test_map();
+        let empty_owner_gameobject = test_gameobject_for_spawn(48402, 4840201);
+        let empty_owner_guid = empty_owner_gameobject.world().guid();
+        empty_owner_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(empty_owner_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let empty_owner = empty_owner_map
+            .remove_from_map_like_cpp(empty_owner_guid, false)
+            .unwrap();
+        assert_eq!(
+            empty_owner.personal_phase_unregister.phase_owner,
+            ObjectGuid::EMPTY
+        );
+        assert!(!empty_owner.personal_phase_unregister.attempted);
+        assert!(!empty_owner.personal_phase_unregister.tracker_found);
+        assert!(!empty_owner.personal_phase_unregister.removed);
+
+        let mut missing_tracker_map = test_map();
+        let missing_owner = ObjectGuid::create_player(1, 48403);
+        let mut missing_tracker_gameobject = test_gameobject_for_spawn(48403, 4840301);
+        missing_tracker_gameobject
+            .world_mut()
+            .phase_shift_mut()
+            .set_personal_guid_like_cpp(missing_owner);
+        let missing_tracker_guid = missing_tracker_gameobject.world().guid();
+        missing_tracker_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(missing_tracker_gameobject).unwrap(),
+            )
+            .unwrap();
+
+        let missing_tracker = missing_tracker_map
+            .remove_from_map_like_cpp(missing_tracker_guid, false)
+            .unwrap();
+        assert_eq!(
+            missing_tracker.personal_phase_unregister.phase_owner,
+            missing_owner
+        );
+        assert!(missing_tracker.personal_phase_unregister.attempted);
+        assert!(!missing_tracker.personal_phase_unregister.tracker_found);
+        assert!(!missing_tracker.personal_phase_unregister.removed);
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_follows_cpp_in_world_type_range() {
+        let mut dynamic_map = test_map();
+        let dynamic = test_dynamic_object_for_viewpoint(4840401);
+        let dynamic_guid = dynamic.world().guid();
+        dynamic_map
+            .insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic).unwrap())
+            .unwrap();
+        let dynamic_removed = dynamic_map
+            .remove_from_map_like_cpp(dynamic_guid, false)
+            .unwrap();
+        assert!(dynamic_removed.was_in_world);
+        assert!(!dynamic_removed.cxx_in_world);
+        assert!(
+            dynamic_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut area_map = test_map();
+        let area_trigger = test_area_trigger_for_spawn(48405, 4840501);
+        let area_guid = area_trigger.world().guid();
+        area_map
+            .insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+        let area_removed = area_map.remove_from_map_like_cpp(area_guid, false).unwrap();
+        assert!(area_removed.was_in_world);
+        assert!(!area_removed.cxx_in_world);
+        assert!(
+            area_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_skips_in_world_eligible_records() {
+        let mut gameobject_map = test_map();
+        let gameobject = test_gameobject_for_spawn(48406, 4840601);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        let gameobject_removed = gameobject_map
+            .remove_from_map_like_cpp(gameobject_guid, false)
+            .unwrap();
+        assert!(gameobject_removed.cxx_in_world);
+        assert!(
+            !gameobject_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut creature_map = test_map();
+        let creature = test_creature_for_spawn(48407, 4840701, true);
+        let creature_guid = creature.guid();
+        creature_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let creature_removed = creature_map
+            .remove_from_map_like_cpp(creature_guid, false)
+            .unwrap();
+        assert!(creature_removed.cxx_in_world);
+        assert!(
+            !creature_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut player_map = test_map();
+        let player = test_player_for_viewpoint(4840801);
+        let player_guid = player.guid();
+        player_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        let player_removed = player_map
+            .remove_from_map_like_cpp(player_guid, false)
+            .unwrap();
+        assert!(player_removed.cxx_in_world);
+        assert!(
+            !player_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut pet_map = test_map();
+        let pet = test_pet(4840901, true);
+        let pet_guid = pet.creature().guid();
+        pet_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_pet(pet).unwrap())
+            .unwrap();
+        let pet_removed = pet_map.remove_from_map_like_cpp(pet_guid, false).unwrap();
+        assert!(pet_removed.cxx_in_world);
+        assert!(
+            !pet_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+
+        let mut transport_map = test_map();
+        let transport = test_transport(4841001, true);
+        let transport_guid = transport.world().guid();
+        transport_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_transport(transport).unwrap(),
+            )
+            .unwrap();
+        let transport_removed = transport_map
+            .remove_from_map_like_cpp(transport_guid, false)
+            .unwrap();
+        assert!(transport_removed.cxx_in_world);
+        assert!(
+            !transport_removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
+    }
+
+    #[test]
+    fn remove_from_map_like_cpp_visibility_on_destroy_runs_for_not_in_world_gameobject_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = test_gameobject_for_spawn(48411, 4841101);
+        gameobject.world_mut().object_mut().remove_from_world();
+        let guid = gameobject.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(guid, false).unwrap();
+
+        assert!(!removed.was_in_world);
+        assert!(!removed.cxx_in_world);
+        assert!(
+            removed
+                .visibility_on_destroy
+                .update_object_visibility_on_destroy_represented
+        );
     }
 
     #[test]
@@ -10713,6 +21591,67 @@ mod tests {
         let creature = map.get_typed_creature(guid).unwrap();
         assert!(creature.unit().world().object().is_destroyed_object());
         assert_eq!(creature.cleanup_before_delete_count(), 1);
+    }
+
+    #[test]
+    fn personal_phase_tracker_update_enqueues_expired_canonical_object_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 44001);
+        let phase_id = 44;
+        let creature = test_creature_for_spawn(44001, 4400101, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        map.register_personal_phase_object_for_test(phase_id, owner, guid);
+        map.mark_personal_phases_for_deletion_for_test(owner);
+
+        let early = map.update_personal_phase_tracker_like_cpp(59_999);
+
+        assert_eq!(early, PersonalPhaseTrackerUpdateSummaryLikeCpp::default());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(guid).is_some());
+
+        let expired = map.update_personal_phase_tracker_like_cpp(1);
+
+        assert_eq!(
+            expired,
+            PersonalPhaseTrackerUpdateSummaryLikeCpp {
+                expired_objects: 1,
+                remove_queued: 1,
+                missing_or_stale: 0,
+                unsupported_kinds: 0,
+                duplicate_queued: 0,
+            }
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        assert!(map.map_object_record(guid).is_some());
+        let creature = map.get_typed_creature(guid).unwrap();
+        assert!(creature.unit().world().object().is_destroyed_object());
+        assert_eq!(creature.cleanup_before_delete_count(), 1);
+    }
+
+    #[test]
+    fn personal_phase_tracker_update_counts_missing_expired_guid_like_cpp() {
+        let mut map = test_map();
+        let owner = ObjectGuid::create_player(1, 44002);
+        let missing_guid = guid(HighGuid::Creature, 4400201);
+        map.register_personal_phase_object_for_test(44, owner, missing_guid);
+        map.mark_personal_phases_for_deletion_for_test(owner);
+
+        let summary = map.update_personal_phase_tracker_like_cpp(60_000);
+
+        assert_eq!(
+            summary,
+            PersonalPhaseTrackerUpdateSummaryLikeCpp {
+                expired_objects: 1,
+                remove_queued: 0,
+                missing_or_stale: 1,
+                unsupported_kinds: 0,
+                duplicate_queued: 0,
+            }
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 0);
     }
 
     #[test]
@@ -10855,6 +21794,126 @@ mod tests {
             .relocate(Position::xyz(11.0, 21.0, 31.0));
         dynamic_object.world_mut().object_mut().add_to_world();
         dynamic_object
+    }
+
+    #[test]
+    fn send_object_updates_processes_dynamic_object_data_update_like_cpp() {
+        use wow_entities::{DYNAMIC_OBJECT_DATA_PARENT_BIT, DYNAMIC_OBJECT_DATA_RADIUS_BIT};
+
+        let mut map = test_map();
+        let dynamic_object = test_dynamic_object_for_viewpoint(501001);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let record = map.map_objects.get_mut(&dynamic_object_guid).unwrap();
+        assert!(!record.object().object().is_object_updated());
+        record.dynamic_object_mut().unwrap().set_radius(12.5);
+        assert!(record.object().object().is_object_updated());
+        assert!(
+            record
+                .dynamic_object()
+                .unwrap()
+                .dynamic_object_data_changes_mask()
+                .is_any_set()
+        );
+
+        let summary = map.send_object_updates_like_cpp();
+
+        assert_eq!(summary.queued_before, 1);
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.cleared_update_masks, 1);
+        assert_eq!(summary.skipped_not_in_world, 0);
+        assert_eq!(summary.missing_or_stale, 0);
+        assert_eq!(summary.fanout_not_represented, 1);
+        assert_eq!(summary.dynamic_object_values_updates.len(), 1);
+        let represented_values = &summary.dynamic_object_values_updates[0];
+        assert_eq!(represented_values.guid, dynamic_object_guid);
+        let dynamic_object_data = represented_values
+            .values_update
+            .dynamic_object_data
+            .as_ref()
+            .unwrap();
+        assert!(
+            dynamic_object_data
+                .mask
+                .is_set(DYNAMIC_OBJECT_DATA_PARENT_BIT)
+        );
+        assert!(
+            dynamic_object_data
+                .mask
+                .is_set(DYNAMIC_OBJECT_DATA_RADIUS_BIT)
+        );
+        assert_eq!(dynamic_object_data.values.radius, 12.5);
+        assert!(
+            !map.map_object_record(dynamic_object_guid)
+                .unwrap()
+                .object()
+                .object()
+                .is_object_updated()
+        );
+        assert!(
+            !map.map_object_record(dynamic_object_guid)
+                .unwrap()
+                .dynamic_object()
+                .unwrap()
+                .dynamic_object_data_changes_mask()
+                .is_any_set()
+        );
+        assert!(
+            !map.map_object_record(dynamic_object_guid)
+                .unwrap()
+                .dynamic_object()
+                .unwrap()
+                .values_update()
+                .has_data()
+        );
+    }
+
+    #[test]
+    fn far_spell_callbacks_drain_fifo_record_execution_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 10,
+            action: RepresentedFarSpellCallbackActionLikeCpp::RecordExecution,
+        });
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 20,
+            action: RepresentedFarSpellCallbackActionLikeCpp::RecordExecution,
+        });
+
+        let summary = map.drain_far_spell_callbacks_like_cpp();
+
+        assert_eq!(summary.queued_before, 2);
+        assert_eq!(summary.processed, 2);
+        assert_eq!(summary.record_only, 2);
+        assert_eq!(summary.queued_after, 0);
+        assert_eq!(map.far_spell_callbacks_count_like_cpp(), 0);
+        assert_eq!(
+            map.represented_far_spell_callback_execution_log_like_cpp(),
+            &[10, 20]
+        );
+    }
+
+    #[test]
+    fn far_spell_callback_queue_object_remove_missing_records_stale_like_cpp() {
+        let mut map = Map::new(1, 0, 0, 60_000);
+        let missing_guid = guid(HighGuid::DynamicObject, 487_001);
+        map.add_far_spell_callback_like_cpp(RepresentedFarSpellCallbackLikeCpp {
+            id: 1,
+            action: RepresentedFarSpellCallbackActionLikeCpp::QueueObjectRemove {
+                guid: missing_guid,
+            },
+        });
+
+        let summary = map.drain_far_spell_callbacks_like_cpp();
+
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.remove_queue_attempted, 1);
+        assert_eq!(summary.remove_queued, 0);
+        assert_eq!(summary.remove_missing_or_stale, 1);
+        assert_eq!(summary.remove_duplicates, 0);
+        assert_eq!(summary.queued_after, 0);
     }
 
     fn create_farsight_focus_for_tests<Terrain, Lifecycle>(
@@ -11674,6 +22733,1287 @@ mod tests {
     }
 
     #[test]
+    fn move_list_add_same_guid_updates_position_without_duplicate_like_cpp() {
+        let mut map = test_map();
+        let creature = test_creature_for_spawn(44101, 4410101, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let first = Position::xyz(2.0, 3.0, 4.0);
+        let second = Position::xyz(3.0, 4.0, 5.0);
+
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, first),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, second),
+            AddObjectToMoveListOutcomeLikeCpp::UpdatedExisting
+        );
+
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            1
+        );
+        let pending = map
+            .pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid)
+            .unwrap();
+        assert_eq!(pending.state, MapObjectCellMoveStateLikeCpp::Active);
+        assert_eq!(pending.new_position, second);
+    }
+
+    #[test]
+    fn move_list_remove_marks_inactive_and_drain_resets_without_relocation_like_cpp() {
+        let mut map = test_map();
+        let creature = test_creature_for_spawn(44102, 4410201, true);
+        let guid = creature.guid();
+        let original_position = creature.unit().world().position();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, Position::xyz(50.0, 50.0, 6.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert_eq!(
+            map.remove_creature_from_move_list_like_cpp(guid),
+            RemoveObjectFromMoveListOutcomeLikeCpp::MarkedInactive
+        );
+        let summary = map.move_all_creatures_in_move_list_like_cpp();
+
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.inactive_reset, 1);
+        assert_eq!(summary.relocated, 0);
+        assert_eq!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, guid),
+            None
+        );
+        assert_eq!(map.map_object(guid).unwrap().position(), original_position);
+    }
+
+    #[test]
+    fn move_list_drain_active_in_world_relocates_cell_membership_like_cpp() {
+        let mut map = test_map();
+        let creature = test_creature_for_spawn(44103, 4410301, true);
+        let guid = creature.guid();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let new_position = Position::xyz(120.0, 120.0, 7.0);
+        map.load_grid(new_position.x, new_position.y);
+        let new_cell = Cell::from_world(new_position.x, new_position.y);
+
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(guid, new_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        let summary = map.move_all_creatures_in_move_list_like_cpp();
+
+        assert_eq!(summary.processed, 1);
+        assert_eq!(summary.relocated, 1);
+        let stored = map.map_object(guid).unwrap();
+        assert_eq!(stored.position(), new_position);
+        assert_eq!(
+            stored.current_cell(),
+            Some((new_cell.cell_x(), new_cell.cell_y()))
+        );
+        let nearby = map.exact_cell_guids_like_cpp(new_cell.cell_coord());
+        assert!(nearby.grid.creatures.contains(&guid) || nearby.world.creatures.contains(&guid));
+    }
+
+    #[test]
+    fn move_list_drain_tolerates_missing_wrong_kind_and_not_in_world_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::Creature, 4410401);
+        let gameobject = test_gameobject_for_spawn(44104, 4410402);
+        let gameobject_guid = gameobject.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        let mut not_in_world = test_creature_for_spawn(44105, 4410403, true);
+        not_in_world
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        let not_in_world_guid = not_in_world.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(not_in_world).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(missing_guid, Position::xyz(2.0, 2.0, 2.0)),
+            AddObjectToMoveListOutcomeLikeCpp::MissingOrStale
+        );
+        assert!(matches!(
+            map.add_creature_to_move_list_like_cpp(gameobject_guid, Position::xyz(2.0, 2.0, 2.0)),
+            AddObjectToMoveListOutcomeLikeCpp::WrongKind {
+                actual: AccessorObjectKind::GameObject
+            }
+        ));
+        map.creatures_to_move.push(missing_guid);
+        map.creature_move_states.insert(
+            missing_guid,
+            PendingCellMoveLikeCpp {
+                state: MapObjectCellMoveStateLikeCpp::Active,
+                new_position: Position::xyz(2.0, 2.0, 2.0),
+            },
+        );
+        map.creatures_to_move.push(gameobject_guid);
+        map.creature_move_states.insert(
+            gameobject_guid,
+            PendingCellMoveLikeCpp {
+                state: MapObjectCellMoveStateLikeCpp::Active,
+                new_position: Position::xyz(2.0, 2.0, 2.0),
+            },
+        );
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(not_in_world_guid, Position::xyz(2.0, 2.0, 2.0)),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+
+        let summary = map.move_all_creatures_in_move_list_like_cpp();
+
+        assert_eq!(summary.processed, 3);
+        assert_eq!(summary.missing_or_stale, 1);
+        assert_eq!(summary.wrong_kind, 1);
+        assert_eq!(summary.not_in_world, 1);
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            0
+        );
+        assert_eq!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, missing_guid),
+            None
+        );
+    }
+
+    #[test]
+    fn move_list_dynamic_and_area_trigger_blocked_unloaded_grid_do_not_queue_remove_like_cpp() {
+        let mut map = test_map();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4410501);
+        dynamic_object.world_mut().set_active(false);
+        let dynamic_guid = dynamic_object.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_dynamic_object(dynamic_object).unwrap(),
+        )
+        .unwrap();
+        let area_trigger = test_area_trigger_for_update(4410502, 10_000, true);
+        let area_guid = area_trigger.world().guid();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_area_trigger(area_trigger).unwrap(),
+        )
+        .unwrap();
+        let unloaded_grid_position = Position::xyz(5_000.0, 5_000.0, 1.0);
+
+        assert_eq!(
+            map.add_dynamic_object_to_move_list_like_cpp(dynamic_guid, unloaded_grid_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert_eq!(
+            map.add_area_trigger_to_move_list_like_cpp(area_guid, unloaded_grid_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        let dyn_summary = map.move_all_dynamic_objects_in_move_list_like_cpp();
+        let area_summary = map.move_all_area_triggers_in_move_list_like_cpp();
+
+        assert_eq!(dyn_summary.blocked_by_unloaded_grid, 1);
+        assert_eq!(area_summary.blocked_by_unloaded_grid, 1);
+        assert_eq!(dyn_summary.remove_list_queued, 0);
+        assert_eq!(area_summary.remove_list_queued, 0);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(dynamic_guid).is_some());
+        assert!(map.map_object_record(area_guid).is_some());
+    }
+
+    #[test]
+    fn unload_grid_at_false_consumes_creature_gameobject_area_trigger_move_lists_like_cpp() {
+        let mut map = test_map();
+        let creature = test_creature_for_spawn(44106, 4410601, true);
+        let creature_guid = creature.guid();
+        let gameobject = test_gameobject_for_spawn(44106, 4410602);
+        let gameobject_guid = gameobject.world().guid();
+        let area_trigger = test_area_trigger_for_update(4410603, 10_000, true);
+        let area_guid = area_trigger.world().guid();
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_area_trigger(area_trigger).unwrap(),
+        )
+        .unwrap();
+        let same_cell_new_position = Position::xyz(2.0, 3.0, 4.0);
+        map.add_creature_to_move_list_like_cpp(creature_guid, same_cell_new_position);
+        map.add_game_object_to_move_list_like_cpp(gameobject_guid, same_cell_new_position);
+        map.add_area_trigger_to_move_list_like_cpp(area_guid, same_cell_new_position);
+
+        let unload_position = Position::xyz(3_000.0, 3_000.0, 0.0);
+        map.load_grid(unload_position.x, unload_position.y);
+        let unload_cell = Cell::from_world(unload_position.x, unload_position.y);
+        let unload_grid = GridCoord::new(unload_cell.grid_x(), unload_cell.grid_y());
+
+        assert!(map.unload_grid_at(unload_grid, false));
+
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            0
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject),
+            0
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger),
+            0
+        );
+        assert_eq!(
+            map.map_object(creature_guid).unwrap().position(),
+            same_cell_new_position
+        );
+        assert_eq!(
+            map.map_object(gameobject_guid).unwrap().position(),
+            same_cell_new_position
+        );
+        assert_eq!(
+            map.map_object(area_guid).unwrap().position(),
+            same_cell_new_position
+        );
+        assert_eq!(map.lifecycle().evacuates, 1);
+    }
+
+    #[test]
+    fn unload_grid_at_true_does_not_drain_move_lists_and_unload_all_helper_clears_cpp_subset_like_cpp()
+     {
+        let mut map = test_map();
+        let creature = test_creature_for_spawn(44107, 4410701, true);
+        let creature_guid = creature.guid();
+        let creature_original_position = creature.unit().world().position();
+        let gameobject = test_gameobject_for_spawn(44107, 4410702);
+        let gameobject_guid = gameobject.world().guid();
+        let gameobject_original_position = gameobject.world().position();
+        let area_trigger = test_area_trigger_for_update(4410703, 10_000, true);
+        let area_guid = area_trigger.world().guid();
+        let area_original_position = area_trigger.world().position();
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_area_trigger(area_trigger).unwrap(),
+        )
+        .unwrap();
+        let pending_position = Position::xyz(2.0, 3.0, 4.0);
+        assert_eq!(
+            map.add_creature_to_move_list_like_cpp(creature_guid, pending_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert_eq!(
+            map.add_game_object_to_move_list_like_cpp(gameobject_guid, pending_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+        assert_eq!(
+            map.add_area_trigger_to_move_list_like_cpp(area_guid, pending_position),
+            AddObjectToMoveListOutcomeLikeCpp::Queued
+        );
+
+        let unload_position = Position::xyz(3_500.0, 3_500.0, 0.0);
+        map.load_grid(unload_position.x, unload_position.y);
+        let unload_cell = Cell::from_world(unload_position.x, unload_position.y);
+        let unload_grid = GridCoord::new(unload_cell.grid_x(), unload_cell.grid_y());
+
+        assert!(map.unload_grid_at(unload_grid, true));
+
+        assert_eq!(
+            map.map_object(creature_guid).unwrap().position(),
+            creature_original_position
+        );
+        assert_eq!(
+            map.map_object(gameobject_guid).unwrap().position(),
+            gameobject_original_position
+        );
+        assert_eq!(
+            map.map_object(area_guid).unwrap().position(),
+            area_original_position
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            1
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject),
+            1
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger),
+            1
+        );
+        assert_eq!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, creature_guid)
+                .unwrap()
+                .new_position,
+            pending_position
+        );
+        assert_eq!(map.lifecycle().evacuates, 0);
+
+        map.clear_unload_all_delayed_moves_like_cpp();
+
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature),
+            0
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::GameObject),
+            0
+        );
+        assert_eq!(
+            map.move_list_len_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger),
+            1
+        );
+        assert_eq!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::Creature, creature_guid),
+            None
+        );
+        assert_eq!(
+            map.pending_cell_move_like_cpp(
+                MapObjectMoveListFamilyLikeCpp::GameObject,
+                gameobject_guid
+            ),
+            None
+        );
+        assert!(
+            map.pending_cell_move_like_cpp(MapObjectMoveListFamilyLikeCpp::AreaTrigger, area_guid)
+                .is_some()
+        );
+    }
+
+    fn test_area_trigger_for_update(counter: i64, duration_ms: i32, in_world: bool) -> AreaTrigger {
+        let mut area_trigger = AreaTrigger::new();
+        area_trigger
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::AreaTrigger, counter));
+        area_trigger.world_mut().object_mut().set_entry(42);
+        area_trigger.world_mut().set_map(571, 7).unwrap();
+        area_trigger
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            area_trigger.world_mut().object_mut().add_to_world();
+        }
+        area_trigger.set_duration(duration_ms);
+        area_trigger
+    }
+
+    #[test]
+    fn area_trigger_update_decrements_duration_without_queue_like_cpp() {
+        let mut map = test_map();
+        let area_trigger = test_area_trigger_for_update(4340101, 1_000, true);
+        let area_trigger_guid = area_trigger.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+
+        let outcome = map.update_area_trigger_like_cpp(area_trigger_guid, 250);
+
+        assert_eq!(outcome.status, AreaTriggerUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.duration_before_ms, Some(1_000));
+        assert_eq!(outcome.duration_after_ms, Some(750));
+        assert_eq!(outcome.time_since_created_before_ms, Some(0));
+        assert_eq!(outcome.time_since_created_after_ms, Some(250));
+        assert!(outcome.non_static_movement_would_run);
+        assert!(outcome.ai_update_would_run);
+        assert!(outcome.target_list_update_would_run);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        let area_trigger = map
+            .map_object_record(area_trigger_guid)
+            .unwrap()
+            .area_trigger()
+            .unwrap();
+        assert_eq!(area_trigger.duration_ms(), 750);
+        assert_eq!(area_trigger.time_since_created_ms(), 250);
+        assert!(!area_trigger.is_removed());
+    }
+
+    #[test]
+    fn area_trigger_update_expiry_queues_remove_list_and_preserves_record_like_cpp() {
+        let mut map = test_map();
+        let area_trigger = test_area_trigger_for_update(4340201, 250, true);
+        let area_trigger_guid = area_trigger.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+
+        let outcome = map.update_area_trigger_like_cpp(area_trigger_guid, 250);
+
+        assert_eq!(
+            outcome.status,
+            AreaTriggerUpdateStatusLikeCpp::ExpiredRemoveQueued
+        );
+        assert_eq!(outcome.duration_before_ms, Some(250));
+        assert_eq!(outcome.duration_after_ms, Some(250));
+        assert_eq!(outcome.time_since_created_before_ms, Some(0));
+        assert_eq!(outcome.time_since_created_after_ms, Some(250));
+        assert!(outcome.non_static_movement_would_run);
+        assert!(!outcome.ai_update_would_run);
+        assert!(!outcome.target_list_update_would_run);
+        assert_eq!(outcome.remove_list.unwrap().queued, true);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        let area_trigger = map
+            .map_object_record(area_trigger_guid)
+            .unwrap()
+            .area_trigger()
+            .unwrap();
+        assert!(area_trigger.is_removed());
+    }
+
+    #[test]
+    fn area_trigger_update_permanent_duration_increments_time_without_queue_like_cpp() {
+        let mut map = test_map();
+        let mut area_trigger = test_area_trigger_for_update(4340301, -1, true);
+        area_trigger.set_spawn_id(4340301);
+        let area_trigger_guid = area_trigger.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+
+        let outcome = map.update_area_trigger_like_cpp(area_trigger_guid, 1_000);
+
+        assert_eq!(outcome.status, AreaTriggerUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.duration_before_ms, Some(-1));
+        assert_eq!(outcome.duration_after_ms, Some(-1));
+        assert_eq!(outcome.time_since_created_after_ms, Some(1_000));
+        assert!(!outcome.non_static_movement_would_run);
+        assert!(outcome.ai_update_would_run);
+        assert!(outcome.target_list_update_would_run);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn area_trigger_update_not_in_world_returns_no_mutation_or_queue_like_cpp() {
+        let mut map = test_map();
+        let area_trigger = test_area_trigger_for_update(4340401, 500, false);
+        let area_trigger_guid = area_trigger.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+
+        let outcome = map.update_area_trigger_like_cpp(area_trigger_guid, 250);
+
+        assert_eq!(outcome.status, AreaTriggerUpdateStatusLikeCpp::NotInWorld);
+        assert_eq!(outcome.duration_before_ms, Some(500));
+        assert_eq!(outcome.duration_after_ms, Some(500));
+        assert_eq!(outcome.time_since_created_before_ms, Some(0));
+        assert_eq!(outcome.time_since_created_after_ms, Some(0));
+        assert!(!outcome.non_static_movement_would_run);
+        assert!(!outcome.ai_update_would_run);
+        assert!(!outcome.target_list_update_would_run);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        let area_trigger = map
+            .map_object_record(area_trigger_guid)
+            .unwrap()
+            .area_trigger()
+            .unwrap();
+        assert_eq!(area_trigger.duration_ms(), 500);
+        assert_eq!(area_trigger.time_since_created_ms(), 0);
+        assert!(!area_trigger.is_removed());
+    }
+
+    #[test]
+    fn area_trigger_update_missing_or_non_area_creates_no_dummy_or_queue_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::AreaTrigger, 4340501);
+        let creature_guid = guid(HighGuid::Creature, 4340502);
+        let creature = test_creature_for_spawn(43405, 4340502, true);
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let missing = map.update_area_trigger_like_cpp(missing_guid, 250);
+        let non_area = map.update_area_trigger_like_cpp(creature_guid, 250);
+
+        assert_eq!(
+            missing.status,
+            AreaTriggerUpdateStatusLikeCpp::MissingAreaTrigger
+        );
+        assert_eq!(
+            non_area.status,
+            AreaTriggerUpdateStatusLikeCpp::NotAreaTrigger
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(missing_guid).is_none());
+        assert!(map.map_object_record(creature_guid).is_some());
+    }
+
+    #[test]
+    fn send_object_updates_clears_in_world_changed_object_like_cpp() {
+        let mut map = test_map();
+        let game_object = test_gameobject_for_spawn(4450101, 4450101);
+        let game_object_guid = game_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(game_object).unwrap())
+            .unwrap();
+        map.map_objects
+            .get_mut(&game_object_guid)
+            .unwrap()
+            .object_mut()
+            .object_mut()
+            .set_scale(2.0);
+
+        let before = map.map_object(game_object_guid).unwrap().object();
+        assert!(before.is_object_updated());
+        assert!(!before.changed_fields().is_empty());
+
+        let summary = map.send_object_updates_like_cpp();
+
+        assert_eq!(
+            summary,
+            SendObjectUpdatesSummaryLikeCpp {
+                queued_before: 1,
+                processed: 1,
+                cleared_update_masks: 1,
+                skipped_not_in_world: 0,
+                missing_or_stale: 0,
+                fanout_not_represented: 1,
+                dynamic_object_values_updates: Vec::new(),
+            }
+        );
+        let after = map.map_object(game_object_guid).unwrap().object();
+        assert!(!after.is_object_updated());
+        assert!(after.changed_fields().is_empty());
+    }
+
+    #[test]
+    fn send_object_updates_skips_unchanged_objects_like_cpp() {
+        let mut map = test_map();
+        let game_object = test_gameobject_for_spawn(4450201, 4450201);
+        let game_object_guid = game_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(game_object).unwrap())
+            .unwrap();
+
+        let before = map.map_object(game_object_guid).unwrap().object();
+        assert!(!before.is_object_updated());
+        assert!(before.changed_fields().is_empty());
+
+        let summary = map.send_object_updates_like_cpp();
+
+        assert_eq!(summary, SendObjectUpdatesSummaryLikeCpp::default());
+        let after = map.map_object(game_object_guid).unwrap().object();
+        assert!(!after.is_object_updated());
+        assert!(after.changed_fields().is_empty());
+    }
+
+    #[test]
+    fn send_object_updates_not_in_world_updated_state_is_not_publicly_constructible() {
+        // C++ `_updateObjects` should never contain not-in-world objects:
+        // `Object::AddToObjectUpdateIfNeeded` only sets `m_objectUpdated` when
+        // `m_inWorld`, and `Object::remove_from_world`/`ClearUpdateMask(true)`
+        // clears the flag. Rust mirrors that public invariant in
+        // `EntityObject`, whose `object_updated`/`in_world` fields are private to
+        // `wow-entities`, so wow-map tests cannot construct the defensive
+        // `skipped_not_in_world` branch without unsafe/private-field hacks.
+        let mut map = test_map();
+        let mut game_object = test_gameobject_for_spawn(4450301, 4450301);
+        game_object.world_mut().object_mut().set_scale(2.0);
+        game_object.world_mut().object_mut().remove_from_world();
+        let game_object_guid = game_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_game_object(game_object).unwrap())
+            .unwrap();
+
+        assert!(
+            !map.map_object(game_object_guid)
+                .unwrap()
+                .object()
+                .is_in_world()
+        );
+        assert!(
+            !map.map_object(game_object_guid)
+                .unwrap()
+                .object()
+                .is_object_updated()
+        );
+        assert_eq!(
+            map.send_object_updates_like_cpp(),
+            SendObjectUpdatesSummaryLikeCpp::default()
+        );
+    }
+
+    fn test_conversation_for_update(
+        counter: i64,
+        duration_ms: i32,
+        in_world: bool,
+    ) -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Conversation, counter));
+        conversation.world_mut().object_mut().set_entry(42);
+        conversation.world_mut().set_map(571, 7).unwrap();
+        conversation
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        if in_world {
+            conversation.world_mut().object_mut().add_to_world();
+        }
+        conversation.set_duration_ms(duration_ms);
+        conversation
+    }
+
+    fn test_transport_for_update(counter: i64, in_world: bool) -> Transport {
+        let template = wow_entities::TransportTemplate {
+            total_path_time_ms: 1_000,
+            path_legs: vec![wow_entities::TransportPathLeg {
+                map_id: 571,
+                start_timestamp_ms: 0,
+                duration_ms: 1_000,
+                segments: vec![],
+            }],
+            ..wow_entities::TransportTemplate::default()
+        };
+        let mut transport = Transport::with_template(template);
+        transport
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::Transport, counter));
+        transport.world_mut().set_map(571, 7).unwrap();
+        transport.world_mut().relocate(Position::xyz(1.0, 2.0, 3.0));
+        transport.set_path_progress_ms(100);
+        if in_world {
+            transport.world_mut().object_mut().add_to_world();
+        }
+        transport
+    }
+
+    #[test]
+    fn transport_update_mutates_typed_canonical_record_like_cpp() {
+        let mut map = test_map();
+        let transport = test_transport_for_update(4390101, true);
+        let transport_guid = transport.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_transport(transport).unwrap())
+            .unwrap();
+
+        let outcome = map.update_transport_like_cpp(transport_guid, 50, 10_000);
+
+        assert_eq!(outcome.status, TransportUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.path_progress_before_ms, Some(100));
+        assert_eq!(outcome.path_progress_after_ms, Some(150));
+        assert_eq!(outcome.timer_ms, Some(150));
+        assert!(outcome.position_update_represented);
+        let transport = map
+            .map_object_record(transport_guid)
+            .and_then(MapObjectRecord::transport)
+            .unwrap();
+        assert_eq!(transport.path_progress_ms(), 150);
+    }
+
+    #[test]
+    fn transport_update_wrong_kind_missing_untyped_skip_but_not_in_world_updates_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::Transport, 4390201);
+        let creature = test_creature_for_spawn(43902, 4390202, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let not_in_world = test_transport_for_update(4390203, false);
+        let not_in_world_guid = not_in_world.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_transport(not_in_world).unwrap())
+            .unwrap();
+        let untyped_transport =
+            world_object_with_counter(HighGuid::Transport, 4390204, 571, 7, true);
+        let untyped_guid = untyped_transport.guid();
+        map.insert_map_object(AccessorObjectKind::Transport, untyped_transport)
+            .unwrap();
+
+        let missing = map.update_transport_like_cpp(missing_guid, 50, 10_000);
+        let wrong_kind = map.update_transport_like_cpp(creature_guid, 50, 10_000);
+        let not_in_world = map.update_transport_like_cpp(not_in_world_guid, 50, 10_000);
+        let untyped = map.update_transport_like_cpp(untyped_guid, 50, 10_000);
+
+        assert_eq!(
+            missing.status,
+            TransportUpdateStatusLikeCpp::MissingTransport
+        );
+        assert_eq!(
+            wrong_kind.status,
+            TransportUpdateStatusLikeCpp::NotTransport
+        );
+        assert_eq!(not_in_world.status, TransportUpdateStatusLikeCpp::Updated);
+        assert_eq!(not_in_world.path_progress_before_ms, Some(100));
+        assert_eq!(not_in_world.path_progress_after_ms, Some(150));
+        assert_eq!(untyped.status, TransportUpdateStatusLikeCpp::NotTransport);
+        assert_eq!(map.map_object_count(), 3);
+        let transport = map
+            .map_object_record(not_in_world_guid)
+            .and_then(MapObjectRecord::transport)
+            .unwrap();
+        assert_eq!(transport.path_progress_ms(), 150);
+    }
+
+    #[test]
+    fn transports_update_summary_snapshots_only_typed_transports_like_cpp() {
+        let mut map = test_map();
+        let typed_transport = test_transport_for_update(4390301, true);
+        let typed_guid = typed_transport.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_transport(typed_transport).unwrap())
+            .unwrap();
+        let untyped_transport =
+            world_object_with_counter(HighGuid::Transport, 4390302, 571, 7, true);
+        map.insert_map_object(AccessorObjectKind::Transport, untyped_transport)
+            .unwrap();
+        let creature = test_creature_for_spawn(43903, 4390303, true);
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let summary = map.update_transports_like_cpp(250, 10_000);
+
+        assert_eq!(
+            summary,
+            TransportsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 1,
+                unsupported_no_period: 0,
+                missing_or_stale: 0,
+                not_transport: 0,
+                not_in_world: 0,
+                position_updates_represented: 1,
+                just_stopped: 0,
+            }
+        );
+        let transport = map
+            .map_object_record(typed_guid)
+            .and_then(MapObjectRecord::transport)
+            .unwrap();
+        assert_eq!(transport.path_progress_ms(), 350);
+    }
+
+    #[test]
+    fn transport_update_period_zero_reports_unsupported_without_mutation_like_cpp() {
+        let mut map = test_map();
+        let mut transport = test_transport_for_update(4390401, true);
+        let transport_guid = transport.world().guid();
+        transport.set_period(0);
+        transport.set_path_progress_ms(333);
+        map.insert_map_object_record(MapObjectRecord::new_transport(transport).unwrap())
+            .unwrap();
+
+        let outcome = map.update_transport_like_cpp(transport_guid, 50, 10_000);
+
+        assert_eq!(
+            outcome.status,
+            TransportUpdateStatusLikeCpp::UnsupportedNoPeriod
+        );
+        assert_eq!(outcome.path_progress_before_ms, Some(333));
+        assert_eq!(outcome.path_progress_after_ms, Some(333));
+        assert_eq!(outcome.timer_ms, None);
+        let transport = map
+            .map_object_record(transport_guid)
+            .and_then(MapObjectRecord::transport)
+            .unwrap();
+        assert_eq!(transport.path_progress_ms(), 333);
+    }
+
+    fn test_scene_object_for_update(
+        counter: i64,
+        in_world: bool,
+        created_by_spell_cast: ObjectGuid,
+    ) -> SceneObject {
+        let mut scene_object = SceneObject::new();
+        scene_object
+            .world_mut()
+            .object_mut()
+            .create(guid(HighGuid::SceneObject, counter));
+        scene_object.world_mut().object_mut().set_entry(42);
+        scene_object.world_mut().set_map(571, 7).unwrap();
+        scene_object
+            .world_mut()
+            .relocate(Position::xyz(1.0, 2.0, 3.0));
+        scene_object.set_created_by(guid(HighGuid::Player, counter + 1_000));
+        scene_object.set_created_by_spell_cast(created_by_spell_cast);
+        if in_world {
+            scene_object.world_mut().object_mut().add_to_world();
+        }
+        scene_object
+    }
+
+    #[test]
+    fn scene_object_update_with_creator_and_aura_updates_without_queue_like_cpp() {
+        let mut map = test_map();
+        let scene_object =
+            test_scene_object_for_update(4370101, true, guid(HighGuid::Cast, 4370102));
+        let scene_object_guid = scene_object.world().guid();
+        let owner_guid = scene_object.owner_guid();
+        let cast_guid = scene_object.created_by_spell_cast();
+        map.insert_map_object_record(MapObjectRecord::new_scene_object(scene_object).unwrap())
+            .unwrap();
+
+        let outcome = map.update_scene_object_like_cpp(
+            scene_object_guid,
+            250,
+            SceneObjectUpdateContextLikeCpp {
+                creator_exists: true,
+                linked_aura_exists: true,
+            },
+        );
+
+        assert_eq!(outcome.status, SceneObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.owner_guid, Some(owner_guid));
+        assert_eq!(outcome.created_by_spell_cast, Some(cast_guid));
+        assert!(outcome.creator_exists);
+        assert!(outcome.linked_aura_exists);
+        assert!(outcome.world_update_would_run);
+        assert!(!outcome.should_be_removed);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(scene_object_guid).is_some());
+    }
+
+    #[test]
+    fn scene_object_update_missing_creator_queues_remove_and_preserves_record_like_cpp() {
+        let mut map = test_map();
+        let scene_object = test_scene_object_for_update(4370201, true, ObjectGuid::EMPTY);
+        let scene_object_guid = scene_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_scene_object(scene_object).unwrap())
+            .unwrap();
+
+        let outcome = map.update_scene_object_like_cpp(
+            scene_object_guid,
+            250,
+            SceneObjectUpdateContextLikeCpp {
+                creator_exists: false,
+                linked_aura_exists: true,
+            },
+        );
+
+        assert_eq!(outcome.status, SceneObjectUpdateStatusLikeCpp::RemoveQueued);
+        assert!(outcome.world_update_would_run);
+        assert!(outcome.should_be_removed);
+        assert_eq!(outcome.remove_list.unwrap().queued, true);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        assert!(map.map_object_record(scene_object_guid).is_some());
+    }
+
+    #[test]
+    fn scene_object_update_missing_linked_aura_queues_remove_like_cpp() {
+        let mut map = test_map();
+        let scene_object =
+            test_scene_object_for_update(4370301, true, guid(HighGuid::Cast, 4370302));
+        let scene_object_guid = scene_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_scene_object(scene_object).unwrap())
+            .unwrap();
+
+        let outcome = map.update_scene_object_like_cpp(
+            scene_object_guid,
+            250,
+            SceneObjectUpdateContextLikeCpp {
+                creator_exists: true,
+                linked_aura_exists: false,
+            },
+        );
+
+        assert_eq!(outcome.status, SceneObjectUpdateStatusLikeCpp::RemoveQueued);
+        assert!(outcome.world_update_would_run);
+        assert!(outcome.should_be_removed);
+        assert_eq!(outcome.remove_list.unwrap().queued, true);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn scene_object_update_not_in_world_returns_no_mutation_or_queue_like_cpp() {
+        let mut map = test_map();
+        let scene_object =
+            test_scene_object_for_update(4370401, false, guid(HighGuid::Cast, 4370402));
+        let scene_object_guid = scene_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_scene_object(scene_object).unwrap())
+            .unwrap();
+
+        let outcome = map.update_scene_object_like_cpp(
+            scene_object_guid,
+            250,
+            SceneObjectUpdateContextLikeCpp {
+                creator_exists: false,
+                linked_aura_exists: false,
+            },
+        );
+
+        assert_eq!(outcome.status, SceneObjectUpdateStatusLikeCpp::NotInWorld);
+        assert!(!outcome.world_update_would_run);
+        assert!(!outcome.should_be_removed);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert!(map.map_object_record(scene_object_guid).is_some());
+    }
+
+    #[test]
+    fn scene_object_update_missing_non_scene_or_untyped_creates_no_dummy_or_queue_like_cpp() {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::SceneObject, 4370501);
+        let creature = test_creature_for_spawn(43705, 4370502, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped_scene = world_object_with_counter(HighGuid::SceneObject, 4370503, 571, 7, true);
+        let untyped_scene_guid = untyped_scene.guid();
+        map.insert_map_object(AccessorObjectKind::SceneObject, untyped_scene)
+            .unwrap();
+
+        let context = SceneObjectUpdateContextLikeCpp {
+            creator_exists: false,
+            linked_aura_exists: false,
+        };
+        let missing = map.update_scene_object_like_cpp(missing_guid, 250, context);
+        let non_scene = map.update_scene_object_like_cpp(creature_guid, 250, context);
+        let untyped = map.update_scene_object_like_cpp(untyped_scene_guid, 250, context);
+
+        assert_eq!(
+            missing.status,
+            SceneObjectUpdateStatusLikeCpp::MissingSceneObject
+        );
+        assert_eq!(
+            non_scene.status,
+            SceneObjectUpdateStatusLikeCpp::NotSceneObject
+        );
+        assert_eq!(
+            untyped.status,
+            SceneObjectUpdateStatusLikeCpp::NotSceneObject
+        );
+        assert_eq!(missing.remove_list, None);
+        assert_eq!(non_scene.remove_list, None);
+        assert_eq!(untyped.remove_list, None);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 2);
+        assert!(map.map_object_record(missing_guid).is_none());
+        assert!(map.map_object_record(creature_guid).is_some());
+        assert!(map.map_object_record(untyped_scene_guid).is_some());
+    }
+
+    #[test]
+    fn scene_objects_update_summary_snapshots_only_typed_scene_objects_like_cpp() {
+        let mut map = test_map();
+        let typed_scene = test_scene_object_for_update(4370601, true, ObjectGuid::EMPTY);
+        let typed_scene_guid = typed_scene.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_scene_object(typed_scene).unwrap())
+            .unwrap();
+        let untyped_scene = world_object_with_counter(HighGuid::SceneObject, 4370602, 571, 7, true);
+        map.insert_map_object(AccessorObjectKind::SceneObject, untyped_scene)
+            .unwrap();
+        let creature = test_creature_for_spawn(43706, 4370603, true);
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let summary = map.update_scene_objects_like_cpp(250, |_guid, scene_object| {
+            assert_eq!(scene_object.world().guid(), typed_scene_guid);
+            SceneObjectUpdateContextLikeCpp {
+                creator_exists: true,
+                linked_aura_exists: true,
+            }
+        });
+
+        assert_eq!(
+            summary,
+            SceneObjectsUpdateSummaryLikeCpp {
+                visited: 1,
+                updated: 1,
+                remove_queued: 0,
+                missing_or_stale: 0,
+                not_scene_object: 0,
+                not_in_world: 0,
+            }
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn conversation_update_decrements_duration_without_queue_like_cpp() {
+        let mut map = test_map();
+        let conversation = test_conversation_for_update(4360101, 1_000, true);
+        let conversation_guid = conversation.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_conversation(conversation).unwrap())
+            .unwrap();
+
+        let outcome = map.update_conversation_like_cpp(conversation_guid, 250);
+
+        assert_eq!(outcome.status, ConversationUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.duration_before_ms, Some(1_000));
+        assert_eq!(outcome.duration_after_ms, Some(750));
+        assert!(outcome.script_update_would_run);
+        assert!(outcome.world_update_would_run);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        let conversation = map
+            .map_object_record(conversation_guid)
+            .unwrap()
+            .conversation()
+            .unwrap();
+        assert_eq!(conversation.duration_ms(), 750);
+        assert!(!conversation.is_removed());
+    }
+
+    #[test]
+    fn conversation_update_expiry_queues_remove_list_and_preserves_record_like_cpp() {
+        let mut map = test_map();
+        let conversation = test_conversation_for_update(4360201, 250, true);
+        let conversation_guid = conversation.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_conversation(conversation).unwrap())
+            .unwrap();
+
+        let outcome = map.update_conversation_like_cpp(conversation_guid, 250);
+
+        assert_eq!(
+            outcome.status,
+            ConversationUpdateStatusLikeCpp::ExpiredRemoveQueued
+        );
+        assert_eq!(outcome.duration_before_ms, Some(250));
+        assert_eq!(outcome.duration_after_ms, Some(250));
+        assert!(outcome.script_update_would_run);
+        assert!(!outcome.world_update_would_run);
+        assert_eq!(outcome.remove_list.unwrap().queued, true);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        let conversation = map
+            .map_object_record(conversation_guid)
+            .unwrap()
+            .conversation()
+            .unwrap();
+        assert!(conversation.is_removed());
+    }
+
+    #[test]
+    fn conversation_update_not_in_world_returns_no_mutation_or_queue_like_cpp() {
+        let mut map = test_map();
+        let conversation = test_conversation_for_update(4360301, 500, false);
+        let conversation_guid = conversation.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_conversation(conversation).unwrap())
+            .unwrap();
+
+        let outcome = map.update_conversation_like_cpp(conversation_guid, 250);
+
+        assert_eq!(outcome.status, ConversationUpdateStatusLikeCpp::NotInWorld);
+        assert_eq!(outcome.duration_before_ms, Some(500));
+        assert_eq!(outcome.duration_after_ms, Some(500));
+        assert!(!outcome.script_update_would_run);
+        assert!(!outcome.world_update_would_run);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        let conversation = map
+            .map_object_record(conversation_guid)
+            .unwrap()
+            .conversation()
+            .unwrap();
+        assert_eq!(conversation.duration_ms(), 500);
+        assert!(!conversation.is_removed());
+    }
+
+    #[test]
+    fn conversation_update_missing_non_conversation_or_untyped_creates_no_dummy_or_queue_like_cpp()
+    {
+        let mut map = test_map();
+        let missing_guid = guid(HighGuid::Conversation, 4360401);
+        let creature = test_creature_for_spawn(43604, 4360402, true);
+        let creature_guid = creature.guid();
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        let untyped_conversation =
+            world_object_with_counter(HighGuid::Conversation, 4360403, 571, 7, true);
+        let untyped_conversation_guid = untyped_conversation.guid();
+        map.insert_map_object(AccessorObjectKind::Conversation, untyped_conversation)
+            .unwrap();
+
+        let missing = map.update_conversation_like_cpp(missing_guid, 250);
+        let non_conversation = map.update_conversation_like_cpp(creature_guid, 250);
+        let untyped = map.update_conversation_like_cpp(untyped_conversation_guid, 250);
+
+        assert_eq!(
+            missing.status,
+            ConversationUpdateStatusLikeCpp::MissingConversation
+        );
+        assert_eq!(
+            non_conversation.status,
+            ConversationUpdateStatusLikeCpp::NotConversation
+        );
+        assert_eq!(
+            untyped.status,
+            ConversationUpdateStatusLikeCpp::NotConversation
+        );
+        assert_eq!(missing.remove_list, None);
+        assert_eq!(non_conversation.remove_list, None);
+        assert_eq!(untyped.remove_list, None);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(map.map_object_count(), 2);
+        assert!(map.map_object_record(missing_guid).is_none());
+        assert!(map.map_object_record(creature_guid).is_some());
+        assert!(map.map_object_record(untyped_conversation_guid).is_some());
+    }
+
+    #[test]
+    fn creature_update_in_world_consumes_runtime_plan_once_like_cpp() {
+        let mut map = test_map();
+        let creature_guid = guid(HighGuid::Creature, 4350101);
+        let creature = test_creature_for_spawn(43501, 4350101, true);
+        assert!(creature.trigger_just_appeared());
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let first = map.update_creature_like_cpp(
+            creature_guid,
+            1,
+            1_000,
+            CreatureRuntimeUpdateContext::default(),
+        );
+        let second = map.update_creature_like_cpp(
+            creature_guid,
+            1,
+            1_001,
+            CreatureRuntimeUpdateContext::default(),
+        );
+
+        assert_eq!(first.status, CreatureUpdateStatusLikeCpp::Updated);
+        assert!(
+            first
+                .plan
+                .as_ref()
+                .unwrap()
+                .contains(wow_entities::CreatureRuntimeAction::NotifyJustAppeared)
+        );
+        assert!(
+            !map.map_object_record(creature_guid)
+                .unwrap()
+                .creature()
+                .unwrap()
+                .trigger_just_appeared()
+        );
+        assert_eq!(second.status, CreatureUpdateStatusLikeCpp::Updated);
+        assert!(
+            !second
+                .plan
+                .as_ref()
+                .unwrap()
+                .contains(wow_entities::CreatureRuntimeAction::NotifyJustAppeared)
+        );
+    }
+
+    #[test]
+    fn creature_update_not_in_world_skips_without_mutation_like_cpp() {
+        let mut map = test_map();
+        let creature_guid = guid(HighGuid::Creature, 4350201);
+        let mut creature = test_creature_for_spawn(43502, 4350201, true);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        assert!(creature.trigger_just_appeared());
+        map.insert_map_object_record(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+
+        let outcome = map.update_creature_like_cpp(
+            creature_guid,
+            1,
+            1_000,
+            CreatureRuntimeUpdateContext::default(),
+        );
+
+        assert_eq!(outcome.status, CreatureUpdateStatusLikeCpp::NotInWorld);
+        assert_eq!(outcome.actions_recorded, 0);
+        assert!(
+            map.map_object_record(creature_guid)
+                .unwrap()
+                .creature()
+                .unwrap()
+                .trigger_just_appeared()
+        );
+    }
+
+    #[test]
+    fn creature_update_snapshot_ignores_gameobject_areatrigger_dynamicobject_like_cpp() {
+        let mut map = test_map();
+        let creature_guid = guid(HighGuid::Creature, 4350301);
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(43503, 4350301, true)).unwrap(),
+        )
+        .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(43504, 4350302)).unwrap(),
+        )
+        .unwrap();
+        let mut area_trigger = test_area_trigger_for_update(4350303, 10, true);
+        area_trigger.set_duration(10);
+        let area_trigger_guid = area_trigger.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_area_trigger(area_trigger).unwrap())
+            .unwrap();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4350304);
+        dynamic_object.set_duration(10);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        map.insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let summary = map.update_creatures_like_cpp(1, 1_000, |_guid, _creature| {
+            CreatureRuntimeUpdateContext::default()
+        });
+
+        assert_eq!(summary.visited, 1);
+        assert_eq!(summary.updated, 1);
+        assert_eq!(summary.skipped_non_creature, 0);
+        assert!(summary.actions_recorded > 0);
+        assert!(
+            !map.map_object_record(creature_guid)
+                .unwrap()
+                .creature()
+                .unwrap()
+                .trigger_just_appeared()
+        );
+        assert_eq!(
+            map.map_object_record(area_trigger_guid)
+                .unwrap()
+                .area_trigger()
+                .unwrap()
+                .duration_ms(),
+            10
+        );
+        assert_eq!(
+            map.get_typed_dynamic_object(dynamic_object_guid)
+                .unwrap()
+                .duration_ms(),
+            10
+        );
+    }
+
+    #[test]
+    fn creature_update_context_resolver_affects_plan_like_cpp() {
+        let mut default_map = test_map();
+        default_map
+            .insert_map_object_record(
+                MapObjectRecord::new_creature(test_creature_for_spawn(43504, 4350401, true))
+                    .unwrap(),
+            )
+            .unwrap();
+        let default_summary =
+            default_map.update_creatures_like_cpp(1, 1_000, |_guid, _creature| {
+                CreatureRuntimeUpdateContext::default()
+            });
+
+        let mut disabled_ai_map = test_map();
+        disabled_ai_map
+            .insert_map_object_record(
+                MapObjectRecord::new_creature(test_creature_for_spawn(43504, 4350402, true))
+                    .unwrap(),
+            )
+            .unwrap();
+        let disabled_ai_summary =
+            disabled_ai_map.update_creatures_like_cpp(1, 1_000, |_guid, _creature| {
+                CreatureRuntimeUpdateContext {
+                    ai_enabled: false,
+                    ..CreatureRuntimeUpdateContext::default()
+                }
+            });
+
+        assert_eq!(default_summary.visited, 1);
+        assert_eq!(disabled_ai_summary.visited, 1);
+        assert!(default_summary.actions_recorded > disabled_ai_summary.actions_recorded);
+    }
+
+    #[test]
     fn dynamic_object_update_non_aura_decrements_duration_without_queue_like_cpp() {
         let mut map = test_map();
         let mut dynamic_object = test_dynamic_object_for_viewpoint(4290101);
@@ -12157,6 +24497,300 @@ mod tests {
     }
 
     #[test]
+    fn player_remove_from_world_viewpoint_dynamic_object_cleans_before_extract_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4930101);
+        let player_guid = player.guid();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4930102);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        player.set_farsight_object_like_cpp(dynamic_object_guid);
+        dynamic_object.set_caster_guid(player_guid);
+        dynamic_object.bind_to_caster(player_guid);
+        dynamic_object.set_caster_viewpoint();
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let removed = map.remove_from_map_like_cpp(player_guid, false).unwrap();
+
+        let cleanup = removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(cleanup.player_guid, player_guid);
+        assert_eq!(cleanup.viewpoint_guid, dynamic_object_guid);
+        assert_eq!(
+            cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert!(!cleanup.update_visibility_requested);
+        assert!(cleanup.set_seer_requested);
+        assert!(!cleanup.object_accessor_fanout_represented);
+        assert_eq!(cleanup.dynamic_object_caster_viewpoint, None);
+        let player_set_viewpoint = cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(player_set_viewpoint.player_guid, player_guid);
+        assert_eq!(player_set_viewpoint.target_guid, dynamic_object_guid);
+        assert!(!player_set_viewpoint.apply);
+        assert_eq!(
+            player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(!player_set_viewpoint.update_visibility_requested);
+        assert!(player_set_viewpoint.set_seer_requested);
+        assert!(map.map_object_record(player_guid).is_none());
+        assert!(map.map_object_record(dynamic_object_guid).is_some());
+        assert!(
+            map.get_typed_dynamic_object(dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+        assert!(!removed.object.unwrap().object().is_in_world());
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_dynamic_object_ignores_bound_caster_like_cpp() {
+        let mut missing_caster_map = test_map();
+        let mut missing_caster_player = test_player_for_viewpoint(4930111);
+        let missing_caster_player_guid = missing_caster_player.guid();
+        let mut missing_caster_dynamic_object = test_dynamic_object_for_viewpoint(4930112);
+        let missing_caster_dynamic_object_guid = missing_caster_dynamic_object.world().guid();
+        missing_caster_player.set_farsight_object_like_cpp(missing_caster_dynamic_object_guid);
+        missing_caster_dynamic_object.set_caster_viewpoint();
+        missing_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(missing_caster_player).unwrap())
+            .unwrap();
+        missing_caster_map
+            .insert_map_object_record(
+                MapObjectRecord::new_dynamic_object(missing_caster_dynamic_object).unwrap(),
+            )
+            .unwrap();
+
+        let missing_caster_removed = missing_caster_map
+            .remove_from_map_like_cpp(missing_caster_player_guid, false)
+            .unwrap();
+
+        let missing_caster_cleanup = missing_caster_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            missing_caster_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert_eq!(missing_caster_cleanup.dynamic_object_caster_viewpoint, None);
+        let missing_caster_set_viewpoint = missing_caster_cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(
+            missing_caster_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(missing_caster_set_viewpoint.set_seer_requested);
+        assert!(
+            missing_caster_map
+                .get_typed_dynamic_object(missing_caster_dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+
+        let mut other_caster_map = test_map();
+        let mut removed_player = test_player_for_viewpoint(4930121);
+        let removed_player_guid = removed_player.guid();
+        let mut other_player = test_player_for_viewpoint(4930122);
+        let other_player_guid = other_player.guid();
+        let mut dynamic_object = test_dynamic_object_for_viewpoint(4930123);
+        let dynamic_object_guid = dynamic_object.world().guid();
+        removed_player.set_farsight_object_like_cpp(dynamic_object_guid);
+        other_player.set_farsight_object_like_cpp(dynamic_object_guid);
+        dynamic_object.set_caster_guid(other_player_guid);
+        dynamic_object.bind_to_caster(other_player_guid);
+        dynamic_object.set_caster_viewpoint();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(removed_player).unwrap())
+            .unwrap();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_player(other_player).unwrap())
+            .unwrap();
+        other_caster_map
+            .insert_map_object_record(MapObjectRecord::new_dynamic_object(dynamic_object).unwrap())
+            .unwrap();
+
+        let other_caster_removed = other_caster_map
+            .remove_from_map_like_cpp(removed_player_guid, false)
+            .unwrap();
+
+        let other_caster_cleanup = other_caster_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            other_caster_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedDynamicObjectViewpoint
+        );
+        assert_eq!(other_caster_cleanup.dynamic_object_caster_viewpoint, None);
+        let other_caster_set_viewpoint = other_caster_cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(other_caster_set_viewpoint.player_guid, removed_player_guid);
+        assert_eq!(
+            other_caster_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(other_caster_set_viewpoint.set_seer_requested);
+        assert_eq!(
+            other_caster_map
+                .get_typed_player(other_player_guid)
+                .unwrap()
+                .active_data()
+                .farsight_object,
+            dynamic_object_guid
+        );
+        assert!(
+            other_caster_map
+                .get_typed_dynamic_object(dynamic_object_guid)
+                .unwrap()
+                .is_caster_viewpoint()
+        );
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_creature_consumes_shared_vision_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4930201);
+        let player_guid = player.guid();
+        let (target_guid, _cell, _grid) =
+            add_loaded_grid_creature_for_switch(&mut map, 493020, 4930202);
+        player.set_farsight_object_like_cpp(target_guid);
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.get_typed_creature_mut(target_guid)
+            .unwrap()
+            .unit_mut()
+            .add_player_to_vision_like_cpp(player_guid);
+
+        let removed = map.remove_from_map_like_cpp(player_guid, false).unwrap();
+
+        let cleanup = removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::RemovedUnitViewpoint
+        );
+        let player_set_viewpoint = cleanup.player_set_viewpoint.unwrap();
+        assert_eq!(
+            player_set_viewpoint.status,
+            PlayerSetViewpointStatusLikeCpp::Removed
+        );
+        assert!(!player_set_viewpoint.update_visibility_requested);
+        assert!(player_set_viewpoint.set_seer_requested);
+        assert_eq!(
+            player_set_viewpoint.set_world_object,
+            Some(SetWorldObjectOutcomeLikeCpp {
+                guid: target_guid,
+                on: false,
+                status: SetWorldObjectStatusLikeCpp::Delegated(
+                    AddObjectToSwitchListStatusLikeCpp::Queued
+                ),
+            })
+        );
+        assert!(map.map_object_record(player_guid).is_none());
+        assert!(
+            map.get_typed_creature(target_guid)
+                .unwrap()
+                .unit()
+                .subsystems()
+                .control
+                .shared_vision_guids
+                .is_empty()
+        );
+        assert_eq!(map.pending_switch_like_cpp(target_guid), Some(false));
+        assert!(removed.object.unwrap().guid() == player_guid);
+    }
+
+    #[test]
+    fn player_remove_from_world_viewpoint_missing_or_unsupported_target_no_cleanup_success_like_cpp()
+     {
+        let mut missing_map = test_map();
+        let mut missing_player = test_player_for_viewpoint(4930301);
+        let missing_player_guid = missing_player.guid();
+        let missing_viewpoint_guid = guid(HighGuid::Creature, 4930302);
+        missing_player.set_farsight_object_like_cpp(missing_viewpoint_guid);
+        missing_map
+            .insert_map_object_record(MapObjectRecord::new_player(missing_player).unwrap())
+            .unwrap();
+
+        let missing_removed = missing_map
+            .remove_from_map_like_cpp(missing_player_guid, false)
+            .unwrap();
+
+        let missing_cleanup = missing_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            missing_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::MissingTarget
+        );
+        assert_eq!(missing_cleanup.player_set_viewpoint, None);
+        assert_eq!(missing_cleanup.dynamic_object_caster_viewpoint, None);
+        assert!(missing_map.map_object_record(missing_player_guid).is_none());
+
+        let mut unsupported_map = test_map();
+        let mut unsupported_player = test_player_for_viewpoint(4930401);
+        let unsupported_player_guid = unsupported_player.guid();
+        let game_object = game_object_with_counter(4930402, 571, 7, true);
+        let game_object_guid = game_object.world().guid();
+        unsupported_player.set_farsight_object_like_cpp(game_object_guid);
+        unsupported_map
+            .insert_map_object_record(MapObjectRecord::new_player(unsupported_player).unwrap())
+            .unwrap();
+        unsupported_map
+            .insert_map_object_record(MapObjectRecord::new_game_object(game_object).unwrap())
+            .unwrap();
+
+        let unsupported_removed = unsupported_map
+            .remove_from_map_like_cpp(unsupported_player_guid, false)
+            .unwrap();
+
+        let unsupported_cleanup = unsupported_removed.player_viewpoint_cleanup.unwrap();
+        assert_eq!(
+            unsupported_cleanup.status,
+            PlayerRemoveFromWorldViewpointCleanupStatusLikeCpp::TargetNotSeer
+        );
+        assert_eq!(unsupported_cleanup.player_set_viewpoint, None);
+        assert_eq!(unsupported_cleanup.dynamic_object_caster_viewpoint, None);
+        assert!(
+            unsupported_map
+                .map_object_record(unsupported_player_guid)
+                .is_none()
+        );
+        assert!(
+            unsupported_map
+                .map_object_record(game_object_guid)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn player_remove_from_world_not_in_world_or_empty_farsight_emits_no_cleanup_like_cpp() {
+        let mut not_in_world_map = test_map();
+        let mut not_in_world_player = test_player_for_viewpoint(4930501);
+        let not_in_world_player_guid = not_in_world_player.guid();
+        not_in_world_player.set_farsight_object_like_cpp(guid(HighGuid::Creature, 4930502));
+        not_in_world_player
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        not_in_world_map
+            .insert_map_object_record(MapObjectRecord::new_player(not_in_world_player).unwrap())
+            .unwrap();
+
+        let not_in_world_removed = not_in_world_map
+            .remove_from_map_like_cpp(not_in_world_player_guid, false)
+            .unwrap();
+
+        assert_eq!(not_in_world_removed.player_viewpoint_cleanup, None);
+
+        let mut empty_map = test_map();
+        let empty_player = test_player_for_viewpoint(4930601);
+        let empty_player_guid = empty_player.guid();
+        empty_map
+            .insert_map_object_record(MapObjectRecord::new_player(empty_player).unwrap())
+            .unwrap();
+
+        let empty_removed = empty_map
+            .remove_from_map_like_cpp(empty_player_guid, false)
+            .unwrap();
+
+        assert_eq!(empty_removed.player_viewpoint_cleanup, None);
+    }
+
+    #[test]
     fn unit_shared_vision_set_world_object_request_enqueues_like_cpp() {
         let mut map = test_map();
         let spawn_id = 423010;
@@ -12593,6 +25227,1347 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_update_just_deactivated_removes_linked_trap_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4580101, 571, 7, false);
+        let trap = game_object_with_counter(4580102, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        let trap_guid = trap.world().guid();
+        owner.set_loot_state(LootState::JustDeactivated, None);
+        owner.set_respawn_delay_time(0);
+        owner.set_linked_trap_like_cpp(trap_guid);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(owner_guid, 1, 1_000);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.linked_trap_guid, Some(trap_guid));
+        assert!(outcome.linked_trap_removed);
+        assert!(!outcome.linked_trap_missing_or_self);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert!(outcome.loot_cleared);
+        assert!(map.map_object_record(trap_guid).is_none());
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_clears_owned_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4590101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let personal_guid = guid(HighGuid::Player, 4590191);
+        let unique_guid = guid(HighGuid::Player, 4590192);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(7, 2));
+        gameobject.set_personal_loot_like_cpp(personal_guid, GameObjectOwnedLoot::new(11, 3));
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+        gameobject.add_use_like_cpp();
+        assert!(gameobject.shared_loot_like_cpp().is_some());
+        assert_eq!(gameobject.personal_loot_count_like_cpp(), 1);
+        assert_eq!(gameobject.unique_user_count_like_cpp(), 1);
+        assert_eq!(gameobject.use_times(), 2);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.loot_cleared);
+        assert!(outcome.generic_not_ready);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(canonical.personal_loot_count_like_cpp(), 0);
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_spell_represents_casts_and_clears_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let personal_guid = guid(HighGuid::Player, 4600191);
+        let first_unique_guid = guid(HighGuid::Player, 4600192);
+        let second_unique_guid = guid(HighGuid::Player, 4600193);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            spell_id: 12345,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(17, 4));
+        gameobject.set_personal_loot_like_cpp(personal_guid, GameObjectOwnedLoot::new(19, 5));
+        assert!(gameobject.add_unique_use_like_cpp(first_unique_guid));
+        assert!(gameobject.add_unique_use_like_cpp(second_unique_guid));
+        gameobject.add_use_like_cpp();
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, Some(12345));
+        assert_eq!(outcome.goober_spell_casts_represented, 2);
+        assert!(outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(!outcome.goober_nodespawn_return);
+        assert!(outcome.loot_cleared);
+        assert!(outcome.non_consumed_chest_or_goober_return);
+        assert!(outcome.non_consumed_set_ready);
+        assert_eq!(canonical.loot_state(), LootState::Ready);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(canonical.personal_loot_count_like_cpp(), 0);
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_lock_resets_state_and_clears_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600201, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            lock_id: 77,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(23, 1));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.goober_state_reset);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert!(outcome.loot_cleared);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_nodespawn_returns_before_clearloot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600301, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600391);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_flags(gameobject.data().flags | GO_FLAG_NODESPAWN);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            spell_id: 23456,
+            auto_close_ms: 5000,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(29, 2));
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, Some(23456));
+        assert_eq!(outcome.goober_spell_casts_represented, 1);
+        assert!(outcome.goober_users_cleared);
+        assert!(outcome.goober_state_reset);
+        assert!(outcome.goober_nodespawn_return);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert!(canonical.shared_loot_like_cpp().is_some());
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_nodespawn_without_source_returns_before_clearloot_like_cpp()
+     {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600351, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600352);
+        let personal_guid = guid(HighGuid::Player, 4600353);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_flags(gameobject.data().flags | GO_FLAG_NODESPAWN);
+        gameobject.set_represented_goober_use_source_like_cpp(None);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(30, 2));
+        gameobject.set_personal_loot_like_cpp(personal_guid, GameObjectOwnedLoot::new(31, 1));
+        gameobject.add_use_like_cpp();
+        gameobject.add_use_like_cpp();
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+        let use_times_before = gameobject.use_times();
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, None);
+        assert_eq!(outcome.goober_spell_casts_represented, 0);
+        assert!(!outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(outcome.goober_nodespawn_return);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+        assert_eq!(canonical.data().state, GoState::Active as i8);
+        assert!(canonical.shared_loot_like_cpp().is_some());
+        assert_eq!(canonical.personal_loot_count_like_cpp(), 1);
+        assert_eq!(canonical.unique_user_count_like_cpp(), 1);
+        assert_eq!(canonical.use_times(), use_times_before);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_goober_without_spell_clears_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4600401, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        let unique_guid = guid(HighGuid::Player, 4600491);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource::default()));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(31, 3));
+        assert!(gameobject.add_unique_use_like_cpp(unique_guid));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.goober_spell_cast_spell_id, None);
+        assert_eq!(outcome.goober_spell_casts_represented, 0);
+        assert!(!outcome.goober_users_cleared);
+        assert!(!outcome.goober_state_reset);
+        assert!(!outcome.goober_nodespawn_return);
+        assert!(outcome.loot_cleared);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(canonical.unique_user_count_like_cpp(), 0);
+        assert_eq!(canonical.use_times(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_non_consumed_chest_restock_returns_after_clearloot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4610101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 45,
+            chest_consumable: false,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(41, 2));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.loot_cleared);
+        assert!(outcome.non_consumed_chest_or_goober_return);
+        assert!(outcome.non_consumed_restock_armed);
+        assert!(!outcome.non_consumed_set_ready);
+        assert!(outcome.non_consumed_update_visibility_represented);
+        assert!(outcome.non_consumed_update_dynamic_flags_represented);
+        assert!(!outcome.non_consumed_source_missing);
+        assert_eq!(canonical.restock_time(), 1_045);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_non_consumed_chest_without_restock_sets_ready_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4610201, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 0,
+            chest_consumable: false,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(43, 1));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert!(outcome.loot_cleared);
+        assert!(outcome.non_consumed_chest_or_goober_return);
+        assert!(!outcome.non_consumed_restock_armed);
+        assert!(outcome.non_consumed_set_ready);
+        assert!(outcome.non_consumed_update_visibility_represented);
+        assert!(!outcome.non_consumed_update_dynamic_flags_represented);
+        assert_eq!(canonical.restock_time(), 0);
+        assert_eq!(canonical.loot_state(), LootState::Ready);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_non_consumed_goober_sets_ready_after_prebranch_and_clearloot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4610301, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        gameobject.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            consumable: false,
+            lock_id: 88,
+            ..GooberUseSource::default()
+        }));
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(47, 1));
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert!(outcome.goober_state_reset);
+        assert!(outcome.loot_cleared);
+        assert!(outcome.non_consumed_chest_or_goober_return);
+        assert!(outcome.non_consumed_set_ready);
+        assert_eq!(canonical.loot_state(), LootState::Ready);
+        assert!(canonical.shared_loot_like_cpp().is_none());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_consumable_chest_or_goober_does_not_take_non_consumed_return_like_cpp() {
+        let mut map = test_map();
+        let mut chest = game_object_with_counter(4610401, 571, 7, false);
+        let mut goober = game_object_with_counter(4610402, 571, 7, false);
+        let chest_guid = chest.world().guid();
+        let goober_guid = goober.world().guid();
+        chest.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        chest.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 90,
+            chest_consumable: true,
+            ..GameObjectLootSource::default()
+        }));
+        chest.set_loot_state(LootState::JustDeactivated, None);
+        goober.set_go_type(GAMEOBJECT_TYPE_GOOBER as u8);
+        goober.set_represented_goober_use_source_like_cpp(Some(GooberUseSource {
+            consumable: true,
+            ..GooberUseSource::default()
+        }));
+        goober.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(chest).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(goober).unwrap(),
+        )
+        .unwrap();
+
+        let chest_outcome = map.update_game_object_like_cpp(chest_guid, 1, 1_000);
+        let goober_outcome = map.update_game_object_like_cpp(goober_guid, 1, 1_000);
+
+        assert!(!chest_outcome.non_consumed_chest_or_goober_return);
+        assert!(!chest_outcome.non_consumed_restock_armed);
+        assert!(!chest_outcome.non_consumed_set_ready);
+        assert!(!goober_outcome.non_consumed_chest_or_goober_return);
+        assert!(!goober_outcome.non_consumed_set_ready);
+    }
+
+    #[test]
+    fn gameobject_update_spell_created_expired_deletes_after_clearloot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4610501, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_go_state(GoState::Active);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 30,
+            chest_consumable: false,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_spell_id(123);
+        gameobject.set_respawn_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.loot_cleared);
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.summoned_expired_respawn_time_zeroed);
+        assert!(outcome.summoned_expired_despawn_represented);
+        assert!(outcome.summoned_expired_go_state_ready);
+        assert!(outcome.remove_list.as_ref().is_some_and(|list| list.queued));
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(canonical.data().state, GoState::Ready as i8);
+        assert_eq!(canonical.respawn_time(), 0);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert!(!outcome.non_consumed_restock_armed);
+        assert!(!outcome.non_consumed_set_ready);
+        assert!(!outcome.non_consumed_update_visibility_represented);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_owner_created_expired_deletes_after_clearloot_like_cpp() {
+        let mut map = test_map();
+        let owner_guid = guid(HighGuid::Player, 4620191);
+        let mut gameobject = game_object_with_counter(4620101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_restock_time_secs: 30,
+            chest_consumable: false,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_created_by(owner_guid);
+        gameobject.set_respawn_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.loot_cleared);
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.summoned_expired_respawn_time_zeroed);
+        assert!(outcome.remove_list.as_ref().is_some_and(|list| list.queued));
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_new_flag_drop_owner_new_flag_command_is_represented_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4620201, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG as u8);
+        let mut drop = game_object_with_counter(4620202, 571, 7, false);
+        let drop_guid = drop.world().guid();
+        drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        drop.set_created_by(owner_guid);
+        drop.set_respawn_time(0);
+        drop.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(drop).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(drop_guid, 1, 1_000);
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.summoned_expired_delete);
+        assert!(outcome.new_flag_drop_owner_in_base_command_represented);
+        assert!(!outcome.new_flag_drop_owner_missing_or_empty);
+        assert!(!outcome.new_flag_drop_owner_wrong_kind);
+        assert!(!outcome.new_flag_drop_owner_not_new_flag);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_new_flag_drop_missing_and_wrong_owner_are_explicit_noops_like_cpp() {
+        let mut missing_map = test_map();
+        let mut missing_drop = game_object_with_counter(4620301, 571, 7, false);
+        let missing_drop_guid = missing_drop.world().guid();
+        missing_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        missing_drop.set_created_by(guid(HighGuid::GameObject, 4620399));
+        missing_drop.set_respawn_time(0);
+        missing_drop.set_loot_state(LootState::JustDeactivated, None);
+        missing_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(missing_drop).unwrap(),
+            )
+            .unwrap();
+
+        let missing_outcome = missing_map.update_game_object_like_cpp(missing_drop_guid, 1, 1_000);
+
+        assert!(missing_outcome.summoned_expired_delete);
+        assert!(missing_outcome.new_flag_drop_owner_missing_or_empty);
+        assert!(!missing_outcome.new_flag_drop_owner_in_base_command_represented);
+
+        let mut wrong_kind_map = test_map();
+        let creature = test_creature_for_spawn(4620401, 4620401, true);
+        let creature_guid = creature.guid();
+        let mut wrong_kind_drop = game_object_with_counter(4620402, 571, 7, false);
+        let wrong_kind_drop_guid = wrong_kind_drop.world().guid();
+        wrong_kind_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        wrong_kind_drop.set_created_by(creature_guid);
+        wrong_kind_drop.set_respawn_time(0);
+        wrong_kind_drop.set_loot_state(LootState::JustDeactivated, None);
+        wrong_kind_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_creature(creature).unwrap())
+            .unwrap();
+        wrong_kind_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(wrong_kind_drop).unwrap(),
+            )
+            .unwrap();
+
+        let wrong_kind_outcome =
+            wrong_kind_map.update_game_object_like_cpp(wrong_kind_drop_guid, 1, 1_000);
+
+        assert!(wrong_kind_outcome.summoned_expired_delete);
+        assert!(wrong_kind_outcome.new_flag_drop_owner_wrong_kind);
+        assert!(!wrong_kind_outcome.new_flag_drop_owner_in_base_command_represented);
+
+        let mut not_new_flag_map = test_map();
+        let mut owner = game_object_with_counter(4620501, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        let mut not_new_flag_drop = game_object_with_counter(4620502, 571, 7, false);
+        let not_new_flag_drop_guid = not_new_flag_drop.world().guid();
+        not_new_flag_drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        not_new_flag_drop.set_created_by(owner_guid);
+        not_new_flag_drop.set_respawn_time(0);
+        not_new_flag_drop.set_loot_state(LootState::JustDeactivated, None);
+        not_new_flag_map
+            .add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        not_new_flag_map
+            .add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(not_new_flag_drop).unwrap(),
+            )
+            .unwrap();
+
+        let not_new_flag_outcome =
+            not_new_flag_map.update_game_object_like_cpp(not_new_flag_drop_guid, 1, 1_000);
+
+        assert!(not_new_flag_outcome.summoned_expired_delete);
+        assert!(not_new_flag_outcome.new_flag_drop_owner_not_new_flag);
+        assert!(!not_new_flag_outcome.new_flag_drop_owner_in_base_command_represented);
+    }
+
+    #[test]
+    fn gameobject_update_owner_or_spell_with_future_respawn_does_not_delete_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4620601, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_consumable: true,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_created_by(guid(HighGuid::Player, 4620691));
+        gameobject.set_spell_id(456);
+        gameobject.set_respawn_time(60);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.loot_cleared);
+        assert!(!outcome.summoned_expired_delete);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_visual_despawn_represented);
+        assert_eq!(canonical.respawn_time(), 60);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_generic_spawned_default_noncompat_schedules_respawn_and_remove_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4640101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.world_mut().object_mut().set_entry(190001);
+        gameobject.set_spawn_id(4640101);
+        gameobject.set_spawned_by_default(true);
+        gameobject.set_represented_gameobject_data_present_like_cpp(true);
+        gameobject.set_respawn_compatibility_mode(false);
+        gameobject.set_respawn_delay_time(45);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        let respawn_info = map
+            .get_respawn_info_like_cpp(SpawnObjectType::GameObject, 4640101)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.generic_not_ready);
+        assert_eq!(outcome.generic_respawn_scheduled_time, Some(1_045));
+        assert!(outcome.generic_spawned_by_default_branch);
+        assert_eq!(
+            outcome.generic_respawn_timer_add,
+            Some(AddRespawnInfoOutcomeLikeCpp::Inserted)
+        );
+        assert!(!outcome.generic_respawn_compatibility_db_only_represented);
+        assert!(!outcome.generic_visibility_on_destroy_represented);
+        assert!(outcome.remove_list.is_some());
+        assert_eq!(canonical.respawn_time(), 1_045);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(respawn_info.object_type, SpawnObjectType::GameObject);
+        assert_eq!(respawn_info.spawn_id, 4640101);
+        assert_eq!(respawn_info.entry, 190001);
+        assert_eq!(respawn_info.respawn_time, 1_045);
+        assert_eq!(respawn_info.grid_id, compute_grid_coord(1.0, 2.0).get_id());
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_generic_spawned_default_compat_saves_db_only_and_visibility_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4640201, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.world_mut().object_mut().set_entry(190002);
+        gameobject.set_spawn_id(4640201);
+        gameobject.set_spawned_by_default(true);
+        gameobject.set_represented_gameobject_data_present_like_cpp(true);
+        gameobject.set_respawn_compatibility_mode(true);
+        gameobject.set_respawn_delay_time(30);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 2_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.generic_not_ready);
+        assert_eq!(outcome.generic_respawn_scheduled_time, Some(2_030));
+        assert!(outcome.generic_spawned_by_default_branch);
+        assert_eq!(outcome.generic_respawn_timer_add, None);
+        assert!(outcome.generic_respawn_compatibility_db_only_represented);
+        assert!(outcome.generic_visibility_on_destroy_represented);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(canonical.respawn_time(), 2_030);
+        assert!(
+            map.get_respawn_info_like_cpp(SpawnObjectType::GameObject, 4640201)
+                .is_none()
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_visibility_on_destroy_update_summary_carries_guids_without_truncation_like_cpp() {
+        let mut map = test_map();
+        let mut expected_guids = Vec::new();
+
+        for offset in 0..300 {
+            let counter = 5_050_101_i64 + i64::from(offset);
+            let mut gameobject = game_object_with_counter(counter, 571, 7, false);
+            let gameobject_guid = gameobject.world().guid();
+            gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+            gameobject.world_mut().object_mut().set_entry(190_505);
+            gameobject.set_spawn_id(u64::try_from(counter).unwrap());
+            gameobject.set_spawned_by_default(true);
+            gameobject.set_represented_gameobject_data_present_like_cpp(true);
+            gameobject.set_respawn_compatibility_mode(true);
+            gameobject.set_respawn_delay_time(30);
+            gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+            expected_guids.push(gameobject_guid);
+            map.add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let summary = map.update_game_objects_like_cpp(1, 2_000);
+
+        assert_eq!(summary.generic_visibility_on_destroy_represented, 300);
+        let carried_guids = summary.generic_visibility_on_destroy_guids.as_slice();
+        assert_eq!(carried_guids.len(), 300);
+        assert!(carried_guids.contains(&expected_guids[256]));
+        assert!(carried_guids.contains(&expected_guids[299]));
+        let carried_set = carried_guids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        let expected_set = expected_guids
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(carried_set, expected_set);
+        assert_eq!(
+            summary.generic_respawn_compatibility_db_only_represented,
+            300
+        );
+        assert_eq!(summary.despawn_remove_queued, 0);
+        for guid in expected_guids {
+            assert!(map.map_object_record(guid).is_some());
+        }
+    }
+
+    #[test]
+    fn gameobject_update_generic_spawned_default_noncompat_missing_godata_does_not_insert_respawn_like_cpp()
+     {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4640251, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.world_mut().object_mut().set_entry(190003);
+        gameobject.set_spawn_id(4640251);
+        gameobject.set_spawned_by_default(true);
+        gameobject.set_respawn_compatibility_mode(false);
+        gameobject.set_respawn_delay_time(25);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 2_500);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.generic_not_ready);
+        assert_eq!(outcome.generic_respawn_scheduled_time, Some(2_525));
+        assert!(outcome.generic_spawned_by_default_branch);
+        assert_eq!(outcome.generic_respawn_timer_add, None);
+        assert!(outcome.generic_respawn_save_missing_gameobject_data);
+        assert!(!outcome.generic_respawn_save_missing_spawn_id);
+        assert!(!outcome.generic_respawn_compatibility_db_only_represented);
+        assert!(!outcome.generic_visibility_on_destroy_represented);
+        assert!(outcome.remove_list.is_some());
+        assert_eq!(canonical.respawn_time(), 2_525);
+        assert!(
+            map.get_respawn_info_like_cpp(SpawnObjectType::GameObject, 4640251)
+                .is_none()
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_generic_temporary_noncompat_spawn_id_visibility_no_remove_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4640301, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.set_spawn_id(4640301);
+        gameobject.set_spawned_by_default(false);
+        gameobject.set_respawn_compatibility_mode(false);
+        gameobject.set_respawn_delay_time(60);
+        gameobject.set_respawn_time(999);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 3_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.generic_not_ready);
+        assert_eq!(outcome.generic_respawn_scheduled_time, None);
+        assert!(!outcome.generic_spawned_by_default_branch);
+        assert!(outcome.generic_temporary_respawn_zeroed);
+        assert_eq!(outcome.generic_respawn_timer_add, None);
+        assert!(outcome.generic_visibility_on_destroy_represented);
+        assert!(outcome.remove_list.is_none());
+        assert_eq!(canonical.respawn_time(), 0);
+        assert!(
+            map.get_respawn_info_like_cpp(SpawnObjectType::GameObject, 4640301)
+                .is_none()
+        );
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_generic_temporary_zero_spawn_id_deletes_remove_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4640351, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.set_spawn_id(0);
+        gameobject.set_spawned_by_default(false);
+        gameobject.set_respawn_compatibility_mode(false);
+        gameobject.set_respawn_delay_time(60);
+        gameobject.set_respawn_time(999);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 3_100);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_temporary_respawn_zeroed);
+        assert!(!outcome.generic_visibility_on_destroy_represented);
+        assert!(outcome.remove_list.is_some());
+        assert_eq!(canonical.respawn_time(), 0);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_generic_zero_respawn_sets_not_ready_without_remove_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4630101, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert!(outcome.loot_cleared);
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_zero_respawn_delay_return);
+        assert!(!outcome.generic_visual_despawn_represented);
+        assert!(!outcome.generic_flags_restored_represented);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_generic_chest_consumable_visual_despawn_restores_flags_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4630201, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(Some(GameObjectLootSource {
+            chest_consumable: true,
+            ..GameObjectLootSource::default()
+        }));
+        gameobject.set_represented_baseline_flags_like_cpp(Some(0x10));
+        gameobject.set_flags(0x90);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_visual_despawn_represented);
+        assert!(outcome.generic_flags_restored_represented);
+        assert!(!outcome.generic_despawn_at_action_source_missing);
+        assert_eq!(canonical.data().flags, 0x10);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 0);
+    }
+
+    #[test]
+    fn gameobject_update_generic_anim_progress_visual_despawn_without_despawn_source_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4630301, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.set_go_anim_progress_like_cpp(1);
+        gameobject.set_represented_baseline_flags_like_cpp(Some(0x04));
+        gameobject.set_flags(0x84);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_visual_despawn_represented);
+        assert!(outcome.generic_flags_restored_represented);
+        assert!(!outcome.generic_despawn_at_action_source_missing);
+        assert_eq!(canonical.data().flags, 0x04);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+    }
+
+    #[test]
+    fn gameobject_update_generic_chest_missing_source_does_not_assume_despawn_at_action_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4630401, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(None);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert!(outcome.non_consumed_source_missing);
+        assert!(outcome.generic_not_ready);
+        assert!(outcome.generic_despawn_at_action_source_missing);
+        assert!(!outcome.generic_visual_despawn_represented);
+        assert!(!outcome.generic_flags_restored_represented);
+        assert_eq!(canonical.loot_state(), LootState::NotReady);
+    }
+
+    #[test]
+    fn gameobject_update_summary_counts_generic_branch_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4630501, 571, 7, false);
+        gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+        gameobject.set_go_anim_progress_like_cpp(3);
+        gameobject.set_represented_baseline_flags_like_cpp(Some(0x08));
+        gameobject.set_flags(0x88);
+        gameobject.set_respawn_delay_time(0);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        let gameobject_guid = gameobject.world().guid();
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.generic_not_ready, 1);
+        assert_eq!(summary.generic_visual_despawn_represented, 1);
+        assert_eq!(
+            summary.generic_visual_despawn_guids.as_slice(),
+            &[gameobject_guid]
+        );
+        assert_eq!(summary.generic_flags_restored_represented, 1);
+        assert_eq!(summary.generic_zero_respawn_delay_returns, 1);
+        assert_eq!(summary.despawn_remove_queued, 0);
+    }
+
+    #[test]
+    fn gameobject_visual_despawn_summary_guids_are_not_truncated_like_cpp() {
+        let mut map = test_map();
+        let mut expected_guids = Vec::new();
+        for index in 0..300 {
+            let mut gameobject = game_object_with_counter(4630601 + index, 571, 7, false);
+            gameobject.set_go_type(GAMEOBJECT_TYPE_GENERIC_LIKE_CPP as u8);
+            gameobject.set_go_anim_progress_like_cpp(1);
+            gameobject.set_represented_baseline_flags_like_cpp(Some(0x08));
+            gameobject.set_flags(0x88);
+            gameobject.set_respawn_delay_time(0);
+            gameobject.set_loot_state(LootState::JustDeactivated, None);
+            expected_guids.push(gameobject.world().guid());
+            map.add_map_object_record_to_map_like_cpp(
+                MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.generic_visual_despawn_represented, 300);
+        assert_eq!(summary.generic_visual_despawn_guids.as_slice().len(), 300);
+        let mut actual_guids = summary.generic_visual_despawn_guids.as_slice().to_vec();
+        actual_guids.sort_by_key(|guid| guid.counter());
+        expected_guids.sort_by_key(|guid| guid.counter());
+        assert_eq!(actual_guids, expected_guids);
+    }
+
+    #[test]
+    fn gameobject_update_summary_counts_summoned_expired_delete_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4620701, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        owner.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG as u8);
+        let mut drop = game_object_with_counter(4620702, 571, 7, false);
+        drop.set_go_type(GAMEOBJECT_TYPE_NEW_FLAG_DROP as u8);
+        drop.set_created_by(owner_guid);
+        drop.set_respawn_time(0);
+        drop.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(drop).unwrap())
+            .unwrap();
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.summoned_expired_deletes, 1);
+        assert_eq!(summary.summoned_expired_respawn_time_zeroed, 1);
+        assert_eq!(summary.summoned_expired_despawn_represented, 1);
+        assert_eq!(summary.new_flag_drop_owner_in_base_commands_represented, 1);
+        assert_eq!(summary.despawn_remove_queued, 1);
+    }
+
+    #[test]
+    fn gameobject_update_missing_template_source_does_not_assume_non_consumed_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4610601, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_go_type(GAMEOBJECT_TYPE_CHEST as u8);
+        gameobject.set_represented_chest_loot_source_like_cpp(None);
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+
+        assert!(outcome.loot_cleared);
+        assert!(!outcome.non_consumed_chest_or_goober_return);
+        assert!(!outcome.non_consumed_set_ready);
+        assert!(!outcome.non_consumed_restock_armed);
+        assert!(outcome.non_consumed_source_missing);
+    }
+
+    #[test]
+    fn gameobject_update_despawn_requested_does_not_consume_just_deactivated_linked_trap_like_cpp()
+    {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4580501, 571, 7, false);
+        let trap = game_object_with_counter(4580502, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        let trap_guid = trap.world().guid();
+        owner.set_loot_state(LootState::JustDeactivated, None);
+        owner.set_linked_trap_like_cpp(trap_guid);
+        owner.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(5, 1));
+        owner.set_personal_loot_like_cpp(
+            guid(HighGuid::Player, 4590291),
+            GameObjectOwnedLoot::new(6, 1),
+        );
+        assert!(owner.add_unique_use_like_cpp(guid(HighGuid::Player, 4590292)));
+        assert!(owner.schedule_despawn_or_unsummon_like_cpp(1, 0));
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(owner_guid, 1, 1_000);
+
+        assert_eq!(
+            outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRemoveQueued
+        );
+        assert_eq!(outcome.linked_trap_guid, None);
+        assert!(!outcome.linked_trap_removed);
+        assert!(!outcome.linked_trap_missing_or_self);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(map.objects_to_remove_count_like_cpp(), 1);
+        let owner_after = map
+            .map_object_record(owner_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(owner_after.loot_state(), LootState::NotReady);
+        assert!(owner_after.shared_loot_like_cpp().is_some());
+        assert_eq!(owner_after.personal_loot_count_like_cpp(), 1);
+        assert_eq!(owner_after.unique_user_count_like_cpp(), 1);
+        assert_eq!(owner_after.use_times(), 1);
+        assert!(map.map_object_record(trap_guid).is_some());
+    }
+
+    #[test]
+    fn gameobject_update_non_just_deactivated_keeps_linked_trap_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4580201, 571, 7, false);
+        let trap = game_object_with_counter(4580202, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        let trap_guid = trap.world().guid();
+        owner.set_loot_state(LootState::Ready, None);
+        owner.set_linked_trap_like_cpp(trap_guid);
+        owner.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(9, 1));
+        owner.set_personal_loot_like_cpp(
+            guid(HighGuid::Player, 4590391),
+            GameObjectOwnedLoot::new(10, 1),
+        );
+        assert!(owner.add_unique_use_like_cpp(guid(HighGuid::Player, 4590392)));
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(owner_guid, 1, 1_000);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.linked_trap_guid, None);
+        assert!(!outcome.linked_trap_removed);
+        assert!(!outcome.linked_trap_missing_or_self);
+        assert!(!outcome.loot_cleared);
+        let owner_after = map
+            .map_object_record(owner_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+        assert_eq!(owner_after.loot_state(), LootState::Ready);
+        assert!(owner_after.shared_loot_like_cpp().is_some());
+        assert_eq!(owner_after.personal_loot_count_like_cpp(), 1);
+        assert_eq!(owner_after.unique_user_count_like_cpp(), 1);
+        assert_eq!(owner_after.use_times(), 1);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert!(map.map_object_record(trap_guid).is_some());
+    }
+
+    #[test]
+    fn gameobject_update_not_in_world_does_not_clear_owned_loot_like_cpp() {
+        let mut map = test_map();
+        let mut gameobject = game_object_with_counter(4590401, 571, 7, false);
+        let gameobject_guid = gameobject.world().guid();
+        gameobject.set_loot_state(LootState::JustDeactivated, None);
+        gameobject.set_shared_loot_like_cpp(GameObjectOwnedLoot::new(12, 1));
+        gameobject.set_personal_loot_like_cpp(
+            guid(HighGuid::Player, 4590491),
+            GameObjectOwnedLoot::new(13, 1),
+        );
+        assert!(gameobject.add_unique_use_like_cpp(guid(HighGuid::Player, 4590492)));
+
+        map.insert_map_object_record(MapObjectRecord::new_game_object(gameobject).unwrap())
+            .unwrap();
+
+        let outcome = map.update_game_object_like_cpp(gameobject_guid, 1, 1_000);
+        let canonical = map
+            .map_object_record(gameobject_guid)
+            .and_then(MapObjectRecord::game_object)
+            .unwrap();
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::NotInWorld);
+        assert!(!outcome.loot_cleared);
+        assert_eq!(canonical.loot_state(), LootState::JustDeactivated);
+        assert!(canonical.shared_loot_like_cpp().is_some());
+        assert_eq!(canonical.personal_loot_count_like_cpp(), 1);
+        assert_eq!(canonical.unique_user_count_like_cpp(), 1);
+        assert_eq!(canonical.use_times(), 1);
+    }
+
+    #[test]
+    fn gameobject_update_just_deactivated_empty_self_missing_trap_is_noop_like_cpp() {
+        let mut map = test_map();
+        let mut empty = game_object_with_counter(4580301, 571, 7, false);
+        let mut self_linked = game_object_with_counter(4580302, 571, 7, false);
+        let mut missing = game_object_with_counter(4580303, 571, 7, false);
+        let unrelated = game_object_with_counter(4580304, 571, 7, false);
+        let empty_guid = empty.world().guid();
+        let self_guid = self_linked.world().guid();
+        let missing_guid = missing.world().guid();
+        let missing_trap_guid = guid(HighGuid::GameObject, 4580399);
+        let unrelated_guid = unrelated.world().guid();
+        empty.set_loot_state(LootState::JustDeactivated, None);
+        self_linked.set_loot_state(LootState::JustDeactivated, None);
+        self_linked.set_linked_trap_like_cpp(self_guid);
+        missing.set_loot_state(LootState::JustDeactivated, None);
+        missing.set_linked_trap_like_cpp(missing_trap_guid);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(empty).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(self_linked).unwrap(),
+        )
+        .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(missing).unwrap(),
+        )
+        .unwrap();
+        map.add_map_object_record_to_map_like_cpp(
+            MapObjectRecord::new_game_object(unrelated).unwrap(),
+        )
+        .unwrap();
+
+        let empty_outcome = map.update_game_object_like_cpp(empty_guid, 1, 1_000);
+        let self_outcome = map.update_game_object_like_cpp(self_guid, 1, 1_000);
+        let missing_outcome = map.update_game_object_like_cpp(missing_guid, 1, 1_000);
+
+        assert_eq!(empty_outcome.linked_trap_guid, None);
+        assert!(!empty_outcome.linked_trap_removed);
+        assert!(empty_outcome.linked_trap_missing_or_self);
+        assert_eq!(self_outcome.linked_trap_guid, Some(self_guid));
+        assert!(!self_outcome.linked_trap_removed);
+        assert!(self_outcome.linked_trap_missing_or_self);
+        assert_eq!(missing_outcome.linked_trap_guid, Some(missing_trap_guid));
+        assert!(!missing_outcome.linked_trap_removed);
+        assert!(missing_outcome.linked_trap_missing_or_self);
+        assert!(map.map_object_record(empty_guid).is_some());
+        assert!(map.map_object_record(self_guid).is_some());
+        assert!(map.map_object_record(missing_guid).is_some());
+        assert!(map.map_object_record(unrelated_guid).is_some());
+    }
+
+    #[test]
+    fn gameobject_update_summary_counts_linked_trap_removal_like_cpp() {
+        let mut map = test_map();
+        let mut owner = game_object_with_counter(4580401, 571, 7, false);
+        let trap = game_object_with_counter(4580402, 571, 7, false);
+        let owner_guid = owner.world().guid();
+        let trap_guid = trap.world().guid();
+        owner.set_loot_state(LootState::JustDeactivated, None);
+        owner.set_linked_trap_like_cpp(trap_guid);
+
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(trap).unwrap())
+            .unwrap();
+        map.add_map_object_record_to_map_like_cpp(MapObjectRecord::new_game_object(owner).unwrap())
+            .unwrap();
+
+        let summary = map.update_game_objects_like_cpp(1, 1_000);
+
+        assert_eq!(summary.linked_traps_removed, 1);
+        assert_eq!(summary.loot_cleared, 1);
+        assert!(summary.visited >= 1);
+        assert!(map.map_object_record(owner_guid).is_some());
+        assert!(map.map_object_record(trap_guid).is_none());
+    }
+
+    #[test]
     fn remove_list_drain_gameobject_owner_removes_linked_trap_like_cpp() {
         let mut map = test_map();
         let mut owner = game_object_with_counter(4190601, 571, 7, false);
@@ -12900,6 +26875,8 @@ mod tests {
             [other_player, old_player, old_creature],
             &nearby,
             true,
+            [],
+            [],
         );
 
         assert!(plan.visible_guids.contains(&player));
@@ -12929,10 +26906,55 @@ mod tests {
             [creature],
             &nearby,
             false,
+            [],
+            [],
         );
 
         assert!(plan.out_of_range_guids.is_empty());
         assert!(plan.ai_relocation_checks.is_empty());
+    }
+
+    #[test]
+    fn player_relocation_visibility_plan_filters_targets_needing_cpp_notify() {
+        let player = guid(HighGuid::Player, 4440201);
+        let player_target_needs_notify = guid(HighGuid::Player, 4440202);
+        let player_target_clear = guid(HighGuid::Player, 4440203);
+        let old_player_needs_notify = guid(HighGuid::Player, 4440204);
+        let old_player_clear = guid(HighGuid::Player, 4440205);
+        let creature_needs_notify = guid(HighGuid::Creature, 4440206);
+        let creature_clear = guid(HighGuid::Creature, 4440207);
+        let mut nearby = NearbyCellGuids::default();
+        nearby.world.players.insert(player);
+        nearby.world.players.insert(player_target_needs_notify);
+        nearby.world.players.insert(player_target_clear);
+        nearby.grid.creatures.insert(creature_needs_notify);
+        nearby.grid.creatures.insert(creature_clear);
+
+        let plan = PlayerRelocationVisibilityPlan::from_nearby_like_cpp(
+            player,
+            [old_player_needs_notify, old_player_clear],
+            &nearby,
+            true,
+            [player_target_needs_notify, old_player_needs_notify],
+            [creature_needs_notify],
+        );
+
+        assert!(
+            !plan
+                .reciprocal_player_updates
+                .contains(&player_target_needs_notify)
+        );
+        assert!(
+            plan.reciprocal_player_updates
+                .contains(&player_target_clear)
+        );
+        assert!(
+            !plan
+                .reciprocal_player_updates
+                .contains(&old_player_needs_notify)
+        );
+        assert!(plan.reciprocal_player_updates.contains(&old_player_clear));
+        assert_eq!(plan.ai_relocation_checks, vec![(creature_clear, player)]);
     }
 
     #[test]
@@ -13094,11 +27116,160 @@ mod tests {
         );
         assert_eq!(
             plan.cell_plans[0].plan.player_relocations,
-            vec![player_notify_guid]
+            vec![player_notify_guid, player_invalid_guid]
         );
+        assert!(
+            plan.cell_plans[0]
+                .plan
+                .skipped_invalid_viewpoints
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn delayed_unit_relocation_for_cells_uses_player_seer_notify_like_cpp() {
+        let mut map = test_map();
+        let mut player = test_player_for_viewpoint(4440101);
+        let player_guid = player.guid();
+        let viewpoint = world_object_with_counter(HighGuid::Creature, 4440102, 571, 7, false);
+        let viewpoint_guid = viewpoint.guid();
+        player.set_farsight_object_like_cpp(viewpoint_guid);
+
+        let cell = map
+            .add_to_map_like_cpp(
+                AccessorObjectKind::Player,
+                world_object_with_counter(HighGuid::Player, 4440101, 571, 7, false),
+            )
+            .unwrap()
+            .cell;
+        map.insert_map_object_record(MapObjectRecord::new_player(player).unwrap())
+            .unwrap();
+        map.add_to_map_like_cpp(AccessorObjectKind::Creature, viewpoint)
+            .unwrap();
+        map.map_objects
+            .get_mut(&viewpoint_guid)
+            .unwrap()
+            .object_mut()
+            .object_mut()
+            .add_to_notify(ObjectNotifyFlags::VISIBILITY_CHANGED);
+
+        let plan = map.delayed_unit_relocation_for_cells_like_cpp([cell], []);
+        assert_eq!(plan.cell_plans.len(), 1);
         assert_eq!(
-            plan.cell_plans[0].plan.skipped_invalid_viewpoints,
-            vec![player_invalid_guid]
+            plan.cell_plans[0].plan.player_relocations,
+            vec![player_guid]
+        );
+        assert!(
+            plan.cell_plans[0]
+                .plan
+                .skipped_invalid_viewpoints
+                .is_empty()
+        );
+
+        let visibility_plans = map.delayed_unit_relocation_visibility_plans_like_cpp(
+            &plan,
+            map.delayed_player_relocation_contexts_from_plan_like_cpp(&plan),
+            [DelayedCreatureRelocationContext {
+                creature_guid: viewpoint_guid,
+                source_creature_alive: true,
+            }],
+        );
+        assert_eq!(visibility_plans.player_plans.len(), 1);
+        assert_eq!(visibility_plans.player_plans[0].player_guid, player_guid);
+        assert_eq!(
+            visibility_plans.player_plans[0].viewpoint_guid,
+            viewpoint_guid
+        );
+        assert!(
+            visibility_plans.player_plans[0]
+                .visibility_plan
+                .ai_relocation_checks
+                .is_empty()
+        );
+        let creature_plan = visibility_plans
+            .creature_plans
+            .iter()
+            .find(|plan| plan.creature_guid == viewpoint_guid)
+            .unwrap();
+        assert!(
+            !creature_plan
+                .visibility_plan
+                .player_visibility_updates
+                .contains(&player_guid),
+            "CreatureRelocationNotifier must test player->m_seer notify, not the Player notify flag"
+        );
+
+        map.map_objects
+            .get_mut(&viewpoint_guid)
+            .unwrap()
+            .object_mut()
+            .relocate(Position::xyz(1.0e9, 1.0e9, 0.0));
+        map.map_objects
+            .get_mut(&viewpoint_guid)
+            .unwrap()
+            .object_mut()
+            .object_mut()
+            .add_to_notify(ObjectNotifyFlags::VISIBILITY_CHANGED);
+
+        let skipped = map.delayed_unit_relocation_for_cells_like_cpp([cell], []);
+        assert_eq!(skipped.cell_plans.len(), 1);
+        assert!(skipped.cell_plans[0].plan.player_relocations.is_empty());
+        assert_eq!(
+            skipped.cell_plans[0].plan.skipped_invalid_viewpoints,
+            vec![player_guid]
+        );
+    }
+
+    #[test]
+    fn delayed_unit_relocation_visibility_plans_filter_player_seers_like_cpp() {
+        let mut map = test_map();
+        let source_player = world_object_with_counter(HighGuid::Player, 4440301, 571, 7, false);
+        let source_player_guid = source_player.guid();
+        let target_needs_notify =
+            world_object_with_counter(HighGuid::Player, 4440302, 571, 7, false);
+        let target_needs_notify_guid = target_needs_notify.guid();
+        let target_clear = world_object_with_counter(HighGuid::Player, 4440303, 571, 7, false);
+        let target_clear_guid = target_clear.guid();
+        let cell = map
+            .add_to_map_like_cpp(AccessorObjectKind::Player, source_player)
+            .unwrap()
+            .cell;
+        map.add_to_map_like_cpp(AccessorObjectKind::Player, target_needs_notify)
+            .unwrap();
+        map.add_to_map_like_cpp(AccessorObjectKind::Player, target_clear)
+            .unwrap();
+        for guid in [source_player_guid, target_needs_notify_guid] {
+            map.map_objects
+                .get_mut(&guid)
+                .unwrap()
+                .object_mut()
+                .object_mut()
+                .add_to_notify(ObjectNotifyFlags::VISIBILITY_CHANGED);
+        }
+
+        let delayed_plan = map.delayed_unit_relocation_for_cells_like_cpp([cell], []);
+        let visibility_plans = map.delayed_unit_relocation_visibility_plans_like_cpp(
+            &delayed_plan,
+            map.delayed_player_relocation_contexts_from_plan_like_cpp(&delayed_plan),
+            std::iter::empty::<DelayedCreatureRelocationContext>(),
+        );
+        let source_plan = visibility_plans
+            .player_plans
+            .iter()
+            .find(|plan| plan.player_guid == source_player_guid)
+            .unwrap();
+
+        assert!(
+            !source_plan
+                .visibility_plan
+                .reciprocal_player_updates
+                .contains(&target_needs_notify_guid)
+        );
+        assert!(
+            source_plan
+                .visibility_plan
+                .reciprocal_player_updates
+                .contains(&target_clear_guid)
         );
     }
 
@@ -13217,10 +27388,16 @@ mod tests {
                 previous_client_guids: vec![old_player, old_creature],
                 relocated_for_ai: true,
             }],
-            [DelayedCreatureRelocationContext {
-                creature_guid: source_creature_guid,
-                source_creature_alive: true,
-            }],
+            [
+                DelayedCreatureRelocationContext {
+                    creature_guid: source_creature_guid,
+                    source_creature_alive: true,
+                },
+                DelayedCreatureRelocationContext {
+                    creature_guid: notified_creature_guid,
+                    source_creature_alive: true,
+                },
+            ],
         );
 
         assert_eq!(plans.creature_plans.len(), 2);
@@ -13278,10 +27455,22 @@ mod tests {
                 .contains(&old_creature)
         );
         assert!(
-            player_plan
+            !player_plan
                 .visibility_plan
                 .ai_relocation_checks
                 .contains(&(source_creature_guid, player_notify_guid))
+        );
+        assert!(
+            player_plan
+                .visibility_plan
+                .ai_relocation_checks
+                .contains(&(other_creature_guid, player_notify_guid))
+        );
+        assert!(
+            !player_plan
+                .visibility_plan
+                .ai_relocation_checks
+                .contains(&(notified_creature_guid, player_notify_guid))
         );
     }
 

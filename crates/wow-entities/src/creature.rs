@@ -3,7 +3,9 @@ use wow_constants::{
 };
 use wow_core::{ObjectGuid, Position};
 
-use crate::{BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit};
+use crate::{
+    BASE_MAXDAMAGE, BASE_MINDAMAGE, Unit, VehicleAccessory, VehicleSeatAddon, VehicleSeatInfo,
+};
 
 pub const CREATURE_REGEN_INTERVAL_MS: u32 = 2_000;
 pub const MAX_CREATURE_SPELLS: usize = 8;
@@ -181,6 +183,7 @@ pub struct CreatureTemplateLifecycleRecord {
     pub spells: [u32; MAX_CREATURE_SPELLS],
     pub classification: u32,
     pub flags_extra: u32,
+    pub creature_type: u32,
     pub type_flags: u32,
     pub movement_type: MovementGeneratorType,
     pub min_level: u8,
@@ -217,6 +220,56 @@ pub struct CreatureSpawnLifecycleRecord {
     pub respawn_compatibility_mode: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleKitCreateInputLikeCpp {
+    pub vehicle_id: u32,
+    pub creature_entry: u32,
+    pub loading: bool,
+    pub seat_defs: Vec<(i8, VehicleSeatInfo, VehicleSeatAddon)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CreatureFormationInfoLikeCpp {
+    pub leader_spawn_id: u64,
+    pub follow_dist: f32,
+    pub follow_angle_radians: f32,
+    pub group_ai: u32,
+    pub leader_waypoint_ids: [u32; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureSearchFormationOutcomeLikeCpp {
+    pub spawn_id: u64,
+    pub is_summon: bool,
+    pub formation_info_found: bool,
+    pub leader_spawn_id: Option<u64>,
+    pub add_to_group_requested: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreatureAimInitializeOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub spawn_id: u64,
+    pub aim_create_represented: bool,
+    pub motion_initialize_represented: bool,
+    pub formation_present: bool,
+    pub formation_leader: bool,
+    pub formation_move_idle_represented: bool,
+    pub motion_initialize_requires_formed_state: bool,
+    pub motion_master_initialize_represented: bool,
+    pub ai_selected_represented: bool,
+    pub ai_initialize_represented: bool,
+    pub vehicle_reset_expected: bool,
+    pub succeeded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatureAddToWorldVehicleResetContextLikeCpp {
+    pub is_mechanical_creature: bool,
+    pub is_world_boss: bool,
+    pub accessories: Vec<VehicleAccessory>,
+}
+
 /// Resolved, testable input for TrinityCore `Creature::Create`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreatureCreateLifecycleRecord {
@@ -227,6 +280,8 @@ pub struct CreatureCreateLifecycleRecord {
     pub position: Position,
     pub dynamic: bool,
     pub vehicle_id: Option<u32>,
+    pub vehicle_kit_create_input: Option<VehicleKitCreateInputLikeCpp>,
+    pub add_to_world_vehicle_reset_context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
     pub template: CreatureTemplateLifecycleRecord,
     pub spawn: Option<CreatureSpawnLifecycleRecord>,
     pub selected_level: u8,
@@ -253,6 +308,7 @@ pub struct CreatureLifecycleMetadata {
     pub unit_class: u8,
     pub classification: u32,
     pub flags_extra: u32,
+    pub creature_type: u32,
     pub type_flags: u32,
     pub selected_level: u8,
     pub selected_display_id: u32,
@@ -278,7 +334,10 @@ pub struct CreatureLifecycleMetadata {
     pub add_to_map_requested: bool,
     pub map_insertion_requested: bool,
     pub dynamic_spawn: bool,
+    pub is_summon_like_cpp: bool,
+    pub formation_info: Option<CreatureFormationInfoLikeCpp>,
     pub vehicle_id: Option<u32>,
+    pub add_to_world_vehicle_reset_context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
     pub equipment_id: u8,
     pub original_equipment_id: i8,
 }
@@ -292,6 +351,7 @@ impl Default for CreatureLifecycleMetadata {
             unit_class: 0,
             classification: 0,
             flags_extra: 0,
+            creature_type: 0,
             type_flags: 0,
             selected_level: 0,
             selected_display_id: 0,
@@ -317,7 +377,10 @@ impl Default for CreatureLifecycleMetadata {
             add_to_map_requested: false,
             map_insertion_requested: false,
             dynamic_spawn: false,
+            is_summon_like_cpp: false,
+            formation_info: None,
             vehicle_id: None,
+            add_to_world_vehicle_reset_context: None,
             equipment_id: 0,
             original_equipment_id: 0,
         }
@@ -726,6 +789,32 @@ impl Creature {
         self.spells = template.spells;
         self.equipment_id = equipment_id;
         self.original_equipment_id = original_equipment_id;
+        if record.vehicle_id.is_some() {
+            // C++ `Creature::CreateFromProto` calls `CreateVehicleKit(vehId, entry, true)` here.
+            // The bounded seam creates the local DB2 seat-backed `Vehicle` only when the caller
+            // resolved a real `VehicleEntry`; a missing input preserves identity metadata but
+            // represents `CreateVehicleKit` returning false.
+            let create_input = record.vehicle_kit_create_input;
+            let vehicle_id = create_input
+                .as_ref()
+                .map_or(record.vehicle_id, |input| Some(input.vehicle_id));
+            let loading = create_input.as_ref().map_or(true, |input| input.loading);
+            let creature_entry = create_input
+                .as_ref()
+                .map_or(record.entry, |input| input.creature_entry);
+            let seat_defs = create_input.map(|input| input.seat_defs);
+            self.unit
+                .subsystems_mut()
+                .vehicle
+                .create_vehicle_kit_like_cpp(
+                    record.guid,
+                    position,
+                    vehicle_id,
+                    creature_entry,
+                    loading,
+                    seat_defs,
+                );
+        }
         self.default_movement_type = spawn
             .map(|spawn| spawn.movement_type)
             .unwrap_or(template.movement_type);
@@ -771,6 +860,7 @@ impl Creature {
             unit_class: template.unit_class,
             classification: template.classification,
             flags_extra: template.flags_extra,
+            creature_type: template.creature_type,
             type_flags: template.type_flags,
             selected_level: record.selected_level,
             selected_display_id: record.selected_display_id,
@@ -802,7 +892,10 @@ impl Creature {
             add_to_map_requested: spawn.map(|spawn| spawn.add_to_map).unwrap_or(false),
             map_insertion_requested: spawn.map(|spawn| spawn.add_to_map).unwrap_or(false),
             dynamic_spawn: record.dynamic,
+            is_summon_like_cpp: false,
+            formation_info: None,
             vehicle_id: record.vehicle_id,
+            add_to_world_vehicle_reset_context: record.add_to_world_vehicle_reset_context,
             equipment_id,
             original_equipment_id,
         };
@@ -864,6 +957,118 @@ impl Creature {
 
     pub const fn lifecycle_metadata(&self) -> &CreatureLifecycleMetadata {
         &self.lifecycle_metadata
+    }
+
+    pub fn add_to_world_vehicle_reset_context_like_cpp(
+        &self,
+    ) -> Option<&CreatureAddToWorldVehicleResetContextLikeCpp> {
+        self.lifecycle_metadata
+            .add_to_world_vehicle_reset_context
+            .as_ref()
+    }
+
+    pub fn set_add_to_world_vehicle_reset_context_like_cpp(
+        &mut self,
+        context: Option<CreatureAddToWorldVehicleResetContextLikeCpp>,
+    ) {
+        self.lifecycle_metadata.add_to_world_vehicle_reset_context = context;
+    }
+
+    pub const fn is_summon_like_cpp(&self) -> bool {
+        self.lifecycle_metadata.is_summon_like_cpp
+    }
+
+    pub fn set_summon_like_cpp(&mut self, is_summon: bool) {
+        self.lifecycle_metadata.is_summon_like_cpp = is_summon;
+    }
+
+    pub const fn formation_info_like_cpp(&self) -> Option<&CreatureFormationInfoLikeCpp> {
+        self.lifecycle_metadata.formation_info.as_ref()
+    }
+
+    pub fn set_formation_info_like_cpp(&mut self, info: Option<CreatureFormationInfoLikeCpp>) {
+        self.lifecycle_metadata.formation_info = info;
+    }
+
+    /// Represented C++ `Creature::SearchFormation()` branch.
+    ///
+    /// C++ anchor: `Creature.cpp:379-389`. This only consumes explicit
+    /// caller-provided `FormationInfo` evidence already stored on the creature.
+    /// It does not query DB, scan spawn groups, or own a real `FormationMgr`.
+    pub fn search_formation_like_cpp(&self) -> CreatureSearchFormationOutcomeLikeCpp {
+        let spawn_id = self.spawn_id();
+        let is_summon = self.is_summon_like_cpp();
+        if is_summon {
+            return CreatureSearchFormationOutcomeLikeCpp {
+                spawn_id,
+                is_summon,
+                formation_info_found: self.lifecycle_metadata.formation_info.is_some(),
+                leader_spawn_id: None,
+                add_to_group_requested: false,
+            };
+        }
+
+        if spawn_id == 0 {
+            return CreatureSearchFormationOutcomeLikeCpp {
+                spawn_id,
+                is_summon,
+                formation_info_found: self.lifecycle_metadata.formation_info.is_some(),
+                leader_spawn_id: None,
+                add_to_group_requested: false,
+            };
+        }
+
+        let Some(formation_info) = self.lifecycle_metadata.formation_info else {
+            return CreatureSearchFormationOutcomeLikeCpp {
+                spawn_id,
+                is_summon,
+                formation_info_found: false,
+                leader_spawn_id: None,
+                add_to_group_requested: false,
+            };
+        };
+
+        CreatureSearchFormationOutcomeLikeCpp {
+            spawn_id,
+            is_summon,
+            formation_info_found: true,
+            leader_spawn_id: Some(formation_info.leader_spawn_id),
+            add_to_group_requested: true,
+        }
+    }
+
+    /// Represented C++ `Creature::AIM_Initialize()` / `AIM_Create()` seam.
+    ///
+    /// C++ anchors: `Creature.cpp:1026-1044` (`AIM_Create`, `AIM_Initialize`)
+    /// and `Creature.cpp:1046-1060` (`Motion_Initialize`). This records local
+    /// evidence only: it does not instantiate real AI, run `InitializeAI`, call
+    /// `CreatureGroup::FormationReset`, query `CreatureGroup::IsFormed`, move a
+    /// `MotionMaster`, or reset a vehicle kit. The vehicle reset remains the
+    /// following AddToMap seam representing `if (GetVehicleKit()) Reset()`.
+    pub fn aim_initialize_like_cpp(&self) -> CreatureAimInitializeOutcomeLikeCpp {
+        let spawn_id = self.spawn_id();
+        let formation_info = self.formation_info_like_cpp();
+        let formation_present = formation_info.is_some();
+        let formation_leader = formation_info.is_some_and(|info| info.leader_spawn_id == spawn_id);
+        let motion_initialize_requires_formed_state = formation_present && !formation_leader;
+
+        CreatureAimInitializeOutcomeLikeCpp {
+            guid: self.guid(),
+            spawn_id,
+            aim_create_represented: true,
+            motion_initialize_represented: true,
+            formation_present,
+            formation_leader,
+            // C++ non-leader formed groups call MoveIdle() and return, but this
+            // represented seam has no real CreatureGroup::IsFormed() state yet.
+            formation_move_idle_represented: false,
+            motion_initialize_requires_formed_state,
+            motion_master_initialize_represented: !motion_initialize_requires_formed_state,
+            ai_selected_represented: true,
+            ai_initialize_represented: true,
+            vehicle_reset_expected: self.unit().subsystems().vehicle.kit.is_some(),
+            succeeded: true,
+        }
     }
 
     pub fn clear_data_changes(&mut self) {
@@ -1250,10 +1455,21 @@ impl Creature {
 
     pub fn set_spawn_id(&mut self, spawn_id: u64) {
         self.spawn_id = spawn_id;
+        self.lifecycle_metadata.spawn_id = spawn_id;
     }
 
     pub const fn equipment_id(&self) -> u8 {
         self.equipment_id
+    }
+
+    /// Represented bounded seam for TrinityCore `Creature::LoadEquipment(id, true)` callers.
+    ///
+    /// This only records the selected equipment id on the canonical creature state and
+    /// lifecycle metadata. It does not load `creature_equip_template` items, update
+    /// visible item fields, or fan out values updates.
+    pub fn set_equipment_id_like_cpp(&mut self, equipment_id: u8) {
+        self.equipment_id = equipment_id;
+        self.lifecycle_metadata.equipment_id = equipment_id;
     }
 
     pub const fn original_equipment_id(&self) -> i8 {
@@ -2018,6 +2234,69 @@ fn power_type_from_u8(power: u8) -> PowerType {
 mod tests {
     use super::*;
 
+    fn formation_info_like_cpp(leader_spawn_id: u64) -> CreatureFormationInfoLikeCpp {
+        CreatureFormationInfoLikeCpp {
+            leader_spawn_id,
+            follow_dist: 7.0,
+            follow_angle_radians: 1.25,
+            group_ai: 3,
+            leader_waypoint_ids: [11, 12],
+        }
+    }
+
+    #[test]
+    fn creature_search_formation_like_cpp_requests_only_with_spawn_and_info() {
+        let mut creature = Creature::new(false);
+        creature.set_spawn_id(1234);
+        creature.set_formation_info_like_cpp(Some(formation_info_like_cpp(77)));
+
+        let outcome = creature.search_formation_like_cpp();
+
+        assert_eq!(outcome.spawn_id, 1234);
+        assert!(!outcome.is_summon);
+        assert!(outcome.formation_info_found);
+        assert_eq!(outcome.leader_spawn_id, Some(77));
+        assert!(outcome.add_to_group_requested);
+    }
+
+    #[test]
+    fn creature_search_formation_like_cpp_skips_summon_and_zero_spawn() {
+        let mut summon = Creature::new(false);
+        summon.set_spawn_id(1234);
+        summon.set_summon_like_cpp(true);
+        summon.set_formation_info_like_cpp(Some(formation_info_like_cpp(77)));
+
+        let summon_outcome = summon.search_formation_like_cpp();
+        assert!(summon_outcome.is_summon);
+        assert!(summon_outcome.formation_info_found);
+        assert_eq!(summon_outcome.leader_spawn_id, None);
+        assert!(!summon_outcome.add_to_group_requested);
+
+        let mut zero_spawn = Creature::new(false);
+        zero_spawn.set_formation_info_like_cpp(Some(formation_info_like_cpp(77)));
+
+        let zero_spawn_outcome = zero_spawn.search_formation_like_cpp();
+        assert_eq!(zero_spawn_outcome.spawn_id, 0);
+        assert!(!zero_spawn_outcome.is_summon);
+        assert!(zero_spawn_outcome.formation_info_found);
+        assert_eq!(zero_spawn_outcome.leader_spawn_id, None);
+        assert!(!zero_spawn_outcome.add_to_group_requested);
+    }
+
+    #[test]
+    fn creature_search_formation_like_cpp_skips_missing_formation_info() {
+        let mut creature = Creature::new(false);
+        creature.set_spawn_id(1234);
+
+        let outcome = creature.search_formation_like_cpp();
+
+        assert_eq!(outcome.spawn_id, 1234);
+        assert!(!outcome.is_summon);
+        assert!(!outcome.formation_info_found);
+        assert_eq!(outcome.leader_spawn_id, None);
+        assert!(!outcome.add_to_group_requested);
+    }
+
     #[test]
     fn creature_constructor_matches_cpp_base_state() {
         let creature = Creature::new(false);
@@ -2413,6 +2692,7 @@ mod tests {
             spells,
             classification: 3,
             flags_extra: 0x10,
+            creature_type: 9,
             type_flags: 0x20,
             movement_type: MovementGeneratorType::Idle,
             min_level: 70,
@@ -2450,6 +2730,26 @@ mod tests {
         }
     }
 
+    fn vehicle_seat_def(
+        seat_index: i8,
+        can_enter_or_exit: bool,
+    ) -> (i8, VehicleSeatInfo, VehicleSeatAddon) {
+        (
+            seat_index,
+            VehicleSeatInfo {
+                id: 10_000 + u32::from(seat_index.unsigned_abs()),
+                attachment_offset: Position::ZERO,
+                can_enter_or_exit,
+                usable_by_override: false,
+                can_control: false,
+                disables_gravity: false,
+                passenger_not_selectable: false,
+                keep_pet: false,
+            },
+            VehicleSeatAddon::default(),
+        )
+    }
+
     fn creature_lifecycle_create_record() -> CreatureCreateLifecycleRecord {
         CreatureCreateLifecycleRecord {
             guid: ObjectGuid::new(8, 1001),
@@ -2459,6 +2759,13 @@ mod tests {
             position: Position::new(1.0, 2.0, 3.0, 4.0),
             dynamic: false,
             vehicle_id: Some(101),
+            vehicle_kit_create_input: Some(VehicleKitCreateInputLikeCpp {
+                vehicle_id: 101,
+                creature_entry: 1001,
+                loading: true,
+                seat_defs: vec![vehicle_seat_def(0, true), vehicle_seat_def(2, false)],
+            }),
+            add_to_world_vehicle_reset_context: None,
             template: creature_lifecycle_template(),
             spawn: None,
             selected_level: 71,
@@ -2508,6 +2815,31 @@ mod tests {
         assert_eq!(creature.spells()[3], 116);
         assert_eq!(creature.equipment_id(), 6);
         assert_eq!(creature.original_equipment_id(), -6);
+        let kit = creature.unit().subsystems().vehicle.kit.as_ref().unwrap();
+        assert_eq!(kit.kit_id(), 101);
+        assert!(kit.active());
+        assert!(!kit.installed());
+        assert_eq!(kit.seat_count(), 2);
+        assert_eq!(kit.usable_seat_num(), 1);
+        let create_outcome = creature
+            .unit()
+            .subsystems()
+            .vehicle
+            .last_create_outcome
+            .as_ref()
+            .unwrap();
+        assert_eq!(create_outcome.kit_id, Some(101));
+        assert!(create_outcome.created);
+        assert_eq!(create_outcome.seat_count, 2);
+        assert_eq!(create_outcome.usable_seat_num, 1);
+        assert!(create_outcome.unit_update_flag_vehicle_represented);
+        assert!(create_outcome.unit_type_mask_vehicle_represented);
+        assert!(!create_outcome.send_set_vehicle_rec_id_represented);
+        assert!(create_outcome.set_spellclick_or_player_vehicle_npc_flag_represented);
+        assert!(!create_outcome.remove_spellclick_or_player_vehicle_npc_flag_represented);
+        assert!(create_outcome.update_display_power_represented);
+        assert!(create_outcome.init_movement_info_for_base_represented);
+        assert_eq!(creature.lifecycle_metadata().vehicle_id, Some(101));
         assert_eq!(creature.unit().data().level, 71);
         assert_eq!(creature.unit().data().max_health, 5_000);
         assert_eq!(creature.unit().data().health, 4_500);
@@ -2540,6 +2872,110 @@ mod tests {
         record.spawn = None;
         let dynamic_creature = Creature::create_from_lifecycle(record);
         assert!(!dynamic_creature.respawn_compatibility_mode());
+    }
+
+    #[test]
+    fn aim_initialize_like_cpp_represents_normal_creature_without_formation_or_vehicle() {
+        let mut create = creature_lifecycle_create_record();
+        create.vehicle_id = None;
+        create.vehicle_kit_create_input = None;
+        let creature = Creature::load_from_db_lifecycle(CreatureLoadFromDbLifecycleRecord {
+            create,
+            spawn: creature_lifecycle_spawn(),
+        });
+
+        let outcome = creature.aim_initialize_like_cpp();
+
+        assert_eq!(outcome.guid, creature.guid());
+        assert_eq!(outcome.spawn_id, 44_000);
+        assert!(outcome.aim_create_represented);
+        assert!(outcome.motion_initialize_represented);
+        assert!(!outcome.formation_present);
+        assert!(!outcome.formation_leader);
+        assert!(!outcome.formation_move_idle_represented);
+        assert!(!outcome.motion_initialize_requires_formed_state);
+        assert!(outcome.motion_master_initialize_represented);
+        assert!(outcome.ai_selected_represented);
+        assert!(outcome.ai_initialize_represented);
+        assert!(!outcome.vehicle_reset_expected);
+        assert!(outcome.succeeded);
+    }
+
+    #[test]
+    fn aim_initialize_like_cpp_reports_formation_leader_and_non_leader_without_move_idle() {
+        let mut create = creature_lifecycle_create_record();
+        create.vehicle_id = None;
+        create.vehicle_kit_create_input = None;
+        let spawn = creature_lifecycle_spawn();
+        let mut leader = Creature::load_from_db_lifecycle(CreatureLoadFromDbLifecycleRecord {
+            create: create.clone(),
+            spawn: spawn.clone(),
+        });
+        leader.set_formation_info_like_cpp(Some(CreatureFormationInfoLikeCpp {
+            leader_spawn_id: spawn.spawn_id,
+            follow_dist: 8.0,
+            follow_angle_radians: 0.75,
+            group_ai: 4,
+            leader_waypoint_ids: [21, 22],
+        }));
+
+        let leader_outcome = leader.aim_initialize_like_cpp();
+        assert!(leader_outcome.formation_present);
+        assert!(leader_outcome.formation_leader);
+        assert!(!leader_outcome.formation_move_idle_represented);
+        assert!(!leader_outcome.motion_initialize_requires_formed_state);
+        assert!(leader_outcome.motion_master_initialize_represented);
+
+        let mut non_leader_spawn = spawn;
+        non_leader_spawn.spawn_id = 44_001;
+        let mut non_leader = Creature::load_from_db_lifecycle(CreatureLoadFromDbLifecycleRecord {
+            create,
+            spawn: non_leader_spawn,
+        });
+        non_leader.set_formation_info_like_cpp(Some(CreatureFormationInfoLikeCpp {
+            leader_spawn_id: 44_000,
+            follow_dist: 8.0,
+            follow_angle_radians: 0.75,
+            group_ai: 4,
+            leader_waypoint_ids: [21, 22],
+        }));
+
+        let non_leader_outcome = non_leader.aim_initialize_like_cpp();
+        assert!(non_leader_outcome.formation_present);
+        assert!(!non_leader_outcome.formation_leader);
+        assert!(!non_leader_outcome.formation_move_idle_represented);
+        assert!(non_leader_outcome.motion_initialize_requires_formed_state);
+        assert!(!non_leader_outcome.motion_master_initialize_represented);
+    }
+
+    #[test]
+    fn creature_lifecycle_vehicle_entry_missing_preserves_identity_without_local_kit_like_cpp() {
+        let mut record = creature_lifecycle_create_record();
+        record.vehicle_id = Some(909);
+        record.vehicle_kit_create_input = None;
+
+        let creature = Creature::create_from_lifecycle(record);
+
+        assert_eq!(creature.lifecycle_metadata().vehicle_id, Some(909));
+        assert!(creature.unit().subsystems().vehicle.kit.is_none());
+        let outcome = creature
+            .unit()
+            .subsystems()
+            .vehicle
+            .last_create_outcome
+            .as_ref()
+            .unwrap();
+        assert_eq!(outcome.kit_id, Some(909));
+        assert!(!outcome.created);
+        assert_eq!(outcome.seat_count, 0);
+        assert_eq!(outcome.usable_seat_num, 0);
+        assert!(!outcome.unit_update_flag_vehicle_represented);
+        assert!(!outcome.unit_type_mask_vehicle_represented);
+        assert!(!outcome.send_set_vehicle_rec_id_represented);
+        assert!(!outcome.set_spellclick_or_player_vehicle_npc_flag_represented);
+        assert!(!outcome.remove_spellclick_or_player_vehicle_npc_flag_represented);
+        assert!(!outcome.update_display_power_represented);
+        assert!(!outcome.init_movement_info_for_base_represented);
     }
 
     #[test]

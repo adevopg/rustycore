@@ -5,8 +5,8 @@ use wow_constants::{
 use wow_core::ObjectGuid;
 
 use crate::{
-    CurrentSpellRef, CurrentSpellSlot, ObjectDataUpdate, UnitSubsystems, UpdateMask,
-    VisibleItemValues, WorldObject,
+    CurrentSpellRef, CurrentSpellSlot, MotionMasterAddToWorldOutcomeLikeCpp, ObjectDataUpdate,
+    UnitSubsystems, UpdateMask, VehicleKitRemoveOutcomeLikeCpp, VisibleItemValues, WorldObject,
     update_fields::{TYPEID_UNIT, UNIT_DATA_BITS},
 };
 
@@ -22,6 +22,7 @@ pub const SPELL_AURA_MOD_UNATTACKABLE_LIKE_CPP: i32 = 93;
 pub const SPELL_AURA_DISABLE_ATTACKING_EXCEPT_ABILITIES_LIKE_CPP: i32 = 264;
 pub const SPELL_AURA_MOD_STALKED_LIKE_CPP: i32 = 68;
 pub const SPELL_AURA_INTERRUPT_FLAG_ATTACKING_LIKE_CPP: u32 = 0x0000_1000;
+pub const SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP: u32 = 0x0040_0000;
 pub const MAX_VISIBILITY_AURA_TYPES_LIKE_CPP: usize = 38;
 pub const MAX_PLAYER_STEALTH_DETECT_RANGE_LIKE_CPP: f32 = 30.0;
 pub const GHOST_VISIBILITY_ALIVE_LIKE_CPP: u32 = 0x1;
@@ -130,6 +131,28 @@ pub struct UnitValuesUpdate {
     pub changed_object_type_mask: u32,
     pub object_data: Option<ObjectDataUpdate>,
     pub unit_data: Option<UnitDataUpdate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitRemoveFromWorldOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub was_in_world: bool,
+    pub during_remove_entered: bool,
+    pub ai_on_despawn_represented: bool,
+    pub vehicle_remove: Option<VehicleKitRemoveOutcomeLikeCpp>,
+    pub leave_world_cleanup_represented: bool,
+    pub world_object_removed: bool,
+    pub during_remove_cleared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitAddToWorldOutcomeLikeCpp {
+    pub guid: ObjectGuid,
+    pub world_object_added: bool,
+    pub is_in_world_after: bool,
+    pub motion_master_add_to_world: MotionMasterAddToWorldOutcomeLikeCpp,
+    pub removed_enter_world_auras: Vec<crate::AppliedAuraRef>,
+    pub aura_interrupt_flags_enter_world: u32,
 }
 
 impl UnitValuesUpdate {
@@ -330,6 +353,65 @@ impl Unit {
 
     pub fn world_mut(&mut self) -> &mut WorldObject {
         &mut self.world
+    }
+
+    /// Bounded represented seam for C++ `Unit::AddToWorld()`
+    /// (`Unit.cpp:9471-9477`). This preserves the local statement order
+    /// `WorldObject::AddToWorld()`, `MotionMaster::AddToWorld()`, and
+    /// `RemoveAurasWithInterruptFlags(EnterWorld)`. It does not execute aura
+    /// scripts/procs/update masks/packets or real MotionMaster pathing/runtime
+    /// beyond the represented local helper.
+    pub fn add_to_world_like_cpp(&mut self) -> UnitAddToWorldOutcomeLikeCpp {
+        let guid = self.world().object().guid();
+        self.world_mut().object_mut().add_to_world();
+        let motion_master_add_to_world = self.subsystems_mut().motion.add_to_world_like_cpp();
+        let removed_enter_world_auras = self
+            .subsystems_mut()
+            .auras
+            .remove_interruptible_auras(SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP, 0);
+
+        UnitAddToWorldOutcomeLikeCpp {
+            guid,
+            world_object_added: true,
+            is_in_world_after: self.world().object().is_in_world(),
+            motion_master_add_to_world,
+            removed_enter_world_auras,
+            aura_interrupt_flags_enter_world: SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP,
+        }
+    }
+
+    /// Bounded represented seam for C++ `Unit::RemoveFromWorld()`
+    /// (`Unit.cpp:9479-9533`). This preserves the `IsInWorld()` guard and the
+    /// local ordering around `RemoveVehicleKit(true)` and
+    /// `WorldObject::RemoveFromWorld()` without overclaiming AI, aura,
+    /// control, owned-object, follower, totem, ObjectAccessor, packet, or DB
+    /// cleanup runtime.
+    pub fn remove_from_world_like_cpp(&mut self) -> Option<UnitRemoveFromWorldOutcomeLikeCpp> {
+        let guid = self.world().object().guid();
+        if !self.world().object().is_in_world() {
+            return None;
+        }
+
+        let vehicle_remove = {
+            let remove = self
+                .subsystems_mut()
+                .vehicle
+                .remove_vehicle_kit_like_cpp(true);
+            remove.had_kit.then_some(remove)
+        };
+
+        self.world_mut().object_mut().remove_from_world();
+
+        Some(UnitRemoveFromWorldOutcomeLikeCpp {
+            guid,
+            was_in_world: true,
+            during_remove_entered: true,
+            ai_on_despawn_represented: false,
+            vehicle_remove,
+            leave_world_cleanup_represented: false,
+            world_object_removed: !self.world().object().is_in_world(),
+            during_remove_cleared: true,
+        })
     }
 
     pub fn add_player_to_vision_like_cpp(
@@ -1643,7 +1725,9 @@ mod tests {
     use super::*;
     use crate::{
         AppliedAuraRef, AuraRef, CurrentSpellRef, CurrentSpellSlot, MAX_SUMMON_SLOT,
-        MovementGeneratorKind, OwnedAuraRef,
+        MOTIONMASTER_FLAG_INITIALIZATION_PENDING, MOTIONMASTER_FLAG_INITIALIZING,
+        MotionMasterDelayedActionPayload, MovementGeneratorKind, MovementGeneratorRef,
+        MovementSlot, OwnedAuraRef,
     };
 
     #[test]
@@ -1713,6 +1797,83 @@ mod tests {
         assert!(!unit.subsystems().ai.locked);
         assert!(!unit.subsystems().ai.scheduled_change_pending);
         assert!(!unit.unit_data_changes_mask().is_any_set());
+    }
+
+    #[test]
+    fn unit_add_to_world_like_cpp_removes_enter_world_auras_and_initializes_motion_once() {
+        let mut unit = Unit::new(true);
+        let caster = ObjectGuid::new(0, 47501);
+        let enter_world_aura = AppliedAuraRef::new(47_501, caster, 1, 0x1);
+        let attacking_aura = AppliedAuraRef::new(47_502, caster, 2, 0x1);
+        unit.subsystems_mut().auras.register_applied_aura(
+            enter_world_aura,
+            None,
+            SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP,
+            0,
+        );
+        unit.subsystems_mut().auras.register_applied_aura(
+            attacking_aura,
+            None,
+            SPELL_AURA_INTERRUPT_FLAG_ATTACKING_LIKE_CPP,
+            0,
+        );
+        unit.subsystems_mut().motion.push_delayed_payload_like_cpp(
+            MotionMasterDelayedActionPayload::Add(MovementGeneratorRef::new(
+                MovementGeneratorKind::Point,
+                MovementSlot::Active,
+            )),
+        );
+
+        let first = unit.add_to_world_like_cpp();
+
+        assert_eq!(first.guid, unit.world().object().guid());
+        assert!(first.world_object_added);
+        assert!(first.is_in_world_after);
+        assert_eq!(
+            first.aura_interrupt_flags_enter_world,
+            SPELL_AURA_INTERRUPT_FLAG_ENTER_WORLD_LIKE_CPP
+        );
+        assert_eq!(first.removed_enter_world_auras, vec![enter_world_aura]);
+        assert!(!unit.subsystems().auras.has_applied(enter_world_aura));
+        assert!(unit.subsystems().auras.has_applied(attacking_aura));
+
+        let motion = first.motion_master_add_to_world;
+        assert!(motion.had_initialization_pending);
+        assert!(motion.entered_initializing);
+        assert!(motion.direct_initialize_represented);
+        assert!(motion.exited_initializing);
+        assert_eq!(motion.resolved_delayed_actions.len(), 1);
+        assert!(
+            !unit
+                .subsystems()
+                .motion
+                .has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING)
+        );
+        assert!(
+            !unit
+                .subsystems()
+                .motion
+                .has_motion_master_flag(MOTIONMASTER_FLAG_INITIALIZING)
+        );
+        assert_eq!(
+            unit.subsystems().motion.current_generator,
+            MovementGeneratorKind::Point
+        );
+
+        let second = unit.add_to_world_like_cpp();
+
+        assert!(!second.motion_master_add_to_world.had_initialization_pending);
+        assert!(
+            !second
+                .motion_master_add_to_world
+                .direct_initialize_represented
+        );
+        assert!(second.removed_enter_world_auras.is_empty());
+        assert!(unit.subsystems().auras.has_applied(attacking_aura));
+        assert_eq!(
+            unit.subsystems().motion.current_generator,
+            MovementGeneratorKind::Point
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@
 //! accepts for instant-cast spell animations (no log data, empty RemainingPower).
 
 use wow_constants::{ClientOpcodes, ServerOpcodes};
-use wow_core::ObjectGuid;
+use wow_core::{ObjectGuid, Position};
 
 use crate::world_packet::{PacketError, WorldPacket};
 use crate::{ClientPacket, ServerPacket};
@@ -43,9 +43,40 @@ impl SpellCastVisual {
     }
 }
 
-/// SpellTargetData — unit/item target with optional location data.
-/// C# ref: `SpellPackets.cs / class SpellTargetData`.
-#[derive(Debug, Clone, Default)]
+/// Spell target location payload: transport GUID followed by XYZ only.
+///
+/// Trinity carries optional orientation separately in `SpellTargetData` rather
+/// than inside this XYZ payload.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TargetLocation {
+    pub transport: ObjectGuid,
+    pub position: Position,
+}
+
+impl TargetLocation {
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        let transport = pkt.read_packed_guid()?;
+        let x = pkt.read_float()?;
+        let y = pkt.read_float()?;
+        let z = pkt.read_float()?;
+
+        Ok(Self {
+            transport,
+            position: Position::xyz(x, y, z),
+        })
+    }
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.transport);
+        pkt.write_float(self.position.x);
+        pkt.write_float(self.position.y);
+        pkt.write_float(self.position.z);
+    }
+}
+
+/// SpellTargetData — unit/item target with optional C++ target data preserved.
+/// C++ ref: `WorldPackets::Spells::SpellTargetData`.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SpellTargetData {
     /// SpellCastTargetFlags (28 bits).
     pub flags: u32,
@@ -53,13 +84,21 @@ pub struct SpellTargetData {
     pub unit: ObjectGuid,
     /// Item target (usually EMPTY).
     pub item: ObjectGuid,
+    /// Optional source target location.
+    pub src_location: Option<TargetLocation>,
+    /// Optional destination target location.
+    pub dst_location: Option<TargetLocation>,
+    /// Optional target orientation, stored separately from XYZ locations.
+    pub orientation: Option<f32>,
+    /// Optional target map id.
+    pub map_id: Option<i32>,
+    /// Optional target name payload.
+    pub name: String,
 }
 
 impl SpellTargetData {
-    /// Read from wire; matches C# `SpellTargetData.Read()`.
+    /// Read from wire; matches C++ `operator>>(ByteBuffer&, SpellTargetData&)`.
     pub fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
-        // C# calls ResetBitPos() here — handled by our auto-reset on byte reads,
-        // but we also expose a public reset for clarity.
         pkt.reset_bits();
 
         let flags = pkt.read_bits(28)?;
@@ -72,51 +111,74 @@ impl SpellTargetData {
         let unit = pkt.read_packed_guid()?;
         let item = pkt.read_packed_guid()?;
 
-        // Optional source location: packed guid + vec3
-        if has_src {
-            let _transport = pkt.read_packed_guid()?;
-            let _x = pkt.read_float()?;
-            let _y = pkt.read_float()?;
-            let _z = pkt.read_float()?;
-        }
+        let src_location = if has_src {
+            Some(TargetLocation::read(pkt)?)
+        } else {
+            None
+        };
 
-        // Optional dest location: packed guid + vec3
-        if has_dst {
-            let _transport = pkt.read_packed_guid()?;
-            let _x = pkt.read_float()?;
-            let _y = pkt.read_float()?;
-            let _z = pkt.read_float()?;
-        }
+        let dst_location = if has_dst {
+            Some(TargetLocation::read(pkt)?)
+        } else {
+            None
+        };
 
-        if has_orient {
-            let _o = pkt.read_float()?;
-        }
+        let orientation = if has_orient {
+            Some(pkt.read_float()?)
+        } else {
+            None
+        };
 
-        if has_mapid {
-            let _map = pkt.read_int32()?;
-        }
+        let map_id = if has_mapid {
+            Some(pkt.read_int32()?)
+        } else {
+            None
+        };
 
-        if name_len > 0 {
-            let _name = pkt.read_string(name_len)?;
-        }
+        let name = pkt.read_string(name_len)?;
 
-        Ok(Self { flags, unit, item })
+        Ok(Self {
+            flags,
+            unit,
+            item,
+            src_location,
+            dst_location,
+            orientation,
+            map_id,
+            name,
+        })
     }
 
-    /// Write minimal target (unit only, no locations).
-    /// C# ref: `SpellTargetData.Write()`.
+    /// Write target data; mirrors C++ `operator<<(ByteBuffer&, SpellTargetData const&)`.
     pub fn write(&self, pkt: &mut WorldPacket) {
         pkt.write_bits(self.flags, 28);
-        pkt.write_bit(false); // no SrcLocation
-        pkt.write_bit(false); // no DstLocation
-        pkt.write_bit(false); // no Orientation
-        pkt.write_bit(false); // no MapID
-        pkt.write_bits(0, 7); // name length = 0
+        pkt.write_bit(self.src_location.is_some());
+        pkt.write_bit(self.dst_location.is_some());
+        pkt.write_bit(self.orientation.is_some());
+        pkt.write_bit(self.map_id.is_some());
+        pkt.write_bits(self.name.len() as u32, 7);
         pkt.flush_bits();
 
         pkt.write_packed_guid(&self.unit);
         pkt.write_packed_guid(&self.item);
-        // no Name bytes
+
+        if let Some(src_location) = self.src_location {
+            src_location.write(pkt);
+        }
+
+        if let Some(dst_location) = self.dst_location {
+            dst_location.write(pkt);
+        }
+
+        if let Some(orientation) = self.orientation {
+            pkt.write_float(orientation);
+        }
+
+        if let Some(map_id) = self.map_id {
+            pkt.write_int32(map_id);
+        }
+
+        pkt.write_string(&self.name);
     }
 }
 
@@ -505,5 +567,67 @@ mod tests {
         let open = OpenItem::read(&mut pkt).unwrap();
         assert_eq!(open.slot, 0xFF);
         assert_eq!(open.pack_slot, 0x24);
+    }
+
+    #[test]
+    fn spell_target_data_roundtrips_optional_locations_orientation_map_name() {
+        let unit = ObjectGuid::new(0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+        let item = ObjectGuid::new(0x2122_2324_2526_2728, 0x3132_3334_3536_3738);
+        let src_transport = ObjectGuid::new(0x4142_4344_4546_4748, 0x5152_5354_5556_5758);
+        let dst_transport = ObjectGuid::new(0x6162_6364_6566_6768, 0x7172_7374_7576_7778);
+        let target = SpellTargetData {
+            flags: 0x0A_BC_DE_F0,
+            unit,
+            item,
+            src_location: Some(TargetLocation {
+                transport: src_transport,
+                position: Position::xyz(1.25, -2.5, 3.75),
+            }),
+            dst_location: Some(TargetLocation {
+                transport: dst_transport,
+                position: Position::xyz(100.0, 200.5, -300.25),
+            }),
+            orientation: Some(4.125),
+            map_id: Some(571),
+            name: "FarsightTarget".to_string(),
+        };
+
+        let mut pkt = WorldPacket::new_empty();
+        target.write(&mut pkt);
+        pkt.reset_read();
+
+        let parsed = SpellTargetData::read(&mut pkt).expect("target data must parse");
+        assert_eq!(parsed.flags, target.flags);
+        assert_eq!(parsed.unit, unit);
+        assert_eq!(parsed.item, item);
+        assert_eq!(parsed.src_location, target.src_location);
+        assert_eq!(parsed.dst_location, target.dst_location);
+        assert_eq!(parsed.orientation, target.orientation);
+        assert_eq!(parsed.map_id, target.map_id);
+        assert_eq!(parsed.name, target.name);
+        assert!(pkt.is_empty());
+    }
+
+    #[test]
+    fn spell_target_data_default_minimal_has_no_optional_payload() {
+        let target = SpellTargetData::default();
+        let mut pkt = WorldPacket::new_empty();
+        target.write(&mut pkt);
+
+        // 28-bit flags + 4 presence bits + 7-bit name length flushed to 5 bytes,
+        // then two empty packed GUIDs (2 bytes each), matching the previous minimal shape.
+        assert_eq!(pkt.data().len(), 9);
+
+        pkt.reset_read();
+        let parsed = SpellTargetData::read(&mut pkt).expect("minimal target data must parse");
+        assert_eq!(parsed.flags, 0);
+        assert_eq!(parsed.unit, ObjectGuid::EMPTY);
+        assert_eq!(parsed.item, ObjectGuid::EMPTY);
+        assert_eq!(parsed.src_location, None);
+        assert_eq!(parsed.dst_location, None);
+        assert_eq!(parsed.orientation, None);
+        assert_eq!(parsed.map_id, None);
+        assert!(parsed.name.is_empty());
+        assert!(pkt.is_empty());
     }
 }

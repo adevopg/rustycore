@@ -1427,6 +1427,8 @@ pub struct PlayerCreateData {
     /// Slots 0-18 = equipped, 19-22 = bag containers, rest = backpack/bank.
     /// Each entry is an Item ObjectGuid (or EMPTY).
     pub inv_slots: [ObjectGuid; 141],
+    /// ActivePlayerData::FarsightObject written after InvSlots in WriteCreate.
+    pub farsight_object: ObjectGuid,
     /// Character's learned skills for the SkillInfo array (up to 256).
     /// Each entry: (skill_id, step, rank, starting_rank, max_rank, temp_bonus, perm_bonus).
     pub skill_info: Vec<(u16, u16, u16, u16, u16, i16, u16)>,
@@ -1885,7 +1887,7 @@ impl PlayerCreateData {
         }
 
         // FarsightObject, SummonedBattlePetGUID
-        write_empty_guid(buf);
+        buf.write_packed_guid(&self.farsight_object);
         write_empty_guid(buf);
 
         // KnownTitles.Size
@@ -2614,6 +2616,57 @@ impl GameObjectCreateData {
     }
 }
 
+// ── DynamicObjectCreateData ────────────────────────────────────────
+
+/// Data needed to build a DynamicObject create packet for the client.
+///
+/// C++ anchors:
+/// - `DynamicObject::DynamicObject(bool)` sets Stationary create flag.
+/// - `DynamicObject::BuildValuesCreate` writes ObjectData then DynamicObjectData.
+pub struct DynamicObjectCreateData {
+    pub guid: ObjectGuid,
+    pub entry_id: u32,
+    pub dynamic_flags: u32,
+    pub scale: f32,
+    pub position: Position,
+    pub caster: ObjectGuid,
+    pub dynamic_object_type: u8,
+    pub spell_visual_id: i32,
+    pub spell_id: i32,
+    pub radius: f32,
+    pub cast_time_ms: u32,
+}
+
+impl DynamicObjectCreateData {
+    /// Write the create-time values block: `[u32 size][u8 flags][ObjectData][DynamicObjectData]`.
+    ///
+    /// This is a CREATE values section, not an `UpdateType::Values` block; it intentionally
+    /// does not write a packed object GUID or update masks inside the values payload.
+    pub fn write_values_create(&self, pkt: &mut WorldPacket) {
+        let mut buf = WorldPacket::new_empty();
+
+        // UpdateFieldFlag: 0x00 for non-owner.
+        buf.write_uint8(0x00);
+
+        // ObjectData::WriteCreate.
+        buf.write_int32(self.entry_id as i32);
+        buf.write_uint32(self.dynamic_flags);
+        buf.write_float(self.scale);
+
+        // DynamicObjectData::WriteCreate.
+        buf.write_packed_guid(&self.caster);
+        buf.write_uint8(self.dynamic_object_type);
+        buf.write_int32(self.spell_visual_id);
+        buf.write_int32(self.spell_id);
+        buf.write_float(self.radius);
+        buf.write_uint32(self.cast_time_ms);
+
+        let data = buf.into_data();
+        pkt.write_uint32(data.len() as u32);
+        pkt.write_bytes(&data);
+    }
+}
+
 /// A single update block within an UpdateObject packet.
 pub enum UpdateBlock {
     CreateObject {
@@ -2632,6 +2685,10 @@ pub enum UpdateBlock {
     CreateGameObject {
         guid: ObjectGuid,
         create_data: GameObjectCreateData,
+    },
+    CreateDynamicObject {
+        guid: ObjectGuid,
+        create_data: DynamicObjectCreateData,
     },
     CreateItem {
         guid: ObjectGuid,
@@ -2779,7 +2836,15 @@ impl UpdateObject {
         }
     }
 
-    /// Create a batched UpdateObject with mixed blocks (creatures + gameobjects).
+    /// Create a dynamic object spawn block.
+    pub fn create_dynamic_object_block(create_data: DynamicObjectCreateData) -> UpdateBlock {
+        UpdateBlock::CreateDynamicObject {
+            guid: create_data.guid,
+            create_data,
+        }
+    }
+
+    /// Create a batched UpdateObject with mixed world-object create blocks.
     pub fn create_world_objects(blocks: Vec<UpdateBlock>, map_id: u16) -> Self {
         Self {
             map_id,
@@ -2850,6 +2915,7 @@ impl UpdateObject {
             spell_crit_pct: combat.spell_crit_pct,
             visible_items,
             inv_slots,
+            farsight_object: ObjectGuid::EMPTY,
             skill_info,
             coinage,
             quest_log,
@@ -3263,6 +3329,9 @@ impl ServerPacket for UpdateObject {
                 UpdateBlock::CreateGameObject { guid, create_data } => {
                     write_gameobject_create_block(&mut blocks_buf, guid, create_data);
                 }
+                UpdateBlock::CreateDynamicObject { guid, create_data } => {
+                    write_dynamic_object_create_block(&mut blocks_buf, guid, create_data);
+                }
                 UpdateBlock::CreateItem { guid, create_data } => {
                     write_item_create_block(&mut blocks_buf, guid, create_data);
                 }
@@ -3634,6 +3703,59 @@ fn write_gameobject_create_block(
     buf.write_int32(0); // WorldEffectID
     buf.write_bit(false); // has extra u32
     buf.flush_bits();
+
+    // ── Values block ─────────────────────────────────────────
+    create_data.write_values_create(buf);
+}
+
+/// Write a single CreateObject block for a dynamic object (TypeId::DynamicObject).
+///
+/// DynamicObjects use Stationary (bit 5), no MovementUpdate, no Unit shared-vision payload.
+fn write_dynamic_object_create_block(
+    buf: &mut WorldPacket,
+    guid: &ObjectGuid,
+    create_data: &DynamicObjectCreateData,
+) {
+    // UpdateType: CreateObject2 — first appearance of this object to the client
+    buf.write_uint8(UpdateType::CreateObject2 as u8);
+
+    // Object GUID
+    buf.write_packed_guid(guid);
+
+    // TypeId = DynamicObject (9)
+    buf.write_uint8(TypeId::DynamicObject as u8);
+
+    // ── 18-bit CreateObjectBits ────────────────────────────
+    buf.write_bit(false); // 0: NoBirthAnim
+    buf.write_bit(false); // 1: EnablePortals
+    buf.write_bit(false); // 2: PlayHoverAnim
+    buf.write_bit(false); // 3: MovementUpdate (false for DynamicObjects)
+    buf.write_bit(false); // 4: MovementTransport
+    buf.write_bit(true); // 5: Stationary (true for DynamicObjects)
+    buf.write_bit(false); // 6: CombatVictim
+    buf.write_bit(false); // 7: ServerTime
+    buf.write_bit(false); // 8: Vehicle
+    buf.write_bit(false); // 9: AnimKit
+    buf.write_bit(false); // 10: Rotation
+    buf.write_bit(false); // 11: AreaTrigger
+    buf.write_bit(false); // 12: GameObject
+    buf.write_bit(false); // 13: SmoothPhasing
+    buf.write_bit(false); // 14: ThisIsYou
+    buf.write_bit(false); // 15: SceneObject
+    buf.write_bit(false); // 16: ActivePlayer
+    buf.write_bit(false); // 17: Conversation
+    buf.flush_bits();
+
+    // No MovementUpdate (bit 3 = false)
+
+    // PauseTimes count (i32) — always 0
+    buf.write_int32(0);
+
+    // ── Stationary block (bit 5 = true) ─────────────────────
+    buf.write_float(create_data.position.x);
+    buf.write_float(create_data.position.y);
+    buf.write_float(create_data.position.z);
+    buf.write_float(create_data.position.orientation);
 
     // ── Values block ─────────────────────────────────────────
     create_data.write_values_create(buf);
@@ -7478,6 +7600,101 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_object_create_block_serializes_stationary_create_values_like_cpp() {
+        let guid = ObjectGuid::create_world_object(
+            wow_core::guid::HighGuid::DynamicObject,
+            0,
+            1,
+            571,
+            0,
+            7001,
+            9001,
+        );
+        let caster = ObjectGuid::create_player(1, 42);
+        let position = Position::new(11.0, 22.0, 33.0, 1.5);
+        let pkt = UpdateObject::create_world_objects(
+            vec![UpdateObject::create_dynamic_object_block(
+                DynamicObjectCreateData {
+                    guid,
+                    entry_id: 7001,
+                    dynamic_flags: 0,
+                    scale: 1.0,
+                    position,
+                    caster,
+                    dynamic_object_type: 2,
+                    spell_visual_id: 456,
+                    spell_id: 777,
+                    radius: 12.5,
+                    cast_time_ms: 12345,
+                },
+            )],
+            571,
+        );
+
+        let bytes = pkt.to_bytes();
+        assert_eq!(
+            u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]),
+            1
+        );
+        assert!(
+            bytes
+                .windows(1)
+                .any(|window| window == [UpdateType::CreateObject2 as u8])
+        );
+        assert!(
+            bytes
+                .windows(1)
+                .any(|window| window == [TypeId::DynamicObject as u8])
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == position.x.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == position.y.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == position.z.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == position.orientation.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 7001i32.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 456i32.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 777i32.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 12.5f32.to_le_bytes())
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == 12345u32.to_le_bytes())
+        );
+        assert!(!bytes.windows(1).all(|window| window == [0]));
+    }
+
+    #[test]
     fn update_object_create_player_serializes() {
         let guid = ObjectGuid::create_player(1, 42);
         let pos = Position::new(-8949.95, -132.493, 83.5312, 0.0);
@@ -8708,6 +8925,96 @@ mod tests {
         assert!(stable_bytes.windows(4).any(|window| window == [1, 0, 0, 0]));
         assert!(stable_bytes.windows(4).any(|window| window == [5, 0, 0, 0]));
         assert!(stable_bytes.windows(3).any(|window| window == b"Pet"));
+    }
+
+    fn test_player_create_data_with_farsight(farsight_object: ObjectGuid) -> PlayerCreateData {
+        PlayerCreateData {
+            guid: ObjectGuid::create_player(1, 42),
+            race: 1,
+            class: 1,
+            sex: 0,
+            level: 1,
+            display_id: 49,
+            native_display_id: 49,
+            health: 100,
+            max_health: 100,
+            faction_template: PlayerCreateData::faction_for_race(1),
+            zone_id: 12,
+            stats: [0; 5],
+            base_armor: 0,
+            max_mana: 0,
+            attack_power: 0,
+            ranged_attack_power: 0,
+            min_damage: 1.0,
+            max_damage: 2.0,
+            min_ranged_damage: 0.0,
+            max_ranged_damage: 0.0,
+            dodge_pct: 0.0,
+            parry_pct: 0.0,
+            crit_pct: 5.0,
+            ranged_crit_pct: 5.0,
+            spell_crit_pct: 0.0,
+            visible_items: [(0, 0, 0); 19],
+            inv_slots: [ObjectGuid::EMPTY; 141],
+            farsight_object,
+            skill_info: Vec::new(),
+            quest_log: Vec::new(),
+            coinage: 0,
+        }
+    }
+
+    #[test]
+    fn active_player_create_writes_farsight_after_inventory_slots() {
+        let farsight_object = ObjectGuid::new(0x0102_0304_0506_0708, 0x1112_1314_1516_1718);
+        let create = test_player_create_data_with_farsight(farsight_object);
+        let mut packet = WorldPacket::new_empty();
+        create.write_active_player_data(&mut packet);
+        let data = packet.data();
+
+        let mut expected_guid = WorldPacket::new_empty();
+        expected_guid.write_packed_guid(&farsight_object);
+        let expected_guid = expected_guid.into_data();
+        let farsight_offset = 141 * 2;
+        let summoned_battle_pet_offset = farsight_offset + expected_guid.len();
+
+        assert_ne!(expected_guid, [0, 0]);
+        assert_eq!(
+            &data[farsight_offset..summoned_battle_pet_offset],
+            expected_guid.as_slice()
+        );
+        assert_eq!(
+            &data[summoned_battle_pet_offset..summoned_battle_pet_offset + 2],
+            [0, 0]
+        );
+    }
+
+    #[test]
+    fn create_player_defaults_farsight_object_empty() {
+        let guid = ObjectGuid::create_player(1, 42);
+        let pos = Position::new(0.0, 0.0, 0.0, 0.0);
+        let packet = UpdateObject::create_player(
+            guid,
+            1,
+            1,
+            0,
+            1,
+            49,
+            &pos,
+            0,
+            12,
+            true,
+            [(0, 0, 0); 19],
+            [ObjectGuid::EMPTY; 141],
+            PlayerCombatStats::default(),
+            Vec::new(),
+            0,
+            Vec::new(),
+        );
+
+        let UpdateBlock::CreateObject { create_data, .. } = &packet.blocks[0] else {
+            panic!("create_player should emit one CreateObject block");
+        };
+        assert_eq!(create_data.farsight_object, ObjectGuid::EMPTY);
     }
 
     #[test]

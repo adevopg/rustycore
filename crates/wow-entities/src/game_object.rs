@@ -77,6 +77,8 @@ pub const GAMEOBJECT_DATA_GATHERING_NODE_LINKED_TRAP: usize = 20;
 pub const GO_FLAG_IN_USE: u32 = 0x0000_0001;
 // C++ anchor: /home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:2902
 pub const GO_FLAG_NODESPAWN: u32 = 0x0000_0020;
+// C++ anchor: /home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:2914
+pub const GO_FLAG_MAP_OBJECT: u32 = 0x0010_0000;
 pub const GO_FLAG_IN_MULTI_USE: u32 = 0x0020_0000;
 pub const GAME_OBJECT_DATA_PARENT_BIT: usize = 0;
 pub const GAME_OBJECT_DATA_DISPLAY_ID_BIT: usize = 4;
@@ -107,6 +109,51 @@ pub enum LootState {
     Ready = 1,
     Activated = 2,
     JustDeactivated = 3,
+}
+
+/// Represented status for the `m_despawnDelay` branch of TrinityCore
+/// `GameObject::Update(diff)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameObjectUpdateStatusLikeCpp {
+    Updated,
+    DespawnRequested,
+}
+
+/// Evidence for the bounded Rust representation of TrinityCore
+/// `GameObject::Update(diff)`.
+///
+/// C++ anchors:
+/// - `GameObject.cpp:1215-1233`: `WorldObject::Update(diff)`, AI lookup/
+///   initialization branch, `m_despawnDelay` countdown, and immediate
+///   `DespawnOrUnsummon(0ms, m_despawnRespawnTime)` when the delay expires.
+/// - `GameObject.cpp:1235-1274` and `1276+`: go-type implementation,
+///   per-player state/visibility packets and loot-state machine remain explicit
+///   gaps; booleans here mark non-represented branches, not execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectUpdateOutcomeLikeCpp {
+    pub diff_ms: u32,
+    pub status: GameObjectUpdateStatusLikeCpp,
+    pub despawn_delay_before_ms: u32,
+    pub despawn_delay_after_ms: u32,
+    pub despawn_respawn_time_secs: u32,
+    pub world_update_would_run: bool,
+    pub ai_update_not_represented: bool,
+    pub go_type_impl_update_not_represented: bool,
+    pub despawn_or_unsummon_requested: bool,
+}
+
+/// Evidence for the bounded Rust representation of TrinityCore
+/// `GameObject::EnableCollision(bool)`.
+///
+/// C++ anchor: `GameObject.cpp:3856-3864` returns early when `!m_model`; otherwise it only
+/// forwards the requested value to `m_model->enableCollision(enable)`. The commented map insert
+/// remains intentionally unrepresented here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameObjectCollisionOutcomeLikeCpp {
+    pub requested_enable: bool,
+    pub represented_model_present: bool,
+    pub previous_collision_enabled: Option<bool>,
+    pub new_collision_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -934,6 +981,46 @@ pub struct GameObject {
     lifecycle_string_id: String,
     linked_trap_guid: ObjectGuid,
     stationary_position: Position,
+    go_anim_progress_like_cpp: u8,
+    represented_baseline_flags_like_cpp: Option<u32>,
+    /// Resolved C++ `GetGOInfo()->chest` source carried only when this entity was
+    /// constructed or explicitly seeded with a CHEST template source.
+    ///
+    /// This is represented template evidence for bounded `GameObject::Update`
+    /// branches only; it is not a full live `GameObjectTemplate`/ObjectMgr owner.
+    chest_loot_source_like_cpp: Option<GameObjectLootSource>,
+    /// Resolved C++ `GetGOInfo()->goober` source carried only when this entity was
+    /// constructed or explicitly seeded with a GOOBER template source.
+    ///
+    /// This is represented template evidence for bounded `GameObject::Update`
+    /// branches only; it is not a full live `GameObjectTemplate`/ObjectMgr owner.
+    goober_use_source_like_cpp: Option<GooberUseSource>,
+    /// Explicit represented evidence for TrinityCore `GameObject::m_model != nullptr`.
+    ///
+    /// This flag exists only so map-owned AddToWorld/RemoveFromWorld seams can decide whether
+    /// to register a represented `GameObjectModel` key in `Map`'s represented DynamicMapTree.
+    /// It is not a real `GameObjectModel`, not model geometry, not `GO_FLAG_MAP_OBJECT`, not
+    /// `EnableCollision`, and not DB/model-store hydration. Callers/tests must set it explicitly;
+    /// Rust must not infer it from display id, template, or gameobject type until real
+    /// `GameObjectModel::Create`/DB2 model runtime exists.
+    represented_gameobject_model_like_cpp: bool,
+    /// Explicit represented evidence for TrinityCore `m_model && m_model->isMapObject()`.
+    ///
+    /// This is set only by a caller/test that represents `GameObject::CreateModel()` output.
+    /// It may be true only when `represented_gameobject_model_like_cpp` is true, and it is the
+    /// only represented source that toggles `GO_FLAG_MAP_OBJECT`.
+    represented_gameobject_model_is_map_object_like_cpp: bool,
+    /// Last represented `m_model->enableCollision(enable)` value.
+    ///
+    /// `None` means the C++ call has not been represented or returned early because there was no
+    /// represented model evidence. This is not real collision, BIH, LOS, intersection or height
+    /// runtime.
+    represented_gameobject_model_collision_enabled_like_cpp: Option<bool>,
+    /// Explicit represented evidence for TrinityCore `GameObject::m_goData != nullptr`.
+    ///
+    /// This is only the bounded `GameObjectData` presence needed by `SaveRespawnTime()`; it is not
+    /// full ObjectMgr/DB metadata and must not be inferred from `spawn_id` alone.
+    represented_gameobject_data_present_like_cpp: bool,
     grid_unload_cleanup_before_delete_count: u32,
     grid_unload_delete_requested: bool,
     grid_unload_respawn_relocation_requested: bool,
@@ -979,6 +1066,14 @@ impl GameObject {
             lifecycle_string_id: String::new(),
             linked_trap_guid: ObjectGuid::EMPTY,
             stationary_position: Position::new(0.0, 0.0, 0.0, 0.0),
+            go_anim_progress_like_cpp: 0,
+            represented_baseline_flags_like_cpp: None,
+            chest_loot_source_like_cpp: None,
+            goober_use_source_like_cpp: None,
+            represented_gameobject_model_like_cpp: false,
+            represented_gameobject_model_is_map_object_like_cpp: false,
+            represented_gameobject_model_collision_enabled_like_cpp: None,
+            represented_gameobject_data_present_like_cpp: false,
             grid_unload_cleanup_before_delete_count: 0,
             grid_unload_delete_requested: false,
             grid_unload_respawn_relocation_requested: false,
@@ -1029,6 +1124,7 @@ impl GameObject {
         self.set_display_id(template.display_id);
         self.set_faction(template.faction);
         self.set_flags(template.flags);
+        self.represented_baseline_flags_like_cpp = Some(template.flags);
         self.set_go_type(template.go_type as u8);
         self.prev_go_state = record.go_state;
         self.set_go_state(record.go_state);
@@ -1037,21 +1133,26 @@ impl GameObject {
         self.set_percent_health(template.percent_health);
         self.set_custom_param(template.custom_param);
 
-        // C++ keeps template `data` through `m_goInfo`; Rust has only the resolved handoff for
-        // future type-specific users. Active GO type implementations, model creation, zone scripts,
-        // DB phasing and AddToMap remain external/unrepresented in this entity constructor.
-        let _ = template.data;
+        // C++ keeps template `data` through `m_goInfo`; Rust carries only the
+        // bounded CHEST/GOOBER source needed by represented update branches here. The
+        // remaining type-specific implementations, model creation, zone scripts,
+        // DB phasing and AddToMap stay external/unrepresented in this entity constructor.
+        let template_data = GameObjectTemplateData::new(template.go_type, template.data);
+        self.chest_loot_source_like_cpp = template_data.chest_loot_source_like_cpp();
+        self.goober_use_source_like_cpp = template_data.goober_use_source_like_cpp();
         match template.go_type {
             GAMEOBJECT_TYPE_FISHING_HOLE | GAMEOBJECT_TYPE_TRANSPORT => {
-                // Represented C++ branches call SetGoAnimProgress(animProgress); no Rust field yet.
-                let _ = record.anim_progress;
+                self.set_go_anim_progress_like_cpp(record.anim_progress);
             }
             GAMEOBJECT_TYPE_FISHING_NODE => {
                 self.set_level(0);
-                let _ = record.anim_progress;
+                self.set_go_anim_progress_like_cpp(u8::MAX);
+            }
+            GAMEOBJECT_TYPE_DESTRUCTIBLE_BUILDING => {
+                self.set_go_anim_progress_like_cpp(u8::MAX);
             }
             _ => {
-                let _ = record.anim_progress;
+                self.set_go_anim_progress_like_cpp(record.anim_progress);
             }
         }
 
@@ -1105,6 +1206,7 @@ impl GameObject {
         self.set_respawn_delay_time(respawn_delay_time);
         self.set_respawn_time(respawn_time);
         self.lifecycle_string_id = record.string_id;
+        self.set_represented_gameobject_data_present_like_cpp(true);
     }
 
     pub const fn world(&self) -> &WorldObject {
@@ -1121,6 +1223,113 @@ impl GameObject {
 
     pub fn game_object_data_changes_mask(&self) -> &UpdateMask {
         &self.game_object_data_changes
+    }
+
+    /// Returns explicit represented evidence for TrinityCore `GameObject::m_model != nullptr`.
+    ///
+    /// This is only model-existence evidence for map-owned represented DynamicMapTree
+    /// registration. It is not a real `GameObjectModel`, model geometry, `GO_FLAG_MAP_OBJECT`,
+    /// `EnableCollision`, or DB/model-store hydration, and it is never inferred from display id,
+    /// template, or type.
+    pub const fn has_represented_gameobject_model_like_cpp(&self) -> bool {
+        self.represented_gameobject_model_like_cpp
+    }
+
+    pub const fn has_represented_gameobject_model_map_object_like_cpp(&self) -> bool {
+        self.represented_gameobject_model_is_map_object_like_cpp
+    }
+
+    pub const fn represented_gameobject_model_collision_enabled_like_cpp(&self) -> Option<bool> {
+        self.represented_gameobject_model_collision_enabled_like_cpp
+    }
+
+    /// Returns explicit represented evidence for TrinityCore `GameObject::m_goData != nullptr`.
+    ///
+    /// This only gates `GameObject::SaveRespawnTime()` parity; it does not imply full
+    /// ObjectMgr/DB metadata ownership.
+    pub const fn has_represented_gameobject_data_like_cpp(&self) -> bool {
+        self.represented_gameobject_data_present_like_cpp
+    }
+
+    pub fn set_represented_gameobject_data_present_like_cpp(&mut self, present: bool) {
+        self.represented_gameobject_data_present_like_cpp = present;
+    }
+
+    /// Sets explicit represented evidence for TrinityCore `GameObject::m_model != nullptr`.
+    ///
+    /// Callers must set this only when they have external evidence that the C++ object would have
+    /// a model. The flag is consumed only by map-owned add/remove seams and does not create real
+    /// model geometry, collision, or DB/model-store state. Setting this false also mirrors losing
+    /// `m_model`: represented map-object evidence, `GO_FLAG_MAP_OBJECT`, and collision evidence
+    /// are cleared. Setting this true does not infer map-object or collision state.
+    pub fn set_represented_gameobject_model_like_cpp(&mut self, has_model: bool) {
+        self.represented_gameobject_model_like_cpp = has_model;
+        if !has_model {
+            self.represented_gameobject_model_is_map_object_like_cpp = false;
+            self.represented_gameobject_model_collision_enabled_like_cpp = None;
+            self.set_flags(self.data.flags & !GO_FLAG_MAP_OBJECT);
+        }
+    }
+
+    /// Applies explicit represented output from TrinityCore `GameObject::CreateModel()`.
+    ///
+    /// C++ anchor: `GameObject.cpp:4394-4399` assigns `m_model` from
+    /// `GameObjectModel::Create(...)` and sets `GO_FLAG_MAP_OBJECT` only when the resulting model
+    /// exists and `isMapObject()` is true. Rust does not infer either fact from display id,
+    /// template or type.
+    pub fn apply_represented_gameobject_model_creation_like_cpp(
+        &mut self,
+        has_model: bool,
+        is_map_object: bool,
+    ) {
+        self.set_represented_gameobject_model_like_cpp(has_model);
+        // C++ `CreateModel()` assigns a fresh `m_model`. Any previous represented
+        // `m_model->enableCollision(...)` evidence belongs to the deleted/replaced
+        // model and must not leak onto the new one; `UpdateModel()` does not call
+        // `EnableCollision()` after recreation.
+        self.represented_gameobject_model_collision_enabled_like_cpp = None;
+        let represented_map_object = has_model && is_map_object;
+        self.represented_gameobject_model_is_map_object_like_cpp = represented_map_object;
+        if represented_map_object {
+            self.set_flags(self.data.flags | GO_FLAG_MAP_OBJECT);
+        } else {
+            self.set_flags(self.data.flags & !GO_FLAG_MAP_OBJECT);
+        }
+    }
+
+    pub fn set_represented_gameobject_model_map_object_like_cpp(&mut self, is_map_object: bool) {
+        self.apply_represented_gameobject_model_creation_like_cpp(
+            self.represented_gameobject_model_like_cpp,
+            is_map_object,
+        );
+    }
+
+    /// Bounded representation of TrinityCore `GameObject::EnableCollision(bool)`.
+    ///
+    /// This records only the local `m_model->enableCollision(enable)` evidence. With no represented
+    /// model, it mirrors the C++ early return and does not mutate collision state or insert a model.
+    pub fn enable_represented_gameobject_collision_like_cpp(
+        &mut self,
+        enable: bool,
+    ) -> GameObjectCollisionOutcomeLikeCpp {
+        let previous_collision_enabled =
+            self.represented_gameobject_model_collision_enabled_like_cpp;
+        if !self.represented_gameobject_model_like_cpp {
+            return GameObjectCollisionOutcomeLikeCpp {
+                requested_enable: enable,
+                represented_model_present: false,
+                previous_collision_enabled,
+                new_collision_enabled: previous_collision_enabled,
+            };
+        }
+
+        self.represented_gameobject_model_collision_enabled_like_cpp = Some(enable);
+        GameObjectCollisionOutcomeLikeCpp {
+            requested_enable: enable,
+            represented_model_present: true,
+            previous_collision_enabled,
+            new_collision_enabled: self.represented_gameobject_model_collision_enabled_like_cpp,
+        }
     }
 
     pub fn clear_game_object_data_changes(&mut self) {
@@ -1160,6 +1369,66 @@ impl GameObject {
         self.despawn_respawn_time
     }
 
+    /// Represented subset of TrinityCore `GameObject::DespawnOrUnsummon(delay, forceRespawnTime)`
+    /// for delayed scheduling only.
+    ///
+    /// C++ anchor: `GameObject.cpp:1711-1719` sets `m_despawnDelay` only when
+    /// `delay > 0` and either no delay is pending or the new delay is shorter.
+    /// The immediate `delay == 0` Delete/AddObjectToRemoveList path belongs to
+    /// `wow-map` in this Rust slice.
+    pub fn schedule_despawn_or_unsummon_like_cpp(
+        &mut self,
+        delay_ms: u32,
+        force_respawn_time_secs: u32,
+    ) -> bool {
+        if delay_ms == 0 {
+            return false;
+        }
+
+        if self.despawn_delay == 0 || self.despawn_delay > delay_ms {
+            self.despawn_delay = delay_ms;
+            self.despawn_respawn_time = force_respawn_time_secs;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Bounded local representation of TrinityCore `GameObject::Update(diff)`
+    /// through the `m_despawnDelay` branch only.
+    ///
+    /// C++ anchors: `GameObject.cpp:1215-1233` for `WorldObject::Update`
+    /// plus despawn delay, and `GameObject.cpp:1235-1274`/`1276+` as explicit
+    /// gaps. No AI, go-type runtime, per-player state, packets, DB, pool
+    /// manager or full loot-state machine executes in `wow-entities`.
+    pub fn update_like_cpp(&mut self, diff_ms: u32) -> GameObjectUpdateOutcomeLikeCpp {
+        let despawn_delay_before_ms = self.despawn_delay;
+        let mut status = GameObjectUpdateStatusLikeCpp::Updated;
+        let mut despawn_or_unsummon_requested = false;
+
+        if self.despawn_delay != 0 {
+            if self.despawn_delay > diff_ms {
+                self.despawn_delay -= diff_ms;
+            } else {
+                self.despawn_delay = 0;
+                status = GameObjectUpdateStatusLikeCpp::DespawnRequested;
+                despawn_or_unsummon_requested = true;
+            }
+        }
+
+        GameObjectUpdateOutcomeLikeCpp {
+            diff_ms,
+            status,
+            despawn_delay_before_ms,
+            despawn_delay_after_ms: self.despawn_delay,
+            despawn_respawn_time_secs: self.despawn_respawn_time,
+            world_update_would_run: true,
+            ai_update_not_represented: true,
+            go_type_impl_update_not_represented: true,
+            despawn_or_unsummon_requested,
+        }
+    }
+
     pub const fn restock_time(&self) -> i64 {
         self.restock_time
     }
@@ -1174,11 +1443,17 @@ impl GameObject {
 
     pub fn set_loot_state(&mut self, state: LootState, unit: Option<ObjectGuid>) {
         self.loot_state = state;
-        self.loot_state_unit_guid = if state == LootState::Activated {
-            unit.unwrap_or(ObjectGuid::EMPTY)
-        } else {
-            ObjectGuid::EMPTY
-        };
+        self.loot_state_unit_guid = unit.unwrap_or(ObjectGuid::EMPTY);
+    }
+
+    /// Represented local setter for TrinityCore `GameObject::SetLootState` restock writes.
+    ///
+    /// C++ anchor: `GameObject.cpp:3693-3695` assigns `m_restockTime` only after the
+    /// map-owned caller has proven chest type, activated loot state, positive restock seconds,
+    /// previous zero restock time, and real `Loot::IsChanged()` evidence. This method only writes
+    /// the local represented field; it does not infer `GameTime`, template data, or loot changes.
+    pub fn set_restock_time_like_cpp(&mut self, restock_time: i64) {
+        self.restock_time = restock_time;
     }
 
     pub const fn spawned_by_default(&self) -> bool {
@@ -1224,6 +1499,34 @@ impl GameObject {
 
     pub fn unique_user_count_like_cpp(&self) -> usize {
         self.unique_users.len()
+    }
+
+    pub fn unique_users_snapshot_like_cpp(&self) -> Vec<ObjectGuid> {
+        self.unique_users.iter().copied().collect()
+    }
+
+    pub fn clear_unique_users_and_reset_use_times_like_cpp(&mut self) {
+        self.unique_users.clear();
+        self.use_times = 0;
+    }
+
+    pub fn represented_chest_loot_source_like_cpp(&self) -> Option<GameObjectLootSource> {
+        self.chest_loot_source_like_cpp
+    }
+
+    pub fn set_represented_chest_loot_source_like_cpp(
+        &mut self,
+        source: Option<GameObjectLootSource>,
+    ) {
+        self.chest_loot_source_like_cpp = source;
+    }
+
+    pub fn represented_goober_use_source_like_cpp(&self) -> Option<GooberUseSource> {
+        self.goober_use_source_like_cpp
+    }
+
+    pub fn set_represented_goober_use_source_like_cpp(&mut self, source: Option<GooberUseSource>) {
+        self.goober_use_source_like_cpp = source;
     }
 
     pub fn add_use_like_cpp(&mut self) {
@@ -1408,12 +1711,65 @@ impl GameObject {
         });
     }
 
+    /// Bounded local representation of TrinityCore `GameObject::SetOwnerGUID`.
+    ///
+    /// C++ anchor: `GameObject.h:227-237` always sets `m_spawnedByDefault = false`
+    /// and writes `GameObjectData::CreatedBy`, including for `ObjectGuid::Empty`.
+    /// This does not run `Unit::RemoveGameObject` side effects, owned object slots,
+    /// auras, cooldown events, Creature AI callbacks, ObjectAccessor, or packets.
+    pub fn set_owner_guid_like_cpp(&mut self, owner_guid: ObjectGuid) {
+        self.spawned_by_default = false;
+        self.set_created_by(owner_guid);
+    }
+
+    pub fn clear_owner_guid_like_cpp(&mut self) {
+        self.set_owner_guid_like_cpp(ObjectGuid::EMPTY);
+    }
+
     pub const fn linked_trap_guid_like_cpp(&self) -> ObjectGuid {
         self.linked_trap_guid
     }
 
     pub fn set_linked_trap_like_cpp(&mut self, linked_trap_guid: ObjectGuid) {
         self.linked_trap_guid = linked_trap_guid;
+    }
+
+    /// Represented `GAMEOBJECT_BYTES_1` animation progress used by
+    /// `GameObject::GetGoAnimProgress()` in bounded map-owned update seams.
+    ///
+    /// C++ anchor: `GameObject.cpp:951-1132` passes `GameObjectData::animprogress`
+    /// through `GameObject::Create(..., animProgress, ...)` and calls
+    /// `SetGoAnimProgress(...)` for the represented create branches here.
+    pub const fn go_anim_progress_like_cpp(&self) -> u8 {
+        self.go_anim_progress_like_cpp
+    }
+
+    pub fn set_go_anim_progress_like_cpp(&mut self, progress: u8) {
+        self.go_anim_progress_like_cpp = progress;
+    }
+
+    /// Explicit represented baseline for the flags restored by
+    /// `GameObject::Update` after `SendGameObjectDespawn()`.
+    ///
+    /// This is not a full `GameObjectOverride` runtime. It is populated from the
+    /// lifecycle/template flags when available or by tests/callers with explicit
+    /// source evidence; absent source means no represented restore should clobber
+    /// current runtime flags.
+    pub const fn represented_baseline_flags_like_cpp(&self) -> Option<u32> {
+        self.represented_baseline_flags_like_cpp
+    }
+
+    pub fn set_represented_baseline_flags_like_cpp(&mut self, flags: Option<u32>) {
+        self.represented_baseline_flags_like_cpp = flags;
+    }
+
+    pub fn restore_represented_baseline_flags_like_cpp(&mut self) -> bool {
+        if let Some(flags) = self.represented_baseline_flags_like_cpp {
+            self.set_flags(flags);
+            true
+        } else {
+            false
+        }
     }
 
     pub const fn owner_guid(&self) -> ObjectGuid {
@@ -1621,7 +1977,152 @@ mod tests {
         assert_eq!(go.cleanup_before_delete_count(), 0);
         assert!(!go.grid_unload_delete_requested());
         assert!(!go.grid_unload_respawn_relocation_requested());
+        assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        assert!(!go.has_represented_gameobject_data_like_cpp());
         assert!(!go.game_object_data_changes_mask().is_any_set());
+    }
+
+    #[test]
+    fn gameobject_data_presence_evidence_defaults_false_and_setter_round_trips_like_cpp() {
+        let mut go = GameObject::new();
+
+        assert!(!go.has_represented_gameobject_data_like_cpp());
+        go.set_represented_gameobject_data_present_like_cpp(true);
+        assert!(go.has_represented_gameobject_data_like_cpp());
+        go.set_represented_gameobject_data_present_like_cpp(false);
+        assert!(!go.has_represented_gameobject_data_like_cpp());
+    }
+
+    #[test]
+    fn gameobject_model_existence_evidence_defaults_false_and_setter_round_trips_like_cpp() {
+        let mut go = GameObject::new();
+
+        assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        go.set_represented_gameobject_model_like_cpp(true);
+        assert!(go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        go.set_represented_gameobject_model_like_cpp(false);
+        assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn gameobject_model_map_object_flag_requires_explicit_model_evidence_like_cpp() {
+        let mut go = GameObject::new();
+
+        go.apply_represented_gameobject_model_creation_like_cpp(false, true);
+        assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, 0);
+
+        go.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        assert!(go.has_represented_gameobject_model_like_cpp());
+        assert!(go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, GO_FLAG_MAP_OBJECT);
+
+        go.apply_represented_gameobject_model_creation_like_cpp(true, false);
+        assert!(go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, 0);
+    }
+
+    #[test]
+    fn gameobject_model_disable_clears_map_object_flag_and_collision_evidence_like_cpp() {
+        let mut go = GameObject::new();
+        go.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        let enabled = go.enable_represented_gameobject_collision_like_cpp(true);
+        assert_eq!(enabled.new_collision_enabled, Some(true));
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, GO_FLAG_MAP_OBJECT);
+
+        go.set_represented_gameobject_model_like_cpp(false);
+
+        assert!(!go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, 0);
+    }
+
+    #[test]
+    fn gameobject_model_recreation_clears_previous_collision_evidence_like_cpp() {
+        let mut go = GameObject::new();
+        go.apply_represented_gameobject_model_creation_like_cpp(true, true);
+        let enabled = go.enable_represented_gameobject_collision_like_cpp(true);
+        assert_eq!(enabled.new_collision_enabled, Some(true));
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, GO_FLAG_MAP_OBJECT);
+
+        go.apply_represented_gameobject_model_creation_like_cpp(true, false);
+
+        assert!(go.has_represented_gameobject_model_like_cpp());
+        assert!(!go.has_represented_gameobject_model_map_object_like_cpp());
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+        assert_eq!(go.data().flags & GO_FLAG_MAP_OBJECT, 0);
+    }
+
+    #[test]
+    fn gameobject_model_collision_no_model_is_noop_like_cpp() {
+        let mut go = GameObject::new();
+
+        let outcome = go.enable_represented_gameobject_collision_like_cpp(true);
+
+        assert_eq!(
+            outcome,
+            GameObjectCollisionOutcomeLikeCpp {
+                requested_enable: true,
+                represented_model_present: false,
+                previous_collision_enabled: None,
+                new_collision_enabled: None,
+            }
+        );
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            None
+        );
+    }
+
+    #[test]
+    fn gameobject_model_collision_with_model_stores_true_and_false_like_cpp() {
+        let mut go = GameObject::new();
+        go.set_represented_gameobject_model_like_cpp(true);
+
+        let enabled = go.enable_represented_gameobject_collision_like_cpp(true);
+        assert_eq!(enabled.previous_collision_enabled, None);
+        assert_eq!(enabled.new_collision_enabled, Some(true));
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(true)
+        );
+
+        let disabled = go.enable_represented_gameobject_collision_like_cpp(false);
+        assert_eq!(disabled.previous_collision_enabled, Some(true));
+        assert_eq!(disabled.new_collision_enabled, Some(false));
+        assert_eq!(
+            go.represented_gameobject_model_collision_enabled_like_cpp(),
+            Some(false)
+        );
     }
 
     fn lifecycle_template() -> GameObjectTemplateLifecycleRecord {
@@ -2731,6 +3232,87 @@ mod tests {
     }
 
     #[test]
+    fn gameobject_update_no_despawn_delay_stays_updated_like_cpp() {
+        let mut go = GameObject::new();
+
+        let outcome = go.update_like_cpp(40);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.despawn_delay_before_ms, 0);
+        assert_eq!(outcome.despawn_delay_after_ms, 0);
+        assert!(!outcome.despawn_or_unsummon_requested);
+        assert!(outcome.world_update_would_run);
+        assert!(outcome.ai_update_not_represented);
+        assert!(outcome.go_type_impl_update_not_represented);
+    }
+
+    #[test]
+    fn gameobject_update_decrements_pending_despawn_delay_like_cpp() {
+        let mut go = GameObject::new();
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(100, 7));
+
+        let outcome = go.update_like_cpp(40);
+
+        assert_eq!(outcome.status, GameObjectUpdateStatusLikeCpp::Updated);
+        assert_eq!(outcome.despawn_delay_before_ms, 100);
+        assert_eq!(outcome.despawn_delay_after_ms, 60);
+        assert_eq!(outcome.despawn_respawn_time_secs, 7);
+        assert_eq!(go.despawn_delay(), 60);
+        assert!(!outcome.despawn_or_unsummon_requested);
+    }
+
+    #[test]
+    fn gameobject_update_expired_despawn_delay_requests_immediate_despawn_like_cpp() {
+        let mut exact = GameObject::new();
+        assert!(exact.schedule_despawn_or_unsummon_like_cpp(40, 9));
+        let exact_outcome = exact.update_like_cpp(40);
+        assert_eq!(
+            exact_outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRequested
+        );
+        assert_eq!(exact_outcome.despawn_delay_before_ms, 40);
+        assert_eq!(exact_outcome.despawn_delay_after_ms, 0);
+        assert_eq!(exact_outcome.despawn_respawn_time_secs, 9);
+        assert!(exact_outcome.despawn_or_unsummon_requested);
+        assert_eq!(exact.despawn_delay(), 0);
+        assert_eq!(exact.despawn_respawn_time(), 9);
+
+        let mut overshoot = GameObject::new();
+        assert!(overshoot.schedule_despawn_or_unsummon_like_cpp(40, 11));
+        let overshoot_outcome = overshoot.update_like_cpp(50);
+        assert_eq!(
+            overshoot_outcome.status,
+            GameObjectUpdateStatusLikeCpp::DespawnRequested
+        );
+        assert_eq!(overshoot_outcome.despawn_delay_before_ms, 40);
+        assert_eq!(overshoot_outcome.despawn_delay_after_ms, 0);
+        assert_eq!(overshoot_outcome.despawn_respawn_time_secs, 11);
+        assert!(overshoot_outcome.despawn_or_unsummon_requested);
+        assert_eq!(overshoot.despawn_respawn_time(), 11);
+    }
+
+    #[test]
+    fn gameobject_update_despawn_scheduler_only_shortens_pending_delay_like_cpp() {
+        let mut go = GameObject::new();
+
+        assert!(!go.schedule_despawn_or_unsummon_like_cpp(0, 3));
+        assert_eq!(go.despawn_delay(), 0);
+        assert_eq!(go.despawn_respawn_time(), 0);
+
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(100, 7));
+        assert_eq!(go.despawn_delay(), 100);
+        assert_eq!(go.despawn_respawn_time(), 7);
+
+        assert!(!go.schedule_despawn_or_unsummon_like_cpp(150, 9));
+        assert_eq!(go.despawn_delay(), 100);
+        assert_eq!(go.despawn_respawn_time(), 7);
+
+        assert!(go.schedule_despawn_or_unsummon_like_cpp(40, 11));
+        assert_eq!(go.despawn_delay(), 40);
+        assert_eq!(go.despawn_respawn_time(), 11);
+    }
+
+    #[test]
     fn gameobject_owned_loot_is_looted_matches_cpp_gold_and_unlooted_count() {
         let empty = GameObjectOwnedLoot::default();
         assert_eq!(empty.gold(), 0);
@@ -2903,15 +3485,45 @@ mod tests {
     }
 
     #[test]
-    fn loot_state_tracks_activating_unit_only_for_activated_state() {
+    fn gameobject_set_owner_guid_like_cpp_updates_created_by_and_spawned_default() {
+        let mut go = GameObject::new();
+        let owner = ObjectGuid::create_player(1, 48201);
+        go.set_spawned_by_default(true);
+
+        go.set_owner_guid_like_cpp(owner);
+
+        assert_eq!(go.owner_guid(), owner);
+        assert_eq!(go.data().created_by, owner);
+        assert!(!go.spawned_by_default());
+        assert!(
+            go.game_object_data_changes_mask()
+                .is_set(GAME_OBJECT_DATA_CREATED_BY_BIT)
+        );
+
+        go.set_spawned_by_default(true);
+        go.clear_owner_guid_like_cpp();
+
+        assert_eq!(go.owner_guid(), ObjectGuid::EMPTY);
+        assert_eq!(go.data().created_by, ObjectGuid::EMPTY);
+        assert!(!go.spawned_by_default());
+    }
+
+    #[test]
+    fn loot_state_tracks_unit_for_any_state_and_none_clears_like_cpp() {
         let mut go = GameObject::new();
         let unit = ObjectGuid::new(7, 11);
 
-        go.set_loot_state(LootState::Activated, Some(unit));
-        assert_eq!(go.loot_state(), LootState::Activated);
-        assert_eq!(go.loot_state_unit_guid(), unit);
+        for state in [
+            LootState::Activated,
+            LootState::Ready,
+            LootState::JustDeactivated,
+        ] {
+            go.set_loot_state(state, Some(unit));
+            assert_eq!(go.loot_state(), state);
+            assert_eq!(go.loot_state_unit_guid(), unit);
+        }
 
-        go.set_loot_state(LootState::Ready, Some(unit));
+        go.set_loot_state(LootState::Ready, None);
         assert_eq!(go.loot_state(), LootState::Ready);
         assert_eq!(go.loot_state_unit_guid(), ObjectGuid::EMPTY);
     }

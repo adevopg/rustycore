@@ -92,6 +92,7 @@ pub struct CreatureTemplateLifecycleRecordLikeCpp {
     pub speed_run: f32,
     pub scale: f32,
     pub classification: u32,
+    pub creature_type: u32,
     pub unit_class: u8,
     pub vehicle_id: u32,
     pub movement_type: u8,
@@ -132,7 +133,7 @@ impl CreatureTemplateLifecycleStoreLikeCpp {
         let mut templates = HashMap::new();
         let mut result = db
             .direct_query(
-                "SELECT entry, name, faction, speed_walk, speed_run, scale, Classification, unit_class, VehicleId, MovementType, flags_extra, StringId, RegenHealth FROM creature_template",
+                "SELECT entry, name, faction, speed_walk, speed_run, scale, Classification, `type`, unit_class, VehicleId, MovementType, flags_extra, StringId, RegenHealth FROM creature_template",
             )
             .await?;
         if !result.is_empty() {
@@ -145,12 +146,13 @@ impl CreatureTemplateLifecycleStoreLikeCpp {
                     speed_run: result.try_read::<f32>(4).unwrap_or(0.0),
                     scale: result.try_read::<f32>(5).unwrap_or(1.0),
                     classification: result.try_read::<u32>(6).unwrap_or(0),
-                    unit_class: result.try_read::<u8>(7).unwrap_or(0),
-                    vehicle_id: result.try_read::<u32>(8).unwrap_or(0),
-                    movement_type: result.try_read::<u8>(9).unwrap_or(0),
-                    flags_extra: result.try_read::<u32>(10).unwrap_or(0),
-                    string_id: result.try_read::<String>(11).unwrap_or_default(),
-                    regen_health: result.try_read::<u8>(12).unwrap_or(0) != 0,
+                    creature_type: result.try_read::<u32>(7).unwrap_or(0),
+                    unit_class: result.try_read::<u8>(8).unwrap_or(0),
+                    vehicle_id: result.try_read::<u32>(9).unwrap_or(0),
+                    movement_type: result.try_read::<u8>(10).unwrap_or(0),
+                    flags_extra: result.try_read::<u32>(11).unwrap_or(0),
+                    string_id: result.try_read::<String>(12).unwrap_or_default(),
+                    regen_health: result.try_read::<u8>(13).unwrap_or(0) != 0,
                     spells: [0; MAX_CREATURE_SPELLS_LIKE_CPP],
                     models: Vec::new(),
                 };
@@ -798,6 +800,7 @@ mod tests {
                 speed_run: 1.14286,
                 scale: 1.25,
                 classification: 4,
+                creature_type: 7,
                 unit_class: 2,
                 vehicle_id: 900,
                 movement_type: 1,
@@ -816,6 +819,7 @@ mod tests {
         assert_eq!(template.speed_run, 1.14286);
         assert_eq!(template.scale, 1.25);
         assert_eq!(template.classification, 4);
+        assert_eq!(template.creature_type, 7);
         assert_eq!(template.unit_class, 2);
         assert_eq!(template.vehicle_id, 900);
         assert_eq!(template.movement_type, 1);
@@ -834,6 +838,7 @@ mod tests {
             speed_run: 0.0,
             scale: 1.0,
             classification: 0,
+            creature_type: 0,
             unit_class: 0,
             vehicle_id: 0,
             movement_type: 0,
@@ -863,6 +868,7 @@ mod tests {
             speed_run: 0.0,
             scale: 1.0,
             classification: 0,
+            creature_type: 0,
             unit_class: 0,
             vehicle_id: 0,
             movement_type: 0,
@@ -911,6 +917,7 @@ mod tests {
             speed_run: 0.0,
             scale: 1.0,
             classification: 0,
+            creature_type: 0,
             unit_class: 0,
             vehicle_id: 0,
             movement_type: 0,
