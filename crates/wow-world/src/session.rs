@@ -14675,9 +14675,10 @@ impl WorldSession {
     /// phase fallback matching create-visibility seams. It consumes only GUIDs
     /// from the canonical `ManagedMap` update summary and gates by same-map typed
     /// Player/GameObject, GameObject in-world state, same-phase visibility, 2D
-    /// visibility range and session-local `HaveAtClient`; it does not claim
-    /// shared-vision/m_seer fanout, exact cell traversal or full
-    /// `SendMessageToSet` parity.
+    /// visibility range, session-local `HaveAtClient`, and the C++ direct-target
+    /// `target->m_seer == target || target->GetVehicle()` branch. The shared-
+    /// vision list/fanout branch remains explicitly unrepresented; this seam does
+    /// not claim exact cell traversal or full `SendMessageToSet` parity.
     pub(crate) fn send_represented_gameobject_visual_despawn_from_last_update_like_cpp(
         &mut self,
     ) -> usize {
@@ -14690,6 +14691,16 @@ impl WorldSession {
         let Some(player_guid) = self.player_guid() else {
             return 0;
         };
+        let direct_target_seer_gate_allows_send =
+            self.represented_seer_guid_like_cpp.is_none_or(|seer_guid| {
+                seer_guid.is_empty()
+                    || seer_guid == player_guid
+                    || self.represented_player_has_active_vehicle_like_cpp()
+            });
+        if !direct_target_seer_gate_allows_send {
+            return 0;
+        }
+
         let (update_generation, despawnable_guids) = {
             let Ok(manager) = manager.lock() else {
                 return 0;
@@ -14744,6 +14755,14 @@ impl WorldSession {
             sent += 1;
         }
         sent
+    }
+
+    fn represented_player_has_active_vehicle_like_cpp(&self) -> bool {
+        self.player_mount_vehicle_kit_like_cpp
+            .as_ref()
+            .is_some_and(|vehicle_kit| {
+                vehicle_kit.status() == wow_entities::VehicleStatus::Installed
+            })
     }
 
     fn current_canonical_player_farsight_object_value_like_cpp(&self) -> Option<ObjectGuid> {
@@ -18636,6 +18655,130 @@ mod tests {
             drain_server_opcodes(&send_rx),
             vec![ServerOpcodes::GameObjectDespawn]
         );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn gameobject_visual_despawn_mismatched_seer_without_vehicle_preserves_delivery_like_cpp()
+    {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let player_guid = ObjectGuid::create_player(1, 50_517);
+        let gameobject_guid = test_gameobject_guid(605_056, 50_518);
+        let seer_guid = test_dynamic_object_guid(605_057, 50_519);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            player_guid,
+            571,
+            7,
+        );
+        add_canonical_visual_despawn_gameobject_like_cpp(
+            &canonical,
+            gameobject_guid,
+            605_056,
+            5_050_518,
+            Position::new(11.0, 21.0, 31.0, 0.0),
+            571,
+            7,
+        );
+        assert_eq!(canonical.lock().unwrap().update(60_000), Some(60_000));
+        assert_eq!(
+            canonical
+                .lock()
+                .unwrap()
+                .find_map(571, 7)
+                .unwrap()
+                .last_game_objects_update_summary()
+                .generic_visual_despawn_guids
+                .as_slice(),
+            &[gameobject_guid]
+        );
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.represented_seer_guid_like_cpp = Some(seer_guid);
+
+        session.process_pending().await;
+
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(!opcodes.contains(&ServerOpcodes::GameObjectDespawn));
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+        assert!(
+            session
+                .represented_gameobject_visual_despawns_delivered_like_cpp
+                .is_empty()
+        );
+
+        session.represented_seer_guid_like_cpp = Some(player_guid);
+        assert_eq!(
+            session.send_represented_gameobject_visual_despawn_from_last_update_like_cpp(),
+            1
+        );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::GameObjectDespawn]
+        );
+        assert!(
+            session
+                .client_visible_guids_like_cpp
+                .contains(&gameobject_guid)
+        );
+    }
+
+    #[tokio::test]
+    async fn gameobject_visual_despawn_mismatched_seer_with_vehicle_sends_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = Arc::new(std::sync::Mutex::new(wow_map::MapManager::new(60_000, 1)));
+        let player_guid = ObjectGuid::create_player(1, 50_520);
+        let gameobject_guid = test_gameobject_guid(605_058, 50_521);
+        let seer_guid = test_dynamic_object_guid(605_059, 50_522);
+
+        configure_dynamic_object_values_snapshot_session_like_cpp(
+            &mut session,
+            &canonical,
+            player_guid,
+            571,
+            7,
+        );
+        add_canonical_visual_despawn_gameobject_like_cpp(
+            &canonical,
+            gameobject_guid,
+            605_058,
+            5_050_521,
+            Position::new(11.0, 21.0, 31.0, 0.0),
+            571,
+            7,
+        );
+        assert_eq!(canonical.lock().unwrap().update(60_000), Some(60_000));
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.represented_seer_guid_like_cpp = Some(seer_guid);
+        let mut vehicle_kit = Vehicle::new(
+            player_guid,
+            TypeId::Player,
+            Position::new(10.0, 20.0, 30.0, 0.0),
+            77,
+            88,
+            std::iter::empty(),
+        );
+        vehicle_kit.install();
+        session.player_mount_vehicle_kit_like_cpp = Some(vehicle_kit);
+
+        session.process_pending().await;
+
+        let opcodes = drain_server_opcodes(&send_rx);
+        assert!(opcodes.contains(&ServerOpcodes::GameObjectDespawn));
         assert!(
             session
                 .client_visible_guids_like_cpp
