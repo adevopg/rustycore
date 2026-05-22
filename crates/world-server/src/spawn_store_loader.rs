@@ -34,6 +34,11 @@
 //!   `MAX(eventEntry)` sizing for `mGameEventCreatureGuids`, `mGameEventGameobjectGuids`, and `mGameEventPoolIds`.
 //! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:379-475`
 //!   `game_event_creature` / `game_event_gameobject` GUID metadata loading.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.h:33-78`
+//!   `GameEventState`, `GameEventData` defaults and `isValid()` predicate.
+//! - `/home/server/woltk-trinity-legacy/src/server/game/Events/GameEventMgr.cpp:215-285`
+//!   `game_event` master metadata load, reserved id 0, normal zero-length validation,
+//!   and deferred holiday DB2 validation / `SetHolidayEventTime`.
 
 use std::collections::BTreeMap;
 
@@ -80,6 +85,7 @@ pub struct CanonicalSpawnStoreLoadReport {
     pub spawn_group_apply: SpawnGroupApplyReport,
     pub linked_respawn: LinkedRespawnLoadReportLikeCpp,
     pub pool_mgr: PoolMgrLoadReportLikeCpp,
+    pub game_events: GameEventDataLoadReportLikeCpp,
     pub game_event_pools: GameEventPoolLoadReportLikeCpp,
     pub game_event_spawn_guids: GameEventSpawnGuidLoadReportLikeCpp,
     pub creature_formations: CreatureFormationLoadReportLikeCpp,
@@ -126,6 +132,16 @@ pub struct PoolMgrLoadReportLikeCpp {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GameEventDataLoadReportLikeCpp {
+    pub rows: usize,
+    pub loaded: usize,
+    pub skipped_reserved_zero: usize,
+    pub skipped_out_of_range: usize,
+    pub invalid_normal_zero_length: usize,
+    pub holiday_validation_deferred: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GameEventPoolLoadReportLikeCpp {
     pub rows: usize,
     pub loaded: usize,
@@ -164,6 +180,133 @@ impl GameEventSizingLikeCpp {
             slot_count,
         }
     }
+
+    fn master_slot_count_like_cpp(self) -> usize {
+        usize::try_from(self.game_event_size).unwrap_or(usize::MAX)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GameEventStateLikeCpp {
+    Normal = 0,
+    WorldInactive = 1,
+    WorldConditions = 2,
+    WorldNextPhase = 3,
+    WorldFinished = 4,
+    Internal = 5,
+}
+
+#[allow(dead_code)]
+impl GameEventStateLikeCpp {
+    pub fn from_raw_like_cpp(state_raw: u8) -> Option<Self> {
+        match state_raw {
+            0 => Some(Self::Normal),
+            1 => Some(Self::WorldInactive),
+            2 => Some(Self::WorldConditions),
+            3 => Some(Self::WorldNextPhase),
+            4 => Some(Self::WorldFinished),
+            5 => Some(Self::Internal),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameEventDataLikeCpp {
+    pub event_id: u16,
+    pub start: u64,
+    pub end: u64,
+    pub next_start: u64,
+    pub occurence: u32,
+    pub length: u32,
+    pub holiday_id: u32,
+    pub holiday_stage: u8,
+    pub state_raw: u8,
+    pub description: String,
+    pub announce: u8,
+}
+
+impl Default for GameEventDataLikeCpp {
+    fn default() -> Self {
+        Self {
+            event_id: 0,
+            start: 1,
+            end: 0,
+            next_start: 0,
+            occurence: 0,
+            length: 0,
+            holiday_id: 0,
+            holiday_stage: 0,
+            state_raw: GameEventStateLikeCpp::Normal as u8,
+            description: String::new(),
+            announce: 0,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl GameEventDataLikeCpp {
+    pub fn state_like_cpp(&self) -> Option<GameEventStateLikeCpp> {
+        GameEventStateLikeCpp::from_raw_like_cpp(self.state_raw)
+    }
+
+    pub fn is_valid_like_cpp(&self) -> bool {
+        self.length > 0 || self.state_raw > GameEventStateLikeCpp::Normal as u8
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GameEventDataStoreLikeCpp {
+    events: Vec<GameEventDataLikeCpp>,
+}
+
+#[allow(dead_code)]
+impl GameEventDataStoreLikeCpp {
+    pub fn from_game_event_max_entry_like_cpp(max_event_entry: Option<u32>) -> Self {
+        Self::from_game_event_sizing_like_cpp(
+            GameEventSizingLikeCpp::from_max_event_entry_like_cpp(max_event_entry),
+        )
+    }
+
+    fn from_game_event_sizing_like_cpp(sizing: GameEventSizingLikeCpp) -> Self {
+        let mut events = vec![GameEventDataLikeCpp::default(); sizing.master_slot_count_like_cpp()];
+        for (event_id, event) in events.iter_mut().enumerate() {
+            event.event_id = u16::try_from(event_id).unwrap_or(u16::MAX);
+        }
+        Self { events }
+    }
+
+    pub fn len_like_cpp(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn event_like_cpp(&self, event_id: u16) -> Option<&GameEventDataLikeCpp> {
+        self.events.get(usize::from(event_id))
+    }
+
+    pub fn iter_like_cpp(&self) -> impl Iterator<Item = &GameEventDataLikeCpp> {
+        self.events.iter()
+    }
+
+    fn event_mut_like_cpp(&mut self, event_id: u16) -> Option<&mut GameEventDataLikeCpp> {
+        self.events.get_mut(usize::from(event_id))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GameEventDataRowLikeCpp {
+    event_id: u16,
+    start: u64,
+    end: u64,
+    occurence: u32,
+    length: u32,
+    holiday_id: u32,
+    holiday_stage: u8,
+    description: String,
+    state_raw: u8,
+    announce: u8,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -303,6 +446,7 @@ pub struct CanonicalSpawnMetadataLikeCpp {
     spawn_group_templates: BTreeMap<u32, SpawnGroupTemplateData>,
     linked_respawns: LinkedRespawnStoreLikeCpp,
     pool_mgr: PoolMgrLikeCpp,
+    game_events: GameEventDataStoreLikeCpp,
     game_event_pools: GameEventPoolIdsLikeCpp,
     game_event_spawn_guids: GameEventSpawnGuidsLikeCpp,
     creature_runtime_rows: BTreeMap<SpawnId, CreatureSpawnRuntimeRowLikeCpp>,
@@ -320,6 +464,7 @@ impl CanonicalSpawnMetadataLikeCpp {
             spawn_group_templates,
             linked_respawns: LinkedRespawnStoreLikeCpp::new(),
             pool_mgr: PoolMgrLikeCpp::new(),
+            game_events: GameEventDataStoreLikeCpp::default(),
             game_event_pools: GameEventPoolIdsLikeCpp::default(),
             game_event_spawn_guids: GameEventSpawnGuidsLikeCpp::default(),
             creature_runtime_rows: BTreeMap::new(),
@@ -349,6 +494,11 @@ impl CanonicalSpawnMetadataLikeCpp {
         self
     }
 
+    pub fn with_game_events_like_cpp(mut self, game_events: GameEventDataStoreLikeCpp) -> Self {
+        self.game_events = game_events;
+        self
+    }
+
     pub fn with_game_event_pools_like_cpp(
         mut self,
         game_event_pools: GameEventPoolIdsLikeCpp,
@@ -371,6 +521,16 @@ impl CanonicalSpawnMetadataLikeCpp {
 
     pub fn pool_mgr_like_cpp(&self) -> &PoolMgrLikeCpp {
         &self.pool_mgr
+    }
+
+    #[allow(dead_code)]
+    pub fn game_events_like_cpp(&self) -> &GameEventDataStoreLikeCpp {
+        &self.game_events
+    }
+
+    #[allow(dead_code)]
+    pub fn game_event_like_cpp(&self, event_id: u16) -> Option<&GameEventDataLikeCpp> {
+        self.game_events.event_like_cpp(event_id)
     }
 
     pub fn game_event_pool_ids_like_cpp(&self, event_id: i16) -> Option<&[u32]> {
@@ -758,6 +918,11 @@ pub async fn load_canonical_spawn_store_like_cpp(
     let game_event_sizing = GameEventSizingLikeCpp::from_max_event_entry_like_cpp(
         load_max_game_event_entry_like_cpp(db).await?,
     );
+    // C++ `GameEventMgr::LoadFromDB` loads master `game_event` metadata into
+    // `mGameEvent` before later event-specific lists consume the same sizing.
+    // This is read-only startup metadata: no scheduler, active set, DB2 holiday
+    // rewrite, persistence, or apply/unapply side effect is performed here.
+    let game_events = load_game_events_like_cpp(db, game_event_sizing, &mut report).await?;
     // C++ `GameEventMgr` loads `game_event_pool` after PoolMgr validation so
     // `CheckPool(entry)` can gate each row; this is metadata only.
     let game_event_pools =
@@ -776,6 +941,7 @@ pub async fn load_canonical_spawn_store_like_cpp(
         CanonicalSpawnMetadataLikeCpp::new(store, templates)
             .with_linked_respawns_like_cpp(linked_respawns)
             .with_pool_mgr_like_cpp(pool_mgr)
+            .with_game_events_like_cpp(game_events)
             .with_game_event_pools_like_cpp(game_event_pools)
             .with_game_event_spawn_guids_like_cpp(game_event_spawn_guids)
             .with_creature_runtime_rows_like_cpp(creature_runtime_rows)
@@ -937,6 +1103,81 @@ async fn load_max_game_event_entry_like_cpp(db: &WorldDatabase) -> Result<Option
     }
 
     Ok(result.try_read(0))
+}
+
+async fn load_game_events_like_cpp(
+    db: &WorldDatabase,
+    game_event_sizing: GameEventSizingLikeCpp,
+    report: &mut CanonicalSpawnStoreLoadReport,
+) -> Result<GameEventDataStoreLikeCpp> {
+    let mut game_events =
+        GameEventDataStoreLikeCpp::from_game_event_sizing_like_cpp(game_event_sizing);
+    let stmt = db.prepare(WorldStatements::SEL_GAME_EVENTS);
+    let mut result = db.query(&stmt).await?;
+    if result.is_empty() {
+        return Ok(GameEventDataStoreLikeCpp::default());
+    }
+
+    loop {
+        apply_game_event_data_row_like_cpp(
+            GameEventDataRowLikeCpp {
+                event_id: result.read(0),
+                start: result.read(1),
+                end: result.read(2),
+                occurence: result.read(3),
+                length: result.read(4),
+                holiday_id: result.read(5),
+                holiday_stage: result.read(6),
+                description: result.read(7),
+                state_raw: result.read(8),
+                announce: result.read(9),
+            },
+            &mut game_events,
+            &mut report.game_events,
+        );
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    Ok(game_events)
+}
+
+fn apply_game_event_data_row_like_cpp(
+    row: GameEventDataRowLikeCpp,
+    game_events: &mut GameEventDataStoreLikeCpp,
+    report: &mut GameEventDataLoadReportLikeCpp,
+) {
+    report.rows += 1;
+    if row.event_id == 0 {
+        report.skipped_reserved_zero += 1;
+        return;
+    }
+
+    let Some(event) = game_events.event_mut_like_cpp(row.event_id) else {
+        report.skipped_out_of_range += 1;
+        return;
+    };
+
+    event.event_id = row.event_id;
+    event.start = row.start;
+    event.end = row.end;
+    event.next_start = 0;
+    event.occurence = row.occurence;
+    event.length = row.length;
+    event.holiday_id = row.holiday_id;
+    event.holiday_stage = row.holiday_stage;
+    event.description = row.description;
+    event.state_raw = row.state_raw;
+    event.announce = row.announce;
+    report.loaded += 1;
+
+    if !event.is_valid_like_cpp() {
+        report.invalid_normal_zero_length += 1;
+    }
+    if event.holiday_id != 0 {
+        report.holiday_validation_deferred += 1;
+    }
 }
 
 fn apply_game_event_pool_row_like_cpp(
@@ -2221,6 +2462,207 @@ mod tests {
         assert_eq!(report.autospawn_skipped_broken, 1);
         assert_eq!(report.autospawn_skipped_child, 1);
         assert_eq!(mgr.auto_spawn_pools_for_map_like_cpp(0), &[1]);
+    }
+
+    fn game_event_data_row(
+        event_id: u16,
+        length: u32,
+        state_raw: u8,
+        holiday_id: u32,
+    ) -> GameEventDataRowLikeCpp {
+        GameEventDataRowLikeCpp {
+            event_id,
+            start: 100,
+            end: 200,
+            occurence: 30,
+            length,
+            holiday_id,
+            holiday_stage: 2,
+            description: format!("event-{event_id}"),
+            state_raw,
+            announce: 1,
+        }
+    }
+
+    #[test]
+    fn game_event_data_store_uses_cpp_master_sizing_and_indexing() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(1, 10, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(3, 10, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+
+        assert_eq!(events.len_like_cpp(), 4);
+        assert!(events.event_like_cpp(0).is_some());
+        assert_eq!(
+            events.event_like_cpp(1).map(|event| event.event_id),
+            Some(1)
+        );
+        assert_eq!(
+            events.event_like_cpp(3).map(|event| event.event_id),
+            Some(3)
+        );
+        assert!(events.event_like_cpp(4).is_none());
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.loaded, 2);
+    }
+
+    #[test]
+    fn game_event_data_reserved_zero_is_reported_and_not_loaded() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(0, 10, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+
+        let slot_zero = events.event_like_cpp(0).unwrap();
+        assert_eq!(slot_zero.start, 1);
+        assert_eq!(slot_zero.description, "");
+        assert_eq!(report.rows, 1);
+        assert_eq!(report.loaded, 0);
+        assert_eq!(report.skipped_reserved_zero, 1);
+    }
+
+    #[test]
+    fn game_event_data_preserves_cpp_field_order_and_next_start_zero() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            GameEventDataRowLikeCpp {
+                event_id: 2,
+                start: 1_700_000_001,
+                end: 1_700_000_999,
+                occurence: 120,
+                length: 45,
+                holiday_id: 341,
+                holiday_stage: 3,
+                description: "Darkmoon metadata".to_string(),
+                state_raw: GameEventStateLikeCpp::WorldConditions as u8,
+                announce: 2,
+            },
+            &mut events,
+            &mut report,
+        );
+
+        let event = events.event_like_cpp(2).unwrap();
+        assert_eq!(event.start, 1_700_000_001);
+        assert_eq!(event.end, 1_700_000_999);
+        assert_eq!(event.occurence, 120);
+        assert_eq!(event.length, 45);
+        assert_eq!(event.holiday_id, 341);
+        assert_eq!(event.holiday_stage, 3);
+        assert_eq!(event.description, "Darkmoon metadata");
+        assert_eq!(
+            event.state_raw,
+            GameEventStateLikeCpp::WorldConditions as u8
+        );
+        assert_eq!(
+            event.state_like_cpp(),
+            Some(GameEventStateLikeCpp::WorldConditions)
+        );
+        assert_eq!(event.announce, 2);
+        assert_eq!(event.next_start, 0);
+        assert_eq!(report.loaded, 1);
+    }
+
+    #[test]
+    fn game_event_data_validity_matches_cpp_normal_zero_length_rule() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(1, 0, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(2, 0, GameEventStateLikeCpp::WorldInactive as u8, 0),
+            &mut events,
+            &mut report,
+        );
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(3, 0, GameEventStateLikeCpp::Internal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+
+        assert!(!events.event_like_cpp(1).unwrap().is_valid_like_cpp());
+        assert!(events.event_like_cpp(2).unwrap().is_valid_like_cpp());
+        assert!(events.event_like_cpp(3).unwrap().is_valid_like_cpp());
+        assert_eq!(report.rows, 3);
+        assert_eq!(report.loaded, 3);
+        assert_eq!(report.invalid_normal_zero_length, 1);
+    }
+
+    #[test]
+    fn game_event_data_preserves_holiday_values_and_defers_db2_validation() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(1, 10, GameEventStateLikeCpp::Normal as u8, 777),
+            &mut events,
+            &mut report,
+        );
+
+        let event = events.event_like_cpp(1).unwrap();
+        assert_eq!(event.holiday_id, 777);
+        assert_eq!(event.holiday_stage, 2);
+        assert_eq!(event.start, 100);
+        assert_eq!(event.end, 200);
+        assert_eq!(report.holiday_validation_deferred, 1);
+        assert_eq!(report.loaded, 1);
+    }
+
+    #[test]
+    fn game_event_data_skip_out_of_range_without_truncation() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(4, 10, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+
+        assert_eq!(events.len_like_cpp(), 4);
+        assert!(events.event_like_cpp(4).is_none());
+        assert_eq!(report.rows, 1);
+        assert_eq!(report.loaded, 0);
+        assert_eq!(report.skipped_out_of_range, 1);
+    }
+
+    #[test]
+    fn canonical_metadata_exposes_game_event_master_metadata_like_cpp() {
+        let mut events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(3));
+        let mut report = GameEventDataLoadReportLikeCpp::default();
+        apply_game_event_data_row_like_cpp(
+            game_event_data_row(1, 10, GameEventStateLikeCpp::Normal as u8, 0),
+            &mut events,
+            &mut report,
+        );
+        let metadata = CanonicalSpawnMetadataLikeCpp::new(SpawnStore::new(), BTreeMap::new())
+            .with_game_events_like_cpp(events);
+
+        assert_eq!(metadata.game_events_like_cpp().len_like_cpp(), 4);
+        assert_eq!(metadata.game_events_like_cpp().iter_like_cpp().count(), 4);
+        assert_eq!(
+            metadata.game_event_like_cpp(1).map(|event| event.length),
+            Some(10)
+        );
+        assert!(metadata.game_event_like_cpp(4).is_none());
     }
 
     fn game_event_pool_mgr_with_test_pools() -> PoolMgrLikeCpp {
