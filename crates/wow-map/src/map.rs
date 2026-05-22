@@ -1331,6 +1331,9 @@ pub struct SpawnGroupSpawnOutcomeLikeCpp {
     pub respawn_timers_missing: usize,
     pub skipped_respawn_timer_active: usize,
     pub skipped_live_object_active: usize,
+    /// Spawn metadata entries skipped at the C++ `GetRespawnMapForType(...) == nullptr`
+    /// guard before timers, TypeHasData/live checks, difficulty, grid, or loader planning.
+    pub skipped_no_respawn_map: usize,
     pub skipped_difficulty_mismatch: usize,
     pub skipped_unloaded_grid: usize,
     /// Loaded-grid Creature/GameObject `SpawnGroupSpawn` entries whose explicit
@@ -7095,10 +7098,15 @@ where
     ///   active before iterating metadata.
     /// - `Map.cpp:2326-2353` iterates ObjectMgr spawn metadata, removes respawn
     ///   timers when forced/ignoring, skips active timers and live objects.
+    /// - `Map.cpp:2326-2334` skips types whose `GetRespawnMapForType` is null;
+    ///   `Map.h:751-763,765-777` currently returns null for AreaTrigger, so that
+    ///   type is continued before timers, TypeHasData, difficulty, grid, or loader
+    ///   planning.
     /// - `Map.cpp:2356-2385` checks difficulty/grid-loaded before calling
     ///   Creature/GameObject `LoadFromDB` and retaining the loaded object.
-    /// - `Map.cpp:2387-2395` also handles AreaTrigger; RustyCore still reports
-    ///   that type unsupported here because there is no live AreaTrigger loader seam.
+    /// - `Map.cpp:2387-2395` contains an AreaTrigger switch branch, but it is
+    ///   unreachable with the current respawn-map guard. This does not implement
+    ///   `AreaTrigger::LoadFromDB` or live AreaTrigger runtime.
     ///
     /// Ownership: `Map` owns active spawn-group state, respawn timers, live indexes,
     /// and `AddToMap`. The caller owns DB/template/runtime selection and may provide
@@ -7181,7 +7189,7 @@ where
                         }
                     }
                     SpawnObjectType::AreaTrigger => {
-                        outcome.unsupported_spawn_types += 1;
+                        outcome.skipped_no_respawn_map += 1;
                         continue;
                     }
                 }
@@ -7207,14 +7215,10 @@ where
                 let Some(records) = load_record(self, member.object_type, member.spawn_id, force)
                 else {
                     outcome.blocked_loaded_grid_spawn_loads += 1;
-                    match member.object_type {
-                        SpawnObjectType::Creature => {
-                            outcome.blocked_loaded_grid_creature_loads += 1;
-                        }
-                        SpawnObjectType::GameObject => {
-                            outcome.blocked_loaded_grid_gameobject_loads += 1;
-                        }
-                        SpawnObjectType::AreaTrigger => outcome.unsupported_spawn_types += 1,
+                    if member.object_type == SpawnObjectType::Creature {
+                        outcome.blocked_loaded_grid_creature_loads += 1;
+                    } else if member.object_type == SpawnObjectType::GameObject {
+                        outcome.blocked_loaded_grid_gameobject_loads += 1;
                     }
                     continue;
                 };
@@ -17433,7 +17437,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_group_spawn_area_trigger_is_unsupported_not_complete_like_cpp() {
+    fn spawn_group_spawn_area_trigger_skips_no_respawn_map_before_loader_like_cpp() {
         let group = spawn_group(3946, SpawnGroupFlags::NONE);
         let (group, store) = spawn_group_store(
             group,
@@ -17445,12 +17449,27 @@ mod tests {
         );
         let mut map = test_map();
         map.load_grid(0.0, 0.0);
+        let mut loader_calls = 0;
 
-        let outcome = map.spawn_group_spawn_like_cpp(Some(&group), false, false, &store);
+        let outcome = map.spawn_group_spawn_loaded_grid_records_like_cpp(
+            Some(&group),
+            false,
+            false,
+            &store,
+            |_map, _object_type, _spawn_id, _force| {
+                loader_calls += 1;
+                None
+            },
+        );
 
         assert_eq!(outcome.metadata_entries, 1);
-        assert_eq!(outcome.unsupported_spawn_types, 1);
+        assert_eq!(outcome.skipped_no_respawn_map, 1);
+        assert_eq!(outcome.unsupported_spawn_types, 0);
+        assert_eq!(outcome.blocked_loaded_grid_spawn_loads, 0);
+        assert_eq!(loader_calls, 0);
         assert!(outcome.load_plans.is_empty());
+        assert_eq!(map.map_object_count(), 0);
+        assert!(map.is_spawn_group_active_like_cpp(Some(&group)));
     }
 
     #[test]
