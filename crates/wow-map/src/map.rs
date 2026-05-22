@@ -3642,6 +3642,43 @@ where
         Ok(summary)
     }
 
+    /// Map-owned facade for a direct C++ `PoolMgr::SpawnPool(spawns, pool_id)`
+    /// call over an already loaded canonical map.
+    ///
+    /// Ownership stays one-way: caller-owned canonical metadata and
+    /// `PoolMgrLikeCpp` feed a deterministic `SpawnPool` plan that mutates this
+    /// map's canonical `SpawnedPoolDataLikeCpp`; `Map` then consumes only
+    /// loaded-grid `Spawn1Object`/recursive child-pool actions through the
+    /// caller-supplied typed record loader. `wow-map` does not read DB, create
+    /// dummy records, persist state, touch sessions/ObjectAccessor, or fan out.
+    pub fn spawn_pool_loaded_grid_records_like_cpp<L>(
+        &mut self,
+        pool_mgr: &PoolMgrLikeCpp,
+        pool_id: u32,
+        spawn_store: &SpawnStore,
+        explicit_roll_for: impl FnMut(PoolMemberKindLikeCpp, u32) -> f32,
+        choose_equal: impl FnMut(&[PoolObjectLikeCpp], usize) -> Vec<usize>,
+        mut load_record: L,
+    ) -> Result<ProcessRespawnsSafeSideEffectsSummaryLikeCpp, PoolMgrPlanErrorLikeCpp>
+    where
+        L: FnMut(&mut Self, SpawnObjectType, SpawnId) -> Option<LoadedGridRespawnRecordsLikeCpp>,
+    {
+        let plan = pool_mgr.spawn_pool_plan_like_cpp(
+            &mut self.pool_data,
+            pool_id,
+            explicit_roll_for,
+            choose_equal,
+        )?;
+        let mut summary = ProcessRespawnsSafeSideEffectsSummaryLikeCpp::default();
+        self.apply_pool_spawn_pool_plan_loaded_grid_records_like_cpp(
+            &plan,
+            spawn_store,
+            &mut summary,
+            Some(&mut load_record),
+        );
+        Ok(summary)
+    }
+
     /// C++ `Map` constructor calls `sPoolMgr->InitPoolsForMap(this)` before
     /// startup respawn and spawn-group initialization. This represented seam
     /// applies deterministic autospawn `SpawnPool` plans into the map-owned
@@ -16560,6 +16597,104 @@ mod tests {
         assert_eq!(summary.pool_spawn_action_load_plans, vec![]);
         assert_eq!(map.map_object_count(), 1);
         assert_eq!(map.creature_spawn_id_store_count_like_cpp(80), 1);
+    }
+
+    #[test]
+    fn spawn_pool_facade_mutates_pool_data_and_executes_loaded_grid_loader_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(530, SpawnGroupFlags::NONE);
+        store.add_object_spawn(
+            &spawn_data(SpawnObjectType::Creature, 530101, active),
+            |_| false,
+        );
+        map.ensure_grid_loaded(&cell_from_world(0.0, 0.0));
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(5301, crate::pool::PoolTemplateDataLikeCpp::new(1, 571));
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5301);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(530101, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5301, creature_group)
+            .expect("test creature pool group");
+        let mut loader_calls = 0usize;
+
+        let summary = map
+            .spawn_pool_loaded_grid_records_like_cpp(
+                &pool_mgr,
+                5301,
+                &store,
+                |_, _| 0.0,
+                |_candidates, count| (0..count).collect(),
+                |_, object_type, spawn_id| {
+                    loader_calls += 1;
+                    assert_eq!(object_type, SpawnObjectType::Creature);
+                    assert_eq!(spawn_id, 530101);
+                    let mut creature = test_creature_for_spawn(spawn_id, 53010101, true);
+                    creature
+                        .unit_mut()
+                        .world_mut()
+                        .object_mut()
+                        .remove_from_world();
+                    Some(LoadedGridRespawnRecordsLikeCpp::primary_only(
+                        MapObjectRecord::new_creature(creature).unwrap(),
+                    ))
+                },
+            )
+            .expect("spawn pool facade plan");
+
+        assert_eq!(loader_calls, 1);
+        assert_eq!(summary.executed_loaded_grid_respawns, 1);
+        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 0);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert!(
+            map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(530101)
+        );
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(530101), 1);
+    }
+
+    #[test]
+    fn spawn_pool_facade_filters_unloaded_grid_without_calling_loader_like_cpp() {
+        let mut map = test_map();
+        let mut store = SpawnStore::new();
+        let active = spawn_group(531, SpawnGroupFlags::NONE);
+        let mut unloaded = spawn_data(SpawnObjectType::Creature, 530201, active);
+        unloaded.spawn_point = crate::spawn::SpawnPosition::new(1_000.0, 1_000.0, 0.0, 0.0);
+        store.add_object_spawn(&unloaded, |_| false);
+        let mut pool_mgr = PoolMgrLikeCpp::new();
+        pool_mgr.insert_template_like_cpp(5302, crate::pool::PoolTemplateDataLikeCpp::new(1, 571));
+        let mut creature_group =
+            PoolGroupLikeCpp::with_pool_id(PoolMemberKindLikeCpp::Creature, 5302);
+        creature_group.add_entry_like_cpp(PoolObjectLikeCpp::new(530201, 0.0), 1);
+        pool_mgr
+            .insert_or_replace_group_like_cpp(PoolMemberKindLikeCpp::Creature, 5302, creature_group)
+            .expect("test creature pool group");
+        let mut loader_calls = 0usize;
+
+        let summary = map
+            .spawn_pool_loaded_grid_records_like_cpp(
+                &pool_mgr,
+                5302,
+                &store,
+                |_, _| 0.0,
+                |_candidates, count| (0..count).collect(),
+                |_, _, _| {
+                    loader_calls += 1;
+                    None
+                },
+            )
+            .expect("spawn pool facade plan");
+
+        assert_eq!(loader_calls, 0);
+        assert_eq!(summary.executed_loaded_grid_respawns, 0);
+        assert_eq!(summary.pool_spawn_actions_skipped_unloaded_grid, 1);
+        assert_eq!(summary.pool_spawn_actions_blocked_loaded_grid, 0);
+        assert!(
+            map.pool_data_like_cpp()
+                .is_spawned_creature_like_cpp(530201)
+        );
+        assert_eq!(map.creature_spawn_id_store_count_like_cpp(530201), 0);
     }
 
     #[test]
