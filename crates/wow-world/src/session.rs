@@ -9094,6 +9094,21 @@ impl WorldSession {
         }
     }
 
+    /// C++ `Player::SendUpdateWorldState(variable, value, hidden)` direct-session send.
+    ///
+    /// Mirrors `SendDirectMessage(worldstate.Write())`: constructs one
+    /// `SMSG_UPDATE_WORLD_STATE` packet and sends it only through this session's
+    /// outbound channel. GameEvent fanout, login initialization, and global
+    /// `WorldStateMgr` ownership are intentionally out of scope for this seam.
+    pub fn send_update_world_state_like_cpp(&self, variable_id: u32, value: i32, hidden: bool) {
+        let packet = wow_packet::packets::misc::UpdateWorldState {
+            variable_id,
+            value,
+            hidden,
+        };
+        self.send_packet(&packet);
+    }
+
     /// Send a server packet on the **realm** connection.
     ///
     /// Some packets (e.g. `QueryPlayerNamesResponse`) must travel on the
@@ -29071,6 +29086,64 @@ mod tests {
 
         let data = send_rx.try_recv().unwrap();
         assert_eq!(data.len(), 6); // opcode(2) + serial(4)
+    }
+
+    #[test]
+    fn send_update_world_state_like_cpp_visible_preserves_field_order_and_signed_value() {
+        let (session, _, send_rx) = make_session();
+        let variable_id = 0x1122_3344;
+        let value = -1_234_567;
+        let expected = wow_packet::packets::misc::UpdateWorldState {
+            variable_id,
+            value,
+            hidden: false,
+        }
+        .to_bytes();
+
+        session.send_update_world_state_like_cpp(variable_id, value, false);
+
+        let data = send_rx.try_recv().unwrap();
+        assert_eq!(data, expected);
+        assert_eq!(send_rx.try_recv(), Err(flume::TryRecvError::Empty));
+        assert_eq!(data.len(), 11);
+        assert_eq!(
+            u16::from_le_bytes([data[0], data[1]]),
+            ServerOpcodes::UpdateWorldState as u16
+        );
+        assert_eq!(&data[2..6], &variable_id.to_le_bytes());
+        assert_eq!(&data[6..10], &value.to_le_bytes());
+        assert_eq!(data[10], 0x00);
+    }
+
+    #[test]
+    fn send_update_world_state_like_cpp_hidden_sets_final_bit_byte() {
+        let (session, _, send_rx) = make_session();
+        let variable_id = 0x5566_7788;
+        let value = 42;
+
+        session.send_update_world_state_like_cpp(variable_id, value, true);
+
+        let data = send_rx.try_recv().unwrap();
+        assert_eq!(data.len(), 11);
+        assert_eq!(
+            u16::from_le_bytes([data[0], data[1]]),
+            ServerOpcodes::UpdateWorldState as u16
+        );
+        assert_eq!(&data[2..6], &variable_id.to_le_bytes());
+        assert_eq!(&data[6..10], &value.to_le_bytes());
+        assert_eq!(data[10], 0x80);
+        assert_eq!(send_rx.try_recv(), Err(flume::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn send_update_world_state_like_cpp_uses_only_this_session_channel() {
+        let (session, _, send_rx) = make_session();
+        let (_other_session, _, other_send_rx) = make_session();
+
+        session.send_update_world_state_like_cpp(0x0102_0304, 7, false);
+
+        assert_eq!(drain_server_packet_bytes(&send_rx).len(), 1);
+        assert_eq!(other_send_rx.try_recv(), Err(flume::TryRecvError::Empty));
     }
 
     #[test]
