@@ -152,6 +152,8 @@ pub enum CharStatements {
 
     // Quest status
     SEL_CHAR_QUEST_STATUS,
+    /// SELECT quest, event, completedTime FROM character_queststatus_seasonal WHERE guid = ?
+    SEL_CHAR_QUEST_STATUS_SEASONAL,
     INS_CHAR_QUEST_STATUS,
     DEL_CHAR_QUEST_STATUS,
 
@@ -498,6 +500,9 @@ impl StatementDef for CharStatements {
             Self::SEL_CHAR_QUEST_STATUS => {
                 "SELECT quest, status, explored FROM character_queststatus WHERE guid = ?"
             }
+            Self::SEL_CHAR_QUEST_STATUS_SEASONAL => {
+                "SELECT quest, event, completedTime FROM character_queststatus_seasonal WHERE guid = ?"
+            }
             Self::INS_CHAR_QUEST_STATUS => {
                 "INSERT INTO character_queststatus (guid, quest, status, explored, acceptTime, endTime) \
                  VALUES (?, ?, ?, 0, UNIX_TIMESTAMP(), 0) \
@@ -661,6 +666,11 @@ mod tests {
                 .sql()
                 .is_empty()
         );
+        assert!(
+            !CharStatements::SEL_CHAR_QUEST_STATUS_SEASONAL
+                .sql()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -692,6 +702,18 @@ mod tests {
         assert_eq!(
             CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT.sql(),
             "DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?"
+        );
+        assert_eq!(
+            CharStatements::SEL_CHAR_QUEST_STATUS_SEASONAL.sql(),
+            "SELECT quest, event, completedTime FROM character_queststatus_seasonal WHERE guid = ?"
+        );
+    }
+
+    #[test]
+    fn seasonal_quest_status_load_statement_matches_cpp_sql_exactly() {
+        assert_eq!(
+            CharStatements::SEL_CHAR_QUEST_STATUS_SEASONAL.sql(),
+            "SELECT quest, event, completedTime FROM character_queststatus_seasonal WHERE guid = ?"
         );
     }
 
@@ -750,6 +772,11 @@ mod tests {
         );
         assert!(
             CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT
+                .sql()
+                .contains("character_queststatus_seasonal")
+        );
+        assert!(
+            CharStatements::SEL_CHAR_QUEST_STATUS_SEASONAL
                 .sql()
                 .contains("character_queststatus_seasonal")
         );

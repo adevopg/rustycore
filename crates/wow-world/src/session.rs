@@ -123,6 +123,26 @@ pub(crate) struct ResetSeasonalQuestStatusOutcomeLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SeasonalQuestStatusDbRowLikeCpp {
+    pub quest_id: u32,
+    pub event_id: u32,
+    pub completed_time: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LoadSeasonalQuestStatusOutcomeLikeCpp {
+    pub rows_seen: usize,
+    pub inserted: usize,
+    pub replaced: usize,
+    pub skipped_no_quest_store: usize,
+    pub skipped_missing_quest: usize,
+    pub skipped_event_out_of_range: usize,
+    pub skipped_negative_completed_time: usize,
+    pub completed_bit_set_unrepresented: usize,
+    pub seasonal_quest_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AttackReputationFactionSnapshotLikeCpp {
     faction_id: u32,
     contested_guard: bool,
@@ -7279,6 +7299,65 @@ impl WorldSession {
             commands.push(command);
         }
         commands
+    }
+
+    pub(crate) fn load_seasonal_quest_status_like_cpp(
+        &mut self,
+        rows: impl IntoIterator<Item = SeasonalQuestStatusDbRowLikeCpp>,
+        quest_store: Option<&wow_data::quest::QuestStore>,
+    ) -> LoadSeasonalQuestStatusOutcomeLikeCpp {
+        // C++ Player::_LoadSeasonalQuestStatus clears first and always resets
+        // m_SeasonalQuestChanged at the end. Rust deliberately skips rows when
+        // no quest store is available, because C++ requires a real QuestTemplate.
+        self.seasonal_quests_like_cpp.clear();
+
+        let mut outcome = LoadSeasonalQuestStatusOutcomeLikeCpp::default();
+        for row in rows {
+            outcome.rows_seen += 1;
+
+            let Some(quest_store) = quest_store else {
+                outcome.skipped_no_quest_store += 1;
+                continue;
+            };
+
+            if quest_store.get(row.quest_id).is_none() {
+                outcome.skipped_missing_quest += 1;
+                continue;
+            }
+
+            let Ok(event_id) = u16::try_from(row.event_id) else {
+                outcome.skipped_event_out_of_range += 1;
+                continue;
+            };
+
+            let Ok(completed_time) = u64::try_from(row.completed_time) else {
+                // Bounded Rust safety divergence: C++ reads int64 then assigns
+                // to uint32, but Rust avoids turning negative DB data into a
+                // huge cooldown timestamp.
+                outcome.skipped_negative_completed_time += 1;
+                continue;
+            };
+
+            if self
+                .seasonal_quests_like_cpp
+                .entry(event_id)
+                .or_default()
+                .insert(row.quest_id, completed_time)
+                .is_some()
+            {
+                outcome.replaced += 1;
+            } else {
+                outcome.inserted += 1;
+            }
+
+            // C++ may SetQuestCompletedBit via DB2 unique bit here. Rust has no
+            // canonical active player-data bit path in this represented seam.
+            outcome.completed_bit_set_unrepresented += 1;
+        }
+
+        self.seasonal_quest_changed_like_cpp = false;
+        outcome.seasonal_quest_changed = self.seasonal_quest_changed_like_cpp;
+        outcome
     }
 
     pub(crate) fn reset_seasonal_quest_status_like_cpp(
@@ -17171,6 +17250,163 @@ mod tests {
         quest.min_level = 0;
         quest.event_id_for_quest = event_id_for_quest;
         quest
+    }
+
+    fn seasonal_quest_store_like_cpp(
+        ids: impl IntoIterator<Item = u32>,
+    ) -> wow_data::quest::QuestStore {
+        wow_data::quest::QuestStore::from_quests_like_cpp(
+            ids.into_iter()
+                .map(|id| seasonal_test_quest_template(id, -376, 9)),
+        )
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_clears_stale_state_and_resets_changed_on_empty_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.seed_seasonal_quest_status_like_cpp(9, 12_345, 100);
+        session.seasonal_quest_changed_like_cpp = true;
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp([], Some(&quest_store));
+
+        assert!(session.seasonal_quests_like_cpp.is_empty());
+        assert!(!session.seasonal_quest_changed_like_cpp);
+        assert_eq!(outcome.rows_seen, 0);
+        assert_eq!(outcome.seasonal_quest_changed, false);
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_valid_row_populates_and_blocks_can_take_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest = seasonal_test_quest_template(12_345, -376, 9);
+        let quest_store = wow_data::quest::QuestStore::from_quests_like_cpp([quest.clone()]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+        );
+
+        assert_eq!(outcome.inserted, 1);
+        assert_eq!(outcome.completed_bit_set_unrepresented, 1);
+        assert_eq!(
+            session
+                .seasonal_quests_like_cpp
+                .get(&9)
+                .and_then(|bucket| bucket.get(&12_345)),
+            Some(&100)
+        );
+        assert!(!session.can_take_quest(&quest));
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_skips_missing_quest_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([1]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 2,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+        );
+
+        assert_eq!(outcome.rows_seen, 1);
+        assert_eq!(outcome.skipped_missing_quest, 1);
+        assert!(session.seasonal_quests_like_cpp.is_empty());
+        assert!(!session.seasonal_quest_changed_like_cpp);
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_duplicate_event_quest_last_row_wins_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [
+                SeasonalQuestStatusDbRowLikeCpp {
+                    quest_id: 12_345,
+                    event_id: 9,
+                    completed_time: 100,
+                },
+                SeasonalQuestStatusDbRowLikeCpp {
+                    quest_id: 12_345,
+                    event_id: 9,
+                    completed_time: 200,
+                },
+            ],
+            Some(&quest_store),
+        );
+
+        assert_eq!(outcome.inserted, 1);
+        assert_eq!(outcome.replaced, 1);
+        assert_eq!(
+            session
+                .seasonal_quests_like_cpp
+                .get(&9)
+                .and_then(|bucket| bucket.get(&12_345)),
+            Some(&200)
+        );
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_event_out_of_range_is_skipped_not_truncated_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: u32::from(u16::MAX) + 1,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+        );
+
+        assert_eq!(outcome.skipped_event_out_of_range, 1);
+        assert!(session.seasonal_quests_like_cpp.is_empty());
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_negative_completed_time_is_skipped_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: -1,
+            }],
+            Some(&quest_store),
+        );
+
+        assert_eq!(outcome.skipped_negative_completed_time, 1);
+        assert!(session.seasonal_quests_like_cpp.is_empty());
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_without_quest_store_skips_rows_like_cpp() {
+        let (mut session, _, _) = make_session();
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            None,
+        );
+
+        assert_eq!(outcome.skipped_no_quest_store, 1);
+        assert!(session.seasonal_quests_like_cpp.is_empty());
+        assert!(!session.seasonal_quest_changed_like_cpp);
     }
 
     #[test]

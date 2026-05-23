@@ -28,7 +28,7 @@ use wow_packet::packets::quest::{
     quest_giver_status,
 };
 
-use crate::session::WorldSession;
+use crate::session::{SeasonalQuestStatusDbRowLikeCpp, WorldSession};
 
 // ── Handler registrations ────────────────────────────────────────────────────
 
@@ -1009,10 +1009,86 @@ impl WorldSession {
             }
         }
 
+        let mut seasonal_stmt = char_db.prepare(CharStatements::SEL_CHAR_QUEST_STATUS_SEASONAL);
+        seasonal_stmt.set_u32(0, guid);
+
+        let seasonal_rows = match char_db.query(&seasonal_stmt).await {
+            Ok(result) => {
+                let mut rows = Vec::new();
+                if !result.is_empty() {
+                    let mut result = result;
+                    loop {
+                        let quest_id = result.try_read::<u32>(0).unwrap_or_else(|| {
+                            warn!(
+                                account = self.account_id,
+                                "Failed to read seasonal quest id"
+                            );
+                            0
+                        });
+                        let event_id = result.try_read::<u32>(1).unwrap_or_else(|| {
+                            warn!(
+                                account = self.account_id,
+                                quest_id, "Failed to read seasonal quest event id"
+                            );
+                            u32::MAX
+                        });
+                        let completed_time = result.try_read::<i64>(2).unwrap_or_else(|| {
+                            warn!(
+                                account = self.account_id,
+                                quest_id, event_id, "Failed to read seasonal quest completedTime"
+                            );
+                            -1
+                        });
+                        rows.push(SeasonalQuestStatusDbRowLikeCpp {
+                            quest_id,
+                            event_id,
+                            completed_time,
+                        });
+
+                        if !result.next_row() {
+                            break;
+                        }
+                    }
+                }
+                rows
+            }
+            Err(e) => {
+                warn!(
+                    account = self.account_id,
+                    "Failed to load seasonal quest status: {e}"
+                );
+                Vec::new()
+            }
+        };
+
+        let quest_store = self.quest_store.as_ref().map(Arc::clone);
+        let seasonal_outcome =
+            self.load_seasonal_quest_status_like_cpp(seasonal_rows, quest_store.as_deref());
+
+        if seasonal_outcome.skipped_no_quest_store > 0
+            || seasonal_outcome.skipped_missing_quest > 0
+            || seasonal_outcome.skipped_event_out_of_range > 0
+            || seasonal_outcome.skipped_negative_completed_time > 0
+        {
+            warn!(
+                account = self.account_id,
+                rows_seen = seasonal_outcome.rows_seen,
+                skipped_no_quest_store = seasonal_outcome.skipped_no_quest_store,
+                skipped_missing_quest = seasonal_outcome.skipped_missing_quest,
+                skipped_event_out_of_range = seasonal_outcome.skipped_event_out_of_range,
+                skipped_negative_completed_time = seasonal_outcome.skipped_negative_completed_time,
+                "Skipped seasonal quest status rows during login load"
+            );
+        }
+
         info!(
             account = self.account_id,
             active = self.player_quests.len(),
             rewarded = self.rewarded_quests.len(),
+            seasonal_inserted = seasonal_outcome.inserted,
+            seasonal_replaced = seasonal_outcome.replaced,
+            seasonal_completed_bit_set_unrepresented =
+                seasonal_outcome.completed_bit_set_unrepresented,
             "Loaded player quests"
         );
     }
