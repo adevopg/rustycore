@@ -121,6 +121,7 @@ pub struct SessionResources {
     pub phase_group_store: Option<Arc<wow_data::PhaseGroupStore>>,
     pub quest_store: Option<Arc<wow_data::quest::QuestStore>>,
     pub quest_xp_store: Option<Arc<wow_data::quest_xp::QuestXpStore>>,
+    pub quest_v2_store: Option<Arc<wow_data::progression_rewards::QuestV2Store>>,
     /// XP required per level: index = level (1-based), value = xp_needed.
     pub player_xp_table: Option<Arc<Vec<u32>>>,
     /// Shared registry of all active player sessions (for broadcast).

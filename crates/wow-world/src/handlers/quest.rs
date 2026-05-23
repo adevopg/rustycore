@@ -1062,13 +1062,20 @@ impl WorldSession {
         };
 
         let quest_store = self.quest_store.as_ref().map(Arc::clone);
-        let seasonal_outcome =
-            self.load_seasonal_quest_status_like_cpp(seasonal_rows, quest_store.as_deref());
+        let quest_v2_store = self.quest_v2_store.as_ref().map(Arc::clone);
+        let seasonal_outcome = self.load_seasonal_quest_status_like_cpp(
+            seasonal_rows,
+            quest_store.as_deref(),
+            quest_v2_store.as_deref(),
+        );
 
         if seasonal_outcome.skipped_no_quest_store > 0
             || seasonal_outcome.skipped_missing_quest > 0
             || seasonal_outcome.skipped_event_out_of_range > 0
             || seasonal_outcome.skipped_negative_completed_time > 0
+            || seasonal_outcome.completed_bit_skipped_no_quest_v2_store > 0
+            || seasonal_outcome.completed_bit_skipped_zero_unique_bit > 0
+            || seasonal_outcome.completed_bit_no_change_or_noop > 0
         {
             warn!(
                 account = self.account_id,
@@ -1077,6 +1084,11 @@ impl WorldSession {
                 skipped_missing_quest = seasonal_outcome.skipped_missing_quest,
                 skipped_event_out_of_range = seasonal_outcome.skipped_event_out_of_range,
                 skipped_negative_completed_time = seasonal_outcome.skipped_negative_completed_time,
+                completed_bit_skipped_no_quest_v2_store =
+                    seasonal_outcome.completed_bit_skipped_no_quest_v2_store,
+                completed_bit_skipped_zero_unique_bit =
+                    seasonal_outcome.completed_bit_skipped_zero_unique_bit,
+                completed_bit_no_change_or_noop = seasonal_outcome.completed_bit_no_change_or_noop,
                 "Skipped seasonal quest status rows during login load"
             );
         }
@@ -1087,8 +1099,13 @@ impl WorldSession {
             rewarded = self.rewarded_quests.len(),
             seasonal_inserted = seasonal_outcome.inserted,
             seasonal_replaced = seasonal_outcome.replaced,
-            seasonal_completed_bit_set_unrepresented =
-                seasonal_outcome.completed_bit_set_unrepresented,
+            seasonal_completed_bit_set = seasonal_outcome.completed_bit_set,
+            seasonal_completed_bit_skipped_no_quest_v2_store =
+                seasonal_outcome.completed_bit_skipped_no_quest_v2_store,
+            seasonal_completed_bit_skipped_zero_unique_bit =
+                seasonal_outcome.completed_bit_skipped_zero_unique_bit,
+            seasonal_completed_bit_no_change_or_noop =
+                seasonal_outcome.completed_bit_no_change_or_noop,
             "Loaded player quests"
         );
     }

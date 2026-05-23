@@ -1273,6 +1273,10 @@ async fn main() -> Result<()> {
             wow_data::quest_xp::QuestXpStore::default()
         }),
     );
+    let quest_v2_store = Arc::new(
+        wow_data::progression_rewards::QuestV2Store::load(&data_dir, &locale)
+            .context("Failed to load QuestV2.db2 — check DataDir and DBC.Locale config")?,
+    );
 
     // Get realm ID and load build-specific auth seed
     let realm_id: u16 = wow_config::get_value("RealmID").unwrap_or(1);
@@ -1727,6 +1731,7 @@ async fn main() -> Result<()> {
         phase_group_store: Some(Arc::clone(&phase_group_store)),
         quest_store: Some(Arc::clone(&quest_store)),
         quest_xp_store: Some(Arc::clone(&quest_xp_store)),
+        quest_v2_store: Some(Arc::clone(&quest_v2_store)),
         player_xp_table: Some(Arc::clone(&player_xp_table)),
         player_registry: Some(Arc::clone(&player_registry)),
         group_registry: Some(Arc::clone(&group_registry)),
@@ -6156,6 +6161,9 @@ async fn create_session(
     }
     if let Some(ref store) = resources.quest_xp_store {
         session.set_quest_xp_store(Arc::clone(store));
+    }
+    if let Some(ref store) = resources.quest_v2_store {
+        session.set_quest_v2_store(Arc::clone(store));
     }
     if let Some(ref table) = resources.player_xp_table {
         session.set_player_xp_table(Arc::clone(table));

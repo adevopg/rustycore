@@ -6,7 +6,7 @@
 //! `WorldSession` — per-player session that receives packets from the
 //! [`WorldSocket`](wow_network::WorldSocket) and dispatches them to handlers.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -53,7 +53,7 @@ use wow_data::{
     SpellRangeStore, SpellStore, SummonPropertiesEntry, VEHICLE_SEAT_FLAG_CAN_ATTACK,
     VehicleAccessoryStoreLikeCpp, VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
     is_player_meeting_condition_like_cpp,
-    progression_rewards::{ContentTuningStore, FactionStore, FactionTemplateStore},
+    progression_rewards::{ContentTuningStore, FactionStore, FactionTemplateStore, QuestV2Store},
     spell_duration_ms_like_cpp, spell_effect_radius_like_cpp,
 };
 use wow_database::{
@@ -68,10 +68,11 @@ use wow_entities::{
     INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo, ItemPosCount,
     ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_ITEM_SPELLS, NULL_BAG, NULL_SLOT,
     ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
-    PlayerInventoryStorage, PlayerItemTimeUpdate, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START,
-    SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan, UNIT_DATA_HEALTH_BIT,
-    UnitDataUpdate, UnitDataValues, UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues,
-    WorldObject, is_bag_pos, is_equipment_packed_pos, make_item_pos,
+    PlayerInventoryStorage, PlayerItemTimeUpdate, QUESTS_COMPLETED_BITS_PER_BLOCK,
+    QUESTS_COMPLETED_BITS_SIZE, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, SendNewItemDelivery,
+    SendNewItemDisplayText, SendNewItemPlan, UNIT_DATA_HEALTH_BIT, UnitDataUpdate, UnitDataValues,
+    UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues, WorldObject, is_bag_pos,
+    is_equipment_packed_pos, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::{LootStoreKind, LootStores};
@@ -138,7 +139,10 @@ pub(crate) struct LoadSeasonalQuestStatusOutcomeLikeCpp {
     pub skipped_missing_quest: usize,
     pub skipped_event_out_of_range: usize,
     pub skipped_negative_completed_time: usize,
-    pub completed_bit_set_unrepresented: usize,
+    pub completed_bit_set: usize,
+    pub completed_bit_skipped_no_quest_v2_store: usize,
+    pub completed_bit_skipped_zero_unique_bit: usize,
+    pub completed_bit_no_change_or_noop: usize,
     pub seasonal_quest_changed: bool,
 }
 
@@ -1792,6 +1796,7 @@ pub struct WorldSession {
     /// Quest template store (loaded from world DB at startup).
     pub(crate) quest_store: Option<Arc<wow_data::quest::QuestStore>>,
     pub(crate) quest_xp_store: Option<Arc<wow_data::quest_xp::QuestXpStore>>,
+    pub(crate) quest_v2_store: Option<Arc<QuestV2Store>>,
     pub(crate) player_xp_table: Option<Arc<Vec<u32>>>,
     /// Active quests for this player: quest_id → status.
     pub(crate) player_quests: HashMap<u32, crate::handlers::quest::PlayerQuestStatus>,
@@ -1802,6 +1807,8 @@ pub struct WorldSession {
     pub(crate) seasonal_quests_like_cpp: BTreeMap<u16, BTreeMap<u32, u64>>,
     /// C++ `Player::m_SeasonalQuestChanged` represented flag.
     pub(crate) seasonal_quest_changed_like_cpp: bool,
+    /// Bridge for quest completed unique-bit state loaded before the canonical Player snapshot exists.
+    pub(crate) represented_quest_completed_bits_like_cpp: BTreeSet<u32>,
 
     // ── Loot ──────────────────────────────────────────────────────
     /// Active loot windows keyed by creature GUID.
@@ -2474,10 +2481,12 @@ impl WorldSession {
             spell_range_store: None,
             quest_store: None,
             quest_xp_store: None,
+            quest_v2_store: None,
             player_quests: HashMap::new(),
             rewarded_quests: std::collections::HashSet::new(),
             seasonal_quests_like_cpp: BTreeMap::new(),
             seasonal_quest_changed_like_cpp: false,
+            represented_quest_completed_bits_like_cpp: BTreeSet::new(),
             active_spell_cast: None,
             last_spell_cast_time: None,
             last_spell_cast_time_per_spell: HashMap::new(),
@@ -2565,6 +2574,9 @@ impl WorldSession {
         player.set_xp(self.player_xp_like_cpp() as i32);
         player.set_next_level_xp(self.player_next_level_xp_like_cpp() as i32);
         player.set_money(self.player_gold_like_cpp());
+        for quest_bit in &self.represented_quest_completed_bits_like_cpp {
+            player.set_quest_completed_bit_like_cpp(*quest_bit, true);
+        }
         player
             .unit_mut()
             .set_base_attack_time_like_cpp(WeaponAttackType::BaseAttack, 2_000);
@@ -6596,6 +6608,11 @@ impl WorldSession {
         self.quest_store = Some(store);
     }
 
+    /// Set the QuestV2 store shared reference used for C++ quest unique-bit lookups.
+    pub fn set_quest_v2_store(&mut self, store: Arc<QuestV2Store>) {
+        self.quest_v2_store = Some(store);
+    }
+
     /// Save current player gold to the characters DB.
     pub(crate) async fn save_player_gold(&self) {
         use wow_database::CharStatements;
@@ -6872,6 +6889,27 @@ impl WorldSession {
     /// Set the QuestXP store (loaded from QuestXP.db2).
     pub fn set_quest_xp_store(&mut self, store: Arc<wow_data::quest_xp::QuestXpStore>) {
         self.quest_xp_store = Some(store);
+    }
+
+    fn set_loaded_quest_completed_bit_like_cpp(&mut self, quest_bit: u32) -> bool {
+        if quest_bit == 0 {
+            return false;
+        }
+
+        let field_offset = (quest_bit - 1) / QUESTS_COMPLETED_BITS_PER_BLOCK;
+        if field_offset as usize >= QUESTS_COMPLETED_BITS_SIZE {
+            return false;
+        }
+
+        let canonical_changed = self
+            .mutate_canonical_player_like_cpp(|player| {
+                player.set_quest_completed_bit_like_cpp(quest_bit, true)
+            })
+            .unwrap_or(false);
+        let bridge_changed = self
+            .represented_quest_completed_bits_like_cpp
+            .insert(quest_bit);
+        canonical_changed || bridge_changed
     }
 
     /// Set the player XP table (xp required per level).
@@ -7305,6 +7343,7 @@ impl WorldSession {
         &mut self,
         rows: impl IntoIterator<Item = SeasonalQuestStatusDbRowLikeCpp>,
         quest_store: Option<&wow_data::quest::QuestStore>,
+        quest_v2_store: Option<&QuestV2Store>,
     ) -> LoadSeasonalQuestStatusOutcomeLikeCpp {
         // C++ Player::_LoadSeasonalQuestStatus clears first and always resets
         // m_SeasonalQuestChanged at the end. Rust deliberately skips rows when
@@ -7350,9 +7389,22 @@ impl WorldSession {
                 outcome.inserted += 1;
             }
 
-            // C++ may SetQuestCompletedBit via DB2 unique bit here. Rust has no
-            // canonical active player-data bit path in this represented seam.
-            outcome.completed_bit_set_unrepresented += 1;
+            let Some(quest_v2_store) = quest_v2_store else {
+                outcome.completed_bit_skipped_no_quest_v2_store += 1;
+                continue;
+            };
+
+            let quest_bit = quest_v2_store.get_quest_unique_bit_flag_like_cpp(row.quest_id);
+            if quest_bit == 0 {
+                outcome.completed_bit_skipped_zero_unique_bit += 1;
+                continue;
+            }
+
+            if self.set_loaded_quest_completed_bit_like_cpp(quest_bit) {
+                outcome.completed_bit_set += 1;
+            } else {
+                outcome.completed_bit_no_change_or_noop += 1;
+            }
         }
 
         self.seasonal_quest_changed_like_cpp = false;
@@ -17261,6 +17313,17 @@ mod tests {
         )
     }
 
+    fn seasonal_quest_v2_store_like_cpp(
+        entries: impl IntoIterator<Item = (u32, u16)>,
+    ) -> QuestV2Store {
+        QuestV2Store::from_entries(entries.into_iter().map(|(id, unique_bit_flag)| {
+            wow_data::progression_rewards::QuestV2Entry {
+                id,
+                unique_bit_flag,
+            }
+        }))
+    }
+
     #[test]
     fn load_seasonal_quest_status_clears_stale_state_and_resets_changed_on_empty_like_cpp() {
         let (mut session, _, _) = make_session();
@@ -17268,7 +17331,7 @@ mod tests {
         session.seasonal_quest_changed_like_cpp = true;
         let quest_store = seasonal_quest_store_like_cpp([12_345]);
 
-        let outcome = session.load_seasonal_quest_status_like_cpp([], Some(&quest_store));
+        let outcome = session.load_seasonal_quest_status_like_cpp([], Some(&quest_store), None);
 
         assert!(session.seasonal_quests_like_cpp.is_empty());
         assert!(!session.seasonal_quest_changed_like_cpp);
@@ -17281,6 +17344,7 @@ mod tests {
         let (mut session, _, _) = make_session();
         let quest = seasonal_test_quest_template(12_345, -376, 9);
         let quest_store = wow_data::quest::QuestStore::from_quests_like_cpp([quest.clone()]);
+        let quest_v2_store = seasonal_quest_v2_store_like_cpp([(12_345, 65)]);
 
         let outcome = session.load_seasonal_quest_status_like_cpp(
             [SeasonalQuestStatusDbRowLikeCpp {
@@ -17289,10 +17353,15 @@ mod tests {
                 completed_time: 100,
             }],
             Some(&quest_store),
+            Some(&quest_v2_store),
         );
 
         assert_eq!(outcome.inserted, 1);
-        assert_eq!(outcome.completed_bit_set_unrepresented, 1);
+        assert_eq!(outcome.completed_bit_set, 1);
+        assert_eq!(
+            session.represented_quest_completed_bits_like_cpp,
+            BTreeSet::from([65])
+        );
         assert_eq!(
             session
                 .seasonal_quests_like_cpp
@@ -17301,6 +17370,100 @@ mod tests {
             Some(&100)
         );
         assert!(!session.can_take_quest(&quest));
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_missing_quest_v2_store_inserts_but_skips_bit_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+            None,
+        );
+
+        assert_eq!(outcome.inserted, 1);
+        assert_eq!(outcome.completed_bit_skipped_no_quest_v2_store, 1);
+        assert!(session.represented_quest_completed_bits_like_cpp.is_empty());
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_zero_unique_bit_inserts_but_skips_bit_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+        let quest_v2_store = seasonal_quest_v2_store_like_cpp([(12_345, 0)]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+            Some(&quest_v2_store),
+        );
+
+        assert_eq!(outcome.inserted, 1);
+        assert_eq!(outcome.completed_bit_skipped_zero_unique_bit, 1);
+        assert!(session.represented_quest_completed_bits_like_cpp.is_empty());
+    }
+
+    #[test]
+    fn load_seasonal_quest_status_repeated_bit_counts_no_change_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+        let quest_v2_store = seasonal_quest_v2_store_like_cpp([(12_345, 65)]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [
+                SeasonalQuestStatusDbRowLikeCpp {
+                    quest_id: 12_345,
+                    event_id: 9,
+                    completed_time: 100,
+                },
+                SeasonalQuestStatusDbRowLikeCpp {
+                    quest_id: 12_345,
+                    event_id: 9,
+                    completed_time: 200,
+                },
+            ],
+            Some(&quest_store),
+            Some(&quest_v2_store),
+        );
+
+        assert_eq!(outcome.completed_bit_set, 1);
+        assert_eq!(outcome.completed_bit_no_change_or_noop, 1);
+    }
+
+    #[test]
+    fn canonical_player_entity_snapshot_preserves_loaded_seasonal_unique_bit_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 12_345)));
+        session.set_loaded_player_name_like_cpp("SeasonalBit".to_string());
+        session.player_position = Some(Position::new(1.0, 2.0, 3.0, 0.0));
+        let quest_store = seasonal_quest_store_like_cpp([12_345]);
+        let quest_v2_store = seasonal_quest_v2_store_like_cpp([(12_345, 65)]);
+
+        let outcome = session.load_seasonal_quest_status_like_cpp(
+            [SeasonalQuestStatusDbRowLikeCpp {
+                quest_id: 12_345,
+                event_id: 9,
+                completed_time: 100,
+            }],
+            Some(&quest_store),
+            Some(&quest_v2_store),
+        );
+
+        assert_eq!(outcome.completed_bit_set, 1);
+        let player = session
+            .canonical_player_entity_snapshot_like_cpp()
+            .expect("canonical player snapshot");
+        assert_eq!(player.quest_completed_block_like_cpp(1), Some(1));
     }
 
     #[test]
@@ -17315,6 +17478,7 @@ mod tests {
                 completed_time: 100,
             }],
             Some(&quest_store),
+            Some(&seasonal_quest_v2_store_like_cpp([(2, 65)])),
         );
 
         assert_eq!(outcome.rows_seen, 1);
@@ -17342,6 +17506,7 @@ mod tests {
                 },
             ],
             Some(&quest_store),
+            Some(&seasonal_quest_v2_store_like_cpp([(12_345, 65)])),
         );
 
         assert_eq!(outcome.inserted, 1);
@@ -17367,6 +17532,7 @@ mod tests {
                 completed_time: 100,
             }],
             Some(&quest_store),
+            Some(&seasonal_quest_v2_store_like_cpp([(12_345, 65)])),
         );
 
         assert_eq!(outcome.skipped_event_out_of_range, 1);
@@ -17385,6 +17551,7 @@ mod tests {
                 completed_time: -1,
             }],
             Some(&quest_store),
+            Some(&seasonal_quest_v2_store_like_cpp([(12_345, 65)])),
         );
 
         assert_eq!(outcome.skipped_negative_completed_time, 1);
@@ -17402,6 +17569,7 @@ mod tests {
                 completed_time: 100,
             }],
             None,
+            Some(&seasonal_quest_v2_store_like_cpp([(12_345, 65)])),
         );
 
         assert_eq!(outcome.skipped_no_quest_store, 1);
