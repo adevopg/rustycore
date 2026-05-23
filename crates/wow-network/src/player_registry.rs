@@ -107,6 +107,8 @@ pub struct PlayerBroadcastInfo {
     pub map_id: u16,
     /// Server-side world position (updated on every movement packet).
     pub position: Position,
+    /// Represented C++ `Player::IsInWorld()` receiver gate for global-message fanout.
+    pub is_in_world: bool,
     /// Channel used to push serialised packets to this player's socket.
     pub send_tx: flume::Sender<Vec<u8>>,
     /// Channel used for C++-style cross-session state mutations.

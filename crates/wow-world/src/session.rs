@@ -7083,6 +7083,32 @@ impl WorldSession {
         self.pending_invites.as_ref()
     }
 
+    fn player_is_in_world_for_registry_like_cpp(&self) -> bool {
+        let Some(guid) = self.player_guid() else {
+            return false;
+        };
+
+        if let Some(manager) = &self.canonical_map_manager
+            && let Ok(manager) = manager.lock()
+        {
+            let mut canonical_in_world = None;
+            manager.do_for_all_maps(|managed| {
+                if canonical_in_world.is_none()
+                    && let Some(player) = managed.map().get_typed_player(guid)
+                {
+                    canonical_in_world = Some(player.unit().world().object().is_in_world());
+                }
+            });
+            if let Some(is_in_world) = canonical_in_world {
+                return is_in_world;
+            }
+        }
+
+        // Registry insertion happens only after successful character login; logout/disconnect
+        // unregisters instead of leaving a false/stale row behind.
+        true
+    }
+
     /// Register this session in the player registry.
     /// Called after player login is complete (player_guid + position both set).
     pub(crate) fn register_in_player_registry(&self) {
@@ -7111,6 +7137,7 @@ impl WorldSession {
             PlayerBroadcastInfo {
                 map_id,
                 position: pos,
+                is_in_world: self.player_is_in_world_for_registry_like_cpp(),
                 send_tx: self.send_tx.clone(),
                 command_tx: self.session_command_tx.clone(),
                 active_loot_rolls: self
@@ -7158,6 +7185,7 @@ impl WorldSession {
             return;
         };
         if let Some(mut info) = registry.get_mut(&guid) {
+            info.is_in_world = self.player_is_in_world_for_registry_like_cpp();
             info.active_loot_rolls = self
                 .represented_loot_rolls
                 .keys()
@@ -24909,6 +24937,7 @@ mod tests {
         PlayerBroadcastInfo {
             map_id: 0,
             position: Position::new(0.0, 0.0, 0.0, 0.0),
+            is_in_world: true,
             send_tx,
             command_tx,
             active_loot_rolls: Vec::new(),

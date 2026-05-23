@@ -1185,6 +1185,7 @@ mod tests {
         wow_network::PlayerBroadcastInfo {
             map_id: 0,
             position: wow_core::Position::ZERO,
+            is_in_world: true,
             send_tx,
             command_tx,
             active_loot_rolls: Vec::new(),

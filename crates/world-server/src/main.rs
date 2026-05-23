@@ -1639,6 +1639,8 @@ async fn main() -> Result<()> {
                 side_effect_summary.announce_event_localization_unrepresented,
             announce_event_in_world_filter_unrepresented =
                 side_effect_summary.announce_event_in_world_filter_unrepresented,
+            announce_event_not_in_world_skipped =
+                side_effect_summary.announce_event_not_in_world_skipped,
             announce_event_world_text_unimplemented =
                 side_effect_summary.announce_event_world_text_unimplemented,
             announce_event_session_fanout_unimplemented =
@@ -3780,6 +3782,7 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     announce_event_send_failed: usize,
     announce_event_localization_unrepresented: usize,
     announce_event_in_world_filter_unrepresented: usize,
+    announce_event_not_in_world_skipped: usize,
     announce_event_world_text_unimplemented: usize,
     announce_event_session_fanout_unimplemented: usize,
     change_equip_or_model_actions: usize,
@@ -3845,6 +3848,7 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     update_world_states_global_message_send_attempted: usize,
     update_world_states_global_message_send_queued: usize,
     update_world_states_global_message_send_failed: usize,
+    update_world_states_global_message_not_in_world_skipped: usize,
     update_world_states_last_world_state_id: Option<i16>,
     update_world_states_last_world_state_value: Option<i32>,
     update_npc_flags_actions: usize,
@@ -3907,11 +3911,6 @@ fn fanout_game_event_announcement_to_player_sessions_like_cpp(
         return;
     };
 
-    // PlayerBroadcastInfo currently represents active registered sessions but
-    // does not expose C++ Player::IsInWorld(). Keep the fanout bounded to the
-    // registry's active-session scope and count the exact IsInWorld filter gap.
-    summary.announce_event_in_world_filter_unrepresented += 1;
-
     let packet_bytes: Vec<Vec<u8>> = lines
         .into_iter()
         .map(|text| {
@@ -3931,6 +3930,11 @@ fn fanout_game_event_announcement_to_player_sessions_like_cpp(
         .collect();
 
     for session in player_registry.iter() {
+        if !session.is_in_world {
+            summary.announce_event_not_in_world_skipped += 1;
+            continue;
+        }
+
         for bytes in &packet_bytes {
             summary.announce_event_send_attempted += 1;
             match session.send_tx.try_send(bytes.clone()) {
@@ -4275,6 +4279,11 @@ fn fanout_realm_update_world_state_to_player_sessions_like_cpp(
     let bytes = packet.to_bytes();
 
     for session in player_registry.iter() {
+        if !session.is_in_world {
+            summary.update_world_states_global_message_not_in_world_skipped += 1;
+            continue;
+        }
+
         summary.update_world_states_global_message_send_attempted += 1;
         match session.send_tx.try_send(bytes.clone()) {
             Ok(()) => summary.update_world_states_global_message_send_queued += 1,
@@ -4632,6 +4641,8 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     world_state_summary.update_world_states_global_message_send_queued;
                 summary.update_world_states_global_message_send_failed +=
                     world_state_summary.update_world_states_global_message_send_failed;
+                summary.update_world_states_global_message_not_in_world_skipped +=
+                    world_state_summary.update_world_states_global_message_not_in_world_skipped;
                 summary.update_world_states_last_world_state_id =
                     world_state_summary.update_world_states_last_world_state_id;
                 summary.update_world_states_last_world_state_value =
@@ -6796,6 +6807,7 @@ mod tests {
         PlayerBroadcastInfo {
             map_id: 0,
             position: wow_core::Position::ZERO,
+            is_in_world: true,
             send_tx,
             command_tx,
             active_loot_rolls: Vec::new(),
@@ -6818,19 +6830,30 @@ mod tests {
         }
     }
 
+    fn insert_player_broadcast_fixture_with_in_world_like_cpp(
+        registry: &PlayerRegistry,
+        counter: u64,
+        send_tx: flume::Sender<Vec<u8>>,
+        command_tx: flume::Sender<SessionCommand>,
+        is_in_world: bool,
+    ) {
+        let mut info = player_broadcast_info_fixture_like_cpp(
+            send_tx,
+            command_tx,
+            &format!("Player{counter}"),
+        );
+        info.is_in_world = is_in_world;
+        registry.insert(ObjectGuid::create_player(1, counter as i64), info);
+    }
+
     fn insert_player_broadcast_fixture_like_cpp(
         registry: &PlayerRegistry,
         counter: u64,
         send_tx: flume::Sender<Vec<u8>>,
         command_tx: flume::Sender<SessionCommand>,
     ) {
-        registry.insert(
-            ObjectGuid::create_player(1, counter as i64),
-            player_broadcast_info_fixture_like_cpp(
-                send_tx,
-                command_tx,
-                &format!("Player{counter}"),
-            ),
+        insert_player_broadcast_fixture_with_in_world_like_cpp(
+            registry, counter, send_tx, command_tx, true,
         );
     }
 
@@ -10573,6 +10596,57 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
+    fn game_event_world_state_global_fanout_skips_not_in_world_player_like_cpp() {
+        let registry = PlayerRegistry::default();
+        let (in_world_tx, in_world_rx) = flume::bounded(1);
+        let (in_world_command_tx, _in_world_command_rx) = flume::bounded(1);
+        let (not_in_world_tx, not_in_world_rx) = flume::bounded(1);
+        let (not_in_world_command_tx, _not_in_world_command_rx) = flume::bounded(1);
+        insert_player_broadcast_fixture_with_in_world_like_cpp(
+            &registry,
+            7901,
+            in_world_tx,
+            in_world_command_tx,
+            true,
+        );
+        insert_player_broadcast_fixture_with_in_world_like_cpp(
+            &registry,
+            7902,
+            not_in_world_tx,
+            not_in_world_command_tx,
+            false,
+        );
+        let mut summary = GameEventLiveUpdateSideEffectSummaryLikeCpp::default();
+
+        fanout_realm_update_world_state_to_player_sessions_like_cpp(
+            Some(&registry),
+            782,
+            1,
+            false,
+            &mut summary,
+        );
+
+        let expected = wow_packet::packets::misc::UpdateWorldState {
+            variable_id: 782,
+            value: 1,
+            hidden: false,
+        }
+        .to_bytes();
+        assert_eq!(summary.update_world_states_global_message_send_attempted, 1);
+        assert_eq!(summary.update_world_states_global_message_send_queued, 1);
+        assert_eq!(summary.update_world_states_global_message_send_failed, 0);
+        assert_eq!(
+            summary.update_world_states_global_message_not_in_world_skipped,
+            1
+        );
+        assert_eq!(
+            in_world_rx.try_recv().expect("in-world player update"),
+            expected
+        );
+        assert!(not_in_world_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn game_event_world_state_global_fanout_preserves_signed_value_and_wrapped_variable_like_cpp() {
         let registry = PlayerRegistry::default();
         let (send_tx, send_rx) = flume::bounded(1);
@@ -10939,7 +11013,8 @@ mmap.enablePathFinding = 0
         );
         assert_eq!(summary.announce_event_world_text_represented, 1);
         assert_eq!(summary.announce_event_localization_unrepresented, 1);
-        assert_eq!(summary.announce_event_in_world_filter_unrepresented, 1);
+        assert_eq!(summary.announce_event_in_world_filter_unrepresented, 0);
+        assert_eq!(summary.announce_event_not_in_world_skipped, 0);
         assert_eq!(summary.announce_event_lines, 1);
         assert_eq!(summary.announce_event_send_attempted, 2);
         assert_eq!(summary.announce_event_send_queued, 2);
@@ -10970,6 +11045,62 @@ mmap.enablePathFinding = 0
         assert!(send_rx_a.try_recv().is_err());
         assert!(send_rx_b.try_recv().is_err());
         assert_eq!(summary.spawn_actions, 1);
+    }
+
+    #[test]
+    fn game_event_announce_fanout_skips_not_in_world_player_like_cpp() {
+        let registry = PlayerRegistry::default();
+        let (in_world_tx, in_world_rx) = flume::bounded(1);
+        let (in_world_command_tx, _in_world_command_rx) = flume::bounded(1);
+        let (not_in_world_tx, not_in_world_rx) = flume::bounded(1);
+        let (not_in_world_command_tx, _not_in_world_command_rx) = flume::bounded(1);
+        insert_player_broadcast_fixture_with_in_world_like_cpp(
+            &registry,
+            7903,
+            in_world_tx,
+            in_world_command_tx,
+            true,
+        );
+        insert_player_broadcast_fixture_with_in_world_like_cpp(
+            &registry,
+            7904,
+            not_in_world_tx,
+            not_in_world_command_tx,
+            false,
+        );
+        let mut summary = GameEventLiveUpdateSideEffectSummaryLikeCpp::default();
+
+        fanout_game_event_announcement_to_player_sessions_like_cpp(
+            Some(&registry),
+            "Darkmoon Faire",
+            &mut summary,
+        );
+
+        let expected = ChatPkt {
+            msg_type: ChatMsg::System,
+            language: 0,
+            sender_guid: ObjectGuid::EMPTY,
+            sender_name: String::new(),
+            target_guid: ObjectGuid::EMPTY,
+            target_name: String::new(),
+            channel: String::new(),
+            text: "|cffff0000[Event Message]: Darkmoon Faire|r".to_string(),
+            virtual_realm: 0,
+        }
+        .to_bytes();
+        assert_eq!(summary.announce_event_world_text_represented, 1);
+        assert_eq!(summary.announce_event_localization_unrepresented, 1);
+        assert_eq!(summary.announce_event_in_world_filter_unrepresented, 0);
+        assert_eq!(summary.announce_event_not_in_world_skipped, 1);
+        assert_eq!(summary.announce_event_lines, 1);
+        assert_eq!(summary.announce_event_send_attempted, 1);
+        assert_eq!(summary.announce_event_send_queued, 1);
+        assert_eq!(summary.announce_event_send_failed, 0);
+        assert_eq!(
+            in_world_rx.try_recv().expect("in-world player chat"),
+            expected
+        );
+        assert!(not_in_world_rx.try_recv().is_err());
     }
 
     #[test]
@@ -11358,6 +11489,7 @@ mmap.enablePathFinding = 0
             PlayerBroadcastInfo {
                 map_id: 0,
                 position: wow_core::Position::ZERO,
+                is_in_world: true,
                 send_tx,
                 command_tx,
                 active_loot_rolls: Vec::new(),

@@ -559,6 +559,7 @@ mod tests {
         PlayerBroadcastInfo {
             map_id: 0,
             position: Position::ZERO,
+            is_in_world: true,
             send_tx,
             command_tx,
             active_loot_rolls: Vec::new(),
