@@ -1524,7 +1524,7 @@ Remaining gaps: live `UpdateEventNPCFlags` map mutation, `CreatureTemplate::npcf
 
 ## #NEXT.R8.ENTITIES.563 — GameEventMgr ResetEventSeasonalQuests character DB delete bridge
 
-Status: represented-complete only for the bounded `World::ResetEventSeasonalQuests` character DB delete bridge; local developer validation complete; review/CI pending. No push/install/restart and not manual-test-ready.
+Status: represented-complete only for the bounded `World::ResetEventSeasonalQuests` character DB delete bridge; independent review `APROBADO`; CI `CI_OK`; committed locally before this docs-only handoff refresh; no push/install/restart and not manual-test-ready.
 
 C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:3747-3758` (`World::ResetEventSeasonalQuests` logs, prepares `CHAR_DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT`, binds `event_id` UInt16 and `eventStartTime` Int64, executes on CharacterDatabase, then iterates live sessions); `/home/server/woltk-trinity-legacy/src/server/database/Database/Implementation/CharacterDatabase.cpp:128-129` (exact SQL `DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?`); `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:24166-24189` (live `Player::ResetSeasonalQuestStatus` remains separate session/runtime work).
 
