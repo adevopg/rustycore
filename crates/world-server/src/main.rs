@@ -942,6 +942,10 @@ async fn main() -> Result<()> {
         wow_data::Db2IdStore::load(&data_dir, &locale, "BattlemasterList.db2")
             .context("Failed to load BattlemasterList.db2 — check DataDir and DBC.Locale config")?,
     );
+    let battlemaster_list_typed_store = Arc::new(
+        wow_data::BattlemasterListStore::load(&data_dir, &locale)
+            .context("Failed to load typed BattlemasterList.db2 HolidayWorldState store")?,
+    );
     let char_titles_store = Arc::new(
         wow_data::Db2IdStore::load(&data_dir, &locale, "CharTitles.db2")
             .context("Failed to load CharTitles.db2 — check DataDir and DBC.Locale config")?,
@@ -991,11 +995,12 @@ async fn main() -> Result<()> {
         .context("Failed to load conversation_line_template ids for C++ ConditionMgr validation")?,
     );
     info!(
-        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} criteria, {} battlemaster lists, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} world state expressions, {} conversation lines",
+        "Loaded condition validation DB2 id stores: {} factions, {} achievements, {} criteria, {} battlemaster lists, {} typed battlemaster holiday-world-state rows, {} titles, {} battle pet species, {} scenario steps, {} scene script packages, {} player conditions, {} world state expressions, {} conversation lines",
         faction_store.len(),
         achievement_store.len(),
         criteria_store.len(),
         battlemaster_list_store.len(),
+        battlemaster_list_typed_store.len(),
         char_titles_store.len(),
         battle_pet_species_store.len(),
         scenario_step_store.len(),
@@ -1538,6 +1543,7 @@ async fn main() -> Result<()> {
                 &mut manager,
                 &mut canonical_spawn_metadata,
                 &loaded_grid_creature_respawn_caches,
+                Some(battlemaster_list_typed_store.as_ref()),
                 &active_event_ids,
                 &game_event_outcome,
                 false,
@@ -1625,8 +1631,21 @@ async fn main() -> Result<()> {
             update_world_states_no_holiday = side_effect_summary.update_world_states_no_holiday,
             update_world_states_missing_event =
                 side_effect_summary.update_world_states_missing_event,
+            update_world_states_store_missing = side_effect_summary.update_world_states_store_missing,
+            update_world_states_holiday_not_weekend_battleground =
+                side_effect_summary.update_world_states_holiday_not_weekend_battleground,
+            update_world_states_battlemaster_list_missing =
+                side_effect_summary.update_world_states_battlemaster_list_missing,
+            update_world_states_holiday_world_state_zero =
+                side_effect_summary.update_world_states_holiday_world_state_zero,
             update_world_states_holiday_lookup_unrepresented =
                 side_effect_summary.update_world_states_holiday_lookup_unrepresented,
+            update_world_states_set_value_represented =
+                side_effect_summary.update_world_states_set_value_represented,
+            update_world_states_last_world_state_id =
+                side_effect_summary.update_world_states_last_world_state_id,
+            update_world_states_last_world_state_value =
+                side_effect_summary.update_world_states_last_world_state_value,
             update_npc_flags_actions = side_effect_summary.update_npc_flags_actions,
             update_npc_flags_records_seen = side_effect_summary.update_npc_flags_records_seen,
             update_npc_flags_maps_matched = side_effect_summary.update_npc_flags_maps_matched,
@@ -1660,7 +1679,7 @@ async fn main() -> Result<()> {
                 .reset_event_seasonal_quests_character_db_delete_failed,
             reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range = side_effect_summary
                 .reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range,
-            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; real SendWorldText/session fanout, full ConditionMgr world-event runtime, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
+            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, represented UpdateWorldStates HolidayWorldState -> WorldStateMgr::SetValue evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; real SendWorldText/session fanout, full ConditionMgr world-event runtime, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr storage/session fanout/login/GM worldstate, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
         );
         CanonicalGameEventSchedulerLikeCpp::start_system(
             game_event_outcome.next_update_delay_millis,
@@ -1863,6 +1882,7 @@ async fn main() -> Result<()> {
         loaded_grid_creature_respawn_caches.clone(),
         game_event_scheduler,
         Arc::clone(&player_registry),
+        Arc::clone(&battlemaster_list_typed_store),
     );
 
     set_realm_online(&login_db, realm_id).await?;
@@ -3756,7 +3776,14 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     update_world_states_actions: usize,
     update_world_states_no_holiday: usize,
     update_world_states_missing_event: usize,
+    update_world_states_store_missing: usize,
+    update_world_states_holiday_not_weekend_battleground: usize,
+    update_world_states_battlemaster_list_missing: usize,
+    update_world_states_holiday_world_state_zero: usize,
     update_world_states_holiday_lookup_unrepresented: usize,
+    update_world_states_set_value_represented: usize,
+    update_world_states_last_world_state_id: Option<i16>,
+    update_world_states_last_world_state_value: Option<i32>,
     update_npc_flags_actions: usize,
     update_npc_flags_records_seen: usize,
     update_npc_flags_missing_event_buckets: usize,
@@ -4117,6 +4144,7 @@ fn game_event_update_npc_vendor_like_cpp(
 
 fn game_event_update_world_states_like_cpp(
     canonical_spawn_metadata: &spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
+    battlemaster_list_store: Option<&wow_data::BattlemasterListStore>,
     event_id: u16,
     activate: bool,
 ) -> GameEventLiveUpdateSideEffectSummaryLikeCpp {
@@ -4131,8 +4159,37 @@ fn game_event_update_world_states_like_cpp(
         return summary;
     }
 
-    let _represented_activate_value = usize::from(activate);
-    summary.update_world_states_holiday_lookup_unrepresented = 1;
+    let Some(battlemaster_list_store) = battlemaster_list_store else {
+        summary.update_world_states_store_missing = 1;
+        summary.update_world_states_holiday_lookup_unrepresented = 1;
+        return summary;
+    };
+
+    match battlemaster_list_store.holiday_world_state_for_weekend_holiday_like_cpp(event.holiday_id)
+    {
+        wow_data::HolidayWorldStateLookupLikeCpp::HolidayNone => {
+            summary.update_world_states_no_holiday = 1;
+        }
+        wow_data::HolidayWorldStateLookupLikeCpp::HolidayNotWeekendBattleground { .. } => {
+            summary.update_world_states_holiday_not_weekend_battleground = 1;
+            summary.update_world_states_holiday_lookup_unrepresented = 1;
+        }
+        wow_data::HolidayWorldStateLookupLikeCpp::BattlemasterListMissing { .. } => {
+            summary.update_world_states_battlemaster_list_missing = 1;
+            summary.update_world_states_holiday_lookup_unrepresented = 1;
+        }
+        wow_data::HolidayWorldStateLookupLikeCpp::HolidayWorldStateZero { .. } => {
+            summary.update_world_states_holiday_world_state_zero = 1;
+        }
+        wow_data::HolidayWorldStateLookupLikeCpp::SetValueRepresented {
+            world_state_id, ..
+        } => {
+            summary.update_world_states_set_value_represented = 1;
+            summary.update_world_states_last_world_state_id = Some(world_state_id);
+            summary.update_world_states_last_world_state_value = Some(if activate { 1 } else { 0 });
+        }
+    }
+
     summary
 }
 
@@ -4192,6 +4249,7 @@ fn consume_game_event_live_update_side_effects_like_cpp(
     manager: &mut wow_map::MapManager,
     canonical_spawn_metadata: &mut spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
     loaded_grid_creature_respawn_caches: &LoadedGridCreatureRespawnCachesLikeCpp,
+    battlemaster_list_store: Option<&wow_data::BattlemasterListStore>,
     active_event_ids: &[u16],
     outcome: &spawn_store_loader::GameEventUpdateOutcomeLikeCpp,
     config_event_announce: bool,
@@ -4329,6 +4387,7 @@ fn consume_game_event_live_update_side_effects_like_cpp(
             GameEventLiveUpdateActionLikeCpp::UpdateWorldStates { event_id, activate } => {
                 let world_state_summary = game_event_update_world_states_like_cpp(
                     canonical_spawn_metadata,
+                    battlemaster_list_store,
                     event_id,
                     activate,
                 );
@@ -5603,6 +5662,7 @@ fn spawn_canonical_map_update_loop(
     loaded_grid_creature_respawn_caches: LoadedGridCreatureRespawnCachesLikeCpp,
     mut game_event_scheduler: CanonicalGameEventSchedulerLikeCpp,
     player_registry: Arc<PlayerRegistry>,
+    battlemaster_list_store: Arc<wow_data::BattlemasterListStore>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval =
@@ -5697,6 +5757,7 @@ fn spawn_canonical_map_update_loop(
                         &mut manager,
                         &mut canonical_spawn_metadata,
                         &loaded_grid_creature_respawn_caches,
+                        Some(battlemaster_list_store.as_ref()),
                         &active_event_ids,
                         &game_event_outcome,
                         false,
@@ -5836,7 +5897,7 @@ fn spawn_canonical_map_update_loop(
                         .reset_event_seasonal_quests_character_db_delete_failed,
                     reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range = side_effect_summary
                         .reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range,
-                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; ConditionMgr world-event rows, real SendWorldText/session fanout, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
+                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, represented UpdateWorldStates HolidayWorldState -> WorldStateMgr::SetValue evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; ConditionMgr world-event rows, real SendWorldText/session fanout, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr storage/session fanout/login/GM worldstate, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
                 );
             }
 
@@ -6446,9 +6507,9 @@ mod tests {
         game_event_unspawn_creatures_and_gameobjects_for_event_like_cpp,
         game_event_unspawn_for_event_like_cpp, game_event_unspawn_pools_for_event_like_cpp,
         game_event_unspawn_pools_like_cpp, game_event_update_npc_flags_like_cpp,
-        game_event_update_npc_vendor_like_cpp, install_canonical_spawn_group_initializer_like_cpp,
-        load_world_config_from, loot_drop_rates_like_cpp,
-        materialize_game_event_quest_complete_db_bridge_like_cpp,
+        game_event_update_npc_vendor_like_cpp, game_event_update_world_states_like_cpp,
+        install_canonical_spawn_group_initializer_like_cpp, load_world_config_from,
+        loot_drop_rates_like_cpp, materialize_game_event_quest_complete_db_bridge_like_cpp,
         materialize_game_event_world_event_state_db_bridge_like_cpp, mmap_runtime_config_like_cpp,
         persisted_respawn_info_from_row_like_cpp, queue_respawn_db_delete_like_cpp,
         queue_respawn_db_save_like_cpp, spawn_store_loader, world_config_bool, world_config_u8,
@@ -9689,6 +9750,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[1],
             &outcome,
             false,
@@ -9726,6 +9788,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[1],
             &outcome,
             false,
@@ -9747,6 +9810,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[],
             &outcome,
             false,
@@ -9756,6 +9820,114 @@ mmap.enablePathFinding = 0
         assert_eq!(summary.update_world_states_missing_event, 1);
         assert_eq!(summary.update_world_states_no_holiday, 0);
         assert_eq!(summary.update_world_states_holiday_lookup_unrepresented, 0);
+    }
+
+    #[test]
+    fn game_event_world_state_holiday_set_value_activate_is_represented_like_cpp() {
+        let metadata = game_event_world_state_metadata_like_cpp(
+            1,
+            &[spawn_store_loader::GameEventDataLikeCpp {
+                event_id: 1,
+                holiday_id: wow_data::HOLIDAY_CALL_TO_ARMS_AV_LIKE_CPP,
+                length: 1,
+                ..spawn_store_loader::GameEventDataLikeCpp::default()
+            }],
+        );
+        let store =
+            wow_data::BattlemasterListStore::from_entries([wow_data::BattlemasterListEntry {
+                id: wow_data::BATTLEGROUND_AV_LIKE_CPP,
+                holiday_world_state: 777,
+            }]);
+
+        let summary = game_event_update_world_states_like_cpp(&metadata, Some(&store), 1, true);
+
+        assert_eq!(summary.update_world_states_set_value_represented, 1);
+        assert_eq!(summary.update_world_states_last_world_state_id, Some(777));
+        assert_eq!(summary.update_world_states_last_world_state_value, Some(1));
+        assert_eq!(summary.update_world_states_holiday_lookup_unrepresented, 0);
+    }
+
+    #[test]
+    fn game_event_world_state_holiday_set_value_deactivate_is_represented_like_cpp() {
+        let metadata = game_event_world_state_metadata_like_cpp(
+            1,
+            &[spawn_store_loader::GameEventDataLikeCpp {
+                event_id: 1,
+                holiday_id: wow_data::HOLIDAY_CALL_TO_ARMS_AB_LIKE_CPP,
+                length: 1,
+                ..spawn_store_loader::GameEventDataLikeCpp::default()
+            }],
+        );
+        let store =
+            wow_data::BattlemasterListStore::from_entries([wow_data::BattlemasterListEntry {
+                id: wow_data::BATTLEGROUND_AB_LIKE_CPP,
+                holiday_world_state: 888,
+            }]);
+
+        let summary = game_event_update_world_states_like_cpp(&metadata, Some(&store), 1, false);
+
+        assert_eq!(summary.update_world_states_set_value_represented, 1);
+        assert_eq!(summary.update_world_states_last_world_state_id, Some(888));
+        assert_eq!(summary.update_world_states_last_world_state_value, Some(0));
+        assert_eq!(summary.update_world_states_holiday_lookup_unrepresented, 0);
+    }
+
+    #[test]
+    fn game_event_world_state_missing_battlemaster_store_is_explicit_skip_like_cpp() {
+        let metadata = game_event_world_state_metadata_like_cpp(
+            1,
+            &[spawn_store_loader::GameEventDataLikeCpp {
+                event_id: 1,
+                holiday_id: wow_data::HOLIDAY_CALL_TO_ARMS_AV_LIKE_CPP,
+                length: 1,
+                ..spawn_store_loader::GameEventDataLikeCpp::default()
+            }],
+        );
+
+        let summary = game_event_update_world_states_like_cpp(&metadata, None, 1, true);
+
+        assert_eq!(summary.update_world_states_store_missing, 1);
+        assert_eq!(summary.update_world_states_holiday_lookup_unrepresented, 1);
+        assert_eq!(summary.update_world_states_set_value_represented, 0);
+    }
+
+    #[test]
+    fn game_event_world_state_missing_or_zero_battlemaster_row_is_explicit_skip_like_cpp() {
+        let metadata = game_event_world_state_metadata_like_cpp(
+            1,
+            &[spawn_store_loader::GameEventDataLikeCpp {
+                event_id: 1,
+                holiday_id: wow_data::HOLIDAY_CALL_TO_ARMS_AV_LIKE_CPP,
+                length: 1,
+                ..spawn_store_loader::GameEventDataLikeCpp::default()
+            }],
+        );
+        let missing_store = wow_data::BattlemasterListStore::from_entries([]);
+        let missing_summary =
+            game_event_update_world_states_like_cpp(&metadata, Some(&missing_store), 1, true);
+        assert_eq!(
+            missing_summary.update_world_states_battlemaster_list_missing,
+            1
+        );
+        assert_eq!(
+            missing_summary.update_world_states_holiday_lookup_unrepresented,
+            1
+        );
+        assert_eq!(missing_summary.update_world_states_set_value_represented, 0);
+
+        let zero_store =
+            wow_data::BattlemasterListStore::from_entries([wow_data::BattlemasterListEntry {
+                id: wow_data::BATTLEGROUND_AV_LIKE_CPP,
+                holiday_world_state: 0,
+            }]);
+        let zero_summary =
+            game_event_update_world_states_like_cpp(&metadata, Some(&zero_store), 1, true);
+        assert_eq!(zero_summary.update_world_states_holiday_world_state_zero, 1);
+        assert_eq!(
+            zero_summary.update_world_states_holiday_lookup_unrepresented,
+            0
+        );
+        assert_eq!(zero_summary.update_world_states_set_value_represented, 0);
     }
 
     #[test]
@@ -9886,6 +10058,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[1],
             &outcome,
             true,
@@ -10055,6 +10228,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[7],
             &outcome,
             false,
@@ -10086,6 +10260,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[7],
             &outcome,
             false,
@@ -10169,6 +10344,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[8],
             &outcome,
             false,
@@ -10269,6 +10445,7 @@ mmap.enablePathFinding = 0
             &mut manager,
             &mut metadata,
             &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            None,
             &[9],
             &outcome,
             false,
