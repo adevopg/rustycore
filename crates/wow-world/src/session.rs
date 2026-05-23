@@ -26,7 +26,7 @@ use crate::phasing::{
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{
-    Gender, Team, UnitFlags, UnitPvpFlags, UnitStandStateType, WeaponAttackType,
+    Gender, NPCFlags1, Team, UnitFlags, UnitPvpFlags, UnitStandStateType, WeaponAttackType,
 };
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
@@ -13483,6 +13483,139 @@ impl WorldSession {
         }
 
         true
+    }
+
+    pub(crate) fn send_represented_quest_giver_query_quest_like_cpp(
+        &mut self,
+        source_guid: ObjectGuid,
+        quest_id: u32,
+    ) -> bool {
+        let Some(quest_store) = self.quest_store.as_ref().map(Arc::clone) else {
+            debug!(
+                account = self.account_id,
+                ?source_guid,
+                quest_id,
+                "QuestGiverQueryQuest: missing quest store"
+            );
+            return false;
+        };
+        let Some(quest) = quest_store.get(quest_id).cloned() else {
+            warn!(
+                account = self.account_id,
+                ?source_guid,
+                quest_id,
+                "QuestGiverQueryQuest: unknown quest"
+            );
+            return false;
+        };
+
+        let menu_item = if source_guid.is_any_type_creature() {
+            let Some(access) = self.represented_npc_can_interact_with_like_cpp(
+                source_guid,
+                NPCFlags1::QUEST_GIVER.bits(),
+            ) else {
+                debug!(
+                    account = self.account_id,
+                    ?source_guid,
+                    quest_id,
+                    "QuestGiverQueryQuest: represented Creature source missing or not interactable"
+                );
+                return false;
+            };
+
+            self.represented_quest_giver_query_creature_menu_item_like_cpp(
+                &quest_store,
+                access.entry,
+                &quest,
+            )
+        } else if source_guid.is_game_object() {
+            let Some(access) = self.canonical_gameobject_access_like_cpp(source_guid) else {
+                debug!(
+                    account = self.account_id,
+                    ?source_guid,
+                    quest_id,
+                    "QuestGiverQueryQuest: represented GameObject source missing"
+                );
+                return false;
+            };
+
+            self.represented_quest_giver_query_gameobject_menu_item_like_cpp(
+                &quest_store,
+                access.entry,
+                &quest,
+            )
+        } else {
+            debug!(
+                account = self.account_id,
+                ?source_guid,
+                quest_id,
+                "QuestGiverQueryQuest: unsupported represented source type"
+            );
+            return false;
+        };
+
+        let Some(menu_item) = menu_item else {
+            debug!(
+                account = self.account_id,
+                ?source_guid,
+                quest_id,
+                "QuestGiverQueryQuest: source has no represented starter/involved relation for quest"
+            );
+            return false;
+        };
+
+        self.send_represented_prepared_single_quest_like_cpp(source_guid, &menu_item);
+        true
+    }
+
+    fn represented_quest_giver_query_creature_menu_item_like_cpp(
+        &self,
+        quest_store: &wow_data::quest::QuestStore,
+        creature_entry: u32,
+        quest: &wow_data::quest::QuestTemplate,
+    ) -> Option<RepresentedPreparedQuestMenuItemLikeCpp> {
+        if quest_store.creature_has_ender_relation_like_cpp(creature_entry, quest.id) {
+            if self.represented_player_quest_status_is_complete_or_incomplete_like_cpp(quest.id) {
+                return Some(RepresentedPreparedQuestMenuItemLikeCpp {
+                    quest: quest.clone(),
+                    quest_icon: QUEST_MENU_ICON_COMPLETE_LIKE_CPP,
+                    has_starter_relation: false,
+                    has_involved_relation: true,
+                });
+            }
+            return None;
+        }
+
+        if quest_store.creature_has_starter_relation_like_cpp(creature_entry, quest.id) {
+            return self.represented_starter_quest_menu_item_like_cpp(quest);
+        }
+
+        None
+    }
+
+    fn represented_quest_giver_query_gameobject_menu_item_like_cpp(
+        &self,
+        quest_store: &wow_data::quest::QuestStore,
+        gameobject_entry: u32,
+        quest: &wow_data::quest::QuestTemplate,
+    ) -> Option<RepresentedPreparedQuestMenuItemLikeCpp> {
+        if quest_store.gameobject_has_ender_relation_like_cpp(gameobject_entry, quest.id) {
+            if self.represented_player_quest_status_is_complete_or_incomplete_like_cpp(quest.id) {
+                return Some(RepresentedPreparedQuestMenuItemLikeCpp {
+                    quest: quest.clone(),
+                    quest_icon: QUEST_MENU_ICON_COMPLETE_LIKE_CPP,
+                    has_starter_relation: false,
+                    has_involved_relation: true,
+                });
+            }
+            return None;
+        }
+
+        if quest_store.gameobject_has_starter_relation_like_cpp(gameobject_entry, quest.id) {
+            return self.represented_starter_quest_menu_item_like_cpp(quest);
+        }
+
+        None
     }
 
     fn represented_creature_quest_menu_items_like_cpp(
@@ -36476,6 +36609,169 @@ mod tests {
         session.quest_store = Some(Arc::new(quest_store));
 
         assert!(!session.use_represented_creature_questgiver_like_cpp(creature_guid, 777));
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn quest_giver_query_creature_starter_relation_allows_matching_details_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let source_guid =
+            ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, 777, 24);
+        let position = Position::new(1.0, 2.0, 3.0, 0.0);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_map_position_like_cpp(571, position);
+        session.set_player_level_like_cpp(1);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        add_canonical_test_player_on_map(&canonical, player_guid, position, 571, 0);
+        add_canonical_test_creature(
+            &canonical,
+            source_guid,
+            777,
+            position,
+            wow_constants::unit::NPCFlags1::QUEST_GIVER.bits(),
+        );
+        let mut quest = test_quest_template(9_201);
+        quest.quest_type = 2;
+        let other_quest = test_quest_template(9_202);
+        let mut quest_store =
+            wow_data::quest::QuestStore::from_quests_like_cpp([quest, other_quest]);
+        quest_store.starter_quests.insert(777, vec![9_201]);
+        session.quest_store = Some(Arc::new(quest_store));
+
+        assert!(session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_201));
+        let bytes = send_rx.try_recv().unwrap();
+        assert_eq!(
+            wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
+            Some(ServerOpcodes::QuestGiverQuestDetails)
+        );
+        assert!(packet_contains_quest_ids_in_order(&bytes, &[9_201]));
+
+        assert!(!session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_202));
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn quest_giver_query_creature_ender_relation_allows_request_items_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 99);
+        let source_guid =
+            ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, 778, 25);
+        let position = Position::new(1.0, 2.0, 3.0, 0.0);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_map_position_like_cpp(571, position);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        add_canonical_test_player_on_map(&canonical, player_guid, position, 571, 0);
+        add_canonical_test_creature(
+            &canonical,
+            source_guid,
+            778,
+            position,
+            wow_constants::unit::NPCFlags1::QUEST_GIVER.bits(),
+        );
+        let mut quest_store =
+            wow_data::quest::QuestStore::from_quests_like_cpp([test_quest_template(9_203)]);
+        quest_store.ender_quests.insert(778, vec![9_203]);
+        session.quest_store = Some(Arc::new(quest_store));
+        session.player_quests.insert(
+            9_203,
+            crate::handlers::quest::PlayerQuestStatus {
+                quest_id: 9_203,
+                status: 2,
+                explored: false,
+                objective_counts: Vec::new(),
+            },
+        );
+
+        assert!(session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_203));
+        let bytes = send_rx.try_recv().unwrap();
+        assert_eq!(
+            wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
+            Some(ServerOpcodes::QuestGiverRequestItems)
+        );
+        assert!(packet_contains_quest_ids_in_order(&bytes, &[9_203]));
+    }
+
+    #[test]
+    fn quest_giver_query_gameobject_starter_relation_allows_matching_details_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let source_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 779, 26);
+        let position = Position::new(1.0, 2.0, 3.0, 0.0);
+        session.set_player_map_position_like_cpp(571, position);
+        session.set_player_level_like_cpp(1);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        add_canonical_test_gameobject(&canonical, source_guid, 779, position);
+        let mut quest = test_quest_template(9_204);
+        quest.quest_type = 2;
+        let other_quest = test_quest_template(9_205);
+        let mut quest_store =
+            wow_data::quest::QuestStore::from_quests_like_cpp([quest, other_quest]);
+        assert!(quest_store.insert_gameobject_starter_relation_like_cpp(779, 9_204));
+        session.quest_store = Some(Arc::new(quest_store));
+
+        assert!(session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_204));
+        let bytes = send_rx.try_recv().unwrap();
+        assert_eq!(
+            wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
+            Some(ServerOpcodes::QuestGiverQuestDetails)
+        );
+        assert!(packet_contains_quest_ids_in_order(&bytes, &[9_204]));
+
+        assert!(!session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_205));
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn quest_giver_query_gameobject_ender_relation_allows_request_items_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let source_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 780, 27);
+        let position = Position::new(1.0, 2.0, 3.0, 0.0);
+        session.set_player_map_position_like_cpp(571, position);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        add_canonical_test_gameobject(&canonical, source_guid, 780, position);
+        let mut quest_store =
+            wow_data::quest::QuestStore::from_quests_like_cpp([test_quest_template(9_206)]);
+        assert!(quest_store.insert_gameobject_ender_relation_like_cpp(780, 9_206));
+        session.quest_store = Some(Arc::new(quest_store));
+        session.player_quests.insert(
+            9_206,
+            crate::handlers::quest::PlayerQuestStatus {
+                quest_id: 9_206,
+                status: 1,
+                explored: false,
+                objective_counts: Vec::new(),
+            },
+        );
+
+        assert!(session.send_represented_quest_giver_query_quest_like_cpp(source_guid, 9_206));
+        let bytes = send_rx.try_recv().unwrap();
+        assert_eq!(
+            wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
+            Some(ServerOpcodes::QuestGiverRequestItems)
+        );
+        assert!(packet_contains_quest_ids_in_order(&bytes, &[9_206]));
+    }
+
+    #[test]
+    fn quest_giver_query_unsupported_or_missing_source_sends_no_packet_like_cpp() {
+        let (mut session, _pkt_tx, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        session.set_canonical_map_manager(canonical);
+        session.quest_store = Some(Arc::new(wow_data::quest::QuestStore::from_quests_like_cpp(
+            [test_quest_template(9_207)],
+        )));
+        let missing_guid =
+            ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, 781, 28);
+        let player_guid = ObjectGuid::create_player(1, 123);
+
+        assert!(!session.send_represented_quest_giver_query_quest_like_cpp(missing_guid, 9_207));
+        assert!(!session.send_represented_quest_giver_query_quest_like_cpp(player_guid, 9_207));
         assert!(send_rx.try_recv().is_err());
     }
 

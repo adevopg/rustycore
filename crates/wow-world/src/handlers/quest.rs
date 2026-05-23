@@ -22,9 +22,9 @@ use wow_constants::unit::NPCFlags1;
 use wow_data::DISABLE_TYPE_QUEST;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::quest::{
-    QueryQuestInfoResponse, QuestGiverOfferReward, QuestGiverQuestComplete, QuestGiverQuestDetails,
-    QuestGiverRequestItems, QuestGiverStatus, QuestObjectiveInfo, QuestObjectiveSimple,
-    QuestRewardsBlock, QuestUpdateComplete, quest_giver_status,
+    QueryQuestInfoResponse, QuestGiverOfferReward, QuestGiverQuestComplete, QuestGiverRequestItems,
+    QuestGiverStatus, QuestObjectiveInfo, QuestRewardsBlock, QuestUpdateComplete,
+    quest_giver_status,
 };
 
 use crate::session::{SeasonalQuestStatusDbRowLikeCpp, WorldSession};
@@ -189,55 +189,7 @@ impl WorldSession {
         let quest_id: u32 = pkt.read_uint32().unwrap_or(0);
         let _resend_offer: bool = pkt.read_uint8().unwrap_or(0) != 0;
 
-        let quest_store = match &self.quest_store {
-            Some(s) => Arc::clone(s),
-            None => return,
-        };
-
-        let quest = match quest_store.get(quest_id) {
-            Some(q) => q,
-            None => {
-                warn!(
-                    account = self.account_id,
-                    quest_id, "QuestGiverQueryQuest: unknown quest"
-                );
-                return;
-            }
-        };
-
-        let objectives: Vec<QuestObjectiveSimple> = quest
-            .objectives
-            .iter()
-            .map(|obj| QuestObjectiveSimple {
-                id: obj.id,
-                object_id: obj.object_id,
-                amount: obj.amount,
-                obj_type: obj.obj_type,
-            })
-            .collect();
-
-        let mut rewards = QuestRewardsBlock::default();
-        rewards.money = quest.reward_money_difficulty as i32;
-        for i in 0..4 {
-            rewards.items[i] = (quest.reward_items[i], quest.reward_amounts[i]);
-        }
-        for i in 0..3 {
-            rewards.display_spells[i] = quest.reward_display_spell[i];
-        }
-        rewards.completion_spell = quest.reward_spell as i32;
-
-        self.send_packet(&QuestGiverQuestDetails {
-            giver_guid: guid,
-            quest_id,
-            quest_flags: [quest.flags, quest.flags_ex, quest.flags_ex2],
-            suggested_party_members: quest.suggested_group_num,
-            objectives,
-            rewards,
-            title: quest.log_title.clone(),
-            description: quest.quest_description.clone(),
-            log_description: quest.log_description.clone(),
-            auto_launched: false,
-        });
+        let _ = self.send_represented_quest_giver_query_quest_like_cpp(guid, quest_id);
     }
 
     /// CMSG_QUEST_GIVER_ACCEPT_QUEST — player clicks "Accept" in the quest details dialog.

@@ -362,6 +362,34 @@ impl QuestStore {
         true
     }
 
+    /// Whether a given NPC starts a specific quest.
+    pub fn creature_has_starter_relation_like_cpp(&self, npc_entry: u32, quest_id: u32) -> bool {
+        self.starter_quests
+            .get(&npc_entry)
+            .is_some_and(|ids| ids.contains(&quest_id))
+    }
+
+    /// Whether a given NPC ends a specific quest.
+    pub fn creature_has_ender_relation_like_cpp(&self, npc_entry: u32, quest_id: u32) -> bool {
+        self.ender_quests
+            .get(&npc_entry)
+            .is_some_and(|ids| ids.contains(&quest_id))
+    }
+
+    /// Whether a given GameObject starts a specific quest.
+    pub fn gameobject_has_starter_relation_like_cpp(&self, go_entry: u32, quest_id: u32) -> bool {
+        self.gameobject_starter_quests
+            .get(&go_entry)
+            .is_some_and(|ids| ids.contains(&quest_id))
+    }
+
+    /// Whether a given GameObject ends a specific quest.
+    pub fn gameobject_has_ender_relation_like_cpp(&self, go_entry: u32, quest_id: u32) -> bool {
+        self.gameobject_ender_quests
+            .get(&go_entry)
+            .is_some_and(|ids| ids.contains(&quest_id))
+    }
+
     /// Whether a given NPC starts any quest.
     pub fn npc_has_start_quests(&self, npc_entry: u32) -> bool {
         self.starter_quests
