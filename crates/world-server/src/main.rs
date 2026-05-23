@@ -1552,6 +1552,23 @@ async fn main() -> Result<()> {
                 side_effect_summary.change_equip_or_model_live_creatures_mutated,
             change_equip_or_model_model_validation_unavailable =
                 side_effect_summary.change_equip_or_model_model_validation_unavailable,
+            update_event_quests_actions = side_effect_summary.update_event_quests_actions,
+            update_event_quests_creature_records_seen =
+                side_effect_summary.update_event_quests_creature_records_seen,
+            update_event_quests_gameobject_records_seen =
+                side_effect_summary.update_event_quests_gameobject_records_seen,
+            update_event_quests_creature_inserted =
+                side_effect_summary.update_event_quests_creature_inserted,
+            update_event_quests_gameobject_inserted =
+                side_effect_summary.update_event_quests_gameobject_inserted,
+            update_event_quests_creature_removed =
+                side_effect_summary.update_event_quests_creature_removed,
+            update_event_quests_gameobject_removed =
+                side_effect_summary.update_event_quests_gameobject_removed,
+            update_event_quests_creature_skipped_active_other_event =
+                side_effect_summary.update_event_quests_creature_skipped_active_other_event,
+            update_event_quests_gameobject_skipped_active_other_event =
+                side_effect_summary.update_event_quests_gameobject_skipped_active_other_event,
             update_npc_flags_actions = side_effect_summary.update_npc_flags_actions,
             update_npc_flags_records_seen = side_effect_summary.update_npc_flags_records_seen,
             update_npc_flags_maps_matched = side_effect_summary.update_npc_flags_maps_matched,
@@ -1567,7 +1584,7 @@ async fn main() -> Result<()> {
                 side_effect_summary.update_npc_vendor_missing_event_buckets,
             update_npc_vendor_remove_misses = side_effect_summary.update_npc_vendor_remove_misses,
             update_npc_vendor_no_match = side_effect_summary.update_npc_vendor_no_match,
-            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventNPCFlags, and UpdateEventNPCVendor cache side effects; full ConditionMgr world-event runtime and unsupported ApplyNewEvent/UnApplyEvent side effects remain pending"
+            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateEventNPCFlags, and UpdateEventNPCVendor cache side effects; full ConditionMgr world-event runtime, quest packets/session gossip refresh, full ObjectMgr quest runtime and unsupported ApplyNewEvent/UnApplyEvent side effects remain pending"
         );
         CanonicalGameEventSchedulerLikeCpp::start_system(
             game_event_outcome.next_update_delay_millis,
@@ -3472,6 +3489,7 @@ enum GameEventLiveUpdateActionLikeCpp {
     Spawn(i16),
     Unspawn(i16),
     ChangeEquipOrModel { event_id: u16, activate: bool },
+    UpdateEventQuests { event_id: u16, activate: bool },
     UpdateNpcFlags { event_id: u16 },
     UpdateNpcVendor { event_id: u16, activate: bool },
 }
@@ -3491,6 +3509,21 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     change_equip_or_model_live_creatures_mutated: usize,
     change_equip_or_model_stale_index_or_wrong_kind: usize,
     change_equip_or_model_model_validation_unavailable: usize,
+    update_event_quests_actions: usize,
+    update_event_quests_creature_records_seen: usize,
+    update_event_quests_gameobject_records_seen: usize,
+    update_event_quests_creature_inserted: usize,
+    update_event_quests_gameobject_inserted: usize,
+    update_event_quests_creature_removed: usize,
+    update_event_quests_gameobject_removed: usize,
+    update_event_quests_creature_remove_misses: usize,
+    update_event_quests_gameobject_remove_misses: usize,
+    update_event_quests_creature_no_match: usize,
+    update_event_quests_gameobject_no_match: usize,
+    update_event_quests_creature_missing_event_buckets: usize,
+    update_event_quests_gameobject_missing_event_buckets: usize,
+    update_event_quests_creature_skipped_active_other_event: usize,
+    update_event_quests_gameobject_skipped_active_other_event: usize,
     update_npc_flags_actions: usize,
     update_npc_flags_records_seen: usize,
     update_npc_flags_missing_event_buckets: usize,
@@ -3532,6 +3565,10 @@ fn game_event_live_update_actions_like_cpp(
                     event_id: summary.event_id,
                     activate: true,
                 });
+                actions.push(GameEventLiveUpdateActionLikeCpp::UpdateEventQuests {
+                    event_id: summary.event_id,
+                    activate: true,
+                });
                 actions.push(GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags {
                     event_id: summary.event_id,
                 });
@@ -3549,6 +3586,10 @@ fn game_event_live_update_actions_like_cpp(
                 actions.push(GameEventLiveUpdateActionLikeCpp::Unspawn(event_id));
                 actions.push(GameEventLiveUpdateActionLikeCpp::Spawn(-event_id));
                 actions.push(GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
+                    event_id: summary.event_id,
+                    activate: false,
+                });
+                actions.push(GameEventLiveUpdateActionLikeCpp::UpdateEventQuests {
                     event_id: summary.event_id,
                     activate: false,
                 });
@@ -3696,6 +3737,37 @@ fn game_event_update_npc_vendor_like_cpp(
     summary
 }
 
+fn game_event_update_quests_like_cpp(
+    canonical_spawn_metadata: &mut spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
+    event_id: u16,
+    activate: bool,
+) -> GameEventLiveUpdateSideEffectSummaryLikeCpp {
+    let quest_summary = canonical_spawn_metadata
+        .update_game_event_quest_relation_cache_like_cpp(event_id, activate);
+    let mut summary = GameEventLiveUpdateSideEffectSummaryLikeCpp::default();
+    summary.update_event_quests_creature_records_seen = quest_summary.creature_records_seen;
+    summary.update_event_quests_gameobject_records_seen = quest_summary.gameobject_records_seen;
+    summary.update_event_quests_creature_inserted = quest_summary.creature_inserted;
+    summary.update_event_quests_gameobject_inserted = quest_summary.gameobject_inserted;
+    summary.update_event_quests_creature_removed = quest_summary.creature_removed;
+    summary.update_event_quests_gameobject_removed = quest_summary.gameobject_removed;
+    summary.update_event_quests_creature_remove_misses = quest_summary.creature_remove_misses;
+    summary.update_event_quests_gameobject_remove_misses = quest_summary.gameobject_remove_misses;
+    summary.update_event_quests_creature_no_match = quest_summary.creature_no_match;
+    summary.update_event_quests_gameobject_no_match = quest_summary.gameobject_no_match;
+    summary.update_event_quests_creature_skipped_active_other_event =
+        quest_summary.creature_skipped_active_other_event;
+    summary.update_event_quests_gameobject_skipped_active_other_event =
+        quest_summary.gameobject_skipped_active_other_event;
+    if quest_summary.creature_missing_event_bucket {
+        summary.update_event_quests_creature_missing_event_buckets = 1;
+    }
+    if quest_summary.gameobject_missing_event_bucket {
+        summary.update_event_quests_gameobject_missing_event_buckets = 1;
+    }
+    summary
+}
+
 fn consume_game_event_live_update_side_effects_like_cpp(
     manager: &mut wow_map::MapManager,
     canonical_spawn_metadata: &mut spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
@@ -3754,6 +3826,39 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     change_summary.change_equip_or_model_stale_index_or_wrong_kind;
                 summary.change_equip_or_model_model_validation_unavailable +=
                     change_summary.change_equip_or_model_model_validation_unavailable;
+            }
+            GameEventLiveUpdateActionLikeCpp::UpdateEventQuests { event_id, activate } => {
+                let quest_summary =
+                    game_event_update_quests_like_cpp(canonical_spawn_metadata, event_id, activate);
+                summary.update_event_quests_actions += 1;
+                summary.update_event_quests_creature_records_seen +=
+                    quest_summary.update_event_quests_creature_records_seen;
+                summary.update_event_quests_gameobject_records_seen +=
+                    quest_summary.update_event_quests_gameobject_records_seen;
+                summary.update_event_quests_creature_inserted +=
+                    quest_summary.update_event_quests_creature_inserted;
+                summary.update_event_quests_gameobject_inserted +=
+                    quest_summary.update_event_quests_gameobject_inserted;
+                summary.update_event_quests_creature_removed +=
+                    quest_summary.update_event_quests_creature_removed;
+                summary.update_event_quests_gameobject_removed +=
+                    quest_summary.update_event_quests_gameobject_removed;
+                summary.update_event_quests_creature_remove_misses +=
+                    quest_summary.update_event_quests_creature_remove_misses;
+                summary.update_event_quests_gameobject_remove_misses +=
+                    quest_summary.update_event_quests_gameobject_remove_misses;
+                summary.update_event_quests_creature_no_match +=
+                    quest_summary.update_event_quests_creature_no_match;
+                summary.update_event_quests_gameobject_no_match +=
+                    quest_summary.update_event_quests_gameobject_no_match;
+                summary.update_event_quests_creature_missing_event_buckets +=
+                    quest_summary.update_event_quests_creature_missing_event_buckets;
+                summary.update_event_quests_gameobject_missing_event_buckets +=
+                    quest_summary.update_event_quests_gameobject_missing_event_buckets;
+                summary.update_event_quests_creature_skipped_active_other_event +=
+                    quest_summary.update_event_quests_creature_skipped_active_other_event;
+                summary.update_event_quests_gameobject_skipped_active_other_event +=
+                    quest_summary.update_event_quests_gameobject_skipped_active_other_event;
             }
             GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags { event_id } => {
                 let npc_flag_summary = game_event_update_npc_flags_like_cpp(
@@ -4767,6 +4872,27 @@ fn spawn_canonical_map_update_loop(
                         side_effect_summary.change_equip_or_model_live_creatures_mutated,
                     change_equip_or_model_model_validation_unavailable =
                         side_effect_summary.change_equip_or_model_model_validation_unavailable,
+                    update_event_quests_actions = side_effect_summary.update_event_quests_actions,
+                    update_event_quests_creature_records_seen =
+                        side_effect_summary.update_event_quests_creature_records_seen,
+                    update_event_quests_gameobject_records_seen =
+                        side_effect_summary.update_event_quests_gameobject_records_seen,
+                    update_event_quests_creature_inserted =
+                        side_effect_summary.update_event_quests_creature_inserted,
+                    update_event_quests_gameobject_inserted =
+                        side_effect_summary.update_event_quests_gameobject_inserted,
+                    update_event_quests_creature_removed =
+                        side_effect_summary.update_event_quests_creature_removed,
+                    update_event_quests_gameobject_removed =
+                        side_effect_summary.update_event_quests_gameobject_removed,
+                    update_event_quests_creature_remove_misses =
+                        side_effect_summary.update_event_quests_creature_remove_misses,
+                    update_event_quests_gameobject_remove_misses =
+                        side_effect_summary.update_event_quests_gameobject_remove_misses,
+                    update_event_quests_creature_skipped_active_other_event =
+                        side_effect_summary.update_event_quests_creature_skipped_active_other_event,
+                    update_event_quests_gameobject_skipped_active_other_event = side_effect_summary
+                        .update_event_quests_gameobject_skipped_active_other_event,
                     update_npc_flags_actions = side_effect_summary.update_npc_flags_actions,
                     update_npc_flags_records_seen =
                         side_effect_summary.update_npc_flags_records_seen,
@@ -4788,7 +4914,7 @@ fn spawn_canonical_map_update_loop(
                     update_npc_vendor_remove_misses =
                         side_effect_summary.update_npc_vendor_remove_misses,
                     update_npc_vendor_no_match = side_effect_summary.update_npc_vendor_no_match,
-                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventNPCFlags, and UpdateEventNPCVendor cache side effects; ConditionMgr world-event rows, DB state writes, announcements, quests/worldstates/SAI/seasonal reset and ForceGameEventUpdate command caller remain pending"
+                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateEventNPCFlags, and UpdateEventNPCVendor cache side effects; ConditionMgr world-event rows, DB state writes, announcements, quest packets/session gossip refresh, full ObjectMgr quest runtime, worldstates/SAI/seasonal reset and ForceGameEventUpdate command caller remain pending"
                 );
             }
 
@@ -8015,6 +8141,10 @@ mmap.enablePathFinding = 0
                     event_id: 2,
                     activate: true,
                 },
+                GameEventLiveUpdateActionLikeCpp::UpdateEventQuests {
+                    event_id: 2,
+                    activate: true,
+                },
                 GameEventLiveUpdateActionLikeCpp::UpdateNpcFlags { event_id: 2 },
                 GameEventLiveUpdateActionLikeCpp::UpdateNpcVendor {
                     event_id: 2,
@@ -8023,6 +8153,10 @@ mmap.enablePathFinding = 0
                 GameEventLiveUpdateActionLikeCpp::Unspawn(3),
                 GameEventLiveUpdateActionLikeCpp::Spawn(-3),
                 GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
+                    event_id: 3,
+                    activate: false,
+                },
+                GameEventLiveUpdateActionLikeCpp::UpdateEventQuests {
                     event_id: 3,
                     activate: false,
                 },
