@@ -1521,7 +1521,7 @@ async fn main() -> Result<()> {
             &mut db_bridge_summary,
         )
         .await;
-        let side_effect_summary = {
+        let mut side_effect_summary = {
             let mut manager = canonical_map_manager.lock().map_err(|_| {
                 anyhow::anyhow!("Canonical MapManager mutex poisoned during GameEvent StartSystem")
             })?;
@@ -1537,6 +1537,11 @@ async fn main() -> Result<()> {
                 false,
             )
         };
+        execute_game_event_seasonal_quest_db_deletes_like_cpp(
+            char_db.as_ref(),
+            &mut side_effect_summary,
+        )
+        .await;
         debug!(
             scanned_event_ids = game_event_outcome.scanned_event_ids.len(),
             queued_activation_event_ids = game_event_outcome.queued_activation_event_ids.len(),
@@ -1637,7 +1642,15 @@ async fn main() -> Result<()> {
                 .reset_event_seasonal_quests_player_session_runtime_unimplemented,
             reset_event_seasonal_quests_character_db_statement_unimplemented = side_effect_summary
                 .reset_event_seasonal_quests_character_db_statement_unimplemented,
-            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests request evidence, and represented announcement evidence-only side effects; real SendWorldText/session fanout, full ConditionMgr world-event runtime, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, Player/session seasonal quest reset, and character DB seasonal reset statement execution remain pending"
+            reset_event_seasonal_quests_character_db_delete_queued = side_effect_summary
+                .reset_event_seasonal_quests_character_db_delete_queued,
+            reset_event_seasonal_quests_character_db_delete_executed = side_effect_summary
+                .reset_event_seasonal_quests_character_db_delete_executed,
+            reset_event_seasonal_quests_character_db_delete_failed = side_effect_summary
+                .reset_event_seasonal_quests_character_db_delete_failed,
+            reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range = side_effect_summary
+                .reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range,
+            "Represented C++ GameEventMgr::StartSystem: cleared active events, ran first Update with isSystemInit=false, installed WUPDATE_EVENTS delay, and consumed safe represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; real SendWorldText/session fanout, full ConditionMgr world-event runtime, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
         );
         CanonicalGameEventSchedulerLikeCpp::start_system(
             game_event_outcome.next_update_delay_millis,
@@ -3576,7 +3589,14 @@ enum GameEventLiveUpdateActionLikeCpp {
     },
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+struct GameEventSeasonalQuestDbDeleteLikeCpp {
+    event_id: u16,
+    event_start_time: i64,
+    statement: PreparedStatement,
+}
+
+#[derive(Debug, Default, Clone)]
 struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     actions: Vec<GameEventLiveUpdateActionLikeCpp>,
     spawn_actions: usize,
@@ -3606,6 +3626,11 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     reset_event_seasonal_quests_event_start_time_nonzero: usize,
     reset_event_seasonal_quests_player_session_runtime_unimplemented: usize,
     reset_event_seasonal_quests_character_db_statement_unimplemented: usize,
+    reset_event_seasonal_quests_character_db_delete_queued: usize,
+    reset_event_seasonal_quests_character_db_delete_executed: usize,
+    reset_event_seasonal_quests_character_db_delete_failed: usize,
+    reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range: usize,
+    reset_event_seasonal_quest_db_deletes: Vec<GameEventSeasonalQuestDbDeleteLikeCpp>,
     update_event_quests_actions: usize,
     update_event_quests_creature_records_seen: usize,
     update_event_quests_gameobject_records_seen: usize,
@@ -3651,6 +3676,61 @@ fn game_event_signed_id_like_cpp(event_id: u16) -> i16 {
 
 fn should_announce_game_event_like_cpp(announce: u8, config_event_announce: bool) -> bool {
     announce == 1 || (announce == 2 && config_event_announce)
+}
+
+fn game_event_seasonal_quest_db_delete_like_cpp(
+    event_id: u16,
+    event_start_time: u64,
+    summary: &mut GameEventLiveUpdateSideEffectSummaryLikeCpp,
+) {
+    let Ok(event_start_time_i64) = i64::try_from(event_start_time) else {
+        summary.reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range += 1;
+        return;
+    };
+
+    let mut statement = PreparedStatement::new(
+        CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT.sql(),
+    );
+    statement.set_u16(0, event_id);
+    statement.set_i64(1, event_start_time_i64);
+
+    summary.reset_event_seasonal_quests_character_db_delete_queued += 1;
+    summary
+        .reset_event_seasonal_quest_db_deletes
+        .push(GameEventSeasonalQuestDbDeleteLikeCpp {
+            event_id,
+            event_start_time: event_start_time_i64,
+            statement,
+        });
+}
+
+async fn execute_game_event_seasonal_quest_db_deletes_like_cpp(
+    character_db: &CharacterDatabase,
+    summary: &mut GameEventLiveUpdateSideEffectSummaryLikeCpp,
+) {
+    let db_delete_total = summary.reset_event_seasonal_quest_db_deletes.len();
+    for (db_delete_index, db_delete) in summary
+        .reset_event_seasonal_quest_db_deletes
+        .drain(..)
+        .enumerate()
+    {
+        match character_db.execute(&db_delete.statement).await {
+            Ok(_) => {
+                summary.reset_event_seasonal_quests_character_db_delete_executed += 1;
+            }
+            Err(error) => {
+                summary.reset_event_seasonal_quests_character_db_delete_failed += 1;
+                tracing::error!(
+                    error = %error,
+                    db_delete_index = db_delete_index + 1,
+                    db_delete_total,
+                    event_id = db_delete.event_id,
+                    event_start_time = db_delete.event_start_time,
+                    "Failed to execute C++ World::ResetEventSeasonalQuests character DB delete; continuing live update loop"
+                );
+            }
+        }
+    }
 }
 
 fn game_event_live_update_actions_like_cpp(
@@ -3968,7 +4048,7 @@ fn consume_game_event_live_update_side_effects_like_cpp(
         actions,
         ..GameEventLiveUpdateSideEffectSummaryLikeCpp::default()
     };
-    for action in summary.actions.iter().copied() {
+    for action in summary.actions.clone() {
         match action {
             GameEventLiveUpdateActionLikeCpp::AnnounceEvent {
                 event_id: _,
@@ -4041,7 +4121,7 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     smart_ai_summary.run_smart_ai_script_dispatch_unrepresented;
             }
             GameEventLiveUpdateActionLikeCpp::ResetEventSeasonalQuests {
-                event_id: _,
+                event_id,
                 event_start_time,
             } => {
                 summary.reset_event_seasonal_quests_actions += 1;
@@ -4051,7 +4131,11 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     summary.reset_event_seasonal_quests_event_start_time_nonzero += 1;
                 }
                 summary.reset_event_seasonal_quests_player_session_runtime_unimplemented += 1;
-                summary.reset_event_seasonal_quests_character_db_statement_unimplemented += 1;
+                game_event_seasonal_quest_db_delete_like_cpp(
+                    event_id,
+                    event_start_time,
+                    &mut summary,
+                );
             }
             GameEventLiveUpdateActionLikeCpp::UpdateEventQuests { event_id, activate } => {
                 let quest_summary =
@@ -5439,7 +5523,7 @@ fn spawn_canonical_map_update_loop(
                     &mut db_bridge_summary,
                 )
                 .await;
-                let side_effect_summary = {
+                let mut side_effect_summary = {
                     let Ok(mut manager) = map_manager.lock() else {
                         tracing::error!(
                             "Canonical MapManager mutex poisoned during GameEvent side effects; stopping map update loop"
@@ -5461,6 +5545,11 @@ fn spawn_canonical_map_update_loop(
                         false,
                     )
                 };
+                execute_game_event_seasonal_quest_db_deletes_like_cpp(
+                    character_db.as_ref(),
+                    &mut side_effect_summary,
+                )
+                .await;
                 debug!(
                     scanned_event_ids = game_event_outcome.scanned_event_ids.len(),
                     queued_activation_event_ids =
@@ -5578,7 +5667,15 @@ fn spawn_canonical_map_update_loop(
                     reset_event_seasonal_quests_character_db_statement_unimplemented =
                         side_effect_summary
                             .reset_event_seasonal_quests_character_db_statement_unimplemented,
-                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests request evidence, and represented announcement evidence-only side effects; ConditionMgr world-event rows, real SendWorldText/session fanout, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, Player/session seasonal quest reset, and character DB seasonal reset statement execution remain pending"
+                    reset_event_seasonal_quests_character_db_delete_queued = side_effect_summary
+                        .reset_event_seasonal_quests_character_db_delete_queued,
+                    reset_event_seasonal_quests_character_db_delete_executed = side_effect_summary
+                        .reset_event_seasonal_quests_character_db_delete_executed,
+                    reset_event_seasonal_quests_character_db_delete_failed = side_effect_summary
+                        .reset_event_seasonal_quests_character_db_delete_failed,
+                    reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range = side_effect_summary
+                        .reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range,
+                    "C++ WUPDATE_EVENTS represented timer fired; updated canonical GameEvent metadata and consumed represented GameEventSpawn/GameEventUnspawn plus bounded ChangeEquipOrModel, UpdateEventQuests cache, UpdateWorldStates evidence, UpdateEventNPCFlags, UpdateEventNPCVendor cache, RunSmartAIScripts evidence, ResetEventSeasonalQuests character DB delete bridge, and represented announcement evidence-only side effects; ConditionMgr world-event rows, real SendWorldText/session fanout, quest packets/session gossip refresh, full ObjectMgr quest runtime, real WorldStateMgr/BattlemasterList HolidayWorldState lookup, SmartAI script dispatch, and Player/session seasonal quest reset remain pending"
                 );
             }
 
@@ -9782,8 +9879,97 @@ mmap.enablePathFinding = 0
         );
         assert_eq!(
             summary.reset_event_seasonal_quests_character_db_statement_unimplemented,
+            0
+        );
+        assert_eq!(
+            summary.reset_event_seasonal_quests_character_db_delete_queued,
             1
         );
+        assert_eq!(
+            summary
+                .reset_event_seasonal_quests_character_db_delete_skipped_event_start_time_out_of_range,
+            0
+        );
+        let [db_delete] = summary.reset_event_seasonal_quest_db_deletes.as_slice() else {
+            panic!("expected exactly one seasonal quest DB delete")
+        };
+        assert_eq!(
+            db_delete.statement.sql(),
+            CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT.sql()
+        );
+        assert_eq!(
+            db_delete.statement.sql(),
+            "DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?"
+        );
+        let [
+            SqlParam::U16(actual_event_id),
+            SqlParam::I64(actual_event_start_time),
+        ] = db_delete.statement.params()
+        else {
+            panic!(
+                "expected seasonal quest DB delete params [U16(event_id), I64(event_start_time)]"
+            )
+        };
+        assert_eq!(*actual_event_id, 7);
+        assert_eq!(*actual_event_start_time, 100);
+    }
+
+    #[test]
+    fn game_event_seasonal_db_delete_preserves_zero_event_start_time_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        let mut metadata = game_event_world_state_metadata_like_cpp(
+            8,
+            &[spawn_store_loader::GameEventDataLikeCpp {
+                event_id: 8,
+                start: 100,
+                occurence: 0,
+                state_raw: spawn_store_loader::GameEventStateLikeCpp::Normal as u8,
+                ..spawn_store_loader::GameEventDataLikeCpp::default()
+            }],
+        );
+        let outcome = game_event_world_state_start_outcome_like_cpp(8);
+
+        let summary = consume_game_event_live_update_side_effects_like_cpp(
+            &mut manager,
+            &mut metadata,
+            &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            &[8],
+            &outcome,
+            false,
+        );
+
+        assert_eq!(summary.reset_event_seasonal_quests_actions, 1);
+        assert_eq!(summary.reset_event_seasonal_quests_event_start_time_zero, 1);
+        assert_eq!(
+            summary.reset_event_seasonal_quests_event_start_time_nonzero,
+            0
+        );
+        assert_eq!(
+            summary.reset_event_seasonal_quests_player_session_runtime_unimplemented,
+            1
+        );
+        assert_eq!(
+            summary.reset_event_seasonal_quests_character_db_statement_unimplemented,
+            0
+        );
+        assert_eq!(
+            summary.reset_event_seasonal_quests_character_db_delete_queued,
+            1
+        );
+        let [db_delete] = summary.reset_event_seasonal_quest_db_deletes.as_slice() else {
+            panic!("expected exactly one seasonal quest DB delete")
+        };
+        let [
+            SqlParam::U16(actual_event_id),
+            SqlParam::I64(actual_event_start_time),
+        ] = db_delete.statement.params()
+        else {
+            panic!(
+                "expected seasonal quest DB delete params [U16(event_id), I64(event_start_time)]"
+            )
+        };
+        assert_eq!(*actual_event_id, 8);
+        assert_eq!(*actual_event_start_time, 0);
     }
 
     fn game_event_live_update_npc_vendor_record_like_cpp(

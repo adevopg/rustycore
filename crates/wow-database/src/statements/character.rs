@@ -147,6 +147,8 @@ pub enum CharStatements {
     DEL_GAME_EVENT_CONDITION_SAVE,
     /// INSERT INTO game_event_condition_save (eventEntry, condition_id, done) VALUES (?, ?, ?)
     INS_GAME_EVENT_CONDITION_SAVE,
+    /// DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?
+    DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT,
 
     // Quest status
     SEL_CHAR_QUEST_STATUS,
@@ -403,6 +405,9 @@ impl StatementDef for CharStatements {
             Self::INS_GAME_EVENT_CONDITION_SAVE => {
                 "INSERT INTO game_event_condition_save (eventEntry, condition_id, done) VALUES (?, ?, ?)"
             }
+            Self::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT => {
+                "DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?"
+            }
             Self::UPD_CHAR_XP => "UPDATE characters SET xp = ? WHERE guid = ?",
             Self::UPD_CHAR_LEVEL => "UPDATE characters SET level = ?, xp = ? WHERE guid = ?",
             Self::UPD_CHAR_MONEY => "UPDATE characters SET money = ? WHERE guid = ?",
@@ -651,6 +656,11 @@ mod tests {
                 .sql()
                 .is_empty()
         );
+        assert!(
+            !CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT
+                .sql()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -678,6 +688,10 @@ mod tests {
         assert_eq!(
             CharStatements::INS_GAME_EVENT_CONDITION_SAVE.sql(),
             "INSERT INTO game_event_condition_save (eventEntry, condition_id, done) VALUES (?, ?, ?)"
+        );
+        assert_eq!(
+            CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT.sql(),
+            "DELETE FROM character_queststatus_seasonal WHERE event = ? AND completedTime < ?"
         );
     }
 
@@ -733,6 +747,11 @@ mod tests {
             CharStatements::INS_GAME_EVENT_CONDITION_SAVE
                 .sql()
                 .contains("game_event_condition_save")
+        );
+        assert!(
+            CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT
+                .sql()
+                .contains("character_queststatus_seasonal")
         );
     }
 
@@ -1001,6 +1020,13 @@ mod tests {
                 .matches('?')
                 .count(),
             3
+        );
+        assert_eq!(
+            CharStatements::DEL_RESET_CHARACTER_QUESTSTATUS_SEASONAL_BY_EVENT
+                .sql()
+                .matches('?')
+                .count(),
+            2
         );
     }
 }
