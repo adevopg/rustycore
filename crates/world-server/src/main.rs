@@ -3495,6 +3495,7 @@ enum GameEventLiveUpdateActionLikeCpp {
     Spawn(i16),
     Unspawn(i16),
     ChangeEquipOrModel { event_id: u16, activate: bool },
+    RunSmartAIScripts { event_id: u16, activate: bool },
     UpdateEventQuests { event_id: u16, activate: bool },
     UpdateWorldStates { event_id: u16, activate: bool },
     UpdateNpcFlags { event_id: u16 },
@@ -3516,6 +3517,12 @@ struct GameEventLiveUpdateSideEffectSummaryLikeCpp {
     change_equip_or_model_live_creatures_mutated: usize,
     change_equip_or_model_stale_index_or_wrong_kind: usize,
     change_equip_or_model_model_validation_unavailable: usize,
+    run_smart_ai_actions: usize,
+    run_smart_ai_maps_visited: usize,
+    run_smart_ai_creature_candidates: usize,
+    run_smart_ai_gameobject_candidates: usize,
+    run_smart_ai_creature_ai_enabled_unrepresented: usize,
+    run_smart_ai_script_dispatch_unrepresented: usize,
     update_event_quests_actions: usize,
     update_event_quests_creature_records_seen: usize,
     update_event_quests_gameobject_records_seen: usize,
@@ -3591,6 +3598,10 @@ fn game_event_live_update_actions_like_cpp(
                     event_id: summary.event_id,
                     activate: true,
                 });
+                actions.push(GameEventLiveUpdateActionLikeCpp::RunSmartAIScripts {
+                    event_id: summary.event_id,
+                    activate: true,
+                });
             }
         }
     }
@@ -3598,6 +3609,10 @@ fn game_event_live_update_actions_like_cpp(
         if let spawn_store_loader::GameEventStopOutcomeLikeCpp::Stopped(summary) = outcome {
             if summary.unapply_event_requested {
                 let event_id = game_event_signed_id_like_cpp(summary.event_id);
+                actions.push(GameEventLiveUpdateActionLikeCpp::RunSmartAIScripts {
+                    event_id: summary.event_id,
+                    activate: false,
+                });
                 actions.push(GameEventLiveUpdateActionLikeCpp::Unspawn(event_id));
                 actions.push(GameEventLiveUpdateActionLikeCpp::Spawn(-event_id));
                 actions.push(GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
@@ -3808,6 +3823,27 @@ fn game_event_update_quests_like_cpp(
     summary
 }
 
+fn game_event_run_smart_ai_scripts_like_cpp(
+    manager: &wow_map::MapManager,
+    _event_id: u16,
+    _activate: bool,
+) -> GameEventLiveUpdateSideEffectSummaryLikeCpp {
+    let mut summary = GameEventLiveUpdateSideEffectSummaryLikeCpp::default();
+    manager.do_for_all_maps(|managed_map| {
+        let candidates = managed_map
+            .map()
+            .game_event_smart_ai_script_candidates_like_cpp();
+        summary.run_smart_ai_maps_visited += candidates.maps_visited;
+        summary.run_smart_ai_creature_candidates += candidates.in_world_creature_candidates;
+        summary.run_smart_ai_gameobject_candidates += candidates.in_world_gameobject_candidates;
+        summary.run_smart_ai_creature_ai_enabled_unrepresented +=
+            candidates.creature_ai_enabled_unrepresented;
+        summary.run_smart_ai_script_dispatch_unrepresented +=
+            candidates.script_dispatch_unrepresented;
+    });
+    summary
+}
+
 fn consume_game_event_live_update_side_effects_like_cpp(
     manager: &mut wow_map::MapManager,
     canonical_spawn_metadata: &mut spawn_store_loader::CanonicalSpawnMetadataLikeCpp,
@@ -3866,6 +3902,20 @@ fn consume_game_event_live_update_side_effects_like_cpp(
                     change_summary.change_equip_or_model_stale_index_or_wrong_kind;
                 summary.change_equip_or_model_model_validation_unavailable +=
                     change_summary.change_equip_or_model_model_validation_unavailable;
+            }
+            GameEventLiveUpdateActionLikeCpp::RunSmartAIScripts { event_id, activate } => {
+                let smart_ai_summary =
+                    game_event_run_smart_ai_scripts_like_cpp(manager, event_id, activate);
+                summary.run_smart_ai_actions += 1;
+                summary.run_smart_ai_maps_visited += smart_ai_summary.run_smart_ai_maps_visited;
+                summary.run_smart_ai_creature_candidates +=
+                    smart_ai_summary.run_smart_ai_creature_candidates;
+                summary.run_smart_ai_gameobject_candidates +=
+                    smart_ai_summary.run_smart_ai_gameobject_candidates;
+                summary.run_smart_ai_creature_ai_enabled_unrepresented +=
+                    smart_ai_summary.run_smart_ai_creature_ai_enabled_unrepresented;
+                summary.run_smart_ai_script_dispatch_unrepresented +=
+                    smart_ai_summary.run_smart_ai_script_dispatch_unrepresented;
             }
             GameEventLiveUpdateActionLikeCpp::UpdateEventQuests { event_id, activate } => {
                 let quest_summary =
@@ -8281,7 +8331,7 @@ mmap.enablePathFinding = 0
     }
 
     #[test]
-    fn game_event_world_state_start_stop_order_is_quests_worldstates_npcflags_vendor_like_cpp() {
+    fn game_event_smart_ai_start_stop_order_matches_cpp_live_update_like_cpp() {
         let outcome = spawn_store_loader::GameEventUpdateOutcomeLikeCpp {
             scanned_event_ids: vec![],
             check_outcomes: vec![],
@@ -8347,6 +8397,14 @@ mmap.enablePathFinding = 0
                     event_id: 2,
                     activate: true,
                 },
+                GameEventLiveUpdateActionLikeCpp::RunSmartAIScripts {
+                    event_id: 2,
+                    activate: true,
+                },
+                GameEventLiveUpdateActionLikeCpp::RunSmartAIScripts {
+                    event_id: 3,
+                    activate: false,
+                },
                 GameEventLiveUpdateActionLikeCpp::Unspawn(3),
                 GameEventLiveUpdateActionLikeCpp::Spawn(-3),
                 GameEventLiveUpdateActionLikeCpp::ChangeEquipOrModel {
@@ -8368,6 +8426,54 @@ mmap.enablePathFinding = 0
                 },
             ]
         );
+    }
+
+    #[test]
+    fn game_event_smart_ai_consume_no_maps_missing_event_noops_and_counts_action_like_cpp() {
+        let mut manager = wow_map::MapManager::default();
+        let mut metadata = game_event_world_state_metadata_like_cpp(0, &[]);
+        let outcome = spawn_store_loader::GameEventUpdateOutcomeLikeCpp {
+            scanned_event_ids: vec![],
+            check_outcomes: vec![],
+            next_check_outcomes: vec![],
+            queued_activation_event_ids: vec![7],
+            queued_deactivation_event_ids: vec![],
+            start_outcomes: vec![spawn_store_loader::GameEventStartOutcomeLikeCpp::Started(
+                spawn_store_loader::GameEventStartSummaryLikeCpp {
+                    event_id: 7,
+                    state_before_raw: 0,
+                    state_after_raw: 0,
+                    active_added: true,
+                    active_was_present: false,
+                    apply_new_event_requested: true,
+                    save_world_event_state_requested: false,
+                    force_game_event_update_requested: false,
+                    completed: false,
+                },
+            )],
+            stop_outcomes: vec![],
+            negative_spawn_event_ids: vec![],
+            world_nextphase_finished: vec![],
+            world_conditions_save_requested: vec![],
+            invalid_check_outcomes: vec![],
+            invalid_next_check_outcomes: vec![],
+            next_event_delay_secs_before_padding: 0,
+            next_update_delay_millis: 1_000,
+        };
+
+        let summary = consume_game_event_live_update_side_effects_like_cpp(
+            &mut manager,
+            &mut metadata,
+            &empty_loaded_grid_creature_respawn_caches_like_cpp(),
+            &[7],
+            &outcome,
+        );
+
+        assert_eq!(summary.run_smart_ai_actions, 1);
+        assert_eq!(summary.run_smart_ai_maps_visited, 0);
+        assert_eq!(summary.run_smart_ai_creature_candidates, 0);
+        assert_eq!(summary.run_smart_ai_gameobject_candidates, 0);
+        assert_eq!(summary.run_smart_ai_script_dispatch_unrepresented, 0);
     }
 
     fn game_event_live_update_npc_vendor_record_like_cpp(

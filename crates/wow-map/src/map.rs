@@ -235,6 +235,21 @@ pub struct DynamicMapTreeModelMutationOutcomeLikeCpp {
     pub unbalanced_after: u32,
 }
 
+/// Represented map-owned evidence for C++ `GameEventMgr::RunSmartAIScripts`.
+///
+/// Anchor: `GameEventMgr.cpp:1618-1655`. The C++ worker visits every map and
+/// dispatches only exact in-world Creature/GameObject AI callbacks. Rust does
+/// not model SmartAI/`ProcessEventsFor` here; this summary only counts exact
+/// typed `Map::map_objects` candidates and marks dispatch as unrepresented.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GameEventSmartAiScriptCandidateSummaryLikeCpp {
+    pub maps_visited: usize,
+    pub in_world_creature_candidates: usize,
+    pub in_world_gameobject_candidates: usize,
+    pub creature_ai_enabled_unrepresented: usize,
+    pub script_dispatch_unrepresented: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameObjectUpdateModelStatusLikeCpp {
     Updated,
@@ -10579,6 +10594,49 @@ where
         self.map_objects.get(&guid)
     }
 
+    /// Count exact typed in-world Creature/GameObject candidates for represented
+    /// C++ `GameEventMgr::RunSmartAIScripts` evidence.
+    ///
+    /// This intentionally reads only canonical `Map::map_objects`. Generic
+    /// fallback records are ignored because C++ uses typed object stores. Transport
+    /// records are also ignored even though they can expose a GameObject view; the
+    /// C++ hook worker's switch has no transport branch in this slice.
+    pub fn game_event_smart_ai_script_candidates_like_cpp(
+        &self,
+    ) -> GameEventSmartAiScriptCandidateSummaryLikeCpp {
+        let mut summary = GameEventSmartAiScriptCandidateSummaryLikeCpp {
+            maps_visited: 1,
+            ..GameEventSmartAiScriptCandidateSummaryLikeCpp::default()
+        };
+
+        for record in self.map_objects.values() {
+            match record.kind() {
+                AccessorObjectKind::Creature => {
+                    if record
+                        .creature()
+                        .is_some_and(|creature| creature.unit().world().object().is_in_world())
+                    {
+                        summary.in_world_creature_candidates += 1;
+                        summary.creature_ai_enabled_unrepresented += 1;
+                        summary.script_dispatch_unrepresented += 1;
+                    }
+                }
+                AccessorObjectKind::GameObject => {
+                    if record
+                        .game_object()
+                        .is_some_and(|game_object| game_object.world().object().is_in_world())
+                    {
+                        summary.in_world_gameobject_candidates += 1;
+                        summary.script_dispatch_unrepresented += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        summary
+    }
+
     /// Represented tail metrics from C++ `Map::Update` after
     /// `sScriptMgr->OnMapUpdate(this, t_diff)` (`Map.cpp:804-815`).
     ///
@@ -15307,6 +15365,56 @@ mod tests {
         area_trigger.world_mut().object_mut().add_to_world();
         area_trigger.set_spawn_id(spawn_id);
         area_trigger
+    }
+
+    #[test]
+    fn game_event_smart_ai_candidates_count_exact_in_world_creature_gameobject_only_like_cpp() {
+        let mut map = test_map();
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_creature(test_creature_for_spawn(55301, 5530101, true)).unwrap(),
+        )
+        .unwrap();
+
+        let mut not_in_world_creature = test_creature_for_spawn(55302, 5530102, true);
+        not_in_world_creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        map.insert_map_object_record(MapObjectRecord::new_creature(not_in_world_creature).unwrap())
+            .unwrap();
+
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(test_gameobject_for_spawn(55303, 5530103)).unwrap(),
+        )
+        .unwrap();
+
+        let mut not_in_world_gameobject = test_gameobject_for_spawn(55304, 5530104);
+        not_in_world_gameobject
+            .world_mut()
+            .object_mut()
+            .remove_from_world();
+        map.insert_map_object_record(
+            MapObjectRecord::new_game_object(not_in_world_gameobject).unwrap(),
+        )
+        .unwrap();
+
+        let generic = world_object_with_counter(HighGuid::GameObject, 5530105, 571, 7, true);
+        map.insert_map_object(AccessorObjectKind::GameObject, generic)
+            .unwrap();
+        map.insert_map_object_record(
+            MapObjectRecord::new_transport(test_transport(553_106, true)).unwrap(),
+        )
+        .unwrap();
+
+        let summary = map.game_event_smart_ai_script_candidates_like_cpp();
+
+        assert_eq!(summary.maps_visited, 1);
+        assert_eq!(summary.in_world_creature_candidates, 1);
+        assert_eq!(summary.in_world_gameobject_candidates, 1);
+        assert_eq!(summary.creature_ai_enabled_unrepresented, 1);
+        assert_eq!(summary.script_dispatch_unrepresented, 2);
     }
 
     #[test]
