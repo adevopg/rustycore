@@ -450,6 +450,49 @@ pub struct GameEventConditionLikeCpp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventWorldStateUpdateSourceLikeCpp {
+    Done,
+    Max,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameEventWorldStateValueSkipReasonLikeCpp {
+    NonFinite,
+    Negative,
+    OutOfI32Range,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameEventWorldStateUpdateEvidenceLikeCpp {
+    pub event_id: u16,
+    pub condition_id: u32,
+    pub variable_id: u32,
+    pub value: i32,
+    pub source: GameEventWorldStateUpdateSourceLikeCpp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameEventWorldStateUpdateSkipLikeCpp {
+    pub event_id: u16,
+    pub condition_id: u32,
+    pub variable_id: u32,
+    pub source: GameEventWorldStateUpdateSourceLikeCpp,
+    pub reason: GameEventWorldStateValueSkipReasonLikeCpp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GameEventWorldStateUpdateOutcomeLikeCpp {
+    Updates {
+        event_id: u16,
+        updates: Vec<GameEventWorldStateUpdateEvidenceLikeCpp>,
+        skipped: Vec<GameEventWorldStateUpdateSkipLikeCpp>,
+    },
+    MissingEvent {
+        event_id: u16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameEventConditionApplyOutcomeLikeCpp {
     Loaded,
     OutOfRangeEvent,
@@ -813,6 +856,48 @@ impl GameEventDataStoreLikeCpp {
         GameEventConditionSaveApplyOutcomeLikeCpp::Loaded
     }
 
+    pub fn send_world_state_update_evidence_like_cpp(
+        &self,
+        event_id: u16,
+    ) -> GameEventWorldStateUpdateOutcomeLikeCpp {
+        let Some(event) = self.event_like_cpp(event_id) else {
+            return GameEventWorldStateUpdateOutcomeLikeCpp::MissingEvent { event_id };
+        };
+
+        let mut updates = Vec::new();
+        let mut skipped = Vec::new();
+        for (&condition_id, condition) in &event.conditions {
+            if condition.done_world_state != 0 {
+                push_game_event_world_state_update_like_cpp(
+                    event_id,
+                    condition_id,
+                    u32::from(condition.done_world_state),
+                    condition.done,
+                    GameEventWorldStateUpdateSourceLikeCpp::Done,
+                    &mut updates,
+                    &mut skipped,
+                );
+            }
+            if condition.max_world_state != 0 {
+                push_game_event_world_state_update_like_cpp(
+                    event_id,
+                    condition_id,
+                    u32::from(condition.max_world_state),
+                    condition.req_num,
+                    GameEventWorldStateUpdateSourceLikeCpp::Max,
+                    &mut updates,
+                    &mut skipped,
+                );
+            }
+        }
+
+        GameEventWorldStateUpdateOutcomeLikeCpp::Updates {
+            event_id,
+            updates,
+            skipped,
+        }
+    }
+
     pub fn check_one_game_event_conditions_like_cpp(
         &mut self,
         event_id: u16,
@@ -941,6 +1026,49 @@ impl GameEventActiveSetLikeCpp {
 fn periodic_occurence_secs_like_cpp(occurence_minutes: u32) -> Option<u64> {
     (occurence_minutes != 0)
         .then(|| u64::from(occurence_minutes).saturating_mul(GAME_EVENT_MINUTE_SECS_LIKE_CPP))
+}
+
+fn push_game_event_world_state_update_like_cpp(
+    event_id: u16,
+    condition_id: u32,
+    variable_id: u32,
+    raw_value: f32,
+    source: GameEventWorldStateUpdateSourceLikeCpp,
+    updates: &mut Vec<GameEventWorldStateUpdateEvidenceLikeCpp>,
+    skipped: &mut Vec<GameEventWorldStateUpdateSkipLikeCpp>,
+) {
+    match world_state_value_i32_like_cpp(raw_value) {
+        Ok(value) => updates.push(GameEventWorldStateUpdateEvidenceLikeCpp {
+            event_id,
+            condition_id,
+            variable_id,
+            value,
+            source,
+        }),
+        Err(reason) => skipped.push(GameEventWorldStateUpdateSkipLikeCpp {
+            event_id,
+            condition_id,
+            variable_id,
+            source,
+            reason,
+        }),
+    }
+}
+
+fn world_state_value_i32_like_cpp(
+    raw_value: f32,
+) -> Result<i32, GameEventWorldStateValueSkipReasonLikeCpp> {
+    if !raw_value.is_finite() {
+        return Err(GameEventWorldStateValueSkipReasonLikeCpp::NonFinite);
+    }
+    if raw_value < 0.0 {
+        return Err(GameEventWorldStateValueSkipReasonLikeCpp::Negative);
+    }
+    let truncated = raw_value.trunc();
+    if f64::from(truncated) > f64::from(i32::MAX) {
+        return Err(GameEventWorldStateValueSkipReasonLikeCpp::OutOfI32Range);
+    }
+    Ok(truncated as i32)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5003,6 +5131,210 @@ mod tests {
         assert_eq!(report.loaded, 1);
         assert_eq!(report.skipped_missing_condition, 1);
         assert_eq!(report.skipped_out_of_range_event, 1);
+    }
+
+    #[test]
+    fn game_event_world_state_update_evidence_orders_conditions_done_then_max_like_cpp() {
+        let event = event_with_condition(
+            event_with_condition(
+                event(1, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 5),
+                20,
+                GameEventConditionLikeCpp {
+                    req_num: 9.8,
+                    done: 4.2,
+                    max_world_state: 220,
+                    done_world_state: 221,
+                },
+            ),
+            10,
+            GameEventConditionLikeCpp {
+                req_num: 7.0,
+                done: 3.0,
+                max_world_state: 120,
+                done_world_state: 121,
+            },
+        );
+        let events = game_event_store([event]);
+
+        assert_eq!(
+            events.send_world_state_update_evidence_like_cpp(1),
+            GameEventWorldStateUpdateOutcomeLikeCpp::Updates {
+                event_id: 1,
+                updates: vec![
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 10,
+                        variable_id: 121,
+                        value: 3,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                    },
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 10,
+                        variable_id: 120,
+                        value: 7,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                    },
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 20,
+                        variable_id: 221,
+                        value: 4,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                    },
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 20,
+                        variable_id: 220,
+                        value: 9,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                    },
+                ],
+                skipped: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn game_event_world_state_update_skips_zero_worldstate_ids_like_cpp() {
+        let events = game_event_store([event_with_condition(
+            event_with_condition(
+                event(1, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 5),
+                10,
+                GameEventConditionLikeCpp {
+                    req_num: 2.0,
+                    done: 1.0,
+                    max_world_state: 0,
+                    done_world_state: 88,
+                },
+            ),
+            20,
+            GameEventConditionLikeCpp {
+                req_num: 4.0,
+                done: 3.0,
+                max_world_state: 77,
+                done_world_state: 0,
+            },
+        )]);
+
+        assert_eq!(
+            events.send_world_state_update_evidence_like_cpp(1),
+            GameEventWorldStateUpdateOutcomeLikeCpp::Updates {
+                event_id: 1,
+                updates: vec![
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 10,
+                        variable_id: 88,
+                        value: 1,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                    },
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 20,
+                        variable_id: 77,
+                        value: 4,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                    },
+                ],
+                skipped: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn game_event_world_state_update_missing_event_is_explicit_like_cpp() {
+        let events = GameEventDataStoreLikeCpp::from_game_event_max_entry_like_cpp(Some(1));
+
+        assert_eq!(
+            events.send_world_state_update_evidence_like_cpp(2),
+            GameEventWorldStateUpdateOutcomeLikeCpp::MissingEvent { event_id: 2 }
+        );
+    }
+
+    #[test]
+    fn game_event_world_state_update_skips_invalid_numeric_values_like_cpp() {
+        let events = game_event_store([event_with_condition(
+            event_with_condition(
+                event_with_condition(
+                    event(1, GameEventStateLikeCpp::WorldConditions, 0, 0, 0, 5),
+                    10,
+                    GameEventConditionLikeCpp {
+                        req_num: f32::INFINITY,
+                        done: -1.0,
+                        max_world_state: 110,
+                        done_world_state: 111,
+                    },
+                ),
+                20,
+                GameEventConditionLikeCpp {
+                    req_num: 2_147_483_648.0,
+                    done: 2.0,
+                    max_world_state: 220,
+                    done_world_state: 221,
+                },
+            ),
+            30,
+            GameEventConditionLikeCpp {
+                req_num: 3.0,
+                done: f32::NAN,
+                max_world_state: 330,
+                done_world_state: 331,
+            },
+        )]);
+
+        assert_eq!(
+            events.send_world_state_update_evidence_like_cpp(1),
+            GameEventWorldStateUpdateOutcomeLikeCpp::Updates {
+                event_id: 1,
+                updates: vec![
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 20,
+                        variable_id: 221,
+                        value: 2,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                    },
+                    GameEventWorldStateUpdateEvidenceLikeCpp {
+                        event_id: 1,
+                        condition_id: 30,
+                        variable_id: 330,
+                        value: 3,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                    },
+                ],
+                skipped: vec![
+                    GameEventWorldStateUpdateSkipLikeCpp {
+                        event_id: 1,
+                        condition_id: 10,
+                        variable_id: 111,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                        reason: GameEventWorldStateValueSkipReasonLikeCpp::Negative,
+                    },
+                    GameEventWorldStateUpdateSkipLikeCpp {
+                        event_id: 1,
+                        condition_id: 10,
+                        variable_id: 110,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                        reason: GameEventWorldStateValueSkipReasonLikeCpp::NonFinite,
+                    },
+                    GameEventWorldStateUpdateSkipLikeCpp {
+                        event_id: 1,
+                        condition_id: 20,
+                        variable_id: 220,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Max,
+                        reason: GameEventWorldStateValueSkipReasonLikeCpp::OutOfI32Range,
+                    },
+                    GameEventWorldStateUpdateSkipLikeCpp {
+                        event_id: 1,
+                        condition_id: 30,
+                        variable_id: 331,
+                        source: GameEventWorldStateUpdateSourceLikeCpp::Done,
+                        reason: GameEventWorldStateValueSkipReasonLikeCpp::NonFinite,
+                    },
+                ],
+            }
+        );
     }
 
     #[test]
