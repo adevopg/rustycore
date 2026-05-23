@@ -5,8 +5,8 @@
 
 //! Quest system data structures and in-memory store.
 //!
-//! Loads `quest_template`, `quest_objectives`, `creature_queststarter`
-//! and `creature_questender` from the world database at startup.
+//! Loads `quest_template`, `quest_objectives`, creature quest relations,
+//! and GameObject quest relations from the world database at startup.
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -232,6 +232,10 @@ pub struct QuestStore {
     pub starter_quests: HashMap<u32, Vec<u32>>,
     /// NPC entry → list of quest IDs this NPC ends.
     pub ender_quests: HashMap<u32, Vec<u32>>,
+    /// GameObject template entry → list of quest IDs this GameObject starts.
+    pub gameobject_starter_quests: HashMap<u32, Vec<u32>>,
+    /// GameObject template entry → list of quest IDs this GameObject ends.
+    pub gameobject_ender_quests: HashMap<u32, Vec<u32>>,
 }
 
 impl QuestStore {
@@ -240,6 +244,8 @@ impl QuestStore {
             quests: HashMap::new(),
             starter_quests: HashMap::new(),
             ender_quests: HashMap::new(),
+            gameobject_starter_quests: HashMap::new(),
+            gameobject_ender_quests: HashMap::new(),
         }
     }
 
@@ -248,6 +254,8 @@ impl QuestStore {
             quests: quests.into_iter().map(|quest| (quest.id, quest)).collect(),
             starter_quests: HashMap::new(),
             ender_quests: HashMap::new(),
+            gameobject_starter_quests: HashMap::new(),
+            gameobject_ender_quests: HashMap::new(),
         }
     }
 
@@ -278,6 +286,56 @@ impl QuestStore {
             .unwrap_or_default()
     }
 
+    /// Get all quests a given GameObject can offer.
+    pub fn quests_for_gameobject_starter(&self, go_entry: u32) -> Vec<&QuestTemplate> {
+        self.gameobject_starter_quests
+            .get(&go_entry)
+            .map(|ids| ids.iter().filter_map(|id| self.quests.get(id)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Get all quests a given GameObject can complete/turn-in.
+    pub fn quests_for_gameobject_ender(&self, go_entry: u32) -> Vec<&QuestTemplate> {
+        self.gameobject_ender_quests
+            .get(&go_entry)
+            .map(|ids| ids.iter().filter_map(|id| self.quests.get(id)).collect())
+            .unwrap_or_default()
+    }
+
+    /// C++ `ObjectMgr::LoadQuestRelationsHelper` insert guard for `gameobject_queststarter`.
+    pub fn insert_gameobject_starter_relation_like_cpp(
+        &mut self,
+        go_entry: u32,
+        quest_id: u32,
+    ) -> bool {
+        if !self.quests.contains_key(&quest_id) {
+            return false;
+        }
+
+        self.gameobject_starter_quests
+            .entry(go_entry)
+            .or_default()
+            .push(quest_id);
+        true
+    }
+
+    /// C++ `ObjectMgr::LoadQuestRelationsHelper` insert guard for `gameobject_questender`.
+    pub fn insert_gameobject_ender_relation_like_cpp(
+        &mut self,
+        go_entry: u32,
+        quest_id: u32,
+    ) -> bool {
+        if !self.quests.contains_key(&quest_id) {
+            return false;
+        }
+
+        self.gameobject_ender_quests
+            .entry(go_entry)
+            .or_default()
+            .push(quest_id);
+        true
+    }
+
     /// Whether a given NPC starts any quest.
     pub fn npc_has_start_quests(&self, npc_entry: u32) -> bool {
         self.starter_quests
@@ -289,6 +347,20 @@ impl QuestStore {
     pub fn npc_has_end_quests(&self, npc_entry: u32) -> bool {
         self.ender_quests
             .get(&npc_entry)
+            .map_or(false, |v| !v.is_empty())
+    }
+
+    /// Whether a given GameObject starts any quest.
+    pub fn gameobject_has_start_quests(&self, go_entry: u32) -> bool {
+        self.gameobject_starter_quests
+            .get(&go_entry)
+            .map_or(false, |v| !v.is_empty())
+    }
+
+    /// Whether a given GameObject ends any quest.
+    pub fn gameobject_has_end_quests(&self, go_entry: u32) -> bool {
+        self.gameobject_ender_quests
+            .get(&go_entry)
             .map_or(false, |v| !v.is_empty())
     }
 }
@@ -516,10 +588,45 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
         }
     }
 
+    // ── Load gameobject quest starters ────────────────────────────────────
+    // C++ validates missing/non-questgiver GameObject templates only as a post-insert log pass;
+    // QuestStore owns quest metadata only, so that GO template/type validation remains pending.
+    let stmt = db.prepare(WorldStatements::SEL_GAMEOBJECT_QUEST_STARTERS);
+    let result = db.query(&stmt).await?;
+    if !result.is_empty() {
+        let mut result = result;
+        loop {
+            let go_entry: u32 = result.try_read::<u32>(0).unwrap_or(0);
+            let quest: u32 = result.try_read::<u32>(1).unwrap_or(0);
+            store.insert_gameobject_starter_relation_like_cpp(go_entry, quest);
+            if !result.next_row() {
+                break;
+            }
+        }
+    }
+
+    // ── Load gameobject quest enders ──────────────────────────────────────
+    // C++ also maintains a quest->GO reverse map for enders; no Rust consumer owns it yet.
+    let stmt = db.prepare(WorldStatements::SEL_GAMEOBJECT_QUEST_ENDERS);
+    let result = db.query(&stmt).await?;
+    if !result.is_empty() {
+        let mut result = result;
+        loop {
+            let go_entry: u32 = result.try_read::<u32>(0).unwrap_or(0);
+            let quest: u32 = result.try_read::<u32>(1).unwrap_or(0);
+            store.insert_gameobject_ender_relation_like_cpp(go_entry, quest);
+            if !result.next_row() {
+                break;
+            }
+        }
+    }
+
     info!(
-        "Quest NPC relations: {} starters, {} enders",
+        "Quest relations: NPC {} starters / {} enders, GameObject {} starters / {} enders",
         store.starter_quests.len(),
-        store.ender_quests.len()
+        store.ender_quests.len(),
+        store.gameobject_starter_quests.len(),
+        store.gameobject_ender_quests.len()
     );
 
     Ok(store)
@@ -672,5 +779,60 @@ mod tests {
                 .event_id_for_quest_like_cpp(),
             0
         );
+    }
+
+    #[test]
+    fn gameobject_quest_relations_skip_missing_quests_and_stay_separate_from_creatures_like_cpp() {
+        let mut quest_two = quest_with_sort_and_flags(0, 0, 0);
+        quest_two.id = 2;
+        let mut store =
+            QuestStore::from_quests_like_cpp([quest_with_sort_and_flags(0, 0, 0), quest_two]);
+
+        store.starter_quests.entry(10).or_default().push(1);
+        store.ender_quests.entry(10).or_default().push(2);
+
+        assert!(store.insert_gameobject_starter_relation_like_cpp(1000, 1));
+        assert!(store.insert_gameobject_ender_relation_like_cpp(1000, 2));
+        assert!(!store.insert_gameobject_starter_relation_like_cpp(1000, 999));
+        assert!(!store.insert_gameobject_ender_relation_like_cpp(1000, 999));
+
+        assert_eq!(
+            store
+                .quests_for_gameobject_starter(1000)
+                .into_iter()
+                .map(|quest| quest.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            store
+                .quests_for_gameobject_ender(1000)
+                .into_iter()
+                .map(|quest| quest.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(
+            store
+                .quests_for_starter(10)
+                .into_iter()
+                .map(|quest| quest.id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            store
+                .quests_for_ender(10)
+                .into_iter()
+                .map(|quest| quest.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert!(store.gameobject_has_start_quests(1000));
+        assert!(store.gameobject_has_end_quests(1000));
+        assert!(!store.gameobject_has_start_quests(2000));
+        assert!(!store.gameobject_has_end_quests(2000));
+        assert!(!store.npc_has_start_quests(1000));
+        assert!(!store.npc_has_end_quests(1000));
     }
 }

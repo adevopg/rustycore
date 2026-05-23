@@ -2828,12 +2828,14 @@ mod tests {
         let area_store = crate::AreaTableStore::from_entries([
             crate::AreaTableEntry {
                 id: 300,
+                continent_id: 0,
                 parent_area_id: 0,
                 mount_flags: 0,
                 flags: 0,
             },
             crate::AreaTableEntry {
                 id: 301,
+                continent_id: 0,
                 parent_area_id: 300,
                 mount_flags: 0,
                 flags: crate::area::AREA_FLAG_IS_SUBZONE_LIKE_CPP,
@@ -3377,12 +3379,14 @@ mod tests {
         let area_store = crate::AreaTableStore::from_entries([
             crate::AreaTableEntry {
                 id: 7,
+                continent_id: 0,
                 parent_area_id: 0,
                 mount_flags: 0,
                 flags: 0,
             },
             crate::AreaTableEntry {
                 id: 8,
+                continent_id: 0,
                 parent_area_id: 7,
                 mount_flags: 0,
                 flags: crate::area::AREA_FLAG_IS_SUBZONE_LIKE_CPP,

@@ -281,6 +281,8 @@ pub enum WorldStatements {
     SEL_GAME_EVENT_SEASONAL_QUEST_RELATIONS,
     SEL_QUEST_STARTERS,
     SEL_QUEST_ENDERS,
+    SEL_GAMEOBJECT_QUEST_STARTERS,
+    SEL_GAMEOBJECT_QUEST_ENDERS,
     /// Get TrainerId from creature_trainer by creature entry (NPC template ID).
     SEL_TRAINER_BY_CREATURE,
     /// Load all spells for a trainer by TrainerId.
@@ -892,6 +894,8 @@ impl StatementDef for WorldStatements {
             }
             Self::SEL_QUEST_STARTERS => "SELECT id, quest FROM creature_queststarter",
             Self::SEL_QUEST_ENDERS => "SELECT id, quest FROM creature_questender",
+            Self::SEL_GAMEOBJECT_QUEST_STARTERS => "SELECT id, quest FROM gameobject_queststarter",
+            Self::SEL_GAMEOBJECT_QUEST_ENDERS => "SELECT id, quest FROM gameobject_questender",
         }
     }
 }
@@ -942,5 +946,16 @@ mod tests {
             "SELECT questId, eventEntry FROM game_event_seasonal_questrelation"
         );
         assert_eq!(sql.matches('?').count(), 0);
+    }
+
+    #[test]
+    fn gameobject_quest_relation_statements_match_cpp_sql_exactly() {
+        let starter_sql = WorldStatements::SEL_GAMEOBJECT_QUEST_STARTERS.sql();
+        let ender_sql = WorldStatements::SEL_GAMEOBJECT_QUEST_ENDERS.sql();
+
+        assert_eq!(starter_sql, "SELECT id, quest FROM gameobject_queststarter");
+        assert_eq!(ender_sql, "SELECT id, quest FROM gameobject_questender");
+        assert_eq!(starter_sql.matches('?').count(), 0);
+        assert_eq!(ender_sql.matches('?').count(), 0);
     }
 }

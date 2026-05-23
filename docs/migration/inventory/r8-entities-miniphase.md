@@ -16,6 +16,11 @@
 - None currently tracked.
 
 ## Closed Tasks
+- [x] **#NEXT.R8.ENTITIES.578** QuestStore GameObject queststarter/questender metadata foundation.
+  Status: represented-complete for bounded pure `wow-data` metadata foundation only; independent review `APROBADO`; CI `CI_OK`; local commit is this slice closeout at current #578 HEAD; no push/restart/manual-test-ready claim. C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:8505-8539`; `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:8541-8553`; `/home/server/woltk-trinity-legacy/src/server/game/Globals/ObjectMgr.cpp:8555-8567`.
+  Rust targets: `crates/wow-database/src/statements/world.rs`, `crates/wow-data/src/quest.rs`, docs/inventory/handoff.
+  Acceptance: independent review `APROBADO`; CI `CI_OK`; `cargo fmt --check`; `cargo test -p wow-database gameobject_quest` (1 passed); `cargo test -p wow-data gameobject_quest` (1 passed); `cargo test -p wow-data phase_area_rows_skip_missing_area_or_phase_like_cpp` (1 passed); `PROTOC=/home/cdmonio/.local/protoc/bin/protoc cargo check -p world-server`; `git diff --check`; TSV 9-column check.
+  Boundaries: separate GameObject relation maps only; missing quest templates are skipped like C++; GameObjectTemplate existence/type validation is represented as pending because `QuestStore` does not own GO templates; no quest handler, GameEvent active relation cache, session, map, PlayerRegistry, runtime, install/restart/push/manual-test readiness.
 - [x] **#NEXT.R8.ENTITIES.577** SendGlobalMessage Player::IsInWorld receiver gate for represented GameEvent/WorldState fanout.
   Status: represented-complete for bounded receiver gate only; independent review `APROBADO`; CI `CI_OK`; local commit is this slice closeout at current #577 HEAD. Depends: `#NEXT.R8.ENTITIES.574`, `#NEXT.R8.ENTITIES.576`. C++ refs: `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:2882-2894`; `/home/server/woltk-trinity-legacy/src/server/game/World/World.cpp:3034-3038`.
   Rust targets: `crates/wow-network/src/player_registry.rs`, `crates/wow-world/src/session.rs`, `crates/wow-world/src/handlers/movement.rs`, `crates/wow-world/src/handlers/group.rs`, `crates/wow-world/src/handlers/loot.rs`, `crates/world-server/src/main.rs`, docs/inventory/handoff.
