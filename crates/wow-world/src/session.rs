@@ -118,6 +118,10 @@ pub(crate) struct ResetSeasonalQuestStatusOutcomeLikeCpp {
     pub event_start_time: u64,
     pub reason: ResetSeasonalQuestStatusReasonLikeCpp,
     pub removed_quest_ids: Vec<u32>,
+    pub completed_bit_cleared: usize,
+    pub completed_bit_skipped_no_quest_v2_store: usize,
+    pub completed_bit_skipped_zero_unique_bit: usize,
+    pub completed_bit_no_change_or_noop: usize,
     pub completed_bit_clear_unrepresented: usize,
     pub event_bucket_erased: bool,
     pub seasonal_quest_changed: bool,
@@ -6912,6 +6916,27 @@ impl WorldSession {
         canonical_changed || bridge_changed
     }
 
+    fn clear_loaded_quest_completed_bit_like_cpp(&mut self, quest_bit: u32) -> bool {
+        if quest_bit == 0 {
+            return false;
+        }
+
+        let field_offset = (quest_bit - 1) / QUESTS_COMPLETED_BITS_PER_BLOCK;
+        if field_offset as usize >= QUESTS_COMPLETED_BITS_SIZE {
+            return false;
+        }
+
+        let canonical_changed = self
+            .mutate_canonical_player_like_cpp(|player| {
+                player.set_quest_completed_bit_like_cpp(quest_bit, false)
+            })
+            .unwrap_or(false);
+        let bridge_changed = self
+            .represented_quest_completed_bits_like_cpp
+            .remove(&quest_bit);
+        canonical_changed || bridge_changed
+    }
+
     /// Set the player XP table (xp required per level).
     pub fn set_player_xp_table(&mut self, table: Arc<Vec<u32>>) {
         self.player_xp_table = Some(table);
@@ -7426,6 +7451,10 @@ impl WorldSession {
                 event_start_time,
                 reason: ResetSeasonalQuestStatusReasonLikeCpp::MissingEvent,
                 removed_quest_ids: Vec::new(),
+                completed_bit_cleared: 0,
+                completed_bit_skipped_no_quest_v2_store: 0,
+                completed_bit_skipped_zero_unique_bit: 0,
+                completed_bit_no_change_or_noop: 0,
                 completed_bit_clear_unrepresented: 0,
                 event_bucket_erased: false,
                 seasonal_quest_changed: self.seasonal_quest_changed_like_cpp,
@@ -7438,6 +7467,10 @@ impl WorldSession {
                 event_start_time,
                 reason: ResetSeasonalQuestStatusReasonLikeCpp::EmptyEvent,
                 removed_quest_ids: Vec::new(),
+                completed_bit_cleared: 0,
+                completed_bit_skipped_no_quest_v2_store: 0,
+                completed_bit_skipped_zero_unique_bit: 0,
+                completed_bit_no_change_or_noop: 0,
                 completed_bit_clear_unrepresented: 0,
                 event_bucket_erased: false,
                 seasonal_quest_changed: self.seasonal_quest_changed_like_cpp,
@@ -7460,6 +7493,29 @@ impl WorldSession {
             self.seasonal_quests_like_cpp.remove(&event_id);
         }
 
+        let mut completed_bit_cleared = 0;
+        let mut completed_bit_skipped_no_quest_v2_store = 0;
+        let mut completed_bit_skipped_zero_unique_bit = 0;
+        let mut completed_bit_no_change_or_noop = 0;
+        for quest_id in &removed_quest_ids {
+            let Some(quest_v2_store) = self.quest_v2_store.as_ref().map(Arc::clone) else {
+                completed_bit_skipped_no_quest_v2_store += 1;
+                continue;
+            };
+
+            let quest_bit = quest_v2_store.get_quest_unique_bit_flag_like_cpp(*quest_id);
+            if quest_bit == 0 {
+                completed_bit_skipped_zero_unique_bit += 1;
+                continue;
+            }
+
+            if self.clear_loaded_quest_completed_bit_like_cpp(quest_bit) {
+                completed_bit_cleared += 1;
+            } else {
+                completed_bit_no_change_or_noop += 1;
+            }
+        }
+
         ResetSeasonalQuestStatusOutcomeLikeCpp {
             event_id,
             event_start_time,
@@ -7468,8 +7524,12 @@ impl WorldSession {
             } else {
                 ResetSeasonalQuestStatusReasonLikeCpp::RemovedOlderCompletions
             },
-            completed_bit_clear_unrepresented: removed_quest_ids.len(),
             removed_quest_ids,
+            completed_bit_cleared,
+            completed_bit_skipped_no_quest_v2_store,
+            completed_bit_skipped_zero_unique_bit,
+            completed_bit_no_change_or_noop,
+            completed_bit_clear_unrepresented: 0,
             event_bucket_erased,
             seasonal_quest_changed: self.seasonal_quest_changed_like_cpp,
         }
@@ -17124,7 +17184,9 @@ mod tests {
             ResetSeasonalQuestStatusReasonLikeCpp::RemovedOlderCompletions
         );
         assert_eq!(outcome.removed_quest_ids, vec![1001]);
-        assert_eq!(outcome.completed_bit_clear_unrepresented, 1);
+        assert_eq!(outcome.completed_bit_cleared, 0);
+        assert_eq!(outcome.completed_bit_skipped_no_quest_v2_store, 1);
+        assert_eq!(outcome.completed_bit_clear_unrepresented, 0);
         assert!(outcome.event_bucket_erased);
         assert_eq!(session.seasonal_quest_bucket_like_cpp(7), None);
         assert!(!session.seasonal_quest_changed_like_cpp());
@@ -17136,6 +17198,12 @@ mod tests {
         let (mut session, _, _) = make_session();
         session.seed_seasonal_quest_status_like_cpp(7, 1001, 100);
         session.seed_seasonal_quest_status_like_cpp(7, 1002, 101);
+        session.set_quest_v2_store(Arc::new(seasonal_quest_v2_store_like_cpp([
+            (1001, 65),
+            (1002, 66),
+        ])));
+        assert!(session.set_loaded_quest_completed_bit_like_cpp(65));
+        assert!(session.set_loaded_quest_completed_bit_like_cpp(66));
         session.set_seasonal_quest_changed_like_cpp_for_test(true);
 
         let outcome = session.reset_seasonal_quest_status_like_cpp(7, 100);
@@ -17145,12 +17213,84 @@ mod tests {
             ResetSeasonalQuestStatusReasonLikeCpp::NoOlderCompletions
         );
         assert!(outcome.removed_quest_ids.is_empty());
+        assert_eq!(outcome.completed_bit_cleared, 0);
         let bucket = session
             .seasonal_quest_bucket_like_cpp(7)
             .expect("bucket kept");
         assert_eq!(bucket.get(&1001), Some(&100));
         assert_eq!(bucket.get(&1002), Some(&101));
+        assert_eq!(
+            session.represented_quest_completed_bits_like_cpp,
+            BTreeSet::from([65, 66])
+        );
         assert!(!session.seasonal_quest_changed_like_cpp());
+    }
+
+    #[test]
+    fn reset_seasonal_clears_quest_v2_completed_bit_from_bridge_and_canonical_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 12_345);
+        let canonical = shared_canonical_map_manager();
+        let position = Position::new(1.0, 2.0, 3.0, 0.0);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_map_position_like_cpp(571, position);
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        add_canonical_test_player_on_map(&canonical, player_guid, position, 571, 0);
+        session.seed_seasonal_quest_status_like_cpp(7, 1001, 99);
+        session.set_quest_v2_store(Arc::new(seasonal_quest_v2_store_like_cpp([(1001, 65)])));
+        assert!(session.set_loaded_quest_completed_bit_like_cpp(65));
+
+        let outcome = session.reset_seasonal_quest_status_like_cpp(7, 100);
+
+        assert_eq!(outcome.removed_quest_ids, vec![1001]);
+        assert_eq!(outcome.completed_bit_cleared, 1);
+        assert_eq!(outcome.completed_bit_skipped_no_quest_v2_store, 0);
+        assert_eq!(outcome.completed_bit_skipped_zero_unique_bit, 0);
+        assert_eq!(outcome.completed_bit_no_change_or_noop, 0);
+        assert_eq!(outcome.completed_bit_clear_unrepresented, 0);
+        assert_eq!(session.seasonal_quest_bucket_like_cpp(7), None);
+        assert!(session.represented_quest_completed_bits_like_cpp.is_empty());
+        let guard = canonical.lock().expect("canonical lock");
+        let player = guard
+            .find_map(571, 0)
+            .expect("map")
+            .map()
+            .get_typed_player(player_guid)
+            .expect("player");
+        assert_eq!(player.quest_completed_block_like_cpp(1), Some(0));
+    }
+
+    #[test]
+    fn reset_seasonal_missing_quest_v2_store_removes_without_inventing_bit_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.seed_seasonal_quest_status_like_cpp(7, 1001, 99);
+
+        let outcome = session.reset_seasonal_quest_status_like_cpp(7, 100);
+
+        assert_eq!(outcome.removed_quest_ids, vec![1001]);
+        assert_eq!(outcome.completed_bit_cleared, 0);
+        assert_eq!(outcome.completed_bit_skipped_no_quest_v2_store, 1);
+        assert_eq!(outcome.completed_bit_clear_unrepresented, 0);
+        assert_eq!(session.seasonal_quest_bucket_like_cpp(7), None);
+        assert!(session.represented_quest_completed_bits_like_cpp.is_empty());
+    }
+
+    #[test]
+    fn reset_seasonal_zero_or_missing_unique_bit_removes_without_inventing_bit_like_cpp() {
+        let (mut session, _, _) = make_session();
+        session.seed_seasonal_quest_status_like_cpp(7, 1001, 99);
+        session.seed_seasonal_quest_status_like_cpp(7, 1002, 98);
+        session.set_quest_v2_store(Arc::new(seasonal_quest_v2_store_like_cpp([(1001, 0)])));
+
+        let outcome = session.reset_seasonal_quest_status_like_cpp(7, 100);
+
+        assert_eq!(outcome.removed_quest_ids, vec![1001, 1002]);
+        assert_eq!(outcome.completed_bit_cleared, 0);
+        assert_eq!(outcome.completed_bit_skipped_zero_unique_bit, 2);
+        assert_eq!(outcome.completed_bit_skipped_no_quest_v2_store, 0);
+        assert_eq!(outcome.completed_bit_clear_unrepresented, 0);
+        assert_eq!(session.seasonal_quest_bucket_like_cpp(7), None);
+        assert!(session.represented_quest_completed_bits_like_cpp.is_empty());
     }
 
     #[test]
