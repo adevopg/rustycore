@@ -128,14 +128,23 @@ impl WorldSession {
             }
         };
 
-        let npc_entry = guid.entry();
-        let status = self.get_quest_giver_status(npc_entry);
+        let Some(source) = self.represented_quest_giver_status_query_source_like_cpp(guid) else {
+            debug!(
+                account = self.account_id,
+                ?guid,
+                "QuestGiverStatusQuery: represented ObjectAccessor mask UNIT|GAMEOBJECT miss"
+            );
+            return;
+        };
+        let status = self.get_represented_quest_giver_status_like_cpp(source);
 
         debug!(
             account = self.account_id,
-            npc_entry = npc_entry,
+            ?guid,
+            source_entry = source.entry(),
+            source_kind = source.kind_name(),
             status = status,
-            "QuestGiverStatus"
+            "QuestGiverStatus represented source resolved"
         );
 
         self.send_packet(&QuestGiverStatus { guid, status });
@@ -779,37 +788,86 @@ impl WorldSession {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// Returns the quest giver status for an NPC (controls the ! ? icon above its head).
-    fn get_quest_giver_status(&self, npc_entry: u32) -> u64 {
+    /// Resolves CMSG_QUEST_GIVER_STATUS_QUERY through the represented equivalent of
+    /// C++ `ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT)`.
+    /// Missing canonical objects and unsupported Player/Item/other GUID types fail closed with no packet.
+    fn represented_quest_giver_status_query_source_like_cpp(
+        &self,
+        guid: wow_core::ObjectGuid,
+    ) -> Option<RepresentedQuestGiverStatusSourceLikeCpp> {
+        if guid.is_any_type_creature() {
+            // C++ TYPEID_UNIT branch also checks Creature::IsHostileTo before computing
+            // dialog status. Exact faction/hostility is not represented here yet; a
+            // resolved canonical Creature is treated as non-hostile only for this
+            // bounded represented status calculation.
+            let access = self.canonical_creature_access_like_cpp(guid)?;
+            return Some(RepresentedQuestGiverStatusSourceLikeCpp::Creature {
+                entry: access.entry,
+            });
+        }
+
+        if guid.is_game_object() {
+            let access = self.canonical_gameobject_access_like_cpp(guid)?;
+            return Some(RepresentedQuestGiverStatusSourceLikeCpp::GameObject {
+                entry: access.entry,
+            });
+        }
+
+        None
+    }
+
+    /// Bounded representation of C++ `Player::GetQuestDialogStatus(Object const*)`.
+    /// Creature sources use Creature starter/ender relations; GameObject sources use
+    /// GO starter/ender relations. Full AI dialog status, ConditionMgr, event overlays
+    /// and important/daily/trivial/future/repeatable/covenant/legendary/POI bit flags
+    /// remain documented migration gaps for this slice.
+    fn get_represented_quest_giver_status_like_cpp(
+        &self,
+        source: RepresentedQuestGiverStatusSourceLikeCpp,
+    ) -> u64 {
         let Some(store) = &self.quest_store else {
             return quest_giver_status::NONE;
         };
 
-        // Check if NPC ends any quest the player has completed (blue ?)
-        // C# ref: GetQuestDialogStatus → QuestGiverStatus.Reward
-        let has_turn_in = store.quests_for_ender(npc_entry).iter().any(|q| {
-            !self.is_quest_disabled_like_cpp(q.id)
-                && self
-                    .player_quests
-                    .get(&q.id)
-                    .map_or(false, |qs| qs.status == 2)
-        });
+        let has_turn_in = match source {
+            RepresentedQuestGiverStatusSourceLikeCpp::Creature { entry } => store
+                .quests_for_ender(entry)
+                .iter()
+                .any(|q| self.completed_quest_can_reward_status_like_cpp(q.id)),
+            RepresentedQuestGiverStatusSourceLikeCpp::GameObject { entry } => store
+                .quests_for_gameobject_ender(entry)
+                .iter()
+                .any(|q| self.completed_quest_can_reward_status_like_cpp(q.id)),
+        };
 
         if has_turn_in {
-            return quest_giver_status::CAN_REWARD; // blue ?
+            return quest_giver_status::CAN_REWARD;
         }
 
-        // Check if NPC starts any quest the player can take (yellow !)
-        let has_available = store
-            .quests_for_starter(npc_entry)
-            .iter()
-            .any(|q| self.can_take_quest(q));
+        let has_available = match source {
+            RepresentedQuestGiverStatusSourceLikeCpp::Creature { entry } => store
+                .quests_for_starter(entry)
+                .iter()
+                .any(|q| self.can_take_quest(q)),
+            RepresentedQuestGiverStatusSourceLikeCpp::GameObject { entry } => store
+                .quests_for_gameobject_starter(entry)
+                .iter()
+                .any(|q| self.can_take_quest(q)),
+        };
 
         if has_available {
-            quest_giver_status::AVAILABLE // yellow !
+            quest_giver_status::AVAILABLE
         } else {
             quest_giver_status::NONE
         }
+    }
+
+    fn completed_quest_can_reward_status_like_cpp(&self, quest_id: u32) -> bool {
+        !self.is_quest_disabled_like_cpp(quest_id)
+            && self
+                .player_quests
+                .get(&quest_id)
+                .is_some_and(|qs| qs.status == 2)
     }
 
     /// Check if the player currently has an active quest with the given ID.
@@ -1131,6 +1189,317 @@ impl WorldSession {
                 seasonal_outcome.completed_bit_no_change_or_noop,
             "Loaded player quests"
         );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepresentedQuestGiverStatusSourceLikeCpp {
+    Creature { entry: u32 },
+    GameObject { entry: u32 },
+}
+
+impl RepresentedQuestGiverStatusSourceLikeCpp {
+    fn entry(self) -> u32 {
+        match self {
+            Self::Creature { entry } | Self::GameObject { entry } => entry,
+        }
+    }
+
+    fn kind_name(self) -> &'static str {
+        match self {
+            Self::Creature { .. } => "Creature",
+            Self::GameObject { .. } => "GameObject",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_core::guid::HighGuid;
+    use wow_core::{ObjectGuid, Position};
+    use wow_data::quest::{
+        QUEST_ITEM_DROP_COUNT, QUEST_REWARD_CHOICES_COUNT, QUEST_REWARD_DISPLAY_SPELL_COUNT,
+        QUEST_REWARD_ITEM_COUNT, QuestStore, QuestTemplate,
+    };
+    use wow_packet::WorldPacket;
+
+    fn make_session() -> (WorldSession, flume::Receiver<Vec<u8>>) {
+        let (_pkt_tx, pkt_rx) = flume::bounded(8);
+        let (send_tx, send_rx) = flume::bounded(8);
+        let mut session = WorldSession::new(
+            1,
+            "QuestStatusTest".into(),
+            0,
+            2,
+            9,
+            54261,
+            vec![0; 40],
+            "enUS".into(),
+            pkt_rx,
+            send_tx,
+        );
+        session.set_player_guid(Some(ObjectGuid::create_player(1, 42)));
+        session.set_loaded_player_identity_like_cpp(571, 1, 1, 80, 0);
+        session.set_player_position_like_cpp(Position::new(10.0, 0.0, 0.0, 0.0));
+        (session, send_rx)
+    }
+
+    fn quest_template(id: u32) -> QuestTemplate {
+        QuestTemplate {
+            id,
+            quest_type: 2,
+            quest_level: 1,
+            quest_max_scaling_level: 0,
+            min_level: 1,
+            quest_sort_id: 0,
+            quest_info_id: 0,
+            suggested_group_num: 0,
+            reward_next_quest: 0,
+            reward_xp_difficulty: 0,
+            reward_xp_multiplier: 1.0,
+            reward_money_difficulty: 0,
+            reward_money_multiplier: 1.0,
+            reward_bonus_money: 0,
+            reward_display_spell: [0; QUEST_REWARD_DISPLAY_SPELL_COUNT],
+            reward_spell: 0,
+            reward_honor: 0,
+            flags: 0,
+            flags_ex: 0,
+            flags_ex2: 0,
+            special_flags: 0,
+            event_id_for_quest: 0,
+            reward_items: [0; QUEST_REWARD_ITEM_COUNT],
+            reward_amounts: [0; QUEST_REWARD_ITEM_COUNT],
+            item_drop: [0; QUEST_ITEM_DROP_COUNT],
+            item_drop_quantity: [0; QUEST_ITEM_DROP_COUNT],
+            log_title: format!("Quest {id}"),
+            log_description: String::new(),
+            quest_description: String::new(),
+            area_description: String::new(),
+            quest_completion_log: String::new(),
+            objectives: Vec::new(),
+            allowable_races: 0,
+            allowable_classes: 0,
+            max_level: 0,
+            prev_quest_id: 0,
+            reward_choice_items: [(0, 0); QUEST_REWARD_CHOICES_COUNT],
+        }
+    }
+
+    fn store_with_quests(ids: &[u32]) -> QuestStore {
+        QuestStore::from_quests_like_cpp(ids.iter().copied().map(quest_template))
+    }
+
+    fn creature_guid(entry: u32, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, entry, counter)
+    }
+
+    fn gameobject_guid(entry: u32, counter: i64) -> ObjectGuid {
+        ObjectGuid::create_world_object(HighGuid::GameObject, 0, 1, 571, 0, entry, counter)
+    }
+
+    fn insert_creature(manager: &mut wow_map::MapManager, guid: ObjectGuid, entry: u32) {
+        let mut creature = wow_entities::Creature::new(false);
+        creature.unit_mut().world_mut().object_mut().create(guid);
+        creature
+            .unit_mut()
+            .world_mut()
+            .object_mut()
+            .set_entry(entry);
+        creature.unit_mut().world_mut().set_map(571, 0).unwrap();
+        creature
+            .unit_mut()
+            .world_mut()
+            .relocate(Position::new(10.0, 0.0, 0.0, 0.0));
+        creature.unit_mut().set_level(80);
+        manager
+            .create_world_map(571, 0)
+            .map_mut()
+            .insert_map_object_record(
+                wow_entities::MapObjectRecord::new_creature(creature).unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn insert_gameobject(manager: &mut wow_map::MapManager, guid: ObjectGuid, entry: u32) {
+        let mut gameobject = wow_entities::GameObject::new();
+        gameobject.world_mut().object_mut().create(guid);
+        gameobject.world_mut().object_mut().set_entry(entry);
+        gameobject.world_mut().set_map(571, 0).unwrap();
+        gameobject
+            .world_mut()
+            .relocate(Position::new(10.0, 0.0, 0.0, 0.0));
+        gameobject.world_mut().object_mut().add_to_world();
+        manager
+            .create_world_map(571, 0)
+            .map_mut()
+            .insert_map_object_record(
+                wow_entities::MapObjectRecord::new_game_object(gameobject).unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn attach_map_manager(session: &mut WorldSession, manager: wow_map::MapManager) {
+        session.set_canonical_map_manager(Arc::new(std::sync::Mutex::new(manager)));
+    }
+
+    async fn run_status_query(session: &mut WorldSession, guid: ObjectGuid) {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_packed_guid(&guid);
+        session.handle_quest_giver_status_query(pkt).await;
+    }
+
+    fn recv_status(send_rx: &flume::Receiver<Vec<u8>>) -> (ObjectGuid, u64) {
+        let bytes = send_rx.try_recv().expect("quest giver status packet");
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            wow_constants::ServerOpcodes::QuestGiverStatus as u16
+        );
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let guid = pkt.read_packed_guid().unwrap();
+        let status = pkt.read_uint64().unwrap();
+        (guid, status)
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_missing_noncanonical_guid_sends_no_packet_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        session.set_quest_store(Arc::new(store_with_quests(&[1001])));
+        attach_map_manager(&mut session, wow_map::MapManager::default());
+
+        run_status_query(&mut session, creature_guid(9001, 1)).await;
+
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_unsupported_player_or_item_guid_sends_no_packet_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        session.set_quest_store(Arc::new(store_with_quests(&[1001])));
+        attach_map_manager(&mut session, wow_map::MapManager::default());
+
+        run_status_query(&mut session, ObjectGuid::create_player(1, 99)).await;
+        run_status_query(&mut session, ObjectGuid::create_item(1, 100)).await;
+
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_canonical_creature_starter_sends_available_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[1001]);
+        store.starter_quests.entry(9001).or_default().push(1001);
+        session.set_quest_store(Arc::new(store));
+        let guid = creature_guid(9001, 1);
+        let mut manager = wow_map::MapManager::default();
+        insert_creature(&mut manager, guid, 9001);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(recv_status(&send_rx), (guid, quest_giver_status::AVAILABLE));
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_canonical_creature_completed_ender_sends_can_reward_like_cpp()
+    {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[1002]);
+        store.ender_quests.entry(9002).or_default().push(1002);
+        session.set_quest_store(Arc::new(store));
+        session.player_quests.insert(
+            1002,
+            PlayerQuestStatus {
+                quest_id: 1002,
+                status: 2,
+                explored: false,
+                objective_counts: Vec::new(),
+            },
+        );
+        let guid = creature_guid(9002, 2);
+        let mut manager = wow_map::MapManager::default();
+        insert_creature(&mut manager, guid, 9002);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(
+            recv_status(&send_rx),
+            (guid, quest_giver_status::CAN_REWARD)
+        );
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_canonical_gameobject_starter_uses_go_relation_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[1003]);
+        assert!(store.insert_gameobject_starter_relation_like_cpp(9103, 1003));
+        session.set_quest_store(Arc::new(store));
+        let guid = gameobject_guid(9103, 3);
+        let mut manager = wow_map::MapManager::default();
+        insert_gameobject(&mut manager, guid, 9103);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(recv_status(&send_rx), (guid, quest_giver_status::AVAILABLE));
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_canonical_gameobject_completed_ender_uses_go_relation_like_cpp()
+     {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[1004]);
+        assert!(store.insert_gameobject_ender_relation_like_cpp(9104, 1004));
+        session.set_quest_store(Arc::new(store));
+        session.player_quests.insert(
+            1004,
+            PlayerQuestStatus {
+                quest_id: 1004,
+                status: 2,
+                explored: false,
+                objective_counts: Vec::new(),
+            },
+        );
+        let guid = gameobject_guid(9104, 4);
+        let mut manager = wow_map::MapManager::default();
+        insert_gameobject(&mut manager, guid, 9104);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(
+            recv_status(&send_rx),
+            (guid, quest_giver_status::CAN_REWARD)
+        );
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_gameobject_ignores_creature_relation_for_same_entry_like_cpp()
+    {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[1005]);
+        store.starter_quests.entry(9105).or_default().push(1005);
+        store.ender_quests.entry(9105).or_default().push(1005);
+        session.set_quest_store(Arc::new(store));
+        session.player_quests.insert(
+            1005,
+            PlayerQuestStatus {
+                quest_id: 1005,
+                status: 2,
+                explored: false,
+                objective_counts: Vec::new(),
+            },
+        );
+        let guid = gameobject_guid(9105, 5);
+        let mut manager = wow_map::MapManager::default();
+        insert_gameobject(&mut manager, guid, 9105);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(recv_status(&send_rx), (guid, quest_giver_status::NONE));
     }
 }
 
