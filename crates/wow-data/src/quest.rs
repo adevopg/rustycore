@@ -126,6 +126,20 @@ pub struct QuestTemplate {
     /// Previous quest that must be completed first. 0 = none.
     /// Positive = must be rewarded. Negative = must be active (Incomplete).
     pub prev_quest_id: i32,
+    /// C++ `_nextQuestID`/`Quest::GetNextQuestId()` from `quest_template_addon`.
+    pub next_quest_id: u32,
+    /// C++ `_exclusiveGroup`/`Quest::GetExclusiveGroup()` from `quest_template_addon`.
+    pub exclusive_group: i32,
+    /// C++ `_breadcrumbForQuestId`/`Quest::GetBreadcrumbForQuestId()` from `quest_template_addon`.
+    pub breadcrumb_for_quest_id: i32,
+    /// C++ `Quest::DependentPreviousQuests`, rebuilt post-load by ObjectMgr-style normalization.
+    ///
+    /// This is derived metadata, not a raw DB column.
+    pub dependent_previous_quests: Vec<u32>,
+    /// C++ `Quest::DependentBreadcrumbQuests`, rebuilt post-load by ObjectMgr-style normalization.
+    ///
+    /// This is derived metadata, not a raw DB column.
+    pub dependent_breadcrumb_quests: Vec<u32>,
     /// C++ `Quest::GetRequiredMinRepFaction()` from `quest_template_addon`.
     pub required_min_rep_faction: u32,
     /// C++ `Quest::GetRequiredMinRepValue()` from `quest_template_addon`.
@@ -228,6 +242,18 @@ impl QuestTemplate {
 }
 
 /// C++ `ObjectMgr::LoadQuests` post-load normalization before `Quest` helpers are observable.
+fn nonzero_abs_i32_to_u32_like_cpp(value: i32) -> Option<u32> {
+    let abs = value.unsigned_abs();
+    (abs != 0).then_some(abs)
+}
+
+fn push_unique_sorted_like_cpp(values: &mut Vec<u32>, value: u32) {
+    if !values.contains(&value) {
+        values.push(value);
+        values.sort_unstable();
+    }
+}
+
 fn normalize_quest_flags_like_cpp(flags: u32, special_flags: u32) -> (u32, u32) {
     let mut flags = flags;
     let mut special_flags = special_flags & QUEST_SPECIAL_FLAGS_DB_ALLOWED_LIKE_CPP;
@@ -289,12 +315,105 @@ impl QuestStore {
     }
 
     pub fn from_quests_like_cpp(quests: impl IntoIterator<Item = QuestTemplate>) -> Self {
-        Self {
+        let mut store = Self {
             quests: quests.into_iter().map(|quest| (quest.id, quest)).collect(),
             starter_quests: HashMap::new(),
             ender_quests: HashMap::new(),
             gameobject_starter_quests: HashMap::new(),
             gameobject_ender_quests: HashMap::new(),
+        };
+        store.normalize_dependent_quest_metadata_like_cpp();
+        store
+    }
+
+    /// C++ `ObjectMgr::LoadQuests` represented metadata normalization for quest dependencies.
+    ///
+    /// Ownership: `QuestStore` owns static DB quest metadata and these post-load derived vectors.
+    /// Runtime handlers/sessions may read the normalized vectors in later slices, but must not
+    /// write back into this store.
+    pub fn normalize_dependent_quest_metadata_like_cpp(&mut self) {
+        for quest in self.quests.values_mut() {
+            quest.dependent_previous_quests.clear();
+            quest.dependent_breadcrumb_quests.clear();
+        }
+
+        let mut quest_ids: Vec<u32> = self.quests.keys().copied().collect();
+        quest_ids.sort_unstable();
+
+        for quest_id in &quest_ids {
+            let Some(quest) = self.quests.get(quest_id) else {
+                continue;
+            };
+
+            let prev_quest_id = quest.prev_quest_id;
+            let next_quest_id = quest.next_quest_id;
+            let breadcrumb_for_quest_id = quest.breadcrumb_for_quest_id;
+
+            if let Some(prev_id) = nonzero_abs_i32_to_u32_like_cpp(prev_quest_id) {
+                if self
+                    .quests
+                    .get(&prev_id)
+                    .is_some_and(|previous| previous.breadcrumb_for_quest_id == 0)
+                    && prev_quest_id > 0
+                {
+                    if let Some(quest) = self.quests.get_mut(quest_id) {
+                        push_unique_sorted_like_cpp(&mut quest.dependent_previous_quests, prev_id);
+                    }
+                }
+            }
+
+            if next_quest_id != 0 && self.quests.contains_key(&next_quest_id) {
+                if let Some(next_quest) = self.quests.get_mut(&next_quest_id) {
+                    push_unique_sorted_like_cpp(
+                        &mut next_quest.dependent_previous_quests,
+                        *quest_id,
+                    );
+                }
+            }
+
+            if let Some(breadcrumb_target_id) =
+                nonzero_abs_i32_to_u32_like_cpp(breadcrumb_for_quest_id)
+            {
+                if !self.quests.contains_key(&breadcrumb_target_id) {
+                    if let Some(quest) = self.quests.get_mut(quest_id) {
+                        quest.breadcrumb_for_quest_id = 0;
+                    }
+                }
+            }
+        }
+
+        for source_quest_id in quest_ids {
+            let mut current_quest_id = source_quest_id;
+            let mut breadcrumb_for_quest_id = self
+                .quests
+                .get(&current_quest_id)
+                .and_then(|quest| nonzero_abs_i32_to_u32_like_cpp(quest.breadcrumb_for_quest_id));
+            let mut seen = HashSet::new();
+
+            while let Some(target_quest_id) = breadcrumb_for_quest_id {
+                if !seen.insert(current_quest_id) {
+                    if let Some(quest) = self.quests.get_mut(&current_quest_id) {
+                        quest.breadcrumb_for_quest_id = 0;
+                    }
+                    break;
+                }
+
+                if !self.quests.contains_key(&target_quest_id) {
+                    break;
+                }
+
+                if let Some(target_quest) = self.quests.get_mut(&target_quest_id) {
+                    push_unique_sorted_like_cpp(
+                        &mut target_quest.dependent_breadcrumb_quests,
+                        source_quest_id,
+                    );
+                }
+
+                current_quest_id = target_quest_id;
+                breadcrumb_for_quest_id = self.quests.get(&current_quest_id).and_then(|quest| {
+                    nonzero_abs_i32_to_u32_like_cpp(quest.breadcrumb_for_quest_id)
+                });
+            }
         }
     }
 
@@ -638,7 +757,7 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
             let id: u32 = result.read(0);
             let (flags, special_flags) = normalize_quest_flags_like_cpp(
                 result.try_read::<u32>(19).unwrap_or(0),
-                result.try_read::<u32>(63).unwrap_or(0),
+                result.try_read::<u32>(66).unwrap_or(0),
             );
             let quest = QuestTemplate {
                 id,
@@ -700,6 +819,11 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
                 allowable_classes: result.try_read::<u32>(44).unwrap_or(0),
                 max_level: result.try_read::<u8>(45).unwrap_or(0),
                 prev_quest_id: result.try_read::<i32>(46).unwrap_or(0),
+                next_quest_id: result.try_read::<u32>(63).unwrap_or(0),
+                exclusive_group: result.try_read::<i32>(64).unwrap_or(0),
+                breadcrumb_for_quest_id: result.try_read::<i32>(65).unwrap_or(0),
+                dependent_previous_quests: Vec::new(),
+                dependent_breadcrumb_quests: Vec::new(),
                 required_min_rep_faction: result.try_read::<u32>(47).unwrap_or(0),
                 required_min_rep_value: result.try_read::<i32>(48).unwrap_or(0),
                 required_max_rep_faction: result.try_read::<u32>(49).unwrap_or(0),
@@ -738,6 +862,7 @@ pub async fn load_quests(db: &WorldDatabase) -> Result<QuestStore> {
             }
         }
     }
+    store.normalize_dependent_quest_metadata_like_cpp();
     info!("Loaded {} quest templates", store.quests.len());
 
     // ── Load game_event seasonal quest relations ──────────────────────────
@@ -934,12 +1059,115 @@ mod tests {
             allowable_classes: 0,
             max_level: 0,
             prev_quest_id: 0,
+            next_quest_id: 0,
+            exclusive_group: 0,
+            breadcrumb_for_quest_id: 0,
+            dependent_previous_quests: Vec::new(),
+            dependent_breadcrumb_quests: Vec::new(),
             required_min_rep_faction: 0,
             required_min_rep_value: 0,
             required_max_rep_faction: 0,
             required_max_rep_value: 0,
             reward_choice_items: [(0, 0); QUEST_REWARD_CHOICES_COUNT],
         }
+    }
+
+    fn quest_with_id(id: u32) -> QuestTemplate {
+        let mut quest = quest_with_sort_and_flags(0, 0, 0);
+        quest.id = id;
+        quest
+    }
+
+    #[test]
+    fn quest_dependent_previous_positive_prev_pushes_current_like_cpp() {
+        let previous = quest_with_id(100);
+        let mut current = quest_with_id(200);
+        current.prev_quest_id = 100;
+
+        let store = QuestStore::from_quests_like_cpp([previous, current]);
+
+        assert_eq!(store.get(200).unwrap().dependent_previous_quests, vec![100]);
+    }
+
+    #[test]
+    fn quest_dependent_previous_negative_prev_does_not_push_like_cpp() {
+        let previous = quest_with_id(100);
+        let mut current = quest_with_id(200);
+        current.prev_quest_id = -100;
+
+        let store = QuestStore::from_quests_like_cpp([previous, current]);
+
+        assert!(store.get(200).unwrap().dependent_previous_quests.is_empty());
+    }
+
+    #[test]
+    fn quest_next_quest_id_pushes_source_into_target_dependent_previous_like_cpp() {
+        let mut source = quest_with_id(100);
+        source.next_quest_id = 200;
+        let target = quest_with_id(200);
+
+        let store = QuestStore::from_quests_like_cpp([source, target]);
+
+        assert_eq!(store.get(200).unwrap().dependent_previous_quests, vec![100]);
+    }
+
+    #[test]
+    fn quest_missing_breadcrumb_target_zeroes_breadcrumb_for_quest_id_like_cpp() {
+        let mut breadcrumb = quest_with_id(100);
+        breadcrumb.breadcrumb_for_quest_id = 999;
+
+        let store = QuestStore::from_quests_like_cpp([breadcrumb]);
+
+        assert_eq!(store.get(100).unwrap().breadcrumb_for_quest_id, 0);
+    }
+
+    #[test]
+    fn quest_breadcrumb_chain_informs_each_target_of_source_breadcrumb_like_cpp() {
+        let mut source = quest_with_id(100);
+        source.breadcrumb_for_quest_id = 200;
+        let mut middle = quest_with_id(200);
+        middle.breadcrumb_for_quest_id = 300;
+        let target = quest_with_id(300);
+
+        let store = QuestStore::from_quests_like_cpp([source, middle, target]);
+
+        assert!(
+            store
+                .get(200)
+                .unwrap()
+                .dependent_breadcrumb_quests
+                .contains(&100)
+        );
+        assert!(
+            store
+                .get(300)
+                .unwrap()
+                .dependent_breadcrumb_quests
+                .contains(&100)
+        );
+    }
+
+    #[test]
+    fn quest_breadcrumb_loop_clears_lowest_source_current_link_without_panic_like_cpp() {
+        let mut first = quest_with_id(100);
+        first.breadcrumb_for_quest_id = 200;
+        let mut second = quest_with_id(200);
+        second.breadcrumb_for_quest_id = 100;
+
+        let store = QuestStore::from_quests_like_cpp([first, second]);
+
+        assert_eq!(store.get(100).unwrap().breadcrumb_for_quest_id, 0);
+    }
+
+    #[test]
+    fn quest_missing_prev_and_next_do_not_fabricate_dependent_previous_like_cpp() {
+        let mut quest = quest_with_id(100);
+        quest.prev_quest_id = 777;
+        quest.next_quest_id = 888;
+
+        let store = QuestStore::from_quests_like_cpp([quest]);
+
+        assert!(store.get(100).unwrap().dependent_previous_quests.is_empty());
     }
 
     #[test]

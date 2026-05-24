@@ -887,6 +887,9 @@ impl StatementDef for WorldStatements {
                 "qt.RewardChoiceItemID4, qt.RewardChoiceItemQuantity4, ",
                 "qt.RewardChoiceItemID5, qt.RewardChoiceItemQuantity5, ",
                 "qt.RewardChoiceItemID6, qt.RewardChoiceItemQuantity6, ",
+                "COALESCE(qta.NextQuestID, 0) AS NextQuestID, ",
+                "COALESCE(qta.ExclusiveGroup, 0) AS ExclusiveGroup, ",
+                "COALESCE(qta.BreadcrumbForQuestId, 0) AS BreadcrumbForQuestId, ",
                 "COALESCE(qta.SpecialFlags, 0) AS SpecialFlags ",
                 "FROM quest_template qt LEFT JOIN quest_template_addon qta ON qt.ID = qta.ID"
             ),
