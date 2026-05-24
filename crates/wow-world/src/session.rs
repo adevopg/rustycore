@@ -169,6 +169,15 @@ pub(crate) struct RepresentedQuestPushResultResponseLikeCpp {
     pub result: u8,
 }
 
+/// Evidence that `HandleQuestConfirmAccept` reached the post-clear/template-present seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RepresentedQuestConfirmAcceptLikeCpp {
+    pub receiver_guid: Option<ObjectGuid>,
+    pub sender_guid_before_clear: ObjectGuid,
+    pub quest_id: u32,
+    pub raw_quest_id: i32,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LoadSeasonalQuestStatusOutcomeLikeCpp {
     pub rows_seen: usize,
@@ -1861,6 +1870,9 @@ pub struct WorldSession {
         Vec<RepresentedQuestPushResultResponseLikeCpp>,
     /// Explicit mismatch counter: C++ still clears pending sharing when sender GUID differs.
     pub(crate) represented_quest_push_result_sender_mismatch_count_like_cpp: u32,
+    /// Evidence for represented `HandleQuestConfirmAccept` after clear + template lookup.
+    pub(crate) represented_quest_confirm_accepts_like_cpp:
+        Vec<RepresentedQuestConfirmAcceptLikeCpp>,
 
     // ── Loot ──────────────────────────────────────────────────────
     /// Active loot windows keyed by creature GUID.
@@ -2544,6 +2556,7 @@ impl WorldSession {
             represented_pending_quest_sharing_like_cpp: None,
             represented_quest_push_result_responses_like_cpp: Vec::new(),
             represented_quest_push_result_sender_mismatch_count_like_cpp: 0,
+            represented_quest_confirm_accepts_like_cpp: Vec::new(),
             active_spell_cast: None,
             last_spell_cast_time: None,
             last_spell_cast_time_per_spell: HashMap::new(),
@@ -8846,6 +8859,9 @@ impl WorldSession {
             }
             ClientOpcodes::RequestWorldQuestUpdate => {
                 self.handle_request_world_quest_update(pkt).await;
+            }
+            ClientOpcodes::QuestConfirmAccept => {
+                self.handle_quest_confirm_accept(pkt).await;
             }
             ClientOpcodes::QuestPushResult => {
                 self.handle_quest_push_result(pkt).await;
@@ -15502,6 +15518,20 @@ impl WorldSession {
         self.represented_quest_push_result_sender_mismatch_count_like_cpp = self
             .represented_quest_push_result_sender_mismatch_count_like_cpp
             .saturating_add(1);
+    }
+
+    pub(crate) fn represented_quest_confirm_accepts_like_cpp(
+        &self,
+    ) -> &[RepresentedQuestConfirmAcceptLikeCpp] {
+        &self.represented_quest_confirm_accepts_like_cpp
+    }
+
+    pub(crate) fn record_represented_quest_confirm_accept_like_cpp(
+        &mut self,
+        evidence: RepresentedQuestConfirmAcceptLikeCpp,
+    ) {
+        self.represented_quest_confirm_accepts_like_cpp
+            .push(evidence);
     }
 
     /// Get the logged-in player GUID.

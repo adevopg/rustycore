@@ -19,6 +19,25 @@ const QUEST_REWARD_REPUTATIONS_COUNT: usize = 5;
 const QUEST_REWARD_CURRENCY_COUNT: usize = 4;
 const QUEST_REWARD_DISPLAY_SPELL_COUNT: usize = 3;
 
+/// Client confirmation that accepts a shared quest prompt.
+///
+/// C++ anchor: `WorldPackets::Quest::QuestConfirmAccept::Read`,
+/// `QuestPackets.cpp:603-606`: exactly one signed `int32 QuestID`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuestConfirmAccept {
+    pub quest_id: i32,
+}
+
+impl ClientPacket for QuestConfirmAccept {
+    const OPCODE: ClientOpcodes = ClientOpcodes::QuestConfirmAccept;
+
+    fn read(packet: &mut WorldPacket) -> Result<Self, PacketError> {
+        let quest_id = packet.read_int32()?;
+
+        Ok(Self { quest_id })
+    }
+}
+
 /// Client response to a shared-quest prompt.
 ///
 /// C++ anchor: `WorldPackets::Quest::QuestPushResult::Read`,
@@ -731,6 +750,28 @@ mod tests {
             ServerOpcodes::WorldQuestUpdateResponse as u16
         );
         assert_eq!(&bytes[2..], &[0, 0, 0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod quest_confirm_accept_tests {
+    use super::*;
+
+    #[test]
+    fn quest_confirm_accept_reads_signed_quest_id_like_cpp() {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_int32(7001);
+
+        let parsed = QuestConfirmAccept::read(&mut pkt).expect("valid QuestConfirmAccept packet");
+
+        assert_eq!(parsed.quest_id, 7001);
+    }
+
+    #[test]
+    fn quest_confirm_accept_short_packet_fails_closed() {
+        let mut pkt = WorldPacket::from_bytes(&[0x59, 0x1B, 0x00]);
+
+        assert!(QuestConfirmAccept::read(&mut pkt).is_err());
     }
 }
 
