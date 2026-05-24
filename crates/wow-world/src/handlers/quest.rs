@@ -45,6 +45,8 @@ pub(crate) const QUEST_FLAGS_SHARABLE_LIKE_CPP: u32 = 0x0000_0008;
 pub(crate) const QUEST_PUSH_REASON_BUSY_LIKE_CPP: u8 = 5;
 pub(crate) const QUEST_PUSH_REASON_DEAD_LIKE_CPP: u8 = 6;
 pub(crate) const QUEST_PUSH_REASON_DEAD_TO_RECIPIENT_LIKE_CPP: u8 = 7;
+pub(crate) const QUEST_PUSH_REASON_LOG_FULL_LIKE_CPP: u8 = 8;
+pub(crate) const QUEST_PUSH_REASON_LOG_FULL_TO_RECIPIENT_LIKE_CPP: u8 = 9;
 pub(crate) const QUEST_PUSH_REASON_ON_QUEST_LIKE_CPP: u8 = 10;
 pub(crate) const QUEST_PUSH_REASON_ON_QUEST_TO_RECIPIENT_LIKE_CPP: u8 = 11;
 pub(crate) const QUEST_PUSH_REASON_ALREADY_DONE_LIKE_CPP: u8 = 12;
@@ -863,6 +865,43 @@ impl WorldSession {
                     );
                     continue;
                 }
+            }
+
+            // C++ `Player::SatisfyQuestLog(false)` checks `FindQuestSlot(0) <
+            // MAX_QUEST_LOG_SIZE`; this represented cross-session seam uses
+            // the receiver snapshot derived from `WorldSession.player_quests`
+            // slots via `sync_player_registry_state_like_cpp()`.
+            if receiver.active_quest_statuses.len() >= MAX_QUEST_LOG_SIZE_LIKE_CPP as usize {
+                let Some(sender_guid_for_receiver_packet) = sender_guid else {
+                    blocked_by_unsupported_success_path = true;
+                    continue;
+                };
+
+                self.send_push_quest_result_to_sender_with_title_if_available_like_cpp(
+                    receiver_guid,
+                    QUEST_PUSH_REASON_LOG_FULL_LIKE_CPP,
+                    String::new(),
+                );
+                let _ = receiver.send_tx.send(
+                    QuestPushResultResponse {
+                        sender_guid: sender_guid_for_receiver_packet,
+                        result: QUEST_PUSH_REASON_LOG_FULL_TO_RECIPIENT_LIKE_CPP,
+                        quest_title: quest.log_title.clone(),
+                    }
+                    .to_bytes(),
+                );
+                self.record_represented_push_quest_to_party_outcome_like_cpp(
+                    RepresentedPushQuestToPartyOutcomeLikeCpp {
+                        sender_guid,
+                        quest_id: packet.quest_id,
+                        target_guid: Some(receiver_guid),
+                        reason: RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverLogFull,
+                        quest_pool_active_check_unrepresented: false,
+                        group_runtime_unrepresented: false,
+                        receiver_fanout_unrepresented: false,
+                    },
+                );
+                continue;
             }
 
             blocked_by_unsupported_success_path = true;
@@ -2922,6 +2961,62 @@ mod tests {
                 QUEST_PUSH_REASON_ALREADY_DONE_TO_RECIPIENT_LIKE_CPP,
                 "Quest 7112".to_string()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn push_quest_to_party_grouped_receiver_log_full_emits_log_full_pair_like_cpp() {
+        let (mut session, sender_rx) = make_session();
+        let sender_guid = session.player_guid().expect("test sender guid");
+        let receiver_guid = ObjectGuid::create_player(1, 144);
+        let shared_quest_id = 7116;
+        let quest_store = store_with_sharable_quest(shared_quest_id);
+        let quest_pool_store = QuestPoolStoreLikeCpp::from_rows_like_cpp(&quest_store, [], []);
+        session.set_quest_store(Arc::new(quest_store));
+        session.set_quest_pool_store(Arc::new(quest_pool_store));
+        add_active_quest(&mut session, shared_quest_id);
+        let (_player_registry, mut receiver_session, receiver_rx) =
+            install_represented_party(&mut session, sender_guid, receiver_guid);
+        for slot in 0..MAX_QUEST_LOG_SIZE_LIKE_CPP {
+            add_active_quest_in_slot(&mut receiver_session, 8000 + u32::from(slot), slot);
+        }
+        receiver_session.sync_player_registry_state_like_cpp();
+
+        run_push_quest_to_party(&mut session, shared_quest_id).await;
+
+        assert_eq!(
+            recv_push_quest_result_response(&sender_rx),
+            (
+                receiver_guid,
+                QUEST_PUSH_REASON_LOG_FULL_LIKE_CPP,
+                String::new()
+            )
+        );
+        assert_eq!(
+            recv_push_quest_result_response(&receiver_rx),
+            (
+                sender_guid,
+                QUEST_PUSH_REASON_LOG_FULL_TO_RECIPIENT_LIKE_CPP,
+                "Quest 7116".to_string()
+            )
+        );
+        assert!(
+            !session
+                .represented_push_quest_to_party_outcomes_like_cpp()
+                .iter()
+                .any(|outcome| matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverEligibilityUnrepresented
+                ))
+        );
+        assert!(
+            session
+                .represented_push_quest_to_party_outcomes_like_cpp()
+                .iter()
+                .any(|outcome| matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverLogFull
+                ))
         );
     }
 

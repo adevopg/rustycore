@@ -180,6 +180,7 @@ pub(crate) enum RepresentedPushQuestToPartyOutcomeReasonLikeCpp {
     ReceiverDead,
     ReceiverAlreadyDone,
     ReceiverOnQuest,
+    ReceiverLogFull,
     ReceiverEligibilityUnrepresented,
 }
 
