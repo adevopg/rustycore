@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use wow_constants::ClientOpcodes;
 use wow_constants::unit::NPCFlags1;
+use wow_core::ObjectGuid;
 use wow_data::DISABLE_TYPE_QUEST;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::ClientPacket;
@@ -28,8 +29,8 @@ use wow_packet::packets::query::{
 use wow_packet::packets::quest::{
     PushQuestToParty, QueryQuestInfoResponse, QuestConfirmAccept, QuestGiverOfferReward,
     QuestGiverQuestComplete, QuestGiverRequestItems, QuestGiverStatus, QuestObjectiveInfo,
-    QuestPushResult, QuestRewardsBlock, QuestUpdateComplete, WorldQuestUpdateResponse,
-    quest_giver_status,
+    QuestPushResult, QuestPushResultResponse, QuestRewardsBlock, QuestUpdateComplete,
+    WorldQuestUpdateResponse, quest_giver_status, quest_push_reason,
 };
 
 use crate::session::{
@@ -543,6 +544,8 @@ impl WorldSession {
     ///
     /// Represented-partial: this records sender-local evidence only. It never mutates DB/maps,
     /// never sets receiver pending sharing, and never fans out packets to other sessions.
+    /// If the session has no real `player_guid`, Rust records the existing evidence only and
+    /// does not fabricate an empty sender GUID for `SMSG_QUEST_PUSH_RESULT`.
     pub async fn handle_push_quest_to_party(&mut self, mut pkt: wow_packet::WorldPacket) {
         let packet = match PushQuestToParty::read(&mut pkt) {
             Ok(packet) => packet,
@@ -576,6 +579,10 @@ impl WorldSession {
 
         let sender_guid = self.player_guid();
         if !self.represented_can_share_quest_like_cpp(quest) {
+            self.send_push_quest_result_to_sender_if_available_like_cpp(
+                sender_guid,
+                quest_push_reason::NOT_ALLOWED,
+            );
             self.record_represented_push_quest_to_party_outcome_like_cpp(
                 RepresentedPushQuestToPartyOutcomeLikeCpp {
                     sender_guid,
@@ -606,6 +613,10 @@ impl WorldSession {
         };
 
         if !quest_pool_store.is_quest_active_like_cpp(packet.quest_id) {
+            self.send_push_quest_result_to_sender_if_available_like_cpp(
+                sender_guid,
+                quest_push_reason::NOT_DAILY,
+            );
             self.record_represented_push_quest_to_party_outcome_like_cpp(
                 RepresentedPushQuestToPartyOutcomeLikeCpp {
                     sender_guid,
@@ -621,6 +632,10 @@ impl WorldSession {
         }
 
         if self.group_guid.is_none() {
+            self.send_push_quest_result_to_sender_if_available_like_cpp(
+                sender_guid,
+                quest_push_reason::NOT_IN_PARTY,
+            );
             self.record_represented_push_quest_to_party_outcome_like_cpp(
                 RepresentedPushQuestToPartyOutcomeLikeCpp {
                     sender_guid,
@@ -651,6 +666,20 @@ impl WorldSession {
     fn represented_can_share_quest_like_cpp(&self, quest: &wow_data::quest::QuestTemplate) -> bool {
         quest.flags & QUEST_FLAGS_SHARABLE_LIKE_CPP != 0
             && self.player_quests.contains_key(&quest.id)
+    }
+
+    fn send_push_quest_result_to_sender_if_available_like_cpp(
+        &self,
+        sender_guid: Option<ObjectGuid>,
+        result: u8,
+    ) {
+        if let Some(sender_guid) = sender_guid {
+            self.send_packet(&QuestPushResultResponse {
+                sender_guid,
+                result,
+                quest_title: String::new(),
+            });
+        }
     }
 
     /// CMSG_QUEST_PUSH_RESULT — response to a shared quest prompt.
@@ -2030,6 +2059,26 @@ mod tests {
         pkt.read_uint32().unwrap()
     }
 
+    fn recv_push_quest_result_response(
+        send_rx: &flume::Receiver<Vec<u8>>,
+    ) -> (ObjectGuid, u8, String) {
+        let bytes = send_rx
+            .try_recv()
+            .expect("quest push result response packet");
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            wow_constants::ServerOpcodes::QuestPushResult as u16
+        );
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let sender_guid = pkt.read_packed_guid().unwrap();
+        let result = pkt.read_uint8().unwrap();
+        let title_len = pkt.read_bits(9).unwrap() as usize;
+        let quest_title = pkt.read_string(title_len).unwrap();
+        assert_eq!(pkt.remaining(), 0);
+        assert!(send_rx.try_recv().is_err());
+        (sender_guid, result, quest_title)
+    }
+
     fn recv_status(send_rx: &flume::Receiver<Vec<u8>>) -> (ObjectGuid, u64) {
         let bytes = send_rx.try_recv().expect("quest giver status packet");
         assert_eq!(
@@ -2387,7 +2436,14 @@ mod tests {
                 receiver_fanout_unrepresented: false,
             }]
         );
-        assert!(send_rx.try_recv().is_err());
+        assert_eq!(
+            recv_push_quest_result_response(&send_rx),
+            (
+                sender_guid.expect("test session has player guid"),
+                quest_push_reason::NOT_ALLOWED,
+                String::new()
+            )
+        );
     }
 
     #[tokio::test]
@@ -2446,7 +2502,14 @@ mod tests {
                 receiver_fanout_unrepresented: false,
             }]
         );
-        assert!(send_rx.try_recv().is_err());
+        assert_eq!(
+            recv_push_quest_result_response(&send_rx),
+            (
+                sender_guid.expect("test session has player guid"),
+                quest_push_reason::NOT_DAILY,
+                String::new()
+            )
+        );
     }
 
     #[tokio::test]
@@ -2474,7 +2537,14 @@ mod tests {
                 receiver_fanout_unrepresented: false,
             }]
         );
-        assert!(send_rx.try_recv().is_err());
+        assert_eq!(
+            recv_push_quest_result_response(&send_rx),
+            (
+                sender_guid.expect("test session has player guid"),
+                quest_push_reason::NOT_IN_PARTY,
+                String::new()
+            )
+        );
     }
 
     #[tokio::test]

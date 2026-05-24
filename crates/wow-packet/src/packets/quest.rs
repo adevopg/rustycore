@@ -49,6 +49,41 @@ pub struct QuestPushResult {
     pub result: u8,
 }
 
+/// C++ `QuestPushReason` values used by `SMSG_QUEST_PUSH_RESULT`.
+///
+/// C++ anchor: `QuestDef.h:75-96`.
+pub mod quest_push_reason {
+    pub const NOT_DAILY: u8 = 14;
+    pub const NOT_IN_PARTY: u8 = 16;
+    pub const NOT_ALLOWED: u8 = 19;
+}
+
+/// Server response emitted to the quest-sharing sender/receiver.
+///
+/// C++ anchors:
+/// - `Player::SendPushToPartyResponse`, `Player.cpp:16735-16752`: sender GUID,
+///   result, optional localized quest title, then direct send.
+/// - `QuestPushResultResponse::Write`, `QuestPackets.cpp:608-618`: packed GUID,
+///   `uint8 Result`, 9-bit title length, flush bits, raw title string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuestPushResultResponse {
+    pub sender_guid: ObjectGuid,
+    pub result: u8,
+    pub quest_title: String,
+}
+
+impl ServerPacket for QuestPushResultResponse {
+    const OPCODE: ServerOpcodes = ServerOpcodes::QuestPushResult;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_packed_guid(&self.sender_guid);
+        pkt.write_uint8(self.result);
+        pkt.write_bits(self.quest_title.len() as u32, 9);
+        pkt.flush_bits();
+        pkt.write_string(&self.quest_title);
+    }
+}
+
 impl ClientPacket for QuestPushResult {
     const OPCODE: ClientOpcodes = ClientOpcodes::QuestPushResult;
 
@@ -820,6 +855,53 @@ mod push_quest_to_party_tests {
 #[cfg(test)]
 mod quest_push_result_tests {
     use super::*;
+
+    #[test]
+    fn quest_push_result_response_writes_empty_title_like_cpp() {
+        let response = QuestPushResultResponse {
+            sender_guid: ObjectGuid::EMPTY,
+            result: quest_push_reason::NOT_ALLOWED,
+            quest_title: String::new(),
+        };
+
+        let bytes = response.to_bytes();
+
+        assert_eq!(
+            &bytes,
+            &[
+                0x90, 0x2A, // SMSG_QUEST_PUSH_RESULT
+                0x00, 0x00, // empty packed ObjectGuid masks
+                19,   // NotAllowed
+                0x00, 0x00, // 9-bit empty title length + flush padding
+            ]
+        );
+        assert_eq!(
+            QuestPushResultResponse::OPCODE,
+            ServerOpcodes::QuestPushResult
+        );
+    }
+
+    #[test]
+    fn quest_push_result_response_writes_title_length_bits_and_string_like_cpp() {
+        let response = QuestPushResultResponse {
+            sender_guid: ObjectGuid::EMPTY,
+            result: quest_push_reason::NOT_DAILY,
+            quest_title: String::from("Hi"),
+        };
+
+        let bytes = response.to_bytes();
+
+        assert_eq!(
+            &bytes,
+            &[
+                0x90, 0x2A, // SMSG_QUEST_PUSH_RESULT
+                0x00, 0x00, // empty packed ObjectGuid masks
+                14,   // NotDaily
+                0x01, 0x00, // 9-bit length 2: 00000001 0xxxxxxx after flush
+                b'H', b'i',
+            ]
+        );
+    }
 
     #[test]
     fn quest_push_result_reads_sender_quest_id_result_in_cpp_order() {
