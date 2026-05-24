@@ -41,6 +41,27 @@ impl ServerPacket for QuestGiverStatus {
     }
 }
 
+/// Quest giver statuses for every currently visible questgiver.
+///
+/// C++ anchor: `WorldPackets::Quest::QuestGiverStatusMultiple::Write`,
+/// `QuestPackets.cpp:64-74`: `int32` count followed by packed GUID and
+/// `uint64` status for each questgiver.
+pub struct QuestGiverStatusMultiple {
+    pub statuses: Vec<(ObjectGuid, u64)>,
+}
+
+impl ServerPacket for QuestGiverStatusMultiple {
+    const OPCODE: ServerOpcodes = ServerOpcodes::QuestGiverStatusMultiple;
+
+    fn write(&self, pkt: &mut WorldPacket) {
+        pkt.write_int32(self.statuses.len() as i32);
+        for (guid, status) in &self.statuses {
+            pkt.write_packed_guid(guid);
+            pkt.write_uint64(*status);
+        }
+    }
+}
+
 // ── Quest giver status constants ──────────────────────────────────────────────
 pub mod quest_giver_status {
     pub const NONE: u64 = 0;
@@ -606,5 +627,30 @@ impl ServerPacket for QuestUpdateAddCredit {
         pkt.write_uint16(self.count);
         pkt.write_uint16(self.required);
         pkt.write_uint8(self.objective_type);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_core::guid::HighGuid;
+
+    #[test]
+    fn quest_giver_status_multiple_writes_status_as_uint64_like_cpp() {
+        let guid = ObjectGuid::create_world_object(HighGuid::Creature, 0, 1, 571, 0, 1234, 5678);
+        let status = 0x1_0000_0020_u64;
+        let bytes = QuestGiverStatusMultiple {
+            statuses: vec![(guid, status)],
+        }
+        .to_bytes();
+
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            ServerOpcodes::QuestGiverStatusMultiple as u16
+        );
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        assert_eq!(pkt.read_int32().unwrap(), 1);
+        assert_eq!(pkt.read_packed_guid().unwrap(), guid);
+        assert_eq!(pkt.read_uint64().unwrap(), status);
     }
 }

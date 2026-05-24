@@ -791,7 +791,7 @@ impl WorldSession {
     /// Resolves CMSG_QUEST_GIVER_STATUS_QUERY through the represented equivalent of
     /// C++ `ObjectAccessor::GetObjectByTypeMask(*_player, guid, TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT)`.
     /// Missing canonical objects and unsupported Player/Item/other GUID types fail closed with no packet.
-    fn represented_quest_giver_status_query_source_like_cpp(
+    pub(crate) fn represented_quest_giver_status_query_source_like_cpp(
         &self,
         guid: wow_core::ObjectGuid,
     ) -> Option<RepresentedQuestGiverStatusSourceLikeCpp> {
@@ -821,7 +821,7 @@ impl WorldSession {
     /// GO starter/ender relations. Full AI dialog status, ConditionMgr, event overlays
     /// and important/daily/trivial/future/repeatable/covenant/legendary/POI bit flags
     /// remain documented migration gaps for this slice.
-    fn get_represented_quest_giver_status_like_cpp(
+    pub(crate) fn get_represented_quest_giver_status_like_cpp(
         &self,
         source: RepresentedQuestGiverStatusSourceLikeCpp,
     ) -> u64 {
@@ -1193,7 +1193,7 @@ impl WorldSession {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RepresentedQuestGiverStatusSourceLikeCpp {
+pub(crate) enum RepresentedQuestGiverStatusSourceLikeCpp {
     Creature { entry: u32 },
     GameObject { entry: u32 },
 }
@@ -1313,6 +1313,7 @@ mod tests {
             .world_mut()
             .relocate(Position::new(10.0, 0.0, 0.0, 0.0));
         creature.unit_mut().set_level(80);
+        creature.set_ai_identity_runtime(1, 35, NPCFlags1::QUEST_GIVER.bits(), 0);
         manager
             .create_world_map(571, 0)
             .map_mut()
@@ -1360,6 +1361,37 @@ mod tests {
         let guid = pkt.read_packed_guid().unwrap();
         let status = pkt.read_uint64().unwrap();
         (guid, status)
+    }
+
+    fn recv_status_multiple(send_rx: &flume::Receiver<Vec<u8>>) -> Vec<(ObjectGuid, u64)> {
+        let bytes = send_rx
+            .try_recv()
+            .expect("quest giver status multiple packet");
+        assert_eq!(
+            u16::from_le_bytes([bytes[0], bytes[1]]),
+            wow_constants::ServerOpcodes::QuestGiverStatusMultiple as u16
+        );
+        let mut pkt = WorldPacket::from_bytes(&bytes[2..]);
+        let count = pkt.read_int32().unwrap();
+        assert!(count >= 0);
+        let mut statuses = Vec::new();
+        for _ in 0..count {
+            statuses.push((pkt.read_packed_guid().unwrap(), pkt.read_uint64().unwrap()));
+        }
+        statuses
+    }
+
+    fn mark_visible(session: &mut WorldSession, guid: ObjectGuid) {
+        session.client_visible_guids_like_cpp.insert(guid);
+    }
+
+    fn mark_visible_gameobject_questgiver(session: &mut WorldSession, guid: ObjectGuid) {
+        let mut state = crate::session::RepresentedGameObjectUseState::default();
+        state.go_type = Some(wow_entities::GAMEOBJECT_TYPE_QUESTGIVER as u8);
+        session
+            .represented_gameobject_use_states
+            .insert(guid, state);
+        mark_visible(session, guid);
     }
 
     #[tokio::test]
@@ -1500,6 +1532,99 @@ mod tests {
         run_status_query(&mut session, guid).await;
 
         assert_eq!(recv_status(&send_rx), (guid, quest_giver_status::NONE));
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_multiple_empty_visible_set_sends_zero_count_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        session.set_quest_store(Arc::new(store_with_quests(&[2001])));
+        attach_map_manager(&mut session, wow_map::MapManager::default());
+
+        session.handle_quest_giver_status_multiple_query().await;
+
+        assert!(recv_status_multiple(&send_rx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_multiple_visible_canonical_creature_starter_sends_available_like_cpp()
+     {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[2002]);
+        store.starter_quests.entry(9202).or_default().push(2002);
+        session.set_quest_store(Arc::new(store));
+        let guid = creature_guid(9202, 202);
+        let mut manager = wow_map::MapManager::default();
+        insert_creature(&mut manager, guid, 9202);
+        attach_map_manager(&mut session, manager);
+        mark_visible(&mut session, guid);
+
+        session.handle_quest_giver_status_multiple_query().await;
+
+        assert_eq!(
+            recv_status_multiple(&send_rx),
+            vec![(guid, quest_giver_status::AVAILABLE)]
+        );
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_multiple_visible_gameobject_starter_uses_go_relation_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[2003]);
+        assert!(store.insert_gameobject_starter_relation_like_cpp(9203, 2003));
+        store.starter_quests.entry(9203).or_default().push(2999);
+        session.set_quest_store(Arc::new(store));
+        let guid = gameobject_guid(9203, 203);
+        let mut manager = wow_map::MapManager::default();
+        insert_gameobject(&mut manager, guid, 9203);
+        attach_map_manager(&mut session, manager);
+        mark_visible_gameobject_questgiver(&mut session, guid);
+
+        session.handle_quest_giver_status_multiple_query().await;
+
+        assert_eq!(
+            recv_status_multiple(&send_rx),
+            vec![(guid, quest_giver_status::AVAILABLE)]
+        );
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_multiple_skips_missing_player_item_and_non_questgiver_go_like_cpp()
+    {
+        let (mut session, send_rx) = make_session();
+        let mut store = store_with_quests(&[2004]);
+        store.starter_quests.entry(9204).or_default().push(2004);
+        assert!(store.insert_gameobject_starter_relation_like_cpp(9204, 2004));
+        session.set_quest_store(Arc::new(store));
+        let accepted_guid = creature_guid(9204, 204);
+        let missing_guid = creature_guid(9204, 205);
+        let player_guid = ObjectGuid::create_player(1, 204);
+        let item_guid = ObjectGuid::create_item(1, 204);
+        let non_questgiver_go = gameobject_guid(9204, 206);
+        let mut manager = wow_map::MapManager::default();
+        insert_creature(&mut manager, accepted_guid, 9204);
+        insert_gameobject(&mut manager, non_questgiver_go, 9204);
+        attach_map_manager(&mut session, manager);
+        for guid in [
+            accepted_guid,
+            missing_guid,
+            player_guid,
+            item_guid,
+            non_questgiver_go,
+        ] {
+            mark_visible(&mut session, guid);
+        }
+        let mut state = crate::session::RepresentedGameObjectUseState::default();
+        state.go_type = Some(wow_entities::GAMEOBJECT_TYPE_CHEST as u8);
+        session
+            .represented_gameobject_use_states
+            .insert(non_questgiver_go, state);
+
+        session.handle_quest_giver_status_multiple_query().await;
+
+        assert_eq!(
+            recv_status_multiple(&send_rx),
+            vec![(accepted_guid, quest_giver_status::AVAILABLE)]
+        );
     }
 }
 

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 use tracing::{debug, info, trace, warn};
+use wow_constants::unit::NPCFlags1;
 use wow_constants::{
     ClientOpcodes, ConditionSourceType, InventoryResult, InventoryType, ItemBondingType,
     ItemContext, ItemExtendedCostFlags, ItemFieldFlags, ItemFlags, ItemFlags2, ItemUpdateState,
@@ -29,10 +30,10 @@ use wow_database::{
 };
 use wow_entities::{
     BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_START, GAMEOBJECT_TYPE_FISHING_HOLE,
-    GameObjectTemplateData, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END,
-    INVENTORY_SLOT_BAG_START, INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, MAX_GAMEOBJECT_DATA,
-    NULL_BAG, NULL_SLOT, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, WorldObject,
-    is_equipment_pos, is_inventory_pos,
+    GAMEOBJECT_TYPE_QUESTGIVER, GameObjectTemplateData, INVENTORY_DEFAULT_SIZE,
+    INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
+    INVENTORY_SLOT_ITEM_START, MAX_BAG_SIZE, MAX_GAMEOBJECT_DATA, NULL_BAG, NULL_SLOT,
+    REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, WorldObject, is_equipment_pos, is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_packet::packets::auth::{
@@ -42,7 +43,10 @@ use wow_packet::packets::character::*;
 use wow_packet::packets::item::*;
 use wow_packet::packets::loot::LootReleaseAll;
 use wow_packet::packets::misc::*;
+use wow_packet::packets::quest::QuestGiverStatusMultiple;
 use wow_packet::packets::update::*;
+
+use crate::handlers::quest::RepresentedQuestGiverStatusSourceLikeCpp;
 
 // ── Handler registration ────────────────────────────────────────────
 
@@ -7630,14 +7634,65 @@ impl WorldSession {
         }
     }
 
-    /// Handle CMSG_QUEST_GIVER_STATUS_MULTIPLE_QUERY — client asks quest status for all NPCs.
+    /// Handle CMSG_QUEST_GIVER_STATUS_MULTIPLE_QUERY — client asks quest status for visible questgivers.
+    ///
+    /// C++ anchors:
+    /// - `Player::SendQuestGiverStatusMultiple`, `Player.cpp:16804-16837`.
+    /// - `QuestGiverStatusMultiple::Write`, `QuestPackets.cpp:64-74`.
+    ///
+    /// Ownership/sync: represented `client_visible_guids_like_cpp` + canonical map access + read-only
+    /// `QuestStore` relations -> one outbound packet only. This handler must not mutate map,
+    /// QuestStore, ObjectAccessor/GameEvent, or player state. Exact Creature hostility/faction remains
+    /// a documented gap; represented Creature NPC QUEST_GIVER flag is enforced when available.
     pub async fn handle_quest_giver_status_multiple_query(&mut self) {
         trace!(
             "QuestGiverStatusMultipleQuery from account {}",
             self.account_id
         );
-        // Respond with empty list — no NPCs have quests
-        self.send_quest_giver_status_multiple(vec![]);
+
+        let visible_guids: Vec<ObjectGuid> =
+            self.client_visible_guids_like_cpp.iter().copied().collect();
+        let mut statuses = Vec::new();
+
+        for guid in visible_guids {
+            if guid.is_any_type_creature() {
+                let Some(access) = self.canonical_creature_access_like_cpp(guid) else {
+                    continue;
+                };
+                if (access.npc_flags & NPCFlags1::QUEST_GIVER.bits()) == 0 {
+                    continue;
+                }
+
+                let status = self.get_represented_quest_giver_status_like_cpp(
+                    RepresentedQuestGiverStatusSourceLikeCpp::Creature {
+                        entry: access.entry,
+                    },
+                );
+                statuses.push((guid, status));
+                continue;
+            }
+
+            if guid.is_game_object() {
+                let Some(access) = self.canonical_gameobject_access_like_cpp(guid) else {
+                    continue;
+                };
+                let Some(state) = self.represented_gameobject_use_states.get(&guid) else {
+                    continue;
+                };
+                if state.go_type.map(u32::from) != Some(GAMEOBJECT_TYPE_QUESTGIVER) {
+                    continue;
+                }
+
+                let status = self.get_represented_quest_giver_status_like_cpp(
+                    RepresentedQuestGiverStatusSourceLikeCpp::GameObject {
+                        entry: access.entry,
+                    },
+                );
+                statuses.push((guid, status));
+            }
+        }
+
+        self.send_packet(&QuestGiverStatusMultiple { statuses });
     }
 
     /// Send SMSG_QUEST_GIVER_STATUS for a single NPC.
@@ -7646,18 +7701,6 @@ impl WorldSession {
         let mut pkt = wow_packet::WorldPacket::new_server(ServerOpcodes::QuestGiverStatus);
         pkt.write_packed_guid(&guid);
         pkt.write_uint32(status);
-        self.send_raw_packet(&pkt.into_data());
-    }
-
-    /// Send SMSG_QUEST_GIVER_STATUS_MULTIPLE with a list of NPC quest statuses.
-    fn send_quest_giver_status_multiple(&self, statuses: Vec<(ObjectGuid, u32)>) {
-        use wow_constants::ServerOpcodes;
-        let mut pkt = wow_packet::WorldPacket::new_server(ServerOpcodes::QuestGiverStatusMultiple);
-        pkt.write_int32(statuses.len() as i32);
-        for (guid, status) in &statuses {
-            pkt.write_packed_guid(guid);
-            pkt.write_uint32(*status);
-        }
         self.send_raw_packet(&pkt.into_data());
     }
 
