@@ -273,6 +273,10 @@ pub(crate) struct RepresentedQuestConfirmAcceptLikeCpp {
     pub can_add_source_item_result: Option<InventoryResult>,
     pub add_quest_runtime_unrepresented: bool,
     pub source_spell_unrepresented: bool,
+    /// Source spell id whose C++ triggered self-casts are represented as evidence only.
+    pub represented_source_spell_id: Option<u32>,
+    /// Count of represented triggered self-casts C++ would perform in this shared-confirm path.
+    pub represented_source_spell_self_casts: u8,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

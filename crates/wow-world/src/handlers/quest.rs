@@ -701,7 +701,9 @@ impl WorldSession {
                       can_add_source_item_unrepresented: bool,
                       can_add_source_item_result: Option<InventoryResult>,
                       add_quest_runtime_unrepresented: bool,
-                      source_spell_unrepresented: bool| {
+                      source_spell_unrepresented: bool,
+                      represented_source_spell_id: Option<u32>,
+                      represented_source_spell_self_casts: u8| {
             session.record_represented_quest_confirm_accept_like_cpp(
                 RepresentedQuestConfirmAcceptLikeCpp {
                     receiver_guid,
@@ -715,6 +717,8 @@ impl WorldSession {
                     can_add_source_item_result,
                     add_quest_runtime_unrepresented,
                     source_spell_unrepresented,
+                    represented_source_spell_id,
+                    represented_source_spell_self_casts,
                 },
             );
         };
@@ -727,6 +731,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         };
@@ -742,6 +748,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         };
@@ -754,6 +762,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         };
@@ -766,6 +776,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         };
@@ -782,6 +794,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         }
@@ -801,6 +815,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         }
@@ -813,6 +829,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         }
@@ -825,6 +843,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         }
@@ -841,6 +861,8 @@ impl WorldSession {
                     Some(source_item_result),
                     false,
                     false,
+                    None,
+                    0,
                 );
                 return;
             };
@@ -853,6 +875,8 @@ impl WorldSession {
                     None,
                     false,
                     false,
+                    None,
+                    0,
                 );
                 return;
             }
@@ -881,6 +905,8 @@ impl WorldSession {
                     Some(source_item_result),
                     false,
                     false,
+                    None,
+                    0,
                 );
                 return;
             }
@@ -891,19 +917,9 @@ impl WorldSession {
                 false,
                 None,
                 true,
-                false,
-            );
-            return;
-        }
-
-        if quest.source_spell_id > 0 {
-            record(
-                self,
-                RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
-                false,
+                quest.source_spell_id > 0,
                 None,
-                true,
-                true,
+                0,
             );
             return;
         }
@@ -916,6 +932,8 @@ impl WorldSession {
                 None,
                 false,
                 false,
+                None,
+                0,
             );
             return;
         };
@@ -933,6 +951,9 @@ impl WorldSession {
             .await;
         self.sync_player_registry_state_like_cpp();
 
+        let represented_source_spell_id =
+            (quest.source_spell_id > 0).then_some(quest.source_spell_id);
+        let represented_source_spell_self_casts = u8::from(quest.source_spell_id > 0) * 2;
         record(
             self,
             RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
@@ -940,6 +961,8 @@ impl WorldSession {
             None,
             false,
             false,
+            represented_source_spell_id,
+            represented_source_spell_self_casts,
         );
     }
 
@@ -3702,6 +3725,8 @@ mod tests {
                 can_add_source_item_result: None,
                 add_quest_runtime_unrepresented: success_boundary,
                 source_spell_unrepresented: false,
+                represented_source_spell_id: None,
+                represented_source_spell_self_casts: 0,
             }]
         );
     }
@@ -4102,7 +4127,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quest_confirm_accept_source_spell_keeps_addquest_boundary_like_cpp() {
+    async fn quest_confirm_accept_source_spell_records_two_self_casts_like_cpp() {
         let (mut session, send_rx) = make_session();
         let receiver_guid = session.player_guid().unwrap();
         let sender_guid = ObjectGuid::create_player(1, 191);
@@ -4111,6 +4136,72 @@ mod tests {
         quest.flags |= QUEST_FLAGS_SHARABLE_LIKE_CPP;
         quest.source_spell_id = 12_345;
         session.set_quest_store(Arc::new(QuestStore::from_quests_like_cpp([quest])));
+        session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
+        let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
+            &mut session,
+            sender_guid,
+            quest_id,
+            true,
+            Some(QUEST_STATUS_INCOMPLETE_LIKE_CPP),
+        );
+
+        run_quest_confirm_accept(&mut session, quest_id as i32).await;
+
+        assert_eq!(session.represented_pending_quest_sharing_like_cpp(), None);
+        let status = session
+            .player_quests
+            .get(&quest_id)
+            .expect("source-spell-only quest should still insert represented local AddQuest state");
+        assert_eq!(status.quest_id, quest_id);
+        assert_eq!(status.status, QUEST_STATUS_INCOMPLETE_LIKE_CPP);
+        assert!(!status.explored);
+        assert_eq!(status.objective_counts, vec![0, 0]);
+        assert_eq!(status.slot, 0);
+        let registry = session.player_registry().expect("test installs registry");
+        let snapshot = registry
+            .get(&receiver_guid)
+            .expect("receiver snapshot should sync after source-spell quest insertion");
+        assert_eq!(
+            snapshot.active_quest_statuses.get(&quest_id),
+            Some(&QUEST_STATUS_INCOMPLETE_LIKE_CPP)
+        );
+        assert_eq!(
+            session.represented_quest_confirm_accepts_like_cpp(),
+            &[RepresentedQuestConfirmAcceptLikeCpp {
+                receiver_guid: Some(receiver_guid),
+                sender_guid_before_clear: sender_guid,
+                quest_id,
+                raw_quest_id: quest_id as i32,
+                reason: RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
+                object_accessor_unrepresented: true,
+                party_runtime_unrepresented: true,
+                can_add_source_item_unrepresented: false,
+                can_add_source_item_result: None,
+                add_quest_runtime_unrepresented: false,
+                source_spell_unrepresented: false,
+                represented_source_spell_id: Some(12_345),
+                represented_source_spell_self_casts: 2,
+            }]
+        );
+        assert!(send_rx.try_recv().is_err());
+        assert!(sender_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn quest_confirm_accept_source_item_with_space_consumes_can_add_gate_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let receiver_guid = session.player_guid().unwrap();
+        let sender_guid = ObjectGuid::create_player(1, 91);
+        let quest_id = 7013;
+        let source_item_id = 9001;
+        let source_spell_id = 12_346;
+        session.set_quest_store(Arc::new(store_with_source_item_quest(
+            quest_id,
+            source_item_id,
+            2,
+            source_spell_id,
+        )));
+        install_source_item_template(&mut session, source_item_id, 20, 0);
         session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
         let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
             &mut session,
@@ -4139,45 +4230,9 @@ mod tests {
                 can_add_source_item_result: None,
                 add_quest_runtime_unrepresented: true,
                 source_spell_unrepresented: true,
+                represented_source_spell_id: None,
+                represented_source_spell_self_casts: 0,
             }]
-        );
-        assert!(send_rx.try_recv().is_err());
-        assert!(sender_rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn quest_confirm_accept_source_item_with_space_consumes_can_add_gate_like_cpp() {
-        let (mut session, send_rx) = make_session();
-        let sender_guid = ObjectGuid::create_player(1, 91);
-        let quest_id = 7013;
-        let source_item_id = 9001;
-        session.set_quest_store(Arc::new(store_with_source_item_quest(
-            quest_id,
-            source_item_id,
-            2,
-            0,
-        )));
-        install_source_item_template(&mut session, source_item_id, 20, 0);
-        session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
-        let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
-            &mut session,
-            sender_guid,
-            quest_id,
-            true,
-            Some(QUEST_STATUS_INCOMPLETE_LIKE_CPP),
-        );
-
-        run_quest_confirm_accept(&mut session, quest_id as i32).await;
-
-        assert_eq!(session.represented_pending_quest_sharing_like_cpp(), None);
-        assert!(!session.player_quests.contains_key(&quest_id));
-        assert_confirm_accept_outcome(
-            &session,
-            Some(ObjectGuid::create_player(1, 42)),
-            sender_guid,
-            quest_id,
-            quest_id as i32,
-            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
         );
         assert!(send_rx.try_recv().is_err());
         assert!(sender_rx.try_recv().is_err());
@@ -4324,6 +4379,8 @@ mod tests {
                 can_add_source_item_result: Some(InventoryResult::ItemNotFound),
                 add_quest_runtime_unrepresented: false,
                 source_spell_unrepresented: false,
+                represented_source_spell_id: None,
+                represented_source_spell_self_casts: 0,
             }]
         );
         assert_eq!(
@@ -4376,6 +4433,8 @@ mod tests {
                 can_add_source_item_result: None,
                 add_quest_runtime_unrepresented: false,
                 source_spell_unrepresented: false,
+                represented_source_spell_id: None,
+                represented_source_spell_self_casts: 0,
             }]
         );
         assert!(send_rx.try_recv().is_err());
