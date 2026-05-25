@@ -635,8 +635,11 @@ impl WorldSession {
     ///
     /// C++ anchor: `WorldSession::HandleQuestConfirmAccept`, `QuestHandler.cpp:499-531`.
     /// Represented-partial: validates against session-local pending sharing state, clears before
-    /// quest-template lookup like C++, then records only safe represented post-template gates.
-    /// Real `AddQuestAndCheckCompletion`, DB/source-item/source-spell side effects remain gaps.
+    /// quest-template lookup like C++, then records safe represented post-template gates.
+    /// No-source-item/no-source-spell quests consume only local quest-log insertion + Character DB
+    /// status save + PlayerRegistry snapshot sync from `Player::AddQuest`. Source-item grants,
+    /// source-spell casts, criteria/completion, timed/PvP, scripts, and `SendQuestUpdate` packet
+    /// fanout remain explicit no-mutation boundaries.
     pub async fn handle_quest_confirm_accept(&mut self, mut pkt: wow_packet::WorldPacket) {
         let packet = match QuestConfirmAccept::read(&mut pkt) {
             Ok(packet) => packet,
@@ -881,15 +884,62 @@ impl WorldSession {
                 );
                 return;
             }
+
+            record(
+                self,
+                RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+                false,
+                None,
+                true,
+                false,
+            );
+            return;
         }
+
+        if quest.source_spell_id > 0 {
+            record(
+                self,
+                RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+                false,
+                None,
+                true,
+                true,
+            );
+            return;
+        }
+
+        let Some(slot) = self.first_free_quest_slot_like_cpp() else {
+            record(
+                self,
+                RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverCanAddQuestLogFull,
+                false,
+                None,
+                false,
+                false,
+            );
+            return;
+        };
+        self.player_quests.insert(
+            parsed_quest_id,
+            PlayerQuestStatus {
+                quest_id: parsed_quest_id,
+                status: QUEST_STATUS_INCOMPLETE_LIKE_CPP,
+                explored: false,
+                objective_counts: vec![0; quest.objectives.len()],
+                slot,
+            },
+        );
+        self.save_quest_to_db(parsed_quest_id, QUEST_STATUS_INCOMPLETE_LIKE_CPP)
+            .await;
+        self.sync_player_registry_state_like_cpp();
 
         record(
             self,
-            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
             false,
             None,
-            true,
-            quest.source_spell_id > 0,
+            false,
+            false,
         );
     }
 
@@ -1956,11 +2006,16 @@ impl WorldSession {
     }
 
     fn quest_slot_has_active_entry_like_cpp(&self, slot: u8) -> bool {
+        // C++ `QuestSlotOffset` stores the quest id independently from the status fields;
+        // represented active slots are COMPLETE or INCOMPLETE only for this bounded helper.
         slot < MAX_QUEST_LOG_SIZE_LIKE_CPP
-            && self
-                .player_quests
-                .values()
-                .any(|status| status.slot == slot && (status.status == 1 || status.status == 2))
+            && self.player_quests.values().any(|status| {
+                status.slot == slot
+                    && matches!(
+                        status.status,
+                        QUEST_STATUS_COMPLETE_LIKE_CPP | QUEST_STATUS_INCOMPLETE_LIKE_CPP
+                    )
+            })
     }
 
     pub(crate) fn get_quest_slot_quest_id_like_cpp(&self, slot: u8) -> Option<u32> {
@@ -1969,11 +2024,13 @@ impl WorldSession {
         }
 
         let mut matching_quest_id = None;
-        for status in self
-            .player_quests
-            .values()
-            .filter(|status| status.slot == slot && (status.status == 1 || status.status == 2))
-        {
+        for status in self.player_quests.values().filter(|status| {
+            status.slot == slot
+                && matches!(
+                    status.status,
+                    QUEST_STATUS_COMPLETE_LIKE_CPP | QUEST_STATUS_INCOMPLETE_LIKE_CPP
+                )
+        }) {
             if matching_quest_id.is_some() {
                 return None;
             }
@@ -3025,6 +3082,32 @@ mod tests {
         QuestStore::from_quests_like_cpp(ids.iter().copied().map(quest_template))
     }
 
+    fn quest_template_with_objective_count(id: u32, objective_count: usize) -> QuestTemplate {
+        let mut quest = quest_template(id);
+        quest.objectives = (0..objective_count)
+            .map(|index| QuestObjective {
+                id: id * 10 + index as u32,
+                quest_id: id,
+                obj_type: 0,
+                order: index as u8,
+                storage_index: index as i8,
+                object_id: 1000 + index as i32,
+                amount: 1,
+                flags: 0,
+                flags2: 0,
+                progress_bar_weight: 0.0,
+                description: String::new(),
+            })
+            .collect();
+        quest
+    }
+
+    fn store_with_sharable_quest_objectives(id: u32, objective_count: usize) -> QuestStore {
+        let mut quest = quest_template_with_objective_count(id, objective_count);
+        quest.flags |= QUEST_FLAGS_SHARABLE_LIKE_CPP;
+        QuestStore::from_quests_like_cpp([quest])
+    }
+
     fn quest_template_with_source_item(
         id: u32,
         source_item_id: u32,
@@ -3632,6 +3715,8 @@ mod tests {
     ) -> (WorldSession, flume::Receiver<Vec<u8>>) {
         let player_registry = Arc::new(PlayerRegistry::default());
         session.set_player_registry(Arc::clone(&player_registry));
+        session.set_loaded_player_name_like_cpp("Receiver".to_string());
+        session.register_in_player_registry();
 
         let (mut sender_session, sender_rx) = make_session();
         sender_session.set_player_guid(Some(sender_guid));
@@ -3909,12 +3994,123 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quest_confirm_accept_all_represented_gates_pass_records_addquest_unrepresented_without_mutation_like_cpp()
-     {
+    async fn quest_confirm_accept_no_source_side_effects_adds_local_quest_state_like_cpp() {
         let (mut session, send_rx) = make_session();
+        let receiver_guid = session.player_guid().unwrap();
         let sender_guid = ObjectGuid::create_player(1, 90);
         let quest_id = 7012;
-        session.set_quest_store(Arc::new(store_with_quests(&[quest_id])));
+        session.set_quest_store(Arc::new(store_with_sharable_quest_objectives(quest_id, 3)));
+        session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
+        let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
+            &mut session,
+            sender_guid,
+            quest_id,
+            true,
+            Some(QUEST_STATUS_INCOMPLETE_LIKE_CPP),
+        );
+
+        run_quest_confirm_accept(&mut session, quest_id as i32).await;
+
+        assert_eq!(session.represented_pending_quest_sharing_like_cpp(), None);
+        let status = session
+            .player_quests
+            .get(&quest_id)
+            .expect("receiver quest log should receive bounded local AddQuest state");
+        assert_eq!(status.quest_id, quest_id);
+        assert_eq!(status.status, QUEST_STATUS_INCOMPLETE_LIKE_CPP);
+        assert!(!status.explored);
+        assert_eq!(status.objective_counts, vec![0, 0, 0]);
+        assert_eq!(status.slot, 0);
+        let registry = session.player_registry().expect("test installs registry");
+        let snapshot = registry
+            .get(&receiver_guid)
+            .expect("receiver snapshot should sync after quest insertion");
+        assert_eq!(
+            snapshot.active_quest_statuses.get(&quest_id),
+            Some(&QUEST_STATUS_INCOMPLETE_LIKE_CPP)
+        );
+        assert_eq!(
+            snapshot.active_quest_objective_counts.get(&quest_id),
+            Some(&vec![0, 0, 0])
+        );
+        assert_confirm_accept_outcome(
+            &session,
+            Some(receiver_guid),
+            sender_guid,
+            quest_id,
+            quest_id as i32,
+            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
+        );
+        assert!(send_rx.try_recv().is_err());
+        assert!(sender_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn quest_confirm_accept_first_free_slot_skips_occupied_slot_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let receiver_guid = session.player_guid().unwrap();
+        let sender_guid = ObjectGuid::create_player(1, 190);
+        let occupied_quest_id = 8000;
+        let quest_id = 70120;
+        session.set_quest_store(Arc::new(store_with_sharable_quest_objectives(quest_id, 1)));
+        add_active_quest_in_slot_with_status(
+            &mut session,
+            occupied_quest_id,
+            0,
+            QUEST_STATUS_INCOMPLETE_LIKE_CPP,
+        );
+        session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
+        let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
+            &mut session,
+            sender_guid,
+            quest_id,
+            true,
+            Some(QUEST_STATUS_INCOMPLETE_LIKE_CPP),
+        );
+
+        run_quest_confirm_accept(&mut session, quest_id as i32).await;
+
+        let occupied_status = session
+            .player_quests
+            .get(&occupied_quest_id)
+            .expect("pre-existing quest should remain in slot 0");
+        assert_eq!(occupied_status.slot, 0);
+        let status = session
+            .player_quests
+            .get(&quest_id)
+            .expect("accepted quest should be inserted into first free slot");
+        assert_eq!(status.slot, 1);
+        assert_eq!(status.status, QUEST_STATUS_INCOMPLETE_LIKE_CPP);
+        let registry = session.player_registry().expect("test installs registry");
+        let snapshot = registry
+            .get(&receiver_guid)
+            .expect("receiver snapshot should sync after quest insertion");
+        assert_eq!(
+            snapshot.active_quest_statuses.get(&quest_id),
+            Some(&QUEST_STATUS_INCOMPLETE_LIKE_CPP)
+        );
+        assert_confirm_accept_outcome(
+            &session,
+            Some(receiver_guid),
+            sender_guid,
+            quest_id,
+            quest_id as i32,
+            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
+        );
+        assert!(send_rx.try_recv().is_err());
+        assert!(sender_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn quest_confirm_accept_source_spell_keeps_addquest_boundary_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        let receiver_guid = session.player_guid().unwrap();
+        let sender_guid = ObjectGuid::create_player(1, 191);
+        let quest_id = 70121;
+        let mut quest = quest_template_with_objective_count(quest_id, 2);
+        quest.flags |= QUEST_FLAGS_SHARABLE_LIKE_CPP;
+        quest.source_spell_id = 12_345;
+        session.set_quest_store(Arc::new(QuestStore::from_quests_like_cpp([quest])));
         session.set_represented_pending_quest_sharing_like_cpp(sender_guid, quest_id);
         let (_sender_session, sender_rx) = install_confirm_accept_sender_snapshot(
             &mut session,
@@ -3928,13 +4124,22 @@ mod tests {
 
         assert_eq!(session.represented_pending_quest_sharing_like_cpp(), None);
         assert!(!session.player_quests.contains_key(&quest_id));
-        assert_confirm_accept_outcome(
-            &session,
-            Some(ObjectGuid::create_player(1, 42)),
-            sender_guid,
-            quest_id,
-            quest_id as i32,
-            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+        assert_eq!(
+            session.represented_quest_confirm_accepts_like_cpp(),
+            &[RepresentedQuestConfirmAcceptLikeCpp {
+                receiver_guid: Some(receiver_guid),
+                sender_guid_before_clear: sender_guid,
+                quest_id,
+                raw_quest_id: quest_id as i32,
+                reason:
+                    RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+                object_accessor_unrepresented: true,
+                party_runtime_unrepresented: true,
+                can_add_source_item_unrepresented: false,
+                can_add_source_item_result: None,
+                add_quest_runtime_unrepresented: true,
+                source_spell_unrepresented: true,
+            }]
         );
         assert!(send_rx.try_recv().is_err());
         assert!(sender_rx.try_recv().is_err());
@@ -4200,8 +4405,9 @@ mod tests {
             sender_guid,
             quest_id,
             quest_id as i32,
-            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::AddQuestRuntimeUnrepresented,
+            RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp::ReceiverAddQuestLocalStateRepresented,
         );
+        assert!(session.player_quests.contains_key(&quest_id));
         assert!(send_rx.try_recv().is_err());
         assert!(sender_rx.try_recv().is_err());
     }

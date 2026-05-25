@@ -255,6 +255,7 @@ pub(crate) enum RepresentedQuestConfirmAcceptOutcomeReasonLikeCpp {
     ReceiverCanAddQuestLogFull,
     ReceiverCanAddQuestSourceItemFailed,
     ReceiverCanAddQuestSourceItemLimitCategoryUnrepresented,
+    ReceiverAddQuestLocalStateRepresented,
     AddQuestRuntimeUnrepresented,
 }
 
