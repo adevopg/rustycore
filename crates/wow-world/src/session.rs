@@ -39,21 +39,22 @@ use wow_data::{
     AreaTableStore, AreaTriggerStore, ChrSpecializationStore, ConditionEntriesByTypeStore,
     CreatureDisplayInfoStore, CreatureModelDataStore, CreatureTemplateMountStoreLikeCpp,
     CurrencyTypesEntry, CurrencyTypesStore, DISABLE_TYPE_MAP, DisableMgrLikeCpp,
-    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, FishingBaseSkillStoreLikeCpp,
-    GameObjectDisplayInfoStore, HotfixBlobCache, ImportPriceStores, ItemAppearanceStore,
-    ItemClassStore, ItemCurrencyCostStore, ItemDisenchantLootStore, ItemExtendedCostStore,
-    ItemLimitCategoryConditionStore, ItemLimitCategoryStore, ItemModifiedAppearanceStore,
-    ItemPriceBaseStore, ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore,
-    ItemRandomPropertyTemplateEntry, ItemRandomSuffixStore, ItemStatsStore, ItemStore,
-    LfgDungeonsStore, LockStore, MapDifficultyStore, MapDifficultyXConditionStore, MapStore,
-    MountCapabilityStore, MountStore, MountTypeXCapabilityStore, MountXDisplayStore,
-    PhaseGroupStore, PhaseStore, PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp,
-    PlayerConditionCountLikeCpp, PlayerConditionPartyStatusLikeCpp,
-    PlayerConditionQuestKillLikeCpp, PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp,
-    PlayerConditionStore, PlayerStatsStore, RandPropPointsStore, SkillLineStore, SkillStore,
-    SpellDurationStore, SpellItemEnchantmentStore, SpellMiscStore, SpellRadiusStore,
-    SpellRangeStore, SpellStore, SummonPropertiesEntry, VEHICLE_SEAT_FLAG_CAN_ATTACK,
-    VehicleAccessoryStoreLikeCpp, VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
+    DisableWorldObjectRefLikeCpp, DungeonEncounterStore, DurabilityCostsStore,
+    DurabilityQualityStore, FishingBaseSkillStoreLikeCpp, GameObjectDisplayInfoStore,
+    HotfixBlobCache, ImportPriceStores, ItemAppearanceStore, ItemClassStore, ItemCurrencyCostStore,
+    ItemDisenchantLootStore, ItemExtendedCostStore, ItemLimitCategoryConditionStore,
+    ItemLimitCategoryStore, ItemModifiedAppearanceStore, ItemPriceBaseStore,
+    ItemRandomEnchantmentTemplateStore, ItemRandomPropertiesStore, ItemRandomPropertyTemplateEntry,
+    ItemRandomSuffixStore, ItemStatsStore, ItemStore, LfgDungeonsStore, LockStore,
+    MapDifficultyStore, MapDifficultyXConditionStore, MapStore, MountCapabilityStore, MountStore,
+    MountTypeXCapabilityStore, MountXDisplayStore, PhaseGroupStore, PhaseStore,
+    PlayerConditionAuraLikeCpp, PlayerConditionContextLikeCpp, PlayerConditionCountLikeCpp,
+    PlayerConditionPartyStatusLikeCpp, PlayerConditionQuestKillLikeCpp,
+    PlayerConditionReputationLikeCpp, PlayerConditionSkillLikeCpp, PlayerConditionStore,
+    PlayerStatsStore, RandPropPointsStore, SkillLineStore, SkillStore, SpellDurationStore,
+    SpellItemEnchantmentStore, SpellMiscStore, SpellRadiusStore, SpellRangeStore, SpellStore,
+    SummonPropertiesEntry, VEHICLE_SEAT_FLAG_CAN_ATTACK, VehicleAccessoryStoreLikeCpp,
+    VehicleSeatStore, VehicleStore, VehicleTemplateStoreLikeCpp,
     is_player_meeting_condition_like_cpp,
     progression_rewards::{
         ContentTuningStore, FactionEntry, FactionStore, FactionTemplateStore,
@@ -74,15 +75,16 @@ use wow_entities::{
     AccessorObjectKind, ApplyEnchantmentEffectRef, ApplyEnchantmentRandomSuffixRef,
     ApplyEnchantmentTemplateRef, BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_COUNT,
     BUYBACK_SLOT_END, BUYBACK_SLOT_START, BagTemplateRef, CanStoreItemArgs, CanUnequipItemArgs,
-    EQUIPMENT_SLOT_MAINHAND, GameObject, INVENTORY_DEFAULT_SIZE, INVENTORY_SLOT_BAG_0,
-    INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START, Item, ItemCreateInfo,
-    ItemLimitCategoryTemplate, ItemPosCount, ItemSlotRef, ItemStorageRef, ItemStorageTemplate,
-    MAX_ITEM_SPELLS, NULL_BAG, NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player,
-    PlayerEnchantTimeUpdate, PlayerInventoryStorage, PlayerItemTimeUpdate,
-    QUESTS_COMPLETED_BITS_PER_BLOCK, QUESTS_COMPLETED_BITS_SIZE, REAGENT_BAG_SLOT_END,
-    REAGENT_BAG_SLOT_START, SendNewItemDelivery, SendNewItemDisplayText, SendNewItemPlan,
-    UNIT_DATA_HEALTH_BIT, UnitDataUpdate, UnitDataValues, UpdateMask, Vehicle, VehicleAccessory,
-    VisibleItemValues, WorldObject, is_bag_pos, is_equipment_packed_pos, make_item_pos,
+    EQUIPMENT_SLOT_END, EQUIPMENT_SLOT_MAINHAND, GameObject, INVENTORY_DEFAULT_SIZE,
+    INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
+    INVENTORY_SLOT_ITEM_START, Item, ItemCreateInfo, ItemLimitCategoryTemplate, ItemPosCount,
+    ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_BAG_SIZE, MAX_ITEM_SPELLS, NULL_BAG,
+    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
+    PlayerInventoryStorage, PlayerItemTimeUpdate, QUESTS_COMPLETED_BITS_PER_BLOCK,
+    QUESTS_COMPLETED_BITS_SIZE, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, SendNewItemDelivery,
+    SendNewItemDisplayText, SendNewItemPlan, UNIT_DATA_HEALTH_BIT, UnitDataUpdate, UnitDataValues,
+    UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues, WorldObject, is_bag_pos,
+    is_equipment_packed_pos, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::{LootStoreKind, LootStores};
@@ -1662,6 +1664,8 @@ pub struct WorldSession {
 
     // Item stat modifiers store (item_id → stat bonuses from ItemSparse.db2)
     item_stats_store: Option<Arc<ItemStatsStore>>,
+    durability_costs_store: Option<Arc<DurabilityCostsStore>>,
+    durability_quality_store: Option<Arc<DurabilityQualityStore>>,
     item_template_addon_quest_log_item_ids_like_cpp: HashMap<u32, u32>,
 
     // Item random suffix store (ItemRandomSuffix.db2 data)
@@ -2703,6 +2707,8 @@ impl WorldSession {
             item_limit_category_condition_store: None,
             player_stats: None,
             item_stats_store: None,
+            durability_costs_store: None,
+            durability_quality_store: None,
             item_template_addon_quest_log_item_ids_like_cpp: HashMap::new(),
             item_random_suffix_store: None,
             item_random_properties_store: None,
@@ -6049,6 +6055,16 @@ impl WorldSession {
         self.item_stats_store = Some(store);
     }
 
+    /// Set the C++ `sDurabilityCostsStore` equivalent for this session.
+    pub fn set_durability_costs_store(&mut self, store: Arc<DurabilityCostsStore>) {
+        self.durability_costs_store = Some(store);
+    }
+
+    /// Set the C++ `sDurabilityQualityStore` equivalent for this session.
+    pub fn set_durability_quality_store(&mut self, store: Arc<DurabilityQualityStore>) {
+        self.durability_quality_store = Some(store);
+    }
+
     pub fn set_loot_drop_rates_like_cpp(&mut self, rates: LootDropRatesLikeCpp) {
         self.loot_drop_rates = rates;
     }
@@ -6337,6 +6353,262 @@ impl WorldSession {
     /// Get the item stats store reference.
     pub fn item_stats_store(&self) -> Option<&Arc<ItemStatsStore>> {
         self.item_stats_store.as_ref()
+    }
+
+    /// Get the durability cost store reference.
+    pub fn durability_costs_store(&self) -> Option<&Arc<DurabilityCostsStore>> {
+        self.durability_costs_store.as_ref()
+    }
+
+    /// Get the durability quality store reference.
+    pub fn durability_quality_store(&self) -> Option<&Arc<DurabilityQualityStore>> {
+        self.durability_quality_store.as_ref()
+    }
+
+    /// C++ `Item::CalculateDurabilityRepairCost`.
+    pub(crate) fn item_durability_repair_cost_like_cpp(
+        &self,
+        item_id: u32,
+        current_durability: u32,
+        max_durability: u32,
+        discount: f32,
+        repair_cost_rate: f32,
+    ) -> u64 {
+        if max_durability == 0 {
+            return 0;
+        }
+
+        debug_assert!(
+            max_durability >= current_durability,
+            "C++ Item::CalculateDurabilityRepairCost asserts max durability >= current durability"
+        );
+        if current_durability >= max_durability {
+            return 0;
+        }
+
+        let item = match self
+            .item_store
+            .as_ref()
+            .and_then(|store| store.get(item_id))
+        {
+            Some(item) => item,
+            None => return 0,
+        };
+        let stats = match self
+            .item_stats_store
+            .as_ref()
+            .and_then(|store| store.random_property_template(item_id))
+        {
+            Some(stats) => stats,
+            None => return 0,
+        };
+        if stats.quality < 0 {
+            return 0;
+        }
+
+        let durability_cost = match self
+            .durability_costs_store
+            .as_ref()
+            .and_then(|store| store.get(u32::from(stats.item_level)))
+        {
+            Some(cost) => cost,
+            None => return 0,
+        };
+        let durability_quality_entry_id = (stats.quality as u32 + 1) * 2;
+        let durability_quality = match self
+            .durability_quality_store
+            .as_ref()
+            .and_then(|store| store.get(durability_quality_entry_id))
+        {
+            Some(quality) => quality,
+            None => return 0,
+        };
+
+        let subclass = item.subclass_id as usize;
+        let multiplier = if item.class_id == ItemClass::Weapon as u8 {
+            durability_cost
+                .weapon_sub_class_cost
+                .get(subclass)
+                .copied()
+                .unwrap_or(0)
+        } else if item.class_id == ItemClass::Armor as u8 {
+            durability_cost
+                .armor_sub_class_cost
+                .get(subclass)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let lost_durability = max_durability - current_durability;
+        let rounded =
+            (lost_durability as f32 * multiplier as f32 * durability_quality.data * 1.0f32).round();
+        let cost = (rounded * discount * repair_cost_rate) as u64;
+
+        if cost == 0 { 1 } else { cost }
+    }
+
+    /// C++ `Player::DurabilityRepair(pos, takeCost, discountMod)` for one represented item.
+    pub(crate) async fn repair_inventory_item_durability_like_cpp(
+        &mut self,
+        item_guid: ObjectGuid,
+        take_cost: bool,
+        discount: f32,
+        repair_cost_rate: f32,
+    ) -> bool {
+        let top_level_inventory_item = self
+            .inventory_items_like_cpp()
+            .values()
+            .find(|item| item.guid == item_guid)
+            .cloned();
+        let Some(item_object) = self.inventory_item_objects_like_cpp().get(&item_guid) else {
+            return false;
+        };
+
+        let item_entry_id = top_level_inventory_item
+            .as_ref()
+            .map(|item| item.entry_id)
+            .unwrap_or_else(|| item_object.object().entry());
+        let item_db_guid = top_level_inventory_item
+            .as_ref()
+            .map(|item| item.db_guid)
+            .unwrap_or_else(|| item_guid.counter() as u64);
+        let current_durability = item_object.data().durability;
+        let max_durability = item_object.data().max_durability;
+        let cost = self.item_durability_repair_cost_like_cpp(
+            item_entry_id,
+            current_durability,
+            max_durability,
+            discount,
+            repair_cost_rate,
+        );
+
+        if take_cost {
+            let old_money = self.player_gold_like_cpp();
+            if old_money < cost {
+                return false;
+            }
+            if cost != 0 {
+                self.apply_player_money_change_like_cpp(old_money, old_money - cost)
+                    .await;
+            }
+        }
+
+        if let Some(char_db) = self.char_db.as_ref() {
+            let mut stmt = char_db.prepare(CharStatements::UPD_ITEM_INSTANCE_DURABILITY);
+            stmt.set_u32(0, max_durability);
+            stmt.set_u64(1, item_db_guid);
+            if let Err(e) = char_db.execute(&stmt).await {
+                warn!(
+                    item_guid = item_guid.counter(),
+                    error = %e,
+                    "failed to persist represented item durability repair"
+                );
+                return false;
+            }
+        }
+
+        let updated = self.update_inventory_item_object_like_cpp(item_guid, |item| {
+            item.set_durability(max_durability);
+        });
+        if updated {
+            self.sync_object_accessor_player();
+        }
+        updated
+    }
+
+    /// C++ `Player::DurabilityRepairAll(takeCost=true, guildBank=false)` for represented items.
+    pub(crate) async fn repair_all_inventory_item_durability_with_player_money_like_cpp(
+        &mut self,
+        discount: f32,
+        repair_cost_rate: f32,
+    ) -> bool {
+        let repair_items =
+            self.repairable_inventory_item_costs_like_cpp(discount, repair_cost_rate);
+        let total_cost = repair_items
+            .iter()
+            .fold(0u64, |total, (_, cost)| total.saturating_add(*cost));
+
+        if self.player_gold_like_cpp() < total_cost {
+            return false;
+        }
+
+        if total_cost != 0 {
+            let old_money = self.player_gold_like_cpp();
+            self.apply_player_money_change_like_cpp(old_money, old_money - total_cost)
+                .await;
+        }
+
+        let mut repaired_any = false;
+        for (item_guid, _) in repair_items {
+            repaired_any |= self
+                .repair_inventory_item_durability_like_cpp(item_guid, false, 0.0, repair_cost_rate)
+                .await;
+        }
+        repaired_any || total_cost == 0
+    }
+
+    fn repairable_inventory_item_costs_like_cpp(
+        &self,
+        discount: f32,
+        repair_cost_rate: f32,
+    ) -> Vec<(ObjectGuid, u64)> {
+        let mut repair_items = Vec::new();
+        let item_objects = self.inventory_item_objects_like_cpp();
+        let inventory_end = INVENTORY_SLOT_ITEM_START
+            .saturating_add(INVENTORY_DEFAULT_SIZE)
+            .min(PLAYER_SLOT_END as u8);
+
+        for (&slot, inventory_item) in self.inventory_items_like_cpp() {
+            if !((slot < EQUIPMENT_SLOT_END)
+                || (INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot)
+                || (INVENTORY_SLOT_ITEM_START..inventory_end).contains(&slot))
+            {
+                continue;
+            }
+            let Some(item_object) = item_objects.get(&inventory_item.guid) else {
+                continue;
+            };
+            let cost = self.item_durability_repair_cost_like_cpp(
+                inventory_item.entry_id,
+                item_object.data().durability,
+                item_object.data().max_durability,
+                discount,
+                repair_cost_rate,
+            );
+            if cost != 0 {
+                repair_items.push((inventory_item.guid, cost));
+            }
+        }
+
+        let represented_bag_guids: HashSet<_> = self
+            .inventory_items_like_cpp()
+            .iter()
+            .filter_map(|(&slot, item)| {
+                ((INVENTORY_SLOT_BAG_START..INVENTORY_SLOT_BAG_END).contains(&slot))
+                    .then_some(item.guid)
+            })
+            .collect();
+        for item_object in item_objects.values() {
+            if !represented_bag_guids.contains(&item_object.container_guid())
+                || item_object.slot() as usize >= MAX_BAG_SIZE
+            {
+                continue;
+            }
+            let cost = self.item_durability_repair_cost_like_cpp(
+                item_object.object().entry(),
+                item_object.data().durability,
+                item_object.data().max_durability,
+                discount,
+                repair_cost_rate,
+            );
+            if cost != 0 {
+                repair_items.push((item_object.object().guid(), cost));
+            }
+        }
+
+        repair_items
     }
 
     /// Resolve cached C++ `ItemTemplate::QuestLogItemId` from `item_template_addon`.
@@ -20290,14 +20562,16 @@ mod tests {
     };
     use wow_core::{Position, guid::HighGuid};
     use wow_data::{
-        Condition, ImportPriceArmorEntry, ImportPriceArmorStore, ImportPriceQualityEntry,
-        ImportPriceQualityStore, ImportPriceShieldEntry, ImportPriceShieldStore, ImportPriceStores,
-        ImportPriceWeaponEntry, ImportPriceWeaponStore, ItemAppearanceEntry, ItemAppearanceStore,
-        ItemClassEntry, ItemClassStore, ItemCurrencyCostEntry, ItemCurrencyCostStore,
-        ItemDisenchantLootEntry, ItemDisenchantLootStore, ItemLimitCategoryConditionEntry,
-        ItemLimitCategoryConditionStore, ItemLimitCategoryEntry, ItemLimitCategoryStore,
-        ItemModifiedAppearanceEntry, ItemModifiedAppearanceStore, ItemPriceBaseEntry,
-        ItemPriceBaseStore, ItemRandomSuffixEntry, ItemRandomSuffixStore, ItemRecord,
+        Condition, DurabilityCostsEntry, DurabilityCostsStore, DurabilityQualityEntry,
+        DurabilityQualityStore, ImportPriceArmorEntry, ImportPriceArmorStore,
+        ImportPriceQualityEntry, ImportPriceQualityStore, ImportPriceShieldEntry,
+        ImportPriceShieldStore, ImportPriceStores, ImportPriceWeaponEntry, ImportPriceWeaponStore,
+        ItemAppearanceEntry, ItemAppearanceStore, ItemClassEntry, ItemClassStore,
+        ItemCurrencyCostEntry, ItemCurrencyCostStore, ItemDisenchantLootEntry,
+        ItemDisenchantLootStore, ItemLimitCategoryConditionEntry, ItemLimitCategoryConditionStore,
+        ItemLimitCategoryEntry, ItemLimitCategoryStore, ItemModifiedAppearanceEntry,
+        ItemModifiedAppearanceStore, ItemPriceBaseEntry, ItemPriceBaseStore,
+        ItemRandomPropertyTemplateEntry, ItemRandomSuffixEntry, ItemRandomSuffixStore, ItemRecord,
         ItemSparseTemplateEntry, ItemStatsStore, ItemStore, LockEntry, LockStore,
         PlayerConditionEntry, PlayerConditionStore, SpellItemEnchantmentEntry,
         SpellItemEnchantmentStore,
@@ -35135,6 +35409,413 @@ mod tests {
         assert!(session.is_item_bound_account_wide(100));
         assert!(!session.is_item_bound_account_wide(101));
         assert_eq!(session.item_template_flags(102), None);
+    }
+
+    #[test]
+    fn item_durability_repair_cost_uses_cpp_db2_cost_and_quality() {
+        let (mut session, _, _) = make_session();
+        session.set_item_store(Arc::new(ItemStore::from_records([
+            ItemRecord {
+                id: 100,
+                class_id: ItemClass::Weapon as u8,
+                subclass_id: 7,
+                material: 0,
+                inventory_type: InventoryType::Weapon as i8,
+                sheathe_type: 0,
+                random_select: 0,
+                random_suffix_group_id: 0,
+            },
+            ItemRecord {
+                id: 101,
+                class_id: ItemClass::Armor as u8,
+                subclass_id: 4,
+                material: 0,
+                inventory_type: InventoryType::Chest as i8,
+                sheathe_type: 0,
+                random_select: 0,
+                random_suffix_group_id: 0,
+            },
+        ])));
+        session.set_item_stats_store(Arc::new(ItemStatsStore::from_random_property_templates([
+            (
+                100,
+                ItemRandomPropertyTemplateEntry {
+                    item_level: 57,
+                    quality: ItemQuality::Rare as i8,
+                    inventory_type: InventoryType::Weapon as i8,
+                },
+            ),
+            (
+                101,
+                ItemRandomPropertyTemplateEntry {
+                    item_level: 57,
+                    quality: ItemQuality::Rare as i8,
+                    inventory_type: InventoryType::Chest as i8,
+                },
+            ),
+        ])));
+        session.set_durability_costs_store(Arc::new(DurabilityCostsStore::from_entries([
+            DurabilityCostsEntry {
+                id: 57,
+                weapon_sub_class_cost: std::array::from_fn(|i| if i == 7 { 13 } else { 0 }),
+                armor_sub_class_cost: std::array::from_fn(|i| if i == 4 { 5 } else { 0 }),
+            },
+        ])));
+        session.set_durability_quality_store(Arc::new(DurabilityQualityStore::from_entries([
+            DurabilityQualityEntry {
+                id: (ItemQuality::Rare as u32 + 1) * 2,
+                data: 1.25,
+            },
+        ])));
+
+        assert_eq!(
+            session.item_durability_repair_cost_like_cpp(100, 40, 50, 0.8, 2.0),
+            260
+        );
+        assert_eq!(
+            session.item_durability_repair_cost_like_cpp(101, 10, 13, 1.0, 1.0),
+            19
+        );
+        assert_eq!(
+            session.item_durability_repair_cost_like_cpp(100, 50, 50, 1.0, 1.0),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_inventory_item_durability_spends_money_and_restores_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let item_guid = ObjectGuid::create_item(1, 900);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_gold_like_cpp(300);
+        session.set_item_store(Arc::new(ItemStore::from_records([ItemRecord {
+            id: 100,
+            class_id: ItemClass::Weapon as u8,
+            subclass_id: 7,
+            material: 0,
+            inventory_type: InventoryType::Weapon as i8,
+            sheathe_type: 0,
+            random_select: 0,
+            random_suffix_group_id: 0,
+        }])));
+        session.set_item_stats_store(Arc::new(
+            ItemStatsStore::from_sparse_and_random_property_templates(
+                [(
+                    100,
+                    ItemSparseTemplateEntry {
+                        flags: [0; 4],
+                        bag_family: 0,
+                        start_quest_id: 0,
+                        stackable: 1,
+                        max_count: 0,
+                        lock_id: 0,
+                        required_reputation_rank: 0,
+                        sell_price: 0,
+                        buy_price: 0,
+                        vendor_stack_count: 1,
+                        price_variance: 1.0,
+                        price_random_value: 0.0,
+                        max_durability: 50,
+                        limit_category: 0,
+                        instance_bound: 0,
+                        zone_bound: [0; 2],
+                        required_reputation_faction: 0,
+                        allowable_class: 0,
+                        required_expansion: 0,
+                        bonding: ItemBondingType::None as u8,
+                        container_slots: 0,
+                        inventory_type: InventoryType::Weapon as i8,
+                    },
+                )],
+                [(
+                    100,
+                    ItemRandomPropertyTemplateEntry {
+                        item_level: 57,
+                        quality: ItemQuality::Rare as i8,
+                        inventory_type: InventoryType::Weapon as i8,
+                    },
+                )],
+            ),
+        ));
+        session.set_durability_costs_store(Arc::new(DurabilityCostsStore::from_entries([
+            DurabilityCostsEntry {
+                id: 57,
+                weapon_sub_class_cost: std::array::from_fn(|i| if i == 7 { 13 } else { 0 }),
+                armor_sub_class_cost: [0; 8],
+            },
+        ])));
+        session.set_durability_quality_store(Arc::new(DurabilityQualityStore::from_entries([
+            DurabilityQualityEntry {
+                id: (ItemQuality::Rare as u32 + 1) * 2,
+                data: 1.25,
+            },
+        ])));
+        session.inventory_items.insert(
+            23,
+            InventoryItem {
+                guid: item_guid,
+                entry_id: 100,
+                db_guid: item_guid.counter() as u64,
+                inventory_type: Some(InventoryType::Weapon as u8),
+            },
+        );
+        let item = session.make_inventory_item_object(
+            item_guid,
+            100,
+            player_guid,
+            1,
+            40,
+            ItemContext::None,
+            23,
+        );
+        session.insert_inventory_item_object(item);
+
+        assert!(
+            session
+                .repair_inventory_item_durability_like_cpp(item_guid, true, 0.8, 2.0)
+                .await
+        );
+        assert_eq!(session.player_gold_like_cpp(), 40);
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&item_guid]
+                .data()
+                .durability,
+            50
+        );
+
+        session.set_player_gold_like_cpp(10);
+        let item = session.inventory_item_objects.get_mut(&item_guid).unwrap();
+        item.set_durability(40);
+        assert!(
+            !session
+                .repair_inventory_item_durability_like_cpp(item_guid, true, 0.8, 2.0)
+                .await
+        );
+        assert_eq!(session.player_gold_like_cpp(), 10);
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&item_guid]
+                .data()
+                .durability,
+            40
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_all_inventory_item_durability_charges_once_like_cpp() {
+        let (mut session, _, _) = make_session();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let weapon_guid = ObjectGuid::create_item(1, 900);
+        let bag_guid = ObjectGuid::create_item(1, 901);
+        let armor_guid = ObjectGuid::create_item(1, 902);
+        session.set_player_guid(Some(player_guid));
+        session.set_player_gold_like_cpp(500);
+        session.set_item_store(Arc::new(ItemStore::from_records([
+            ItemRecord {
+                id: 100,
+                class_id: ItemClass::Weapon as u8,
+                subclass_id: 7,
+                material: 0,
+                inventory_type: InventoryType::Weapon as i8,
+                sheathe_type: 0,
+                random_select: 0,
+                random_suffix_group_id: 0,
+            },
+            ItemRecord {
+                id: 101,
+                class_id: ItemClass::Armor as u8,
+                subclass_id: 4,
+                material: 0,
+                inventory_type: InventoryType::Chest as i8,
+                sheathe_type: 0,
+                random_select: 0,
+                random_suffix_group_id: 0,
+            },
+            ItemRecord {
+                id: 200,
+                class_id: ItemClass::Container as u8,
+                subclass_id: 0,
+                material: 0,
+                inventory_type: InventoryType::Bag as i8,
+                sheathe_type: 0,
+                random_select: 0,
+                random_suffix_group_id: 0,
+            },
+        ])));
+        let sparse = |inventory_type: InventoryType, max_durability: u32| ItemSparseTemplateEntry {
+            flags: [0; 4],
+            bag_family: 0,
+            start_quest_id: 0,
+            stackable: 1,
+            max_count: 0,
+            lock_id: 0,
+            required_reputation_rank: 0,
+            sell_price: 0,
+            buy_price: 0,
+            vendor_stack_count: 1,
+            price_variance: 1.0,
+            price_random_value: 0.0,
+            max_durability,
+            limit_category: 0,
+            instance_bound: 0,
+            zone_bound: [0; 2],
+            required_reputation_faction: 0,
+            allowable_class: 0,
+            required_expansion: 0,
+            bonding: ItemBondingType::None as u8,
+            container_slots: if inventory_type == InventoryType::Bag {
+                4
+            } else {
+                0
+            },
+            inventory_type: inventory_type as i8,
+        };
+        session.set_item_stats_store(Arc::new(
+            ItemStatsStore::from_sparse_and_random_property_templates(
+                [
+                    (100, sparse(InventoryType::Weapon, 50)),
+                    (101, sparse(InventoryType::Chest, 13)),
+                    (200, sparse(InventoryType::Bag, 0)),
+                ],
+                [
+                    (
+                        100,
+                        ItemRandomPropertyTemplateEntry {
+                            item_level: 57,
+                            quality: ItemQuality::Rare as i8,
+                            inventory_type: InventoryType::Weapon as i8,
+                        },
+                    ),
+                    (
+                        101,
+                        ItemRandomPropertyTemplateEntry {
+                            item_level: 57,
+                            quality: ItemQuality::Rare as i8,
+                            inventory_type: InventoryType::Chest as i8,
+                        },
+                    ),
+                    (
+                        200,
+                        ItemRandomPropertyTemplateEntry {
+                            item_level: 57,
+                            quality: ItemQuality::Normal as i8,
+                            inventory_type: InventoryType::Bag as i8,
+                        },
+                    ),
+                ],
+            ),
+        ));
+        session.set_durability_costs_store(Arc::new(DurabilityCostsStore::from_entries([
+            DurabilityCostsEntry {
+                id: 57,
+                weapon_sub_class_cost: std::array::from_fn(|i| if i == 7 { 13 } else { 0 }),
+                armor_sub_class_cost: std::array::from_fn(|i| if i == 4 { 5 } else { 0 }),
+            },
+        ])));
+        session.set_durability_quality_store(Arc::new(DurabilityQualityStore::from_entries([
+            DurabilityQualityEntry {
+                id: (ItemQuality::Rare as u32 + 1) * 2,
+                data: 1.25,
+            },
+        ])));
+        session.inventory_items.insert(
+            EQUIPMENT_SLOT_MAINHAND,
+            InventoryItem {
+                guid: weapon_guid,
+                entry_id: 100,
+                db_guid: weapon_guid.counter() as u64,
+                inventory_type: Some(InventoryType::Weapon as u8),
+            },
+        );
+        session.inventory_items.insert(
+            INVENTORY_SLOT_BAG_START,
+            InventoryItem {
+                guid: bag_guid,
+                entry_id: 200,
+                db_guid: bag_guid.counter() as u64,
+                inventory_type: Some(InventoryType::Bag as u8),
+            },
+        );
+        let weapon = session.make_inventory_item_object(
+            weapon_guid,
+            100,
+            player_guid,
+            1,
+            40,
+            ItemContext::None,
+            EQUIPMENT_SLOT_MAINHAND,
+        );
+        let bag = session.make_inventory_item_object(
+            bag_guid,
+            200,
+            player_guid,
+            1,
+            0,
+            ItemContext::None,
+            INVENTORY_SLOT_BAG_START,
+        );
+        let mut armor = session.make_inventory_item_object(
+            armor_guid,
+            101,
+            player_guid,
+            1,
+            10,
+            ItemContext::None,
+            0,
+        );
+        armor.set_container_guid_and_slot(bag_guid, 0);
+        session.insert_inventory_item_object(weapon);
+        session.insert_inventory_item_object(bag);
+        session.insert_inventory_item_object(armor);
+
+        assert!(
+            session
+                .repair_all_inventory_item_durability_with_player_money_like_cpp(0.8, 2.0)
+                .await
+        );
+        assert_eq!(session.player_gold_like_cpp(), 210);
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&weapon_guid]
+                .data()
+                .durability,
+            50
+        );
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&armor_guid]
+                .data()
+                .durability,
+            13
+        );
+
+        session.set_player_gold_like_cpp(10);
+        session
+            .inventory_item_objects
+            .get_mut(&weapon_guid)
+            .unwrap()
+            .set_durability(40);
+        session
+            .inventory_item_objects
+            .get_mut(&armor_guid)
+            .unwrap()
+            .set_durability(10);
+        assert!(
+            !session
+                .repair_all_inventory_item_durability_with_player_money_like_cpp(0.8, 2.0)
+                .await
+        );
+        assert_eq!(session.player_gold_like_cpp(), 10);
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&weapon_guid]
+                .data()
+                .durability,
+            40
+        );
+        assert_eq!(
+            session.inventory_item_objects_like_cpp()[&armor_guid]
+                .data()
+                .durability,
+            10
+        );
     }
 
     #[test]

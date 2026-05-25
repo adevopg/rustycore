@@ -99,6 +99,8 @@ pub struct SessionResources {
     pub item_limit_category_condition_store: Option<Arc<wow_data::ItemLimitCategoryConditionStore>>,
     pub player_stats: Option<Arc<wow_data::PlayerStatsStore>>,
     pub item_stats_store: Option<Arc<wow_data::ItemStatsStore>>,
+    pub durability_costs_store: Option<Arc<wow_data::DurabilityCostsStore>>,
+    pub durability_quality_store: Option<Arc<wow_data::DurabilityQualityStore>>,
     pub item_random_suffix_store: Option<Arc<wow_data::ItemRandomSuffixStore>>,
     pub item_random_properties_store: Option<Arc<wow_data::ItemRandomPropertiesStore>>,
     pub rand_prop_points_store: Option<Arc<wow_data::RandPropPointsStore>>,

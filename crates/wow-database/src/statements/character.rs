@@ -217,6 +217,9 @@ pub enum CharStatements {
     /// UPDATE item_instance SET count = ? WHERE guid = ?
     UPD_ITEM_INSTANCE_COUNT,
 
+    /// UPDATE item_instance SET durability = ? WHERE guid = ?
+    UPD_ITEM_INSTANCE_DURABILITY,
+
     /// UPDATE item_instance SET flags = ? WHERE guid = ?
     UPD_ITEM_INSTANCE_FLAGS,
 
@@ -512,6 +515,9 @@ impl StatementDef for CharStatements {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             }
             Self::UPD_ITEM_INSTANCE_COUNT => "UPDATE item_instance SET count = ? WHERE guid = ?",
+            Self::UPD_ITEM_INSTANCE_DURABILITY => {
+                "UPDATE item_instance SET durability = ? WHERE guid = ?"
+            }
             Self::UPD_ITEM_INSTANCE_FLAGS => "UPDATE item_instance SET flags = ? WHERE guid = ?",
             Self::SEL_CHARACTER_GIFT_BY_ITEM => {
                 "SELECT entry, flags FROM character_gifts WHERE item_guid = ?"
