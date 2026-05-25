@@ -3545,6 +3545,42 @@ Focused tests/checks: `PROTOC=/home/cdmonio/.local/protoc/bin/protoc cargo test 
 
 Remaining gaps: Scenario/LFG/GM `RewardQuest` callers are not ported yet, progress-objective synchronous completion paths still need async reward integration for tracking events, full `RewardQuest` side effects remain represented-partial, no manual-test-ready runtime, install, restart, push, or server launch.
 
+### #NEXT.R8.ENTITIES.724 — GetNPCIfCanInteractWith hostile reaction gate
+
+Status: represented-partial for the C++ hostile-reaction branch inside `Player::GetNPCIfCanInteractWith`.
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:1969-1973` (`GetCharmerGUID` then `!UNIT_FLAG2_INTERACT_WHILE_HOSTILE && GetReactionTo(this) <= REP_UNFRIENDLY`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/Object/Object.cpp:2840-2876` (`GetReactionTo` common faction/reputation branches and `IsHostileTo`), and `/home/server/woltk-trinity-legacy/src/server/game/Miscellaneous/SharedDefines.h:194-203` (reputation rank ordering).
+
+Implemented Rust seam: `Unit` now exposes represented `set_unit_flags2_like_cpp` and `unit_flags2_like_cpp`. `represented_npc_can_interact_with_like_cpp` uses the already ported represented `GetReactionTo` helper from the canonical creature faction template toward the current player's faction template. If the creature lacks `UnitFlags2::INTERACT_WHILE_HOSTILE`, `Unfriendly` or worse reaction rejects interaction; setting the bypass flag preserves interaction like C++.
+
+Focused tests/checks: `cargo fmt`; `cargo fmt --check`; `cargo test -p wow-world npc_interaction_resolves_canonical_trainer_like_cpp`; `cargo test -p wow-world repair_item_handler_requires_repair_npc_and_repairs_single_item_like_cpp`; `cargo test -p wow-world repair_inventory_item_durability_spends_money_and_restores_like_cpp`.
+
+Remaining gaps: full ObjectAccessor creature/pet/vehicle nuance, exact `IsInWorld` lifecycle edge evidence, install/restart and manual-test-ready runtime remain open.
+
+### #NEXT.R8.ENTITIES.723 — GetNPCIfCanInteractWith represented flight/death/charmer gates
+
+Status: represented-partial for additional C++ `Player::GetNPCIfCanInteractWith` rejection branches used by `CMSG_REPAIR_ITEM` and other NPC handlers.
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:1929-1982` (`!guid`, `!IsInWorld`, `IsInFlight`, creature lookup, player death with `CREATURE_TYPE_FLAG_VISIBLE_TO_GHOSTS`, creature death with `CREATURE_TYPE_FLAG_INTERACT_WHILE_DEAD`, NPC flags, non-empty `GetCharmerGUID`, hostile reaction, and distance).
+
+Implemented Rust seam: `represented_npc_can_interact_with_like_cpp` now rejects represented sessions currently in taxi flight, dead represented players unless the canonical creature type flags include `VISIBLE_TO_GHOSTS`, dead canonical creatures unless type flags include `INTERACT_WHILE_DEAD`, and canonical creatures with a non-empty represented `charmer_guid`. Existing represented empty GUID/type, canonical lookup, NPC flag, and distance gates remain in place.
+
+Focused tests/checks: `cargo fmt`; `cargo test -p wow-world npc_interaction_resolves_canonical_trainer_like_cpp`; `cargo test -p wow-world repair_inventory_item_durability_spends_money_and_restores_like_cpp`.
+
+Remaining gaps: full hostile reaction/faction resolution, `UNIT_FLAG2_INTERACT_WHILE_HOSTILE`, full ObjectAccessor creature/pet/vehicle nuance, exact `IsInWorld` lifecycle edge evidence, install/restart and manual-test-ready runtime remain open.
+
+### #NEXT.R8.ENTITIES.722 — Player::DurabilityRepair item durability values update
+
+Status: represented-partial for the C++ item-update fanout after `DurabilityRepair` restores durability and marks the item changed.
+
+C++ anchors: `/home/server/woltk-trinity-legacy/src/server/game/Entities/Player/Player.cpp:4713-4740` (`DurabilityRepair` calls `item->SetDurability(item->m_itemData->MaxDurability); item->SetState(ITEM_CHANGED, this)`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/Item.h:190` (`SetDurability` marks `UF::ItemData::Durability`), `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/Item.cpp:843-892` (`SetState`/`AddItemToUpdateQueueOf`), and `/home/server/woltk-trinity-legacy/src/server/game/Entities/Item/Item.cpp:1341-1407` (`BuildValuesUpdate`/`BuildValuesUpdateForPlayerWithMask` write changed item fields).
+
+Implemented Rust seam: represented single-item durability repair now emits an item values `UpdateObject` after successful durability mutation. The update uses a synthetic `ItemValuesUpdate` with only `ITEM_DATA_DURABILITY_BIT` set and the repaired item data, so the represented packet mirrors the C++ repaired durability field instead of leaking stale creation-time item masks from test/setup objects.
+
+Focused tests/checks: `cargo fmt`; `cargo test -p wow-world repair_inventory_item_durability_spends_money_and_restores_like_cpp`.
+
+Remaining gaps: this is immediate represented packet fanout, not the full deferred C++ item update queue/save lifecycle. Full `_ApplyItemMods` item bonuses, equip spells, dependent auras, weapon-dependent aura updates, enchantment effect mutation, guild-bank repair, full C++ `GetNPCIfCanInteractWith` branches, install/restart and manual-test-ready runtime remain open.
+
 ### #NEXT.R8.ENTITIES.721 — Player::DurabilityRepair equipped broken-item mod reapply boundary
 
 Status: represented-partial for the C++ `DurabilityRepair` branch that reapplies item mods after a broken equipped item is repaired.

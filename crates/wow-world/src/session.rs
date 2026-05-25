@@ -15,8 +15,8 @@ use rand::seq::SliceRandom;
 use tracing::{debug, info, trace, warn};
 
 use crate::entity_update_bridge::{
-    dynamic_object_values_update_to_update_object, player_values_update_to_update_object,
-    unit_values_update_to_update_object,
+    dynamic_object_values_update_to_update_object, item_values_update_to_update_object,
+    player_values_update_to_update_object, unit_values_update_to_update_object,
 };
 use crate::map_manager::{WorldMMapPathRequestLikeCpp, WorldMMapPathfinderWorkerLikeCpp};
 use crate::phasing::{
@@ -24,10 +24,12 @@ use crate::phasing::{
     party_member_phase_states_like_cpp,
 };
 use crate::reputation::{ReputationMgrLikeCpp, reputation_to_rank_like_cpp};
+use wow_constants::creature::CreatureTypeFlags;
 use wow_constants::item::{CurrencyTypes, CurrencyTypesFlags};
 use wow_constants::movement::MovementFlag;
 use wow_constants::unit::{
-    Gender, NPCFlags1, Team, UnitFlags, UnitPvpFlags, UnitStandStateType, WeaponAttackType,
+    Gender, NPCFlags1, Team, UnitFlags, UnitFlags2, UnitPvpFlags, UnitStandStateType,
+    WeaponAttackType,
 };
 use wow_constants::{
     BagFamilyMask, BuyResult, ClientOpcodes, InventoryResult, InventoryType, ItemBondingType,
@@ -77,14 +79,15 @@ use wow_entities::{
     BUYBACK_SLOT_END, BUYBACK_SLOT_START, BagTemplateRef, CanStoreItemArgs, CanUnequipItemArgs,
     EQUIPMENT_SLOT_END, EQUIPMENT_SLOT_MAINHAND, GameObject, INVENTORY_DEFAULT_SIZE,
     INVENTORY_SLOT_BAG_0, INVENTORY_SLOT_BAG_END, INVENTORY_SLOT_BAG_START,
-    INVENTORY_SLOT_ITEM_START, Item, ItemCreateInfo, ItemLimitCategoryTemplate, ItemPosCount,
-    ItemSlotRef, ItemStorageRef, ItemStorageTemplate, MAX_BAG_SIZE, MAX_ITEM_SPELLS, NULL_BAG,
-    NULL_SLOT, ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
+    INVENTORY_SLOT_ITEM_START, ITEM_DATA_BITS, ITEM_DATA_DURABILITY_BIT, Item, ItemCreateInfo,
+    ItemDataUpdate, ItemLimitCategoryTemplate, ItemPosCount, ItemSlotRef, ItemStorageRef,
+    ItemStorageTemplate, ItemValuesUpdate, MAX_BAG_SIZE, MAX_ITEM_SPELLS, NULL_BAG, NULL_SLOT,
+    ObjectAccessor, PLAYER_SLOT_END, PhaseShift, Player, PlayerEnchantTimeUpdate,
     PlayerInventoryStorage, PlayerItemTimeUpdate, QUESTS_COMPLETED_BITS_PER_BLOCK,
     QUESTS_COMPLETED_BITS_SIZE, REAGENT_BAG_SLOT_END, REAGENT_BAG_SLOT_START, SendNewItemDelivery,
-    SendNewItemDisplayText, SendNewItemPlan, UNIT_DATA_HEALTH_BIT, UnitDataUpdate, UnitDataValues,
-    UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues, WorldObject, is_bag_pos,
-    is_equipment_packed_pos, make_item_pos,
+    SendNewItemDisplayText, SendNewItemPlan, TYPEID_ITEM, UNIT_DATA_HEALTH_BIT, UnitDataUpdate,
+    UnitDataValues, UpdateMask, Vehicle, VehicleAccessory, VisibleItemValues, WorldObject,
+    is_bag_pos, is_equipment_packed_pos, make_item_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus, build_dispatch_table};
 use wow_loot::{LootStoreKind, LootStores};
@@ -4819,6 +4822,15 @@ impl WorldSession {
         }
         let player_guid = self.player_guid()?;
         let player_position = self.player_position_like_cpp()?;
+        let target_player_contested_pvp = self
+            .canonical_player_has_player_flag_like_cpp(
+                player_guid,
+                PLAYER_FLAGS_CONTESTED_PVP_LIKE_CPP,
+            )
+            .unwrap_or(false);
+        if self.taxi_flight_state_like_cpp.is_some() {
+            return None;
+        }
         let manager = self.canonical_map_manager.as_ref()?;
         let Ok(manager) = manager.lock() else {
             return None;
@@ -4826,11 +4838,50 @@ impl WorldSession {
         let map = manager.find_map(u32::from(self.player_map_id_like_cpp()), 0)?;
         let creature = map.map().get_typed_creature(guid)?;
 
-        if !creature.is_alive() {
+        let type_flags =
+            CreatureTypeFlags::from_bits_retain(creature.lifecycle_metadata().type_flags);
+        if !self.player_is_alive_like_cpp()
+            && !type_flags.contains(CreatureTypeFlags::VISIBLE_TO_GHOSTS)
+        {
+            return None;
+        }
+        if !creature.is_alive() && !type_flags.contains(CreatureTypeFlags::INTERACT_WHILE_DEAD) {
             return None;
         }
         if npc_flags != 0 && (creature.ai_ownership().npc_flags & npc_flags) == 0 {
             return None;
+        }
+        if creature.unit().subsystems().control.charmer_guid.is_some() {
+            return None;
+        }
+        let unit_flags2 = creature.unit().unit_flags2_like_cpp();
+        if !unit_flags2.contains(UnitFlags2::INTERACT_WHILE_HOSTILE) {
+            let reaction =
+                self.represented_get_reaction_to_like_cpp(RepresentedGetReactionInputLikeCpp {
+                    self_faction_template_id: creature.unit().data().faction_template.max(0) as u32,
+                    target_faction_template_id: self.player_faction_template_like_cpp.unwrap_or(0),
+                    same_object: false,
+                    attackable_by_summoner: false,
+                    same_charmer_or_owner_or_self: false,
+                    self_has_player_owner: false,
+                    target_has_player_owner: true,
+                    target_player_owner_is_current_session: true,
+                    target_owner_forced_rank_for_self: None,
+                    same_player_owner: false,
+                    duel_in_progress: false,
+                    same_raid: false,
+                    self_unit_player_controlled: false,
+                    target_unit_player_controlled: true,
+                    self_ffa_pvp: false,
+                    target_ffa_pvp: false,
+                    self_ignores_reputation: false,
+                    target_ignores_reputation: false,
+                    target_is_unit: true,
+                    target_player_contested_pvp,
+                });
+            if reaction <= wow_data::reputation::ReputationRankLikeCpp::Unfriendly {
+                return None;
+            }
         }
 
         let interaction_distance = creature.unit().world().combat_reach() + 4.0;
@@ -6579,6 +6630,25 @@ impl WorldSession {
             item.set_durability(max_durability);
         });
         if updated {
+            if let Some(item) = self.inventory_item_objects_like_cpp().get(&item_guid) {
+                let mut item_data_mask = UpdateMask::new(ITEM_DATA_BITS);
+                item_data_mask.set(ITEM_DATA_DURABILITY_BIT);
+                let durability_update = ItemValuesUpdate {
+                    changed_object_type_mask: 1 << TYPEID_ITEM,
+                    object_data: None,
+                    item_data: Some(ItemDataUpdate {
+                        mask: item_data_mask,
+                        values: item.data().clone(),
+                    }),
+                };
+                if let Some(update) = item_values_update_to_update_object(
+                    item_guid,
+                    self.player_map_id_like_cpp(),
+                    &durability_update,
+                ) {
+                    self.send_packet(&update);
+                }
+            }
             if let Some(slot) = equipped_slot
                 && was_broken
             {
@@ -28279,6 +28349,103 @@ mod tests {
             None
         );
 
+        session.set_taxi_flight_state_like_cpp(
+            RepresentedTaxiFlightNodeLikeCpp {
+                map_id: 571,
+                position: Position::new(10.0, 0.0, 0.0, 0.0),
+                teleport_flag: false,
+            },
+            None,
+        );
+        assert_eq!(
+            session.represented_npc_can_interact_with_like_cpp(
+                trainer_guid,
+                wow_constants::unit::NPCFlags1::TRAINER.bits(),
+            ),
+            None
+        );
+        session.taxi_flight_state_like_cpp = None;
+
+        session.set_player_alive_like_cpp(false);
+        assert_eq!(
+            session.represented_npc_can_interact_with_like_cpp(
+                trainer_guid,
+                wow_constants::unit::NPCFlags1::TRAINER.bits(),
+            ),
+            None
+        );
+        session.set_player_alive_like_cpp(true);
+
+        {
+            let mut canonical = canonical.lock().unwrap();
+            let managed = canonical.find_map_mut(571, 0).unwrap();
+            managed
+                .map_mut()
+                .get_typed_creature_mut(trainer_guid)
+                .unwrap()
+                .unit_mut()
+                .subsystems_mut()
+                .control
+                .set_charmer(player_guid, true);
+        }
+        assert_eq!(
+            session.represented_npc_can_interact_with_like_cpp(
+                trainer_guid,
+                wow_constants::unit::NPCFlags1::TRAINER.bits(),
+            ),
+            None
+        );
+        {
+            let mut canonical = canonical.lock().unwrap();
+            let managed = canonical.find_map_mut(571, 0).unwrap();
+            managed
+                .map_mut()
+                .get_typed_creature_mut(trainer_guid)
+                .unwrap()
+                .unit_mut()
+                .subsystems_mut()
+                .control
+                .remove_charmer();
+        }
+
+        session.set_player_faction_template_like_cpp(1);
+        session.set_faction_template_store(Arc::new(
+            wow_data::progression_rewards::FactionTemplateStore::from_entries([
+                faction_template_entry(35, 35, 0, 0, 1),
+                faction_template_entry(1, 1, 0, 0, 0),
+            ]),
+        ));
+        assert_eq!(
+            session.represented_npc_can_interact_with_like_cpp(
+                trainer_guid,
+                wow_constants::unit::NPCFlags1::TRAINER.bits(),
+            ),
+            None
+        );
+
+        {
+            let mut canonical = canonical.lock().unwrap();
+            let managed = canonical.find_map_mut(571, 0).unwrap();
+            managed
+                .map_mut()
+                .get_typed_creature_mut(trainer_guid)
+                .unwrap()
+                .unit_mut()
+                .set_unit_flags2_like_cpp(wow_constants::unit::UnitFlags2::INTERACT_WHILE_HOSTILE);
+        }
+        assert_eq!(
+            session.represented_npc_can_interact_with_like_cpp(
+                trainer_guid,
+                wow_constants::unit::NPCFlags1::TRAINER.bits(),
+            ),
+            Some(RepresentedCreatureAccessLikeCpp {
+                entry: 500,
+                position: Position::new(14.0, 0.0, 0.0, 0.0),
+                npc_flags: wow_constants::unit::NPCFlags1::TRAINER.bits(),
+                faction_template_id: 35,
+            })
+        );
+
         session.set_player_position_like_cpp(Position::new(40.0, 0.0, 0.0, 0.0));
         session
             .mutate_canonical_player_like_cpp(|player| {
@@ -35601,7 +35768,7 @@ mod tests {
 
     #[tokio::test]
     async fn repair_inventory_item_durability_spends_money_and_restores_like_cpp() {
-        let (mut session, _, _) = make_session();
+        let (mut session, _, send_rx) = make_session();
         let player_guid = ObjectGuid::create_player(1, 42);
         let item_guid = ObjectGuid::create_item(1, 900);
         session.set_player_guid(Some(player_guid));
@@ -35708,6 +35875,10 @@ mod tests {
                 apply: true,
             }]
         );
+        assert_eq!(
+            drain_server_opcodes(&send_rx),
+            vec![ServerOpcodes::UpdateObject]
+        );
 
         session.set_player_gold_like_cpp(10);
         let item = session.inventory_item_objects.get_mut(&item_guid).unwrap();
@@ -35724,6 +35895,7 @@ mod tests {
                 .durability,
             40
         );
+        assert!(drain_server_opcodes(&send_rx).is_empty());
     }
 
     #[tokio::test]

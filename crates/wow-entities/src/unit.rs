@@ -1,6 +1,6 @@
 use wow_constants::{
-    DeathState, Gender, PowerType, SpellState, TypeId, TypeMask, UnitFlags, UnitPvpFlags,
-    UnitStandStateType, UnitState, WeaponAttackType,
+    DeathState, Gender, PowerType, SpellState, TypeId, TypeMask, UnitFlags, UnitFlags2,
+    UnitPvpFlags, UnitStandStateType, UnitState, WeaponAttackType,
 };
 use wow_core::ObjectGuid;
 
@@ -1425,6 +1425,17 @@ impl Unit {
 
     pub fn unit_flags_like_cpp(&self) -> UnitFlags {
         UnitFlags::from_bits_truncate(self.data.flags)
+    }
+
+    pub fn set_unit_flags2_like_cpp(&mut self, flags: UnitFlags2) {
+        if self.data.flags2 != flags.bits() {
+            self.data.flags2 = flags.bits();
+            self.mark_unit_data(UNIT_DATA_FLAGS2_BIT);
+        }
+    }
+
+    pub fn unit_flags2_like_cpp(&self) -> UnitFlags2 {
+        UnitFlags2::from_bits_truncate(self.data.flags2)
     }
 
     pub fn set_race(&mut self, race: u8) {
