@@ -23,7 +23,9 @@ use wow_core::ObjectGuid;
 use wow_data::DISABLE_TYPE_QUEST;
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_network::SessionCommand;
-use wow_network::player_registry::SetQuestSharingInfoAndSendDetailsCommand;
+use wow_network::player_registry::{
+    SendRepeatableTurnInRequestItemsLikeCppCommand, SetQuestSharingInfoAndSendDetailsCommand,
+};
 use wow_packet::packets::query::{
     QueryQuestCompletionNpcs, QuestCompletionNpc, QuestCompletionNpcResponse,
 };
@@ -1476,16 +1478,64 @@ impl WorldSession {
                 && quest.is_repeatable()
                 && !quest.is_daily_or_weekly_like_cpp()
             {
-                blocked_by_unsupported_success_path = true;
+                let Some(sender_guid_for_receiver_command) = sender_guid else {
+                    blocked_by_unsupported_success_path = true;
+                    self.record_represented_push_quest_to_party_outcome_like_cpp(
+                        RepresentedPushQuestToPartyOutcomeLikeCpp {
+                            sender_guid,
+                            quest_id: packet.quest_id,
+                            target_guid: Some(receiver_guid),
+                            reason: RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPromptCommandFailed,
+                            quest_pool_active_check_unrepresented: false,
+                            group_runtime_unrepresented: false,
+                            receiver_fanout_unrepresented: true,
+                        },
+                    );
+                    continue;
+                };
+
+                let command = SessionCommand::SendRepeatableTurnInRequestItemsLikeCpp(
+                    SendRepeatableTurnInRequestItemsLikeCppCommand {
+                        sender_guid: sender_guid_for_receiver_command,
+                        quest: quest.clone(),
+                    },
+                );
+
+                if receiver.command_tx.try_send(command).is_err() {
+                    blocked_by_unsupported_success_path = true;
+                    self.record_represented_push_quest_to_party_outcome_like_cpp(
+                        RepresentedPushQuestToPartyOutcomeLikeCpp {
+                            sender_guid,
+                            quest_id: packet.quest_id,
+                            target_guid: Some(receiver_guid),
+                            reason: RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPromptCommandFailed,
+                            quest_pool_active_check_unrepresented: false,
+                            group_runtime_unrepresented: false,
+                            receiver_fanout_unrepresented: true,
+                        },
+                    );
+                    continue;
+                }
+
+                // C++ `HandlePushQuestToParty` sends Success to the sender before the
+                // repeatable turn-in `SendQuestGiverRequestItems` receiver side effect.
+                // Rust has an extra fallible queue hop, so emit represented Success only
+                // after the receiver command has been accepted.
+                self.send_push_quest_result_to_sender_with_title_if_available_like_cpp(
+                    receiver_guid,
+                    QUEST_PUSH_REASON_SUCCESS_LIKE_CPP,
+                    String::new(),
+                );
+
                 self.record_represented_push_quest_to_party_outcome_like_cpp(
                     RepresentedPushQuestToPartyOutcomeLikeCpp {
                         sender_guid,
                         quest_id: packet.quest_id,
                         target_guid: Some(receiver_guid),
-                        reason: RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsUnrepresented,
+                        reason: RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPrompted,
                         quest_pool_active_check_unrepresented: false,
                         group_runtime_unrepresented: false,
-                        receiver_fanout_unrepresented: true,
+                        receiver_fanout_unrepresented: false,
                     },
                 );
                 continue;
@@ -2059,13 +2109,19 @@ impl WorldSession {
             // C# ref: SendQuestGiverRequestItems(quest, guid, canComplete=false, false)
             self.send_packet(&QuestGiverRequestItems {
                 giver_guid: guid,
+                giver_creature_id: i32::try_from(guid.entry()).unwrap_or(0),
                 quest_id,
+                comp_emote_delay: 0,
+                comp_emote_type: 0,
                 quest_flags: [quest.flags, quest.flags_ex, quest.flags_ex2],
                 suggested_party_members: quest.suggested_group_num,
-                status_flags: 0,
-                money_cost: 0,
+                money_to_get: 0,
+                collect: Vec::new(),
+                currency: Vec::new(),
+                status_flags: 0xFD,
                 title: quest.log_title.clone(),
                 completion_text: quest.area_description.clone(),
+                auto_launched: false,
             });
             return;
         }
@@ -2688,7 +2744,7 @@ mod tests {
     use wow_data::quest::{
         QUEST_FLAGS_DAILY_LIKE_CPP, QUEST_ITEM_DROP_COUNT, QUEST_REWARD_CHOICES_COUNT,
         QUEST_REWARD_DISPLAY_SPELL_COUNT, QUEST_REWARD_ITEM_COUNT,
-        QUEST_SPECIAL_FLAGS_DF_QUEST_LIKE_CPP, QuestPoolMemberRowLikeCpp,
+        QUEST_SPECIAL_FLAGS_DF_QUEST_LIKE_CPP, QuestObjective, QuestPoolMemberRowLikeCpp,
         QuestPoolSavedActiveRowLikeCpp, QuestPoolStoreLikeCpp, QuestStore, QuestTemplate,
     };
     use wow_network::{GroupInfo, GroupRegistry, PendingInvites, PlayerRegistry};
@@ -3078,6 +3134,75 @@ mod tests {
         assert_eq!(
             wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
             Some(wow_constants::ServerOpcodes::QuestGiverQuestDetails)
+        );
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == quest_id.to_le_bytes())
+        );
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    fn recv_quest_giver_request_items_like_cpp(
+        send_rx: &flume::Receiver<Vec<u8>>,
+        quest_id: u32,
+    ) -> (Vec<(i32, i32, u32)>, bool) {
+        let bytes = send_rx
+            .try_recv()
+            .expect("quest giver request items packet");
+        let mut pkt = wow_packet::WorldPacket::from_bytes(&bytes);
+        assert_eq!(
+            pkt.server_opcode(),
+            Some(wow_constants::ServerOpcodes::QuestGiverRequestItems)
+        );
+        pkt.skip_opcode();
+        let _giver_guid = pkt.read_packed_guid().expect("giver guid");
+        let giver_creature_id = pkt.read_int32().expect("giver creature id");
+        assert_eq!(pkt.read_int32().expect("quest id"), quest_id as i32);
+        let _comp_emote_delay = pkt.read_int32().expect("comp emote delay");
+        let _comp_emote_type = pkt.read_int32().expect("comp emote type");
+        for _ in 0..3 {
+            let _ = pkt.read_uint32().expect("quest flags");
+        }
+        let _suggested_party_members = pkt.read_int32().expect("suggested party members");
+        let _money_to_get = pkt.read_int32().expect("money to get");
+        let collect_count = pkt.read_int32().expect("collect count");
+        let currency_count = pkt.read_int32().expect("currency count");
+        let _status_flags = pkt.read_int32().expect("status flags");
+        let mut collect = Vec::new();
+        for _ in 0..collect_count {
+            collect.push((
+                pkt.read_int32().expect("collect object id"),
+                pkt.read_int32().expect("collect amount"),
+                pkt.read_uint32().expect("collect flags"),
+            ));
+        }
+        for _ in 0..currency_count {
+            let _currency_id = pkt.read_int32().expect("currency id");
+            let _currency_amount = pkt.read_int32().expect("currency amount");
+        }
+        let auto_launched = pkt.read_bit().expect("auto launched bit");
+        assert_eq!(
+            pkt.read_int32().expect("repeated giver creature id"),
+            giver_creature_id
+        );
+        assert_eq!(
+            pkt.read_uint32()
+                .expect("conditional completion text count"),
+            0
+        );
+        assert!(send_rx.try_recv().is_err());
+        (collect, auto_launched)
+    }
+
+    fn recv_quest_giver_offer_reward_contains_quest_id(
+        send_rx: &flume::Receiver<Vec<u8>>,
+        quest_id: u32,
+    ) {
+        let bytes = send_rx.try_recv().expect("quest giver offer reward packet");
+        assert_eq!(
+            wow_packet::WorldPacket::from_bytes(&bytes).server_opcode(),
+            Some(wow_constants::ServerOpcodes::QuestGiverOfferRewardMessage)
         );
         assert!(
             bytes
@@ -5156,6 +5281,173 @@ mod tests {
                         | RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverEligibilityUnrepresented
                 ))
         );
+    }
+
+    #[tokio::test]
+    async fn push_quest_to_party_repeatable_turn_in_success_prompts_request_items_without_pending_like_cpp()
+     {
+        let (mut session, sender_rx) = make_session();
+        let sender_guid = session.player_guid().expect("test sender guid");
+        let receiver_guid = ObjectGuid::create_player(1, 611);
+        let shared_quest_id = 76110;
+        let mut quest = quest_template(shared_quest_id);
+        quest.quest_type = 0;
+        quest.flags |= QUEST_FLAGS_SHARABLE_LIKE_CPP;
+        quest.special_flags |= 0x0000_0001;
+        quest.objectives.push(QuestObjective {
+            id: 1,
+            quest_id: shared_quest_id,
+            obj_type: 1,
+            order: 0,
+            storage_index: 0,
+            object_id: 49211,
+            amount: 3,
+            flags: 0xA5,
+            flags2: 0,
+            progress_bar_weight: 0.0,
+            description: String::new(),
+        });
+        let quest_for_assertion = quest.clone();
+        let quest_store = QuestStore::from_quests_like_cpp([quest]);
+        let quest_pool_store = QuestPoolStoreLikeCpp::from_rows_like_cpp(&quest_store, [], []);
+        session.set_quest_store(Arc::new(quest_store));
+        session.set_quest_pool_store(Arc::new(quest_pool_store));
+        add_active_quest(&mut session, shared_quest_id);
+        let (_player_registry, mut receiver_session, receiver_rx) =
+            install_represented_party(&mut session, sender_guid, receiver_guid);
+        receiver_session.sync_player_registry_state_like_cpp();
+
+        run_push_quest_to_party(&mut session, shared_quest_id).await;
+
+        assert_eq!(
+            recv_push_quest_result_response(&sender_rx),
+            (
+                receiver_guid,
+                QUEST_PUSH_REASON_SUCCESS_LIKE_CPP,
+                String::new()
+            )
+        );
+        assert!(receiver_rx.try_recv().is_err());
+        let commands = receiver_session.drain_session_commands();
+        assert_eq!(commands.len(), 1);
+        match &commands[0] {
+            SessionCommand::SendRepeatableTurnInRequestItemsLikeCpp(command) => {
+                assert_eq!(command.sender_guid, sender_guid);
+                assert_eq!(command.quest.id, shared_quest_id);
+            }
+            other => panic!("unexpected session command: {other:?}"),
+        }
+        receiver_session
+            .session_command_tx()
+            .try_send(commands.into_iter().next().expect("command"))
+            .expect("requeue command for processing");
+        receiver_session
+            .process_represented_session_commands_like_cpp()
+            .await;
+
+        assert_eq!(
+            receiver_session.represented_pending_quest_sharing_like_cpp(),
+            None
+        );
+        let (collect, auto_launched) =
+            recv_quest_giver_request_items_like_cpp(&receiver_rx, shared_quest_id);
+        assert_eq!(collect, vec![(49211, 3, 0xA5)]);
+        assert!(auto_launched);
+        assert!(
+            !receiver_session
+                .can_complete_repeatable_quest_represented_bounded_like_cpp(&quest_for_assertion)
+        );
+        assert!(session.represented_push_quest_to_party_outcomes_like_cpp().iter().any(
+            |outcome| outcome.target_guid == Some(receiver_guid)
+                && matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPrompted
+                )
+                && !outcome.receiver_fanout_unrepresented
+        ));
+        assert!(!session.represented_push_quest_to_party_outcomes_like_cpp().iter().any(
+            |outcome| outcome.target_guid == Some(receiver_guid)
+                && matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverSuccessQuestDetailsPrompted
+                )
+        ));
+    }
+
+    #[tokio::test]
+    async fn push_quest_to_party_repeatable_turn_in_command_queue_failure_sends_no_success_like_cpp()
+     {
+        let (mut session, sender_rx) = make_session();
+        let sender_guid = session.player_guid().expect("test sender guid");
+        let receiver_guid = ObjectGuid::create_player(1, 612);
+        let shared_quest_id = 76120;
+        let mut quest = quest_template(shared_quest_id);
+        quest.quest_type = 0;
+        quest.flags |= QUEST_FLAGS_SHARABLE_LIKE_CPP;
+        quest.special_flags |= 0x0000_0001;
+        quest.objectives.push(QuestObjective {
+            id: 1,
+            quest_id: shared_quest_id,
+            obj_type: 1,
+            order: 0,
+            storage_index: 0,
+            object_id: 49212,
+            amount: 3,
+            flags: 0xA5,
+            flags2: 0,
+            progress_bar_weight: 0.0,
+            description: String::new(),
+        });
+        let quest_for_dummy_commands = quest.clone();
+        let quest_store = QuestStore::from_quests_like_cpp([quest]);
+        let quest_pool_store = QuestPoolStoreLikeCpp::from_rows_like_cpp(&quest_store, [], []);
+        session.set_quest_store(Arc::new(quest_store));
+        session.set_quest_pool_store(Arc::new(quest_pool_store));
+        add_active_quest(&mut session, shared_quest_id);
+        let (_player_registry, receiver_session, receiver_rx) =
+            install_represented_party(&mut session, sender_guid, receiver_guid);
+        receiver_session.sync_player_registry_state_like_cpp();
+
+        for _ in 0..256 {
+            receiver_session
+                .session_command_tx()
+                .try_send(SessionCommand::SetQuestSharingInfoAndSendDetails(
+                    SetQuestSharingInfoAndSendDetailsCommand {
+                        sender_guid,
+                        quest: quest_for_dummy_commands.clone(),
+                    },
+                ))
+                .expect("fill receiver command queue fixture");
+        }
+
+        run_push_quest_to_party(&mut session, shared_quest_id).await;
+
+        assert!(sender_rx.try_recv().is_err());
+        assert!(receiver_rx.try_recv().is_err());
+        assert_eq!(receiver_session.drain_session_commands().len(), 256);
+        assert!(session.represented_push_quest_to_party_outcomes_like_cpp().iter().any(
+            |outcome| outcome.target_guid == Some(receiver_guid)
+                && matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPromptCommandFailed
+                )
+                && outcome.receiver_fanout_unrepresented
+        ));
+        assert!(session.represented_push_quest_to_party_outcomes_like_cpp().iter().any(
+            |outcome| outcome.target_guid == Some(sender_guid)
+                && matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverEligibilityUnrepresented
+                )
+                && outcome.receiver_fanout_unrepresented
+        ));
+        assert!(!session.represented_push_quest_to_party_outcomes_like_cpp().iter().any(
+            |outcome| outcome.target_guid == Some(receiver_guid)
+                && matches!(
+                    outcome.reason,
+                    RepresentedPushQuestToPartyOutcomeReasonLikeCpp::ReceiverRepeatableTurnInRequestItemsPrompted
+                )
+        ));
     }
 
     #[tokio::test]
