@@ -217,7 +217,7 @@ Int	CONFIG_CHATFLOOD_MUTE_TIME	server/game/World/World.h:313	ChatFlood.MuteTime	
 Int	CONFIG_CREATURE_FAMILY_ASSISTANCE_DELAY	server/game/World/World.h:314	CreatureFamilyAssistanceDelay	Int	server/game/World/World.cpp:1251	1500		missing_in_rust	-
 Int	CONFIG_CREATURE_FAMILY_FLEE_DELAY	server/game/World/World.h:315	CreatureFamilyFleeDelay	Int	server/game/World/World.cpp:1252	7000		missing_in_rust	-
 Int	CONFIG_WORLD_BOSS_LEVEL_DIFF	server/game/World/World.h:316	WorldBossLevelDiff	Int	server/game/World/World.cpp:1254	3		missing_in_rust	-
-Int	CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF	server/game/World/World.h:317	Quests.LowLevelHideDiff	Int	server/game/World/World.cpp:1259	4		missing_in_rust	-
+Int	CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF	server/game/World/World.h:317	Quests.LowLevelHideDiff	Int	server/game/World/World.cpp:1259	4		implemented	#NEXT.R8.ENTITIES.753
 Int	CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF	server/game/World/World.h:318	Quests.HighLevelHideDiff	Int	server/game/World/World.cpp:1262	7		missing_in_rust	-
 Int	CONFIG_CHAT_STRICT_LINK_CHECKING_SEVERITY	server/game/World/World.h:319	ChatStrictLinkChecking.Severity	Int	server/game/World/World.cpp:1295	0		missing_in_rust	-
 Int	CONFIG_CHAT_STRICT_LINK_CHECKING_KICK	server/game/World/World.h:320	ChatStrictLinkChecking.Kick	Int	server/game/World/World.cpp:1296	0		missing_in_rust	-

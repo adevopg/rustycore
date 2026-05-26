@@ -5801,11 +5801,10 @@ impl WorldSession {
         &self,
         quest: &wow_data::quest::QuestTemplate,
     ) -> bool {
-        const QUEST_LOW_LEVEL_HIDE_DIFF_LIKE_CPP: i32 = 4;
         self.player_level_like_cpp() as i32
             > quest
                 .quest_level
-                .saturating_add(QUEST_LOW_LEVEL_HIDE_DIFF_LIKE_CPP)
+                .saturating_add(self.quest_low_level_hide_diff_like_cpp as i32)
     }
 
     fn satisfy_quest_level_represented_like_cpp(
@@ -14296,6 +14295,25 @@ mod tests {
         let guid = creature_guid(9006, 6);
         let mut manager = wow_map::MapManager::default();
         insert_creature(&mut manager, guid, 9006);
+        attach_map_manager(&mut session, manager);
+
+        run_status_query(&mut session, guid).await;
+
+        assert_eq!(recv_status(&send_rx), (guid, quest_giver_status::QUEST));
+    }
+
+    #[tokio::test]
+    async fn quest_giver_status_query_uses_configured_low_level_hide_diff_like_cpp() {
+        let (mut session, send_rx) = make_session();
+        session.set_quest_low_level_hide_diff_like_cpp(5);
+        let mut quest = quest_template(1013);
+        quest.quest_level = 75;
+        let mut store = QuestStore::from_quests_like_cpp([quest]);
+        store.starter_quests.entry(9013).or_default().push(1013);
+        session.set_quest_store(Arc::new(store));
+        let guid = creature_guid(9013, 13);
+        let mut manager = wow_map::MapManager::default();
+        insert_creature(&mut manager, guid, 9013);
         attach_map_manager(&mut session, manager);
 
         run_status_query(&mut session, guid).await;

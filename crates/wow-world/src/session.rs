@@ -2204,6 +2204,7 @@ pub struct WorldSession {
     pub(crate) monthly_quests_completed_like_cpp: HashSet<u32>,
     /// C++ `Player::m_lastDailyQuestTime`, represented for daily/DF quest status persistence.
     pub(crate) last_daily_quest_time_like_cpp: i64,
+    pub(crate) quest_low_level_hide_diff_like_cpp: u32,
     /// C++ `Player::m_seasonalquests`, represented per-session until full Player runtime owns it.
     pub(crate) seasonal_quests_like_cpp: BTreeMap<u16, BTreeMap<u32, u64>>,
     /// C++ `Player::m_SeasonalQuestChanged` represented flag.
@@ -3000,6 +3001,7 @@ impl WorldSession {
             weekly_quests_completed_like_cpp: HashSet::new(),
             monthly_quests_completed_like_cpp: HashSet::new(),
             last_daily_quest_time_like_cpp: 0,
+            quest_low_level_hide_diff_like_cpp: 4,
             seasonal_quests_like_cpp: BTreeMap::new(),
             seasonal_quest_changed_like_cpp: false,
             represented_timed_quest_removals_like_cpp: Vec::new(),
@@ -9006,6 +9008,11 @@ impl WorldSession {
     /// Set the QuestInfo store used by C++ Quest::GetQuestTag/IsImportant.
     pub fn set_quest_info_store(&mut self, store: Arc<QuestInfoStore>) {
         self.quest_info_store = Some(store);
+    }
+
+    /// Set C++ `CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF`.
+    pub fn set_quest_low_level_hide_diff_like_cpp(&mut self, value: u32) {
+        self.quest_low_level_hide_diff_like_cpp = value;
     }
 
     /// Set the QuestPackageItem store used by C++ quest package reward selection.

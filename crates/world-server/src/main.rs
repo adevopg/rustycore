@@ -1970,6 +1970,11 @@ async fn main() -> Result<()> {
         loot_drop_rates: loot_drop_rates_like_cpp(&world_configs),
         reputation_rates: reputation_rates_like_cpp(&world_configs),
         repair_cost_rate: repair_cost_rate_like_cpp(&world_configs),
+        quest_low_level_hide_diff: world_config_u32(
+            &world_configs,
+            "CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF",
+            4,
+        ),
         enable_ae_loot: world_config_bool(&world_configs, "CONFIG_ENABLE_AE_LOOT", false),
         realm_id,
         realm_external_address,
@@ -6863,6 +6868,7 @@ async fn create_session(
     if let Some(ref store) = resources.quest_info_store {
         session.set_quest_info_store(Arc::clone(store));
     }
+    session.set_quest_low_level_hide_diff_like_cpp(resources.quest_low_level_hide_diff);
     if let Some(ref store) = resources.quest_package_item_store {
         session.set_quest_package_item_store(Arc::clone(store));
     }
