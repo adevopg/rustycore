@@ -12673,6 +12673,9 @@ impl WorldSession {
             ClientOpcodes::LeaveGroup => {
                 self.handle_leave_group(pkt).await;
             }
+            ClientOpcodes::ConvertRaid => {
+                self.handle_convert_raid(pkt).await;
+            }
             ClientOpcodes::SetLootMethod => {
                 self.handle_set_loot_method(pkt).await;
             }
@@ -21959,6 +21962,95 @@ mod tests {
         assert_eq!(
             send_rx.try_recv().expect("filtered visible unit update"),
             expected_packet
+        );
+        assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_visible_gameobjects_or_spellclicks_command_sends_gameobject_delta_like_cpp() {
+        let (mut session, _, send_rx) = make_session();
+        let canonical = shared_canonical_map_manager();
+        let player_guid = ObjectGuid::create_player(1, 42);
+        let go_entry = 8_126;
+        let gameobject_guid = test_gameobject_guid(go_entry, 135);
+        let quest_id = 12_543;
+        let mut quest = test_quest_template(quest_id);
+        quest.objectives.push(wow_data::quest::QuestObjective {
+            id: quest_id * 10,
+            quest_id,
+            obj_type: 2,
+            order: 0,
+            storage_index: 0,
+            object_id: go_entry as i32,
+            amount: 1,
+            flags: 0,
+            flags2: 0,
+            progress_bar_weight: 0.0,
+            description: String::new(),
+        });
+
+        session.set_player_guid(Some(player_guid));
+        session.set_quest_store(Arc::new(wow_data::quest::QuestStore::from_quests_like_cpp(
+            [quest],
+        )));
+        session.player_quests.insert(
+            quest_id,
+            crate::handlers::quest::PlayerQuestStatus {
+                quest_id,
+                status: crate::conditions::QUEST_STATUS_INCOMPLETE_LIKE_CPP,
+                explored: false,
+                accept_time_secs: 0,
+                end_time_secs: 0,
+                objective_counts: vec![0],
+                slot: 0,
+            },
+        );
+        session.set_canonical_map_manager(Arc::clone(&canonical));
+        session.attach_player_controller_like_cpp(SessionPlayerController::new(
+            player_guid,
+            "Tester".to_string(),
+            Position::new(10.0, 0.0, 0.0, 0.0),
+            571,
+            1,
+            1,
+            80,
+            0,
+        ));
+        add_canonical_test_gameobject(
+            &canonical,
+            gameobject_guid,
+            go_entry,
+            Position::new(12.0, 0.0, 0.0, 0.0),
+        );
+        session
+            .client_visible_guids_like_cpp
+            .insert(gameobject_guid);
+        session.represented_gameobject_use_states.insert(
+            gameobject_guid,
+            RepresentedGameObjectUseState {
+                go_type: Some(wow_entities::GAMEOBJECT_TYPE_CHEST as u8),
+                loot_state: Some(wow_entities::LootState::Ready),
+                ..Default::default()
+            },
+        );
+
+        session
+            .session_command_tx()
+            .try_send(SessionCommand::RefreshVisibleGameobjectsOrSpellClicksLikeCpp)
+            .expect("command queued");
+        session
+            .process_represented_session_commands_like_cpp()
+            .await;
+
+        assert_eq!(
+            send_rx.try_recv().expect("remote GO refresh update"),
+            expected_gameobject_dynamic_flags_update_like_cpp(
+                gameobject_guid,
+                571,
+                wow_entities::GO_DYNFLAG_LO_ACTIVATE
+                    | wow_entities::GO_DYNFLAG_LO_SPARKLE
+                    | wow_entities::GO_DYNFLAG_LO_HIGHLIGHT
+            )
         );
         assert!(send_rx.try_recv().is_err());
     }

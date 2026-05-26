@@ -2507,6 +2507,9 @@ impl WorldSession {
                 SessionCommand::SendVisibleObjectValuesUpdate(command) => {
                     self.handle_send_visible_object_values_update_command_like_cpp(command);
                 }
+                SessionCommand::RefreshVisibleGameobjectsOrSpellClicksLikeCpp => {
+                    let _ = self.update_visible_gameobjects_or_spell_clicks_like_cpp();
+                }
                 SessionCommand::SetQuestSharingInfoAndSendDetails(command) => {
                     self.handle_set_quest_sharing_info_and_send_details_command_like_cpp(command);
                 }

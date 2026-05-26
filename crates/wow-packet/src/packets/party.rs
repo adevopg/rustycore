@@ -28,6 +28,23 @@ pub mod party_result {
     pub const GROUP_FULL: u8 = 3;
 }
 
+// ── ConvertRaid (CMSG_CONVERT_RAID) ─────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvertRaid {
+    pub raid: bool,
+}
+
+impl ClientPacket for ConvertRaid {
+    const OPCODE: ClientOpcodes = ClientOpcodes::ConvertRaid;
+
+    fn read(pkt: &mut WorldPacket) -> Result<Self, PacketError> {
+        Ok(Self {
+            raid: pkt.read_bit()?,
+        })
+    }
+}
+
 // ── SetLootMethod (CMSG_SET_LOOT_METHOD) ─────────────────────────
 
 /// Client request to change party loot method.
@@ -391,7 +408,9 @@ impl ServerPacket for PartyMemberFullState {
 
 #[cfg(test)]
 mod tests {
-    use super::{OptOutOfLoot, PartyMemberPhase, PartyMemberPhaseStates, SetLootMethod};
+    use super::{
+        ConvertRaid, OptOutOfLoot, PartyMemberPhase, PartyMemberPhaseStates, SetLootMethod,
+    };
     use crate::{ClientPacket, WorldPacket};
     use wow_core::ObjectGuid;
 
@@ -424,6 +443,18 @@ mod tests {
         let opt_out = OptOutOfLoot::read(&mut pkt).unwrap();
 
         assert!(opt_out.pass_on_loot);
+    }
+
+    #[test]
+    fn convert_raid_reads_cpp_raid_bit() {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(true);
+        pkt.flush_bits();
+        pkt.reset_read();
+
+        let convert = ConvertRaid::read(&mut pkt).unwrap();
+
+        assert!(convert.raid);
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub enum SessionCommand {
     LootRollVote(LootRollVoteCommand),
     ResetSeasonalQuestStatus(ResetSeasonalQuestStatusCommand),
     SendVisibleObjectValuesUpdate(SendVisibleObjectValuesUpdateCommand),
+    RefreshVisibleGameobjectsOrSpellClicksLikeCpp,
     SetQuestSharingInfoAndSendDetails(SetQuestSharingInfoAndSendDetailsCommand),
     SendRepeatableTurnInRequestItemsLikeCpp(SendRepeatableTurnInRequestItemsLikeCppCommand),
 }

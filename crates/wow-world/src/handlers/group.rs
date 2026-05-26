@@ -50,6 +50,15 @@ inventory::submit! {
 
 inventory::submit! {
     PacketHandlerEntry {
+        opcode: ClientOpcodes::ConvertRaid,
+        status: SessionStatus::LoggedIn,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_convert_raid",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
         opcode: ClientOpcodes::SetLootMethod,
         status: SessionStatus::LoggedIn,
         processing: PacketProcessing::ThreadUnsafe,
@@ -161,6 +170,23 @@ fn send_party_update(group: &GroupInfo, registry: &PlayerRegistry, _vra: u32) {
                 };
                 let _ = member_entry.send_tx.send(full_state.to_bytes());
             }
+        }
+    }
+}
+
+fn queue_visible_gameobjects_or_spellclicks_refresh_like_cpp(
+    group: &GroupInfo,
+    registry: &PlayerRegistry,
+    local_guid: ObjectGuid,
+) {
+    for &member_guid in &group.members {
+        if member_guid == local_guid {
+            continue;
+        }
+        if let Some(member) = registry.get(&member_guid) {
+            let _ = member.command_tx.try_send(
+                wow_network::SessionCommand::RefreshVisibleGameobjectsOrSpellClicksLikeCpp,
+            );
         }
     }
 }
@@ -515,6 +541,72 @@ impl WorldSession {
         self.send_packet(&GroupUninvite);
     }
 
+    /// CMSG_CONVERT_RAID.
+    ///
+    /// C++ `WorldPackets::Party::ConvertRaid::Read` reads a single `Raid` bit.
+    pub async fn handle_convert_raid(&mut self, mut pkt: wow_packet::WorldPacket) {
+        let convert = match wow_packet::packets::party::ConvertRaid::read(&mut pkt) {
+            Ok(convert) => convert,
+            Err(e) => {
+                warn!("Bad ConvertRaid: {e}");
+                return;
+            }
+        };
+
+        let my_guid = match self.player_guid() {
+            Some(guid) => guid,
+            None => return,
+        };
+        let group_guid = match self.group_guid {
+            Some(group_guid) => group_guid,
+            None => return,
+        };
+        let group_reg = match self.group_registry() {
+            Some(registry) => std::sync::Arc::clone(registry),
+            None => return,
+        };
+        let registry = match self.player_registry() {
+            Some(registry) => std::sync::Arc::clone(registry),
+            None => return,
+        };
+        let vra = self.virtual_realm_address();
+
+        let converted = {
+            let mut group = match group_reg.get_mut(&group_guid) {
+                Some(group) => group,
+                None => return,
+            };
+            if group.leader_guid != my_guid || group.members.len() < 2 {
+                return;
+            }
+
+            self.send_packet(&PartyCommandResult {
+                name: String::new(),
+                command: 0,
+                result: party_result::OK,
+                result_data: 0,
+                result_guid: ObjectGuid::EMPTY,
+            });
+
+            if convert.raid {
+                group.convert_to_raid_like_cpp();
+                true
+            } else {
+                group.convert_to_group_like_cpp()
+            }
+        };
+
+        if !converted {
+            return;
+        }
+
+        if let Some(group) = group_reg.get(&group_guid) {
+            send_party_update(&group, &registry, vra);
+            queue_visible_gameobjects_or_spellclicks_refresh_like_cpp(&group, &registry, my_guid);
+        }
+        let _ = self.update_visible_gameobjects_or_spell_clicks_like_cpp();
+    }
+
     /// CMSG_SET_LOOT_METHOD.
     ///
     /// This Trinity branch parses the packet but has the entire mutation block
@@ -556,6 +648,7 @@ mod tests {
     use wow_core::{ObjectGuid, Position};
     use wow_network::{
         GroupInfo, GroupRegistry, PendingInvites, PlayerBroadcastInfo, PlayerRegistry,
+        SessionCommand,
     };
     use wow_packet::WorldPacket;
 
@@ -623,6 +716,14 @@ mod tests {
     fn opt_out_of_loot_packet(pass_on_loot: bool) -> WorldPacket {
         let mut pkt = WorldPacket::new_empty();
         pkt.write_bit(pass_on_loot);
+        pkt.flush_bits();
+        pkt.reset_read();
+        pkt
+    }
+
+    fn convert_raid_packet(raid: bool) -> WorldPacket {
+        let mut pkt = WorldPacket::new_empty();
+        pkt.write_bit(raid);
         pkt.flush_bits();
         pkt.reset_read();
         pkt
@@ -778,6 +879,92 @@ mod tests {
         assert_eq!(group.loot_method, 2);
         assert_eq!(group.master_looter_guid, original_master);
         assert!(send_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn convert_raid_sets_flag_and_queues_member_refresh_like_cpp() {
+        let (mut session, send_rx) = make_session_with_send();
+        let leader = ObjectGuid::create_player(1, 42);
+        let member = ObjectGuid::create_player(1, 43);
+        let group_registry = Arc::new(GroupRegistry::default());
+        let mut group = GroupInfo::new(leader);
+        group.add_member(member);
+        let group_guid = group.group_guid;
+        group_registry.insert(group_guid, group);
+
+        let player_registry = Arc::new(PlayerRegistry::default());
+        let (leader_tx, leader_rx) = bounded(8);
+        let (member_tx, _member_rx) = bounded(8);
+        let (member_command_tx, member_command_rx) = bounded(8);
+        player_registry.insert(leader, broadcast_info(leader, leader_tx));
+        let mut member_info = broadcast_info(member, member_tx);
+        member_info.command_tx = member_command_tx;
+        player_registry.insert(member, member_info);
+
+        session.set_player_guid(Some(leader));
+        session.group_guid = Some(group_guid);
+        session.set_player_registry(Arc::clone(&player_registry));
+        session.set_group_registry(group_registry.clone(), Arc::new(PendingInvites::default()));
+
+        session.handle_convert_raid(convert_raid_packet(true)).await;
+
+        assert!(
+            group_registry
+                .get(&group_guid)
+                .is_some_and(|group| group.is_raid_group())
+        );
+        assert!(
+            matches!(
+                member_command_rx.try_recv(),
+                Ok(SessionCommand::RefreshVisibleGameobjectsOrSpellClicksLikeCpp)
+            ),
+            "remote member visible refresh command queued"
+        );
+        let command_result = send_rx.try_recv().expect("party command result");
+        assert_eq!(
+            u16::from_le_bytes([command_result[0], command_result[1]]),
+            ServerOpcodes::PartyCommandResult as u16
+        );
+        assert!(send_rx.try_recv().is_err());
+        let party_update = leader_rx.try_recv().expect("leader party update");
+        assert_eq!(
+            u16::from_le_bytes([party_update[0], party_update[1]]),
+            ServerOpcodes::PartyUpdate as u16
+        );
+        assert_eq!(
+            u16::from_le_bytes([party_update[2], party_update[3]]),
+            wow_network::GROUP_FLAG_RAID_LIKE_CPP
+        );
+    }
+
+    #[tokio::test]
+    async fn convert_raid_to_group_rejects_over_five_members_like_cpp() {
+        let (mut session, _send_rx) = make_session_with_send();
+        let leader = ObjectGuid::create_player(1, 42);
+        let group_registry = Arc::new(GroupRegistry::default());
+        let mut group = GroupInfo::new(leader);
+        for counter in 43..48 {
+            group.add_member(ObjectGuid::create_player(1, counter));
+        }
+        group.convert_to_raid_like_cpp();
+        let group_guid = group.group_guid;
+        group_registry.insert(group_guid, group);
+
+        let player_registry = Arc::new(PlayerRegistry::default());
+        session.set_player_guid(Some(leader));
+        session.group_guid = Some(group_guid);
+        session.set_player_registry(player_registry);
+        session.set_group_registry(group_registry.clone(), Arc::new(PendingInvites::default()));
+
+        session
+            .handle_convert_raid(convert_raid_packet(false))
+            .await;
+
+        assert!(
+            group_registry
+                .get(&group_guid)
+                .is_some_and(|group| group.is_raid_group())
+        );
     }
 
     #[tokio::test]
