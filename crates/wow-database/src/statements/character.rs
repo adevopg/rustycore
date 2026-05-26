@@ -108,6 +108,9 @@ pub enum CharStatements {
     /// VALUES (?, 0, 0, ?, ?, ?)
     INS_CHARACTER_ACTION,
 
+    /// UPDATE `groups` SET groupType = ? WHERE guid = ?
+    UPD_GROUP_TYPE,
+
     /// UPDATE characters SET totaltime = ?, leveltime = ? WHERE guid = ?
     UPD_CHAR_PLAYED_TIME,
 
@@ -391,6 +394,7 @@ impl StatementDef for CharStatements {
                 "INSERT INTO character_action (guid, spec, traitConfigId, button, action, type) \
                  VALUES (?, 0, 0, ?, ?, ?)"
             }
+            Self::UPD_GROUP_TYPE => "UPDATE `groups` SET groupType = ? WHERE guid = ?",
             Self::UPD_CHAR_PLAYED_TIME => {
                 "UPDATE characters SET totaltime = ?, leveltime = ? WHERE guid = ?"
             }
@@ -707,6 +711,15 @@ mod tests {
     }
 
     #[test]
+    fn group_type_update_statement_matches_cpp_exactly() {
+        assert_eq!(
+            CharStatements::UPD_GROUP_TYPE.sql(),
+            "UPDATE `groups` SET groupType = ? WHERE guid = ?"
+        );
+        assert_eq!(CharStatements::UPD_GROUP_TYPE.sql().matches('?').count(), 2);
+    }
+
+    #[test]
     fn char_statements_have_sql() {
         assert!(!CharStatements::SEL_ENUM.sql().is_empty());
         assert!(!CharStatements::SEL_CHECK_NAME.sql().is_empty());
@@ -734,6 +747,7 @@ mod tests {
         assert!(!CharStatements::SEL_PLAYER_CURRENCY.sql().is_empty());
         assert!(!CharStatements::UPD_PLAYER_CURRENCY.sql().is_empty());
         assert!(!CharStatements::REP_PLAYER_CURRENCY.sql().is_empty());
+        assert!(!CharStatements::UPD_GROUP_TYPE.sql().is_empty());
         assert!(!CharStatements::UPD_CHAR_PLAYED_TIME.sql().is_empty());
         assert!(!CharStatements::SEL_CHARACTER_INSTANCE_LOCK.sql().is_empty());
         assert!(!CharStatements::INS_CHARACTER_INSTANCE_LOCK.sql().is_empty());

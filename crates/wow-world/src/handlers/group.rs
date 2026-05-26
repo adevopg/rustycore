@@ -8,6 +8,7 @@
 use tracing::{info, warn};
 use wow_constants::ClientOpcodes;
 use wow_core::ObjectGuid;
+use wow_database::{CharStatements, PreparedStatement, StatementDef};
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
 use wow_network::{GroupInfo, PlayerRegistry};
 use wow_packet::packets::party::{
@@ -189,6 +190,13 @@ fn queue_visible_gameobjects_or_spellclicks_refresh_like_cpp(
             );
         }
     }
+}
+
+fn group_type_update_statement_like_cpp(group_flags: u16, db_store_id: u32) -> PreparedStatement {
+    let mut stmt = PreparedStatement::new(CharStatements::UPD_GROUP_TYPE.sql());
+    stmt.set_u16(0, group_flags);
+    stmt.set_u32(1, db_store_id);
+    stmt
 }
 
 // ── Handler implementations ───────────────────────────────────────────────────
@@ -571,6 +579,7 @@ impl WorldSession {
         };
         let vra = self.virtual_realm_address();
 
+        let mut group_type_persistence: Option<(u16, u32)> = None;
         let converted = {
             let mut group = match group_reg.get_mut(&group_guid) {
                 Some(group) => group,
@@ -590,14 +599,38 @@ impl WorldSession {
 
             if convert.raid {
                 group.convert_to_raid_like_cpp();
+                group_type_persistence = u32::try_from(group.group_guid)
+                    .ok()
+                    .map(|db_guid| (group.group_flags, db_guid));
                 true
             } else {
-                group.convert_to_group_like_cpp()
+                let converted = group.convert_to_group_like_cpp();
+                if converted {
+                    group_type_persistence = u32::try_from(group.group_guid)
+                        .ok()
+                        .map(|db_guid| (group.group_flags, db_guid));
+                }
+                converted
             }
         };
 
         if !converted {
             return;
+        }
+
+        if let (Some((group_flags, db_store_id)), Some(char_db)) = (
+            group_type_persistence,
+            self.char_db().map(std::sync::Arc::clone),
+        ) {
+            let stmt = group_type_update_statement_like_cpp(group_flags, db_store_id);
+            if let Err(error) = char_db.execute(&stmt).await {
+                warn!(
+                    group_guid = db_store_id,
+                    group_flags,
+                    %error,
+                    "failed to persist represented group type"
+                );
+            }
         }
 
         if let Some(group) = group_reg.get(&group_guid) {
@@ -641,11 +674,12 @@ impl WorldSession {
 
 #[cfg(test)]
 mod tests {
-    use super::send_party_update;
+    use super::{group_type_update_statement_like_cpp, send_party_update};
     use flume::bounded;
     use std::sync::Arc;
     use wow_constants::ServerOpcodes;
     use wow_core::{ObjectGuid, Position};
+    use wow_database::{CharStatements, SqlParam, StatementDef};
     use wow_network::{
         GroupInfo, GroupRegistry, PendingInvites, PlayerBroadcastInfo, PlayerRegistry,
         SessionCommand,
@@ -809,6 +843,20 @@ mod tests {
         assert_eq!(
             pkt.read_uint16().unwrap(),
             wow_network::GROUP_FLAG_RAID_LIKE_CPP
+        );
+    }
+
+    #[test]
+    fn group_type_update_statement_binds_cpp_group_flags_and_db_guid() {
+        let stmt = group_type_update_statement_like_cpp(wow_network::GROUP_FLAG_RAID_LIKE_CPP, 77);
+
+        assert_eq!(stmt.sql(), CharStatements::UPD_GROUP_TYPE.sql());
+        assert_eq!(
+            stmt.params(),
+            &[
+                SqlParam::U16(wow_network::GROUP_FLAG_RAID_LIKE_CPP),
+                SqlParam::U32(77)
+            ]
         );
     }
 
