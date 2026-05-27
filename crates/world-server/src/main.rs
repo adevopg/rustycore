@@ -1975,6 +1975,11 @@ async fn main() -> Result<()> {
             "CONFIG_QUEST_LOW_LEVEL_HIDE_DIFF",
             4,
         ),
+        quest_high_level_hide_diff: world_config_u32(
+            &world_configs,
+            "CONFIG_QUEST_HIGH_LEVEL_HIDE_DIFF",
+            7,
+        ),
         enable_ae_loot: world_config_bool(&world_configs, "CONFIG_ENABLE_AE_LOOT", false),
         realm_id,
         realm_external_address,
@@ -6869,6 +6874,7 @@ async fn create_session(
         session.set_quest_info_store(Arc::clone(store));
     }
     session.set_quest_low_level_hide_diff_like_cpp(resources.quest_low_level_hide_diff);
+    session.set_quest_high_level_hide_diff_like_cpp(resources.quest_high_level_hide_diff);
     if let Some(ref store) = resources.quest_package_item_store {
         session.set_quest_package_item_store(Arc::clone(store));
     }
