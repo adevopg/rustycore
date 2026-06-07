@@ -15929,12 +15929,28 @@ impl WorldSession {
                 self.handle_inspect(pkt).await;
             }
 
-            // Empty stubs matching C# — these client opcodes are sent during
-            // character select but require no response (Blizzard services).
-            ClientOpcodes::BattlePayGetProductList
-            | ClientOpcodes::BattlePayGetPurchaseList
-            | ClientOpcodes::UpdateVasPurchaseStates
-            | ClientOpcodes::SocialContractRequest => {
+            // BattlePay requests: respond with minimal empty responses for now.
+            ClientOpcodes::BattlePayGetProductList => {
+                self.handle_battle_pay_get_product_list(&mut pkt).await;
+            }
+            ClientOpcodes::BattlePayGetPurchaseList => {
+                self.handle_battle_pay_get_purchase_list(&mut pkt).await;
+            }
+            ClientOpcodes::BattlePayStartPurchase => {
+                self.handle_battle_pay_start_purchase(&mut pkt).await;
+            }
+            ClientOpcodes::BattlePayStartVasPurchase => {
+                self.handle_battle_pay_start_vas_purchase(&mut pkt).await;
+            }
+            ClientOpcodes::BattlePayOpenCheckout
+            | ClientOpcodes::BattlePayRequestPriceInfo
+            | ClientOpcodes::BattlePayCancelOpenCheckout
+            | ClientOpcodes::BattlePayDistributionAssignToTarget
+            | ClientOpcodes::BattlePayDistributionAssignVas => {
+                self.handle_battle_pay_stub(&mut pkt).await;
+            }
+            // Other stubs remain no-op
+            ClientOpcodes::UpdateVasPurchaseStates | ClientOpcodes::SocialContractRequest => {
                 trace!(
                     "Stub handler for {:?} (0x{:04X}) — no response needed",
                     opcode, opcode_raw

@@ -19,6 +19,7 @@ pub mod item;
 pub mod loot;
 pub mod misc;
 pub mod movement;
+pub mod battlepay;
 pub mod party;
 pub mod pet;
 pub mod query;

@@ -16,6 +16,7 @@ members = [
     # ECS + Game Core
     "crates/wow-ecs",
     "crates/wow-world",
+    "crates/wow-battlepay",
     "crates/wow-map",
     "crates/wow-movement",
     "crates/wow-entities",
@@ -150,6 +151,7 @@ wow-network = { path = "crates/wow-network" }
 wow-proto = { path = "crates/wow-proto" }
 wow-ecs = { path = "crates/wow-ecs" }
 wow-world = { path = "crates/wow-world" }
+wow-battlepay = { path = "crates/wow-battlepay" }
 wow-map = { path = "crates/wow-map" }
 wow-movement = { path = "crates/wow-movement" }
 wow-entities = { path = "crates/wow-entities" }

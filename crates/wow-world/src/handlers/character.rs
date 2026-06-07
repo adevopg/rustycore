@@ -5,7 +5,7 @@
 
 //! Character handlers: enum, create, delete, and player login.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use rand::Rng;
@@ -28,6 +28,7 @@ use wow_database::{
     CharStatements, CharacterDatabase, LoginStatements, SqlTransaction, WorldDatabase,
     WorldStatements,
 };
+use wow_database::params::PreparedStatement;
 use wow_entities::{
     BANK_SLOT_BAG_END, BANK_SLOT_BAG_START, BUYBACK_SLOT_START, GAMEOBJECT_TYPE_FISHING_HOLE,
     GAMEOBJECT_TYPE_QUESTGIVER, GameObjectTemplateData, INVENTORY_DEFAULT_SIZE,
@@ -37,11 +38,17 @@ use wow_entities::{
     is_inventory_pos,
 };
 use wow_handler::{PacketHandlerEntry, PacketProcessing, SessionStatus};
+use wow_packet::ServerPacket;
 use wow_packet::WorldPacket;
 use wow_packet::packets::auth::{
     ConnectTo, ConnectToAddress, ConnectToFailed, ConnectToKey, ConnectToSerial, ResumeComms,
 };
 use wow_packet::packets::character::*;
+use wow_battlepay::manager::{
+    send_empty_product_list, send_empty_purchase_list, send_product_list_response,
+    send_purchase_list_response, send_start_purchase_response, BattlepaySession,
+};
+use wow_packet::packets::battlepay::{Group, Product, ProductInfo, Purchase, Shop};
 use wow_packet::packets::item::*;
 use wow_packet::packets::loot::LootReleaseAll;
 use wow_packet::packets::misc::*;
@@ -85,6 +92,361 @@ fn represented_go_state_from_i8_like_cpp(state: i8) -> Option<wow_entities::GoSt
         24 => Some(wow_entities::GoState::TransportActive),
         25 => Some(wow_entities::GoState::TransportStopped),
         _ => None,
+    }
+}
+
+fn parse_comma_separated_u32_list(value: &str) -> Vec<u32> {
+    value
+        .split(',')
+        .filter_map(|part| part.trim().parse::<u32>().ok())
+        .collect()
+}
+
+async fn load_battlepay_display_infos(
+    world_db: &WorldDatabase,
+) -> HashMap<u32, wow_packet::packets::battlepay::DisplayInfo> {
+    let mut display_infos = HashMap::new();
+    let stmt = PreparedStatement::new("SELECT Entry, CreatureDisplayID, VisualID, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Flags, Unk1, Unk2, Unk3, UnkInt1, UnkInt2, UnkInt3 FROM battlepay_displayinfo");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return display_infos,
+    };
+
+    while !result.is_empty() {
+        let entry = result.try_read::<u32>(0).unwrap_or_default();
+        let display_info = wow_packet::packets::battlepay::DisplayInfo {
+            creature_display_id: result.try_read(1),
+            visual_id: result.try_read(2),
+            name1: result.read_string(3),
+            name2: result.read_string(4),
+            name3: result.read_string(5),
+            name4: result.read_string(6),
+            name5: result.read_string(7),
+            name6: result.read_string(8),
+            name7: result.read_string(9),
+            flags: result.try_read(10),
+            unk1: result.try_read(11).unwrap_or_default(),
+            unk2: result.try_read(12).unwrap_or_default(),
+            unk3: result.try_read(13),
+            unk_int1: result.try_read(14).unwrap_or_default(),
+            unk_int2: result.try_read(15).unwrap_or_default(),
+            unk_int3: result.try_read(16).unwrap_or_default(),
+            disable_listing: None,
+            disable_buy: None,
+            name_color_index: None,
+            script_name: String::new(),
+            comment: String::new(),
+            visuals: Vec::new(),
+        };
+
+        display_infos.insert(entry, display_info);
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    let stmt = PreparedStatement::new("SELECT Entry, DisplayId, VisualId, Unk, Name, DisplayInfoEntry FROM battlepay_visual");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return display_infos,
+    };
+
+    while !result.is_empty() {
+        let display_info_entry = result.try_read::<u32>(5).unwrap_or_default();
+        if let Some(info) = display_infos.get_mut(&display_info_entry) {
+            info.visuals.push(wow_packet::packets::battlepay::Visual {
+                name: result.read_string(4),
+                display_id: result.try_read(1).unwrap_or_default(),
+                visual_id: result.try_read(2).unwrap_or_default(),
+                unk: result.try_read(3).unwrap_or_default(),
+            });
+        }
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    load_battlepay_display_info_addons(world_db, &mut display_infos).await;
+    display_infos
+}
+
+async fn load_battlepay_display_info_addons(
+    world_db: &WorldDatabase,
+    display_infos: &mut HashMap<u32, wow_packet::packets::battlepay::DisplayInfo>,
+) {
+    let stmt = PreparedStatement::new("SELECT DisplayInfoEntry, DisableListing, DisableBuy, NameColorIndex, ScriptName, Comment FROM battlepay_addon");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return,
+    };
+
+    while !result.is_empty() {
+        let display_info_entry = result.try_read::<u32>(0).unwrap_or_default();
+        let info = display_infos
+            .entry(display_info_entry)
+            .or_insert_with(Default::default);
+
+        info.disable_listing = result.try_read(1);
+        info.disable_buy = result.try_read(2);
+        info.name_color_index = result.try_read(3);
+        info.script_name = result.read_string(4);
+        info.comment = result.read_string(5);
+
+        if !result.next_row() {
+            break;
+        }
+    }
+}
+
+async fn load_battlepay_product_groups(world_db: &WorldDatabase) -> Vec<Group> {
+    let stmt = PreparedStatement::new("SELECT Entry, GroupId, IconFileDataID, DisplayType, Ordering, Unk, MainGroupID, Name, Description FROM battlepay_group");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut groups = Vec::new();
+    while !result.is_empty() {
+        groups.push(Group {
+            group_id: result.try_read(1).unwrap_or_default(),
+            icon_file_data_id: result.try_read(2).unwrap_or_default(),
+            display_type: result.try_read(3).unwrap_or_default(),
+            ordering: result.try_read(4).unwrap_or_default(),
+            unk: result.try_read(5).unwrap_or_default(),
+            main_group_id: result.try_read(6).unwrap_or_default(),
+            name: result.read_string(7),
+            description: result.read_string(8),
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    groups
+}
+
+async fn load_battlepay_shops(
+    world_db: &WorldDatabase,
+    display_infos: &HashMap<u32, wow_packet::packets::battlepay::DisplayInfo>,
+) -> Vec<Shop> {
+    let stmt = PreparedStatement::new("SELECT Entry, EntryID, GroupID, ProductID, Ordering, VasServiceType, StoreDeliveryType FROM battlepay_shop");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut shops = Vec::new();
+    while !result.is_empty() {
+        let entry_id = result.try_read(1).unwrap_or_default();
+        let display = result
+            .try_read::<u32>(0)
+            .and_then(|entry| display_infos.get(&entry).cloned());
+
+        shops.push(Shop {
+            entry_id,
+            group_id: result.try_read(2).unwrap_or_default(),
+            product_id: result.try_read(3).unwrap_or_default(),
+            ordering: result.try_read(4).unwrap_or_default(),
+            vas_service_type: result.try_read(5).unwrap_or_default(),
+            store_delivery_type: result.try_read(6).unwrap_or_default(),
+            display,
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    shops
+}
+
+async fn load_battlepay_product_infos(
+    world_db: &WorldDatabase,
+    display_infos: &HashMap<u32, wow_packet::packets::battlepay::DisplayInfo>,
+) -> Vec<ProductInfo> {
+    let stmt = PreparedStatement::new("SELECT Entry, ProductId, NormalPriceFixedPoint, CurrentPriceFixedPoint, ProductIds, Unk1, Unk2, UnkInts, Unk3, ChoiceType FROM battlepay_productinfo");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut product_infos = Vec::new();
+    while !result.is_empty() {
+        let entry = result.try_read::<u32>(0).unwrap_or_default();
+        let ids = parse_comma_separated_u32_list(&result.read_string(4));
+        let display = display_infos.get(&entry).cloned();
+
+        product_infos.push(ProductInfo {
+            product_id: result.try_read(1).unwrap_or_default(),
+            normal_price_fixed_point: result.try_read(2).unwrap_or_default(),
+            current_price_fixed_point: result.try_read(3).unwrap_or_default(),
+            product_ids: ids,
+            unk1: result.try_read(5).unwrap_or_default(),
+            unk2: result.try_read(6).unwrap_or_default(),
+            unk_ints: result
+                .try_read::<u32>(7)
+                .and_then(|value| if value != 0 { Some(vec![value]) } else { None })
+                .unwrap_or_default(),
+            unk3: result.try_read(8).unwrap_or_default(),
+            choice_type: result.try_read(9).unwrap_or_default(),
+            display,
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    product_infos
+}
+
+async fn load_battlepay_product_items(
+    world_db: &WorldDatabase,
+    display_infos: &HashMap<u32, wow_packet::packets::battlepay::DisplayInfo>,
+) -> HashMap<u32, Vec<wow_packet::packets::battlepay::ProductItem>> {
+    let stmt = PreparedStatement::new("SELECT ID, ProductID, UnkByte, ItemID, Quantity, UnkInt1, UnkInt2, IsPet, PetResult, Display FROM battlepay_item");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut items_by_product = HashMap::new();
+    while !result.is_empty() {
+        let product_id = result.try_read::<u32>(1).unwrap_or_default();
+        let display = result
+            .try_read::<u32>(9)
+            .and_then(|display_entry| display_infos.get(&display_entry).cloned());
+
+        let item = wow_packet::packets::battlepay::ProductItem {
+            id: result.try_read(0).unwrap_or_default(),
+            unk_byte: result.try_read(2).unwrap_or_default(),
+            item_id: result.try_read(3).unwrap_or_default(),
+            quantity: result.try_read(4).unwrap_or_default(),
+            unk_int1: result.try_read(5).unwrap_or_default(),
+            unk_int2: result.try_read(6).unwrap_or_default(),
+            is_pet: result.try_read::<u8>(7).unwrap_or_default() != 0,
+            pet_result: result.try_read(8),
+            display,
+        };
+
+        items_by_product
+            .entry(product_id)
+            .or_insert_with(Vec::new)
+            .push(item);
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    items_by_product
+}
+
+async fn load_battlepay_products(
+    world_db: &WorldDatabase,
+    items_by_product: &HashMap<u32, Vec<wow_packet::packets::battlepay::ProductItem>>,
+    display_infos: &HashMap<u32, wow_packet::packets::battlepay::DisplayInfo>,
+) -> Vec<Product> {
+    let stmt = PreparedStatement::new("SELECT Entry, ProductId, Type, Flags, Unk1, DisplayId, ItemId, Unk4, Unk5, Unk6, Unk7, Unk8, Unk9, UnkString, UnkBit, UnkBits, Name FROM battlepay_product");
+    let mut result = match world_db.query(&stmt).await {
+        Ok(result) => result,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut products = Vec::new();
+    while !result.is_empty() {
+        let product_id = result.try_read(1).unwrap_or_default();
+        let display_id = result.try_read::<u32>(5).unwrap_or_default();
+        products.push(Product {
+            product_id,
+            typ: result.try_read(2).unwrap_or_default(),
+            flags: result.try_read(3).unwrap_or_default(),
+            unk1: result.try_read(4).unwrap_or_default(),
+            display_id,
+            item_id: result.try_read(6).unwrap_or_default(),
+            unk4: result.try_read(7).unwrap_or_default(),
+            unk5: result.try_read(8).unwrap_or_default(),
+            unk6: result.try_read(9).unwrap_or_default(),
+            unk7: result.try_read(10).unwrap_or_default(),
+            unk8: result.try_read(11).unwrap_or_default(),
+            unk9: result.try_read(12).unwrap_or_default(),
+            unk_string: result.read_string(13),
+            unk_bit: result.try_read::<u8>(14).unwrap_or_default() != 0,
+            unk_bits: result.try_read(15),
+            items: items_by_product
+                .get(&product_id)
+                .cloned()
+                .unwrap_or_default(),
+            display: display_infos.get(&display_id).cloned(),
+        });
+
+        if !result.next_row() {
+            break;
+        }
+    }
+
+    products
+}
+
+async fn fetch_battlepay_purchases(
+    login_db: &wow_database::LoginDatabase,
+    battlenet_account_id: u32,
+) -> Vec<Purchase> {
+    let queries = [
+        "SELECT id, productID, status, result_code FROM battlepay_purchases WHERE battlenetAccountId = ? AND delivered != 1",
+        "SELECT id, productID, status, result_code FROM battlepay_purchases WHERE battlenetAccountId = ?",
+    ];
+
+    for sql in queries {
+        let mut stmt = PreparedStatement::new(sql);
+        stmt.set_u32(0, battlenet_account_id);
+        let mut result = match login_db.query(&stmt).await {
+            Ok(result) => result,
+            Err(_) => continue,
+        };
+
+        let mut purchases = Vec::new();
+        while !result.is_empty() {
+            purchases.push(Purchase {
+                purchase_id: result.try_read::<u64>(0).unwrap_or_default(),
+                unk_long: 0,
+                unk_long2: 0,
+                status: result.try_read::<u32>(2).unwrap_or_default(),
+                result_code: result.try_read::<u32>(3).unwrap_or_default(),
+                product_id: result.try_read::<u32>(1).unwrap_or_default(),
+                unk_int: 0,
+                wallet_name: String::new(),
+            });
+            if !result.next_row() {
+                break;
+            }
+        }
+
+        return purchases;
+    }
+
+    Vec::new()
+}
+
+async fn build_battlepay_product_list(
+    world_db: &WorldDatabase,
+) -> (u32, Vec<ProductInfo>, Vec<Product>, Vec<Group>, Vec<Shop>) {
+    let display_infos = load_battlepay_display_infos(world_db).await;
+    let product_groups = load_battlepay_product_groups(world_db).await;
+    let shops = load_battlepay_shops(world_db, &display_infos).await;
+    let product_infos = load_battlepay_product_infos(world_db, &display_infos).await;
+    let items_by_product = load_battlepay_product_items(world_db, &display_infos).await;
+    let products = load_battlepay_products(world_db, &items_by_product, &display_infos).await;
+
+    (1, product_infos, products, product_groups, shops)
+}
+
+impl BattlepaySession for crate::session::WorldSession {
+    fn send_packet<P: ServerPacket>(&self, packet: &P) {
+        self.send_packet(packet);
     }
 }
 
@@ -174,6 +536,69 @@ inventory::submit! {
 inventory::submit! {
     PacketHandlerEntry {
         opcode: ClientOpcodes::BattlePayGetPurchaseList,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayStartPurchase,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayStartVasPurchase,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayOpenCheckout,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayRequestPriceInfo,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayCancelOpenCheckout,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::Inplace,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayDistributionAssignToTarget,
+        status: SessionStatus::Authed,
+        processing: PacketProcessing::ThreadUnsafe,
+        handler_name: "handle_battle_pay_stub",
+    }
+}
+
+inventory::submit! {
+    PacketHandlerEntry {
+        opcode: ClientOpcodes::BattlePayDistributionAssignVas,
         status: SessionStatus::Authed,
         processing: PacketProcessing::ThreadUnsafe,
         handler_name: "handle_battle_pay_stub",
@@ -1973,6 +2398,44 @@ impl WorldSession {
     /// Handle CMSG_SERVER_TIME_OFFSET_REQUEST — respond with current realm time.
     pub async fn handle_server_time_offset_request(&mut self) {
         self.send_packet(&ServerTimeOffset::now());
+    }
+
+    /// Handle CMSG_BATTLE_PAY_GET_PRODUCT_LIST — reply with the configured BattlePay product list.
+    pub async fn handle_battle_pay_get_product_list(&mut self, _pkt: &mut wow_packet::WorldPacket) {
+        if let Some(world_db) = self.world_db() {
+            let (currency_id, product_infos, products, product_groups, shops) =
+                build_battlepay_product_list(world_db).await;
+            send_product_list_response(self, currency_id, product_infos, products, product_groups, shops);
+            return;
+        }
+
+        send_empty_product_list(self);
+    }
+
+    /// Handle CMSG_BATTLE_PAY_GET_PURCHASE_LIST — reply with the configured BattlePay purchase history.
+    pub async fn handle_battle_pay_get_purchase_list(&mut self, _pkt: &mut wow_packet::WorldPacket) {
+        if let Some(login_db) = self.login_db() {
+            let purchases = fetch_battlepay_purchases(login_db, self.battlenet_account_id()).await;
+            send_purchase_list_response(self, 0, purchases);
+            return;
+        }
+
+        send_empty_purchase_list(self);
+    }
+
+    /// Handle CMSG_BATTLE_PAY_START_PURCHASE — reply with an empty start purchase response.
+    pub async fn handle_battle_pay_start_purchase(&mut self, _pkt: &mut wow_packet::WorldPacket) {
+        send_start_purchase_response(self, 0, 0, 0);
+    }
+
+    /// Handle CMSG_BATTLE_PAY_START_VAS_PURCHASE — reply with an empty start purchase response.
+    pub async fn handle_battle_pay_start_vas_purchase(&mut self, _pkt: &mut wow_packet::WorldPacket) {
+        send_start_purchase_response(self, 0, 0, 0);
+    }
+
+    /// Handle CMSG_BATTLE_PAY_* stubs that require no response.
+    pub async fn handle_battle_pay_stub(&mut self, _pkt: &mut wow_packet::WorldPacket) {
+        trace!("Stubbed BattlePay client packet for account {}", self.account_id);
     }
 
     /// Handle CMSG_REQUEST_PLAYED_TIME (0x327A).
